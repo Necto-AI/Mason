@@ -29,6 +29,10 @@ Call \`generateSandboxedUi\` and emit its parameters in this EXACT order, becaus
 6. jsExpressions — small synchronous statements invoking those functions.
 Text before or after the widget explains what it shows. "UI generated" means the call rendered; do not rebuild the same widget.
 
+The user can expand any widget to fill the screen, so make every widget fluid: fill the available height (flex or
+\`height: 100%\` on the root, never a fixed pixel height), keep widths in percentages, and re-render charts and
+canvases on \`window.addEventListener('resize', ...)\` so an expanded dashboard stays correct.
+
 Sandbox limits: the iframe has no same-origin access (no localStorage, cookies, IndexedDB, same-origin fetch) and no
 parent DOM. Use the design system's CSS variables (var(--color-text-primary), var(--color-background-secondary), the
 .c-* SVG classes). An importmap provides three, gsap, d3, and chart.js from esm.sh; load them inside an async function

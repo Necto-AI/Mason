@@ -295,6 +295,14 @@ live output, and queued submissions render as faded user bubbles in front of it 
 the bubble produces text or a widget, and settled turns keep only bubbles. `generateSandboxedUi` cards are the exception —
 they render bare (no caption) at the call's position, live and settled alike.
 
+**A widget can take the screen** (`data-testid="widget-fullscreen"`): a quiet icon in the card's corner, revealed on hover
+and always visible where there is no hover. The wrapper becomes a fixed, viewport-filling overlay (`data-fullscreen="true"`)
+and the sandbox fills it, so the widget's own scrolling takes over; the browser's fullscreen is requested on top of that
+where available. The card is never re-mounted, so state inside the widget survives the switch, and the transcript's bottom
+fade (a mask, which would clip the overlay) is dropped while it is up. Exit is the button, `Esc`, or leaving the browser's
+fullscreen. Widgets are therefore authored to be fluid — the sandbox instruction tells the model to fill the available
+height and re-render on `resize`.
+
 **Debug mode** (`?debug=1` or the session bar's `DEBUG` button, remembered in `localStorage`) reuses the same transcript
 and adds everything the durable backend exposes: tool arguments, results, `taskId`/`byTaskId`, diagnostics, `details`,
 thinking rows, `pi.system` sections and tool changes, per-answer `stopReason`/duration/usage, hook ids and prompts,

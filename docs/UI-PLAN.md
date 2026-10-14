@@ -157,3 +157,11 @@ Resolved (2026-10-14):
 3. Composer: two send actions while busy (**Steer** / **Follow-up**); one while idle. Semantics match the durable backend exactly: steer = next boundary (end of the current tool round), follow-up = final boundary (run end).
 4. No skill chips.
 5. Widget cards render bare — no caption or label.
+
+## 8. Beyond the port: widget fullscreen
+
+Widgets are meant to be used, not only glanced at: dashboards and controls need the whole screen. Added after the port —
+`WidgetCard` owns a `fullscreen` state, `SandboxedUiCard` fills the viewport instead of reporting its content height, and
+`frame-content.ts` swaps the sandbox between the measurement layout and a viewport layout (`FULLSCREEN_FRAME_JS`). The
+sandbox is not re-created, so widget state survives. Verified at 1280×900 and 390×844 (enter via button, exit via button
+and `Esc`, live resize inside the sandbox, bridge submission while fullscreen, no clipped edges).

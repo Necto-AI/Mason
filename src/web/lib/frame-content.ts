@@ -83,6 +83,29 @@ export function buildPreviewBodyMorph(body: string): string {
 })();`;
 }
 
+/**
+ * Fullscreen layout for a widget: it owns the viewport, so it fills the height and scrolls itself instead of
+ * collapsing to its content height (which `MEASUREMENT_JS` pins down for the embedded case).
+ */
+export const FULLSCREEN_FRAME_JS = `
+(function() {
+  var id = '__oguiFullscreenStyle';
+  if (document.getElementById(id)) return;
+  var style = document.createElement('style');
+  style.id = id;
+  style.textContent = 'html, body { height: 100% !important; min-height: 100% !important; overflow: auto !important; }';
+  document.head.appendChild(style);
+  window.dispatchEvent(new Event('resize'));
+})();`;
+
+/** Back to the embedded layout: content height, no scrollbars of its own. */
+export const EMBEDDED_FRAME_JS = `
+(function() {
+  var style = document.getElementById('__oguiFullscreenStyle');
+  if (style !== null) style.remove();
+  window.dispatchEvent(new Event('resize'));
+})();`;
+
 /** Continuous autosize: report the content height to the parent on every change. */
 export const MEASUREMENT_JS = `
 (function() {

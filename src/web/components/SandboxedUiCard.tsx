@@ -12,6 +12,8 @@ import {
 	buildFinalFrameContent,
 	buildPreviewBodyMorph,
 	buildPreviewHeadContent,
+	EMBEDDED_FRAME_JS,
+	FULLSCREEN_FRAME_JS,
 	MEASUREMENT_JS,
 	PREVIEW_FRAME_CONTENT,
 	RESIZE_MESSAGE_TYPE,
@@ -59,9 +61,11 @@ export interface SandboxedUiCardProps {
 	bridge: WidgetBridge;
 	/** `true` while the model is still streaming the call; parts of `content` are then incomplete. */
 	streaming: boolean;
+	/** `true` while the card fills the screen: the widget owns the viewport and scrolls itself. */
+	fullscreen?: boolean;
 }
 
-export function SandboxedUiCard({ content, bridge, streaming }: SandboxedUiCardProps) {
+export function SandboxedUiCard({ content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
 	const [throttled, setThrottled] = useState(content);
 	const [previous, setPrevious] = useState(content);
 	const latest = useRef(content);
@@ -101,12 +105,12 @@ export function SandboxedUiCard({ content, bridge, streaming }: SandboxedUiCardP
 		[],
 	);
 
-	return <SandboxedUiFrame content={throttled} bridge={bridge} streaming={streaming} />;
+	return <SandboxedUiFrame content={throttled} bridge={bridge} streaming={streaming} fullscreen={fullscreen} />;
 }
 
 type SandboxState = "idle" | "creating" | "ready" | "failed";
 
-function SandboxedUiFrame({ content, bridge, streaming }: SandboxedUiCardProps) {
+function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
 	const initialHeight = content.initialHeight ?? 200;
 	// The bridge is rebuilt on every parent render, so the sandbox holds a stable forwarder instead: a changing
 	// `localApi` identity would tear the iframe down and lose the widget's own state.
@@ -205,6 +209,8 @@ function SandboxedUiFrame({ content, bridge, streaming }: SandboxedUiCardProps) 
 			const sandbox = finalSandbox.current;
 			if (sandbox === null) return;
 			if (event.source === sandbox.iframe.contentWindow && (event.data as { type?: string })?.type === RESIZE_MESSAGE_TYPE) {
+				// Fullscreen ignores the content height: the frame is the viewport.
+				if (fullscreenRef.current) return;
 				const height = clampReportedHeight((event.data as { height?: unknown }).height);
 				if (height !== null) setAutoHeight(height);
 			}
@@ -280,6 +286,19 @@ function SandboxedUiFrame({ content, bridge, streaming }: SandboxedUiCardProps) 
 
 	const height = autoHeight ?? initialHeight;
 	const showLoading = streaming && !hasVisibleSandbox;
+	const fullscreenRef = useRef(fullscreen === true);
+	fullscreenRef.current = fullscreen === true;
+
+	// The embedded layout pins the content height; fullscreen hands the viewport to the widget instead.
+	useEffect(() => {
+		const sandbox = finalSandbox.current ?? previewSandbox.current;
+		if (sandbox === null || sandboxState === "idle") return;
+		void sandbox.run(fullscreen === true ? FULLSCREEN_FRAME_JS : EMBEDDED_FRAME_JS).catch((error: unknown) => {
+			console.error("[gen-ui] layout switch failed:", error);
+		});
+		// Entering fullscreen makes the last embedded measurement stale; the widget reports a fresh one on exit.
+		if (fullscreen === true) setAutoHeight(null);
+	}, [fullscreen, sandboxState]);
 
 	return (
 		<div className="genui" data-testid="genui-card">
@@ -296,7 +315,7 @@ function SandboxedUiFrame({ content, bridge, streaming }: SandboxedUiCardProps) 
 				className={`genui-frame ${hasVisibleSandbox ? "genui-frame-live" : ""}`}
 				data-testid="genui-frame"
 				data-sandbox-state={sandboxState}
-				style={{ height: `${height}px` }}
+				style={{ height: fullscreen === true ? "100%" : `${height}px` }}
 			>
 				{showLoading ? (
 					<div className="genui-loading">
