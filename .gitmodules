@@ -1,0 +1,6 @@
+[submodule "vendor/pi"]
+	path = vendor/pi
+	url = https://github.com/DenisSud/pi.git
+[submodule "vendor/open-intelligent-ui"]
+	path = vendor/open-intelligent-ui
+	url = https://github.com/CopilotKit/OpenIntelligentUI.git
