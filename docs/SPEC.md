@@ -42,25 +42,36 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │       ├── main.tsx                   # React root + Chord browser host connection
 │       ├── client.ts                  # Chord webSocketLink wrapper + reconnect state
 │       ├── view-types.ts              # JSON shapes the client reads out of ConversationView
-│       ├── lib/                       # Adapted from vendor/open-intelligent-ui
+│       ├── lib/                        # Pure model + renderers (see docs/UI-PLAN.md)
+│       │   ├── transcript-model.ts     # Entries -> blocks -> pieces -> bubbles (apiary's turns.ts, adapted)
+│       │   ├── tool-view.ts            # Tool row formatters: summary, duration, icons, dialects
+│       │   ├── markdown.ts             # marked + link hardening (apiary's markdown.ts, verbatim)
+│       │   ├── stream-text.tsx         # Settled markdown + fading tail reveal (apiary's stream.ts)
+│       │   ├── follower.ts             # Scroll pinning: pinnedAfterScroll + useFollower (apiary's scroll.ts)
 │       │   ├── frame-content.ts        # CSP, importmap, design-system styles, preview morph, measurement
 │       │   ├── process-partial-html.ts # Incomplete-tag-tolerant streaming markup
 │       │   ├── open-genui-content.ts   # Partial tool arguments -> OpenGenUIContent
 │       │   ├── websandbox-loader.ts    # @jetbrains/websandbox UMD loader + widget bridge type
 │       │   └── idiomorph-inline.ts     # Idiomorph IIFE, inlined for the sandbox (no network)
 │       ├── components/
-│       │   ├── StatusBanner.tsx       # Explicit text indicators (connection, run, tools, inbox, hooks)
-│       │   ├── TranscriptView.tsx     # Entries + live generation + tool slots + proactive hook badges
-│       │   ├── ToolRow.tsx            # Explicit tool status (pending/running/done/error) + live output
+│       │   ├── SessionBar.tsx         # Status pill (idle/busy/disconnected) + stop/compact/reset/debug
+│       │   ├── Transcript.tsx         # Blocks, the running turn, the queue, the jump pill wiring
+│       │   ├── MessageRow.tsx         # User, hook banner, system note, live and settled assistant turns
+│       │   ├── Trace.tsx              # Thinking rows + tool rows of one bubble
+│       │   ├── ToolRow.tsx            # Icon, one-line summary, hover duration, live output, debug facts
+│       │   ├── WidgetCard.tsx         # Places a `generateSandboxedUi` card at its call's position (bare)
 │       │   ├── SandboxedUiCard.tsx    # Adapted from vendor/open-intelligent-ui renderer.tsx
-│       │   ├── InboxBar.tsx           # Queued steers/follow-ups with withdraw button
-│       │   ├── HooksPanel.tsx         # List registered event hooks, fire test hook, toggle schedules
-│       │   └── Composer.tsx           # Mobile-friendly input: Send, Steer (when busy), Follow-up, Stop
+│       │   ├── QueuedRows.tsx         # Queued steers/follow-ups: faded bubbles, mode tag, withdraw
+│       │   ├── DebugBits.tsx          # LiveChips (retry/deferred/compaction), usage panel, debug sheet
+│       │   ├── JumpPill.tsx           # Jump-to-latest pill, shown only while scrolled away from the end
+│       │   └── Composer.tsx           # Pill that grows/caps; Send when idle, Steer + Follow-up when busy
 │       └── styles/
-│           └── app.css                # Combines @repo/design-system tokens + chat.css + mobile status styles
+│           ├── tokens.css             # apiary's design tokens (light + dark), app/main column
+│           └── chat.css               # Chat sheet: session bar, transcript, messages, tools, composer, debug
 └── test/
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
-    └── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, UI tool
+    ├── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, UI tool
+    └── transcript-model.test.ts       # Pure chat model: grouping, pieces, bubbles, formatters, pinning
 ```
 
 ---
@@ -268,28 +279,28 @@ self.on("viewSync", viewResource, (nextView, ctx) => {
 This streams exact Chord structural diffs to every connected browser tab over
 `acceptWebSockets(wss, host, { principal: () => ({ kind: "owner" }) })`.
 
-### 4.3 Stage 1 Explicit Status Indicators (Required for Testing & Mobile Clarity)
+### 4.3 Chat Area (apiary look)
 
-The Web UI must render explicit, machine-and-human-readable status badges (`data-testid` attributes included):
-1. **Header / Status Banner (`StatusBanner.tsx`):**
-   - `CONN: <connected | connecting | disconnected>` (`data-testid="status-connection"`)
-   - `RUN: <idle | generating | running_tools | retrying | compacting>` (`data-testid="status-run"`)
-   - `TOOLS: <N running / M total>` (`data-testid="status-tools"`)
-   - `INBOX: <N queued>` (`data-testid="status-inbox"`)
-   - `GEN-UI: <enabled | disabled>` toggle button (`data-testid="toggle-gen-ui"`)
-2. **Per-Message Status (`TranscriptView.tsx`):**
-   - User entry (`pi.user`): `[USER • settled]`
-   - Proactive Hook entry (`app.hook`): `[PROACTIVE HOOK: <hookName> • <firedAt>]` highlighted distinctly so proactive agent initiation is immediately obvious.
-   - Assistant entry (`pi.assistant`): `[ASSISTANT • settled • stopReason=<stopReason>]`
-   - Live streaming assistant (`docs["pi.live"].generation.message`): `[ASSISTANT • STREAMING (attempt N)]` with live text & thinking blocks.
-3. **Per-Tool Status (`ToolRow.tsx`):**
-   - Pairs tool calls from assistant messages with `docs["pi.live"].tools` (while running) and `pi.tool-result` entries (when settled).
-   - Shows explicit badge: `[TOOL: <name> • status=<pending | running | done | error>]` (`data-testid="tool-status-<name>"`).
-   - Streams live `slot.output` in real time while `status === "running"`, and shows final output when `done`.
-4. **Inbox Queue Bar (`InboxBar.tsx`):**
-   - Lists items from `docs["pi.inbox"].items` showing `[QUEUED: <steer | followUp>] <content>` and a `Withdraw` button calling `withdrawSubmission({ submissionId })`.
-5. **Proactive Hooks Drawer/Bar (`HooksPanel.tsx`):**
-   - Shows each configured hook with its `enabled` toggle, `fireCount`, `lastFiredAt`, and a **`Fire Now`** button (`fireHook({ hookId })`) so you can trigger a proactive agent message with one tap on mobile or desktop.
+The browser client is the chat area of apiary (`DenisSud/apiary` → `packages/web`) re-implemented in React on our
+Chord subscription; `docs/UI-PLAN.md` is the porting plan and the decisions log. Two modes, one transcript:
+
+**Status, always explicit.** The session bar carries the run status in words — `idle`, `generating`, `running_tools`,
+`retrying`, `compacting`, plus `connecting` and `disconnected` when the socket is not live (`data-testid="status-run"`,
+`data-testid="status-connection"`, `data-testid="status-tools"`, `data-testid="status-inbox"`, `data-testid="status-model"`).
+While a turn runs, the running turn's trace is open under a `Working` line, each tool row shows a spinner and streams its
+live output, and queued submissions render as faded user bubbles in front of it carrying their boundary
+(`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`).
+
+**Traces are temporary, widgets are not.** A bubble pairs the work with what it produced: the trace folds away the moment
+the bubble produces text or a widget, and settled turns keep only bubbles. `generateSandboxedUi` cards are the exception —
+they render bare (no caption) at the call's position, live and settled alike.
+
+**Debug mode** (`?debug=1` or the session bar's `DEBUG` button, remembered in `localStorage`) reuses the same transcript
+and adds everything the durable backend exposes: tool arguments, results, `taskId`/`byTaskId`, diagnostics, `details`,
+thinking rows, `pi.system` sections and tool changes, per-answer `stopReason`/duration/usage, hook ids and prompts,
+retry/deferred and compaction chips, the `pi.usage` ledger, and a raw inspector over `pi.live`/`pi.inbox`/`pi.agent`/`pi.provider`
+(`data-testid="debug-sheet"`, `data-testid="usage-panel"`). The hooks list with its `enabled` toggle, `fireCount` and
+**Fire now** button lives there too (`data-testid="fire-<hookId>"`), so proactive turns can be triggered by hand.
 
 ---
 
