@@ -34,7 +34,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly port?: number;
 	readonly hostname?: string;
-	/** Directory holding the built client (`index.html`, `main.js`, `app.css`). */
+	/** Directory holding the built client (`index.html`, `main.js`, `main.css`). */
 	readonly webDir?: string;
 }
 
