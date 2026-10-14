@@ -1,0 +1,45 @@
+# AGENTS.md — Personal Durable Agent
+
+## Overview
+
+A proactive, always-on personal agent built on `@earendil-works/pi-durable`, `@earendil-works/pi-env`, and `@earendil-works/chord`, with an event-hook system and a mobile-ready web client adapted from `CopilotKit/OpenIntelligentUI`.
+
+Full architecture, contracts, and milestone specifications live in [`docs/SPEC.md`](docs/SPEC.md). Read `docs/SPEC.md` before writing code.
+
+## Non-Negotiable Rules
+
+1. **Do NOT touch `sibling`.** This project is standalone and will later serve as the foundation for refactoring `sibling`.
+2. **Work against local clones in `vendor/` — they are git submodules pinned to exact commits:**
+   - `vendor/pi` — `DenisSud/pi` (upstream `earendil-works/pi` plus the fleet's patches), currently `aa9cf15be`.
+   - `vendor/open-intelligent-ui` — `CopilotKit/OpenIntelligentUI`, currently `8391a94`.
+   - After a fresh clone: `git submodule update --init --recursive`.
+   - `scripts/link-vendor.mjs` (run by `npm install`) symlinks `@earendil-works/*` and `@repo/design-system` into `node_modules/`.
+   - Vendor source is resolved through the `paths` map in `tsconfig.json` — tsc and esbuild both honour it — so the submodules stay pristine. `@repo/design-system` is listed there because upstream ships no `source` export condition and no `dist/`.
+3. **Do NOT look for `pi-client`, `pi-server`, or `pi-protocol`.** Upstream `pi` deleted those packages in commit `7472cda` because `@earendil-works/chord` (`createHost`, `remote`, `method`, `acceptWebSockets`, `webSocketLink`) now provides the official RPC + live-state replication layer directly over WebSocket.
+4. **Always split Harness vs. Tool Execution via `@earendil-works/pi-env`:**
+   - Never use `NodeExecutionEnv` directly in the agent harness when `pi-env` is available.
+   - Connect `RemoteExecutionEnv` (or `LocalExecutionEnv`) to a `Connection` running `localDaemon()` (`vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env`), or an SSH target when configured.
+5. **Run TypeScript directly from source on Node 22:**
+   - Use `node --conditions=source --experimental-strip-types ...` for all server entrypoints and tests.
+
+## Commands (inside `devenv shell` or via `devenv shell -- ...`)
+
+- `git submodule update --init --recursive` — checks out `vendor/` (first clone only).
+- `npm install` — installs root dependencies, links `vendor/` packages (`scripts/link-vendor.mjs`) and repairs `vendor/pi`'s nested dependencies if a root install pruned them (`scripts/verify-vendor.mjs`, which runs `npm ci --ignore-scripts` in `vendor/pi`).
+- `npm run dev` — starts the durable agent + Chord WebSocket + HTTP server (`src/server/main.ts`).
+- `npm run build:web` — bundles the browser client (`src/web/main.tsx` -> `dist/web/`) using `esbuild`.
+- `npm test` — runs the test suite (`node --conditions=source --experimental-strip-types --test test/*.test.ts`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/` in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, label strings equal to their names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.

@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@earendil-works/chord": ["./vendor/pi/packages/chord/src/index.ts"],
+      "@earendil-works/chord/context": ["./vendor/pi/packages/chord/src/context/index.ts"],
+      "@earendil-works/chord/delta": ["./vendor/pi/packages/chord/src/delta/index.ts"],
+      "@earendil-works/chord/node": ["./vendor/pi/packages/chord/src/node.ts"],
+      "@earendil-works/pi-ai": ["./vendor/pi/packages/ai/src/index.ts"],
+      "@earendil-works/pi-ai/models": ["./vendor/pi/packages/ai/src/models.ts"],
+      "@earendil-works/pi-ai/*": ["./vendor/pi/packages/ai/src/*.ts", "./vendor/pi/packages/ai/src/providers/*.ts"],
+      "@earendil-works/pi-durable": ["./vendor/pi/packages/durable/src/index.ts"],
+      "@earendil-works/pi-durable/tools": ["./vendor/pi/packages/durable/src/tools/index.ts"],
+      "@earendil-works/pi-durable/*": [
+        "./vendor/pi/packages/durable/src/*.ts",
+        "./vendor/pi/packages/durable/src/*/index.ts",
+        "./vendor/pi/packages/durable/src/*"
+      ],
+      "@earendil-works/pi-env": ["./vendor/pi/packages/env/src/index.ts"],
+      "@earendil-works/pi-coding-agent": ["./vendor/pi/packages/coding-agent/dist/index.d.ts"],
+      "@repo/design-system": ["./vendor/open-intelligent-ui/packages/design-system/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "vendor"]
+}

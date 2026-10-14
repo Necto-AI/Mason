@@ -1,0 +1,21 @@
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
+
+# Node / Build / Runtime state
+node_modules/
+dist/
+.data*/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Local issue tracker (docs/agents/issue-tracker.md)
+.scratch/
