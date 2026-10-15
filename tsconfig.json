@@ -31,7 +31,6 @@
       ],
       "@earendil-works/pi-env": ["./vendor/pi/packages/env/src/index.ts"],
       "@earendil-works/pi-coding-agent": ["./vendor/pi/packages/coding-agent/dist/index.d.ts"],
-      "@repo/design-system": ["./vendor/open-intelligent-ui/packages/design-system/src/index.ts"]
     }
   },
   "include": ["src/**/*", "test/**/*", "scripts/**/*"],

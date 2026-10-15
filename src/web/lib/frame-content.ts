@@ -1,6 +1,6 @@
 // Adapted from `vendor/open-intelligent-ui/apps/app/src/components/generative-ui/open-generative-ui/frame-content.ts`
 // (the trip animator is dropped: this client renders conversational widgets, not map trips).
-import { FORM_STYLES_WITH_STAGGER_CSS, IMPORTMAP_SCRIPT_TAG, SVG_CLASSES_CSS, THEME_CSS } from "@repo/design-system";
+import { FORM_STYLES_WITH_STAGGER_CSS, IMPORTMAP_SCRIPT_TAG, SVG_CLASSES_CSS, THEME_CSS } from "./design-system.ts";
 
 export const RESIZE_MESSAGE_TYPE = "__ogui_resize";
 
