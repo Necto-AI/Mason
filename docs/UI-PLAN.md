@@ -165,3 +165,11 @@ Widgets are meant to be used, not only glanced at: dashboards and controls need 
 `frame-content.ts` swaps the sandbox between the measurement layout and a viewport layout (`FULLSCREEN_FRAME_JS`). The
 sandbox is not re-created, so widget state survives. Verified at 1280×900 and 390×844 (enter via button, exit via button
 and `Esc`, live resize inside the sandbox, bridge submission while fullscreen, no clipped edges).
+
+6. **A widget closes its bubble.** The model writes its lead-in and then calls the tool, and the follow-up answer
+   arrives in a message of its own, so `groupBubbles` keeps a widget's own result (and the reasoning that follows it)
+   with the card and opens a fresh bubble for a second card. `bubbleContent()` orders a bubble's content text-first,
+   widgets last: a card never sits above the paragraph that introduces it.
+7. **A failed turn is not a dead end.** The newest turn that ended in a model error carries a Retry control, which
+   fires the `retry-failed-run` hook — the same thing the server's run supervisor fires on its own schedule. See SPEC
+   §4.4.

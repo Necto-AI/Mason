@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { renderMarkdown } from "../lib/markdown.ts";
 import { StreamText } from "../lib/stream-text.tsx";
 import {
+	bubbleContent,
 	bubbleHasContent,
 	groupBubbles,
 	type Bubble,
@@ -111,15 +112,18 @@ interface BubbleProps {
 	readonly onOpened: OpenTracker;
 }
 
-/** One bubble of a settled turn: its widgets and its text; the trace only survives in debug mode. */
+/** One bubble of a settled turn: its text and its widgets; the trace only survives in debug mode. */
 function SettledBubble({ bubble, debug, bridgeFor, onOpened }: BubbleProps) {
 	return (
 		<div className="bubble">
 			{debug ? <Trace pieces={bubble.trace} live={false} debug onOpened={onOpened} /> : null}
-			{bubble.widgets.map((piece) => (
-				<WidgetCard key={piece.id} piece={piece} bridgeFor={bridgeFor} debug={debug} />
-			))}
-			{bubble.text.trim() === "" ? null : <MarkdownText text={bubble.text} />}
+			{bubbleContent(bubble).map((content) =>
+				content.kind === "text" ? (
+					<MarkdownText key={content.key} text={content.text} />
+				) : (
+					<WidgetCard key={content.key} piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
+				),
+			)}
 		</div>
 	);
 }
@@ -166,10 +170,13 @@ function LiveBubble({
 					<Trace pieces={bubble.trace} live deferred={deferred} debug={debug} onOpened={onOpened} />
 				</div>
 			) : null}
-			{bubble.widgets.map((piece) => (
-				<WidgetCard key={piece.id} piece={piece} bridgeFor={bridgeFor} debug={debug} />
-			))}
-			{bubble.text.trim() === "" ? null : <StreamText text={bubble.text} />}
+			{bubbleContent(bubble).map((content) =>
+				content.kind === "text" ? (
+					<StreamText key={content.key} text={content.text} />
+				) : (
+					<WidgetCard key={content.key} piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
+				),
+			)}
 		</div>
 	);
 }
@@ -180,11 +187,14 @@ export function SettledTurn({
 	debug,
 	bridgeFor,
 	onOpened,
+	onRetry,
 }: {
 	turn: Turn;
 	debug: boolean;
 	bridgeFor: (callId: string) => WidgetBridge;
 	onOpened: OpenTracker;
+	/** Fires `retry-failed-run` with the failure text when the reader asks for the run again. */
+	onRetry?: (error: string) => void;
 }) {
 	const bubbles = groupBubbles(turnPieces(turn, undefined, [], { widgetRows: debug })).filter(bubbleHasContent);
 	const errors = turnErrors(turn);
@@ -194,11 +204,27 @@ export function SettledTurn({
 			{bubbles.map((bubble) => (
 				<SettledBubble key={bubble.key} bubble={bubble} debug={debug} bridgeFor={bridgeFor} onOpened={onOpened} />
 			))}
-			{errors.map((error) => (
-				<div className="note error-note" key={error}>
-					{error}
+			{errors.length === 0 ? null : (
+				// A failed run is a dead end otherwise: durable keeps the conversation, so the way out is to ask
+				// again with the failure in hand — as a hook event, not a message the user never wrote.
+				<div className="note error-note" data-testid="run-error">
+					{errors.map((error) => (
+						<div className="error-line" key={error}>
+							{error}
+						</div>
+					))}
+					{onRetry === undefined ? null : (
+						<button
+							type="button"
+							className="retry-run"
+							data-testid="retry-run"
+							onClick={() => onRetry(errors.join("\n"))}
+						>
+							Retry
+						</button>
+					)}
 				</div>
-			))}
+			)}
 			{debug ? <SettledDebug turn={turn} /> : null}
 		</article>
 	);
