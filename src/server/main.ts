@@ -14,6 +14,7 @@ import { WebSocketServer } from "ws";
 import { AgentService, AgentStatusSchema, type AgentStatus } from "../shared/contract.ts";
 import { UnknownHookError } from "./hooks.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
+import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
 import { deriveAgentStatus } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -75,9 +76,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		const view = self.state("view", Type.Unknown(), { init: () => viewResource.value.value });
 		const agentStatus = self.state("agentStatus", AgentStatusSchema, { init: () => statusFor(viewResource.value.value) });
 
+		// The supervisor re-arms a run that a provider outage killed; it reads the committed view only.
+		const supervisor = new RunRetrySupervisor(async (error) => {
+			await runtime.hooks.fire(RETRY_HOOK_ID, error);
+		}, retryOptionsFromEnv());
+
 		self.on("viewSync", viewResource, (next, ctx) => {
 			view.replace(ctx, next);
 			agentStatus.replace(ctx, statusFor(next));
+			supervisor.observe(next);
 		});
 
 		const refreshStatus = (ctx: Ctx): void => {
@@ -89,6 +96,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			view,
 			agentStatus,
 			submit: async ({ content, whenBusy }) => {
+				// The reader is driving now: a scheduled retry would talk over them.
+				supervisor.acted();
 				const conversation = await runtime.conversation();
 				const submission = await conversation.submit(
 					{ type: "input", content, ...(whenBusy === undefined ? {} : { whenBusy }) },
@@ -111,6 +120,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				await (await runtime.conversation()).compact(args?.instructions, BACKGROUND_CONTEXT);
 			},
 			fireHook: async ({ hookId, payload }, ctx) => {
+				if (hookId !== RETRY_HOOK_ID) supervisor.acted();
 				const submission = await runtime.hooks.fire(hookId, payload);
 				refreshStatus(ctx);
 				return { submissionId: submission.id };
@@ -222,6 +232,21 @@ async function serveStatic(response: ServerResponse, webDir: string, pathname: s
 	const body = await readFile(path);
 	response.writeHead(200, { "content-type": CONTENT_TYPES[extname(path)] ?? "application/octet-stream" });
 	response.end(body);
+}
+
+/**
+ * Retry schedule overrides, for tests and for a deployment that wants a different patience:
+ * `PDA_RUN_RETRY_DELAYS_MS="1000,5000"` and `PDA_RUN_RETRY_ATTEMPTS=2`.
+ */
+function retryOptionsFromEnv(): { delaysMs?: number[]; maxAttempts?: number } {
+	const delays = process.env.PDA_RUN_RETRY_DELAYS_MS?.split(",")
+		.map((value) => Number(value.trim()))
+		.filter((value) => Number.isFinite(value) && value >= 0);
+	const attempts = Number(process.env.PDA_RUN_RETRY_ATTEMPTS);
+	return {
+		...(delays === undefined || delays.length === 0 ? {} : { delaysMs: delays }),
+		...(Number.isFinite(attempts) && attempts > 0 ? { maxAttempts: attempts } : {}),
+	};
 }
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {

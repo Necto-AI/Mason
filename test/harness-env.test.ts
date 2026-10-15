@@ -124,7 +124,7 @@ describe("durable harness + pi-env", () => {
 		try {
 			assert.deepEqual(
 				runtime.hooks.list().map((hook) => hook.id),
-				["morning-brief", "workspace-check"],
+				["morning-brief", "retry-failed-run", "workspace-check"],
 			);
 			const submission = await runtime.hooks.fire("workspace-check");
 			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
@@ -147,6 +147,37 @@ describe("durable harness + pi-env", () => {
 			const hook = runtime.hooks.get("workspace-check");
 			assert.equal(hook?.fireCount, 1);
 			assert.ok(hook?.lastFiredAt !== undefined);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("the retry hook carries the failure back to the agent, and nothing schedules it on its own", async () => {
+		const directory = await tempDir("pda-retry-");
+		const { access, faux } = fauxAccess();
+		faux.setResponses([fauxAssistantMessage(fauxText("Resuming the write."))]);
+		const runtime = await openFor(directory, access, { storage: "memory" });
+		try {
+			const hook = runtime.hooks.get("retry-failed-run");
+			assert.ok(hook, "the retry hook ships built in");
+			// Manual only: an interval would fire it at a model that may still be down.
+			assert.equal(hook.enabled, false);
+			assert.equal((hook as { intervalMs?: number }).intervalMs, undefined);
+
+			const submission = await runtime.hooks.fire("retry-failed-run", "Connection error.");
+			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
+
+			const entries = await readEntries(runtime);
+			const hookEntry = entries.find((entry) => entry.kind === "app.hook");
+			assert.ok(hookEntry);
+			const data = hookEntry.data as { hookId: string; payload: string };
+			assert.equal(data.hookId, "retry-failed-run");
+			assert.equal(data.payload, "Connection error.");
+			// The prompt tells the agent to resume rather than restart, with the failure in it.
+			const prompt = textOf(hookEntry.model?.[0]);
+			assert.match(prompt, /^\[EVENT HOOK: Retry a failed run\]/);
+			assert.match(prompt, /resume it from where it stopped/i);
+			assert.match(prompt, /Connection error\./);
 		} finally {
 			await runtime.close();
 		}

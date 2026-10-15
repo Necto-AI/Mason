@@ -216,6 +216,16 @@ export function builtinHooks(): Array<Omit<EventHookConfig, "fireCount">> {
 				"It is {{date}} and the day is starting. Check the workspace and the calendar for what today needs, then send a short brief: what is fixed, what is open, and the one thing to do first.",
 		},
 		{
+			// Manual only: nothing schedules it, and the client's Retry control is the one caller.
+			id: "retry-failed-run",
+			name: "Retry a failed run",
+			description:
+				"Resume a run that ended in a model error. Fired by the Retry control on the failed turn, with the error as payload.",
+			enabled: false,
+			promptTemplate:
+				"Your previous attempt failed before it finished, so the task is still open. Resume it from where it stopped: keep what is already done, redo only the step that failed, and do not start over from scratch. The failure was:\n{{payload}}",
+		},
+		{
 			id: "workspace-check",
 			name: "Workspace check",
 			description: "Inspect the workspace (git status, uncommitted work, stale tasks) and report anything that needs attention.",

@@ -584,6 +584,23 @@
 .note.error-note {
 	color: var(--error);
 }
+.error-note .error-line + .error-line {
+	margin-top: 2px;
+	opacity: 0.75;
+}
+.retry-run {
+	margin-top: 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	background: var(--surface-2);
+	color: var(--text);
+	font: 500 12px var(--sans);
+	padding: 4px 12px;
+	cursor: pointer;
+}
+.retry-run:hover {
+	background: var(--elevated);
+}
 
 /* ===== markdown ===== */
 .markdown > *:first-child,
