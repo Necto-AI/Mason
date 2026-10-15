@@ -15,7 +15,6 @@ const links = [
   ["node_modules/@earendil-works/pi-mcp", "vendor/pi/packages/mcp"],
   ["node_modules/@earendil-works/pi-telemetry", "vendor/pi/packages/telemetry"],
   ["node_modules/@earendil-works/pi-tui", "vendor/pi/packages/tui"],
-  ["node_modules/@repo/design-system", "vendor/open-intelligent-ui/packages/design-system"],
 ];
 
 for (const [destRel, targetRel] of links) {
@@ -27,4 +26,4 @@ for (const [destRel, targetRel] of links) {
   symlinkSync(target, dest, "dir");
 }
 
-console.log("[link-vendor] Linked vendor/pi and vendor/open-intelligent-ui packages into node_modules.");
+console.log("[link-vendor] Linked vendor/pi packages into node_modules.");
