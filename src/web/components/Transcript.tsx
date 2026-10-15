@@ -11,6 +11,9 @@ import { DebugSheet, LiveChips, UsagePanel } from "./DebugBits.tsx";
 import { HookRow, LiveBubbles, NoteRow, SettledTurn, UserRow } from "./MessageRow.tsx";
 import { QueuedRows } from "./QueuedRows.tsx";
 
+/** The built-in hook the Retry control fires (`src/server/hooks.ts`). */
+export const RETRY_HOOK_ID = "retry-failed-run";
+
 export interface TranscriptProps {
 	readonly view: ConversationViewLike | undefined;
 	readonly busy: boolean;
@@ -91,7 +94,16 @@ export function Transcript({
 				if (block.kind === "hook") return <HookRow key={blockKey(block)} entry={block.entry} debug={debug} />;
 				if (block.kind === "note") return <NoteRow key={blockKey(block)} entry={block.entry} debug={debug} />;
 				return (
-					<SettledTurn key={blockKey(block)} turn={block.turn} debug={debug} bridgeFor={bridgeFor} onOpened={onOpened} />
+					<SettledTurn
+						key={blockKey(block)}
+						turn={block.turn}
+						debug={debug}
+						bridgeFor={bridgeFor}
+						onOpened={onOpened}
+						// Only the newest turn is worth retrying: once anything follows it — a message, or the
+						// supervisor's own retry — the failure is history, not a dead end.
+						onRetry={block === blocks[blocks.length - 1] ? (error) => onFireHook(RETRY_HOOK_ID, error) : undefined}
+					/>
 				);
 			})}
 			<div className="live">

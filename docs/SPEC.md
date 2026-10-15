@@ -312,6 +312,39 @@ retry/deferred and compaction chips, the `pi.usage` ledger, and a raw inspector 
 
 ---
 
+### 4.4 Failure handling: the run supervisor and the Retry control
+
+Three layers, because a provider outage has three different timescales.
+
+1. **Inside a run, pi-ai retries the model call.** One attempt plus a bounded number of retries with exponential
+   backoff. A transcript reading `terminated` followed by several `Connection error.` entries *is* that budget being
+   spent: the provider was unreachable for longer than a few seconds.
+2. **After a run, the server re-arms it.** A failed run is otherwise a dead end: pi-durable settles the input as
+   `unanswered` (`reason: "model_error"`) and waits for new work, so nothing resumes it. `src/server/run-retry.ts`
+   holds the whole policy, split so it is testable without a clock:
+
+   - `readRunOutcome(view)` — the newest assistant entry that ended in `stopReason: "error"`, its message, and whether
+     an answer followed it (the failure was made good).
+   - `planRunRetry(input)` — pure: nothing while the run is still going, nothing for an error already handled,
+     nothing once the budget is spent; otherwise `wait(delayMs, attempt, error)`.
+   - `RunRetrySupervisor` — owns the attempt counter and the timer. It observes the committed view on every sync and
+     fires the built-in `retry-failed-run` hook, so a retry is a **hook event** — visible in the transcript as
+     `triggered Retry a failed run` — and never a message the user did not write.
+
+   The schedule is deliberately slower than the in-run retries: **15s, 60s, 5min, 15min** (four attempts, ~20 minutes
+   in total), overridable with `PDA_RUN_RETRY_DELAYS_MS` and `PDA_RUN_RETRY_ATTEMPTS`. The budget resets the moment an
+   answer succeeds, and a pending re-fire is dropped as soon as the reader submits anything — their input leads.
+3. **On demand, the reader retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
+   schedules it; the prompt tells the agent to resume from where it stopped instead of starting over, with the failure
+   text appended as the payload. The client's **Retry** control (`data-testid="retry-run"`) fires the same hook with
+   the error lines it shows, and disappears once anything follows the failed turn. Its prompt explains the durable
+   promise in the terms the reader needs: *the task is still open*.
+
+What durability does and does not promise, in one line: the conversation, the run, the subscriptions and the hook
+state survive a **process** restart — kill the server mid-tool and it resumes the run in place — while a provider
+outage that outlasts every retry budget leaves a failed turn, which the supervisor and the Retry control now pick up
+again.
+
 ## 5. Milestone 3 Specification: OpenIntelligentUI Integration
 
 ### 5.1 Why We Adapt Components Instead of Forking the Next.js Shell

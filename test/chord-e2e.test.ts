@@ -168,7 +168,7 @@ describe("chord client <-> server", () => {
 			assert.equal(status.sandboxedUiEnabled, false);
 			assert.deepEqual(
 				status.hooks.map((hook) => hook.id),
-				["morning-brief", "workspace-check"],
+				["morning-brief", "retry-failed-run", "workspace-check"],
 			);
 			assert.deepEqual(status.model, { provider: "faux", modelId: "faux-1" });
 
