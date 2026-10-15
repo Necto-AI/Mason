@@ -265,8 +265,15 @@ export interface Bubble {
 
 /**
  * Group pieces into bubbles: a trace piece after produced content opens a new bubble; produced content (text
- * or a widget) always lands in the current one. So a bubble reads as [trace] → [widgets] → [the message the
- * trace produced], and only the last bubble of a running turn can still be trace-only.
+ * or a widget) always lands in the current one. So a bubble holds [trace] → [what the trace produced], and only
+ * the last bubble of a running turn can still be trace-only. Render order inside the bubble comes from
+ * `bubbleContent`, not from this grouping.
+ *
+ * A widget is the exception three times over. Its call's own result is that card's completion rather than new work, so
+ * it stays in the card's bubble instead of opening a new one — otherwise the paragraph the model writes about the
+ * widget (its tool result and the reasoning that follows sit between the call and that paragraph in the stream) would
+ * land *below* the card. Reasoning after a card stays with it for the same reason. And a widget opens a bubble of its
+ * own when the current one already holds cards, so two cards never stack under a single shared caption.
  */
 export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 	const bubbles: Bubble[] = [];
@@ -283,8 +290,23 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 			continue;
 		}
 		if (piece.kind === "widget") {
-			current ??= start(piece);
+			if (current === undefined || current.widgets.length > 0) current = start(piece);
 			current.widgets.push(piece);
+			continue;
+		}
+		if (
+			piece.kind === "toolResult" &&
+			current !== undefined &&
+			current.widgets.some((widget) => widget.callId === piece.message.toolCallId)
+		) {
+			current.trace.push(piece);
+			continue;
+		}
+		// Reasoning that follows a card is the model thinking about what it just built; the paragraph it leads to
+		// is the card's caption. Thinking is invisible outside debug mode, so splitting on it would strand that
+		// caption — and the card — in bubbles of their own.
+		if (piece.kind === "thinking" && current !== undefined && current.widgets.length > 0) {
+			current.trace.push(piece);
 			continue;
 		}
 		if (current === undefined || current.text !== "" || current.widgets.length > 0) current = start(piece);
@@ -317,6 +339,26 @@ export function pairToolResults(pieces: readonly TracePiece[]): ToolPairing {
 /** True when a bubble has something to show besides its trace. */
 export function bubbleHasContent(bubble: Bubble): boolean {
 	return bubble.text.trim() !== "" || bubble.widgets.length > 0;
+}
+
+/** Produced content in the order the view renders it: the text, then the widgets it introduces. */
+export type BubbleContent =
+	| { kind: "text"; key: string; text: string }
+	| { kind: "widget"; key: string; piece: WidgetPiece };
+
+/**
+ * What a bubble shows, in render order: the text first, widgets last.
+ *
+ * A model writes its lead-in text and then calls the tool, but call and text land in the same bubble and the
+ * two are not in stream order by the time a turn is read back — a message may carry text, a widget call, and
+ * more text, and the follow-up answer arrives in a message of its own. The text is what the model wrote *about*
+ * the widget, so the widget closes the bubble: a card never appears above the paragraph that introduces it.
+ */
+export function bubbleContent(bubble: Bubble): BubbleContent[] {
+	const content: BubbleContent[] = [];
+	if (bubble.text.trim() !== "") content.push({ kind: "text", key: `${bubble.key}:text`, text: bubble.text });
+	for (const piece of bubble.widgets) content.push({ kind: "widget", key: piece.id, piece });
+	return content;
 }
 
 /* ---------- readers for the view ---------- */

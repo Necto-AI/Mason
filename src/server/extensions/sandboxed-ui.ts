@@ -27,7 +27,10 @@ Call \`generateSandboxedUi\` and emit its parameters in this EXACT order, becaus
 4. html — body markup with readable initial content. No <style> blocks, no monolithic inline scripts.
 5. jsFunctions — named function declarations for behavior.
 6. jsExpressions — small synchronous statements invoking those functions.
-Text before or after the widget explains what it shows. "UI generated" means the call rendered; do not rebuild the same widget.
+The widget is appended at the BOTTOM of your reply, below all of its text, whether you write before or after the call.
+Write the introduction first and call the tool last: nothing you write can land below the card, so skip trailing lines like
+"here it is below", and a closing paragraph written after the call would render above the widget it talks about. "UI
+generated" means the call rendered; do not rebuild the same widget.
 
 The user can expand any widget to fill the screen, so make every widget fluid: fill the available height (flex or
 \`height: 100%\` on the root, never a fixed pixel height), keep widths in percentages, and re-render charts and

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { pinnedAfterScroll } from "../src/web/lib/follower.ts";
 import { singleLine, stepDuration, summarizeArgs } from "../src/web/lib/tool-view.ts";
 import {
+	bubbleContent,
 	type Block,
 	groupBubbles,
 	groupEntries,
@@ -261,6 +262,104 @@ test("a widget is produced content: work after it opens a new bubble, text lands
 			{ trace: ["toolCall"], widgets: 0, text: "" },
 		],
 	);
+});
+
+test("a widget keeps its own result, so the paragraph written after the call lands above the card", () => {
+	// What the model actually emits: the lead-in text and the call in one message, then the wrap-up in the next.
+	// The widget's tool result sits between them in the stream and must not split the bubble.
+	const turn = {
+		entries: [
+			entry(
+				2,
+				"pi.assistant",
+				assistant([
+					{ type: "text", text: "Nine bash calls later:" },
+					{ type: "toolCall", id: "w1", name: "generateSandboxedUi", arguments: { css: "body{}" } },
+				]),
+			),
+			entry(3, "pi.tool-result", toolResult("w1", "UI generated")),
+			entry(
+				4,
+				"pi.assistant",
+				assistant([
+					{ type: "thinking", thinking: "Now write the wrap-up." },
+					{ type: "text", text: "That is the assignment." },
+				]),
+			),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, []));
+	assert.equal(bubbles.length, 1);
+	assert.deepEqual(
+		bubbleContent(bubbles[0]).map((content) => content.kind),
+		["text", "widget"],
+	);
+	assert.equal(bubbles[0]?.text, "Nine bash calls later:\n\nThat is the assignment.");
+	// the result and the reasoning ride along in the trace, which is what debug mode shows under the card
+	assert.deepEqual(
+		bubbles[0]?.trace.map((piece) => piece.kind),
+		["toolResult", "thinking"],
+	);
+});
+
+test("a second widget opens its own bubble rather than stacking under the first card's text", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([{ type: "toolCall", id: "w1", name: "generateSandboxedUi", arguments: {} }])),
+			entry(3, "pi.tool-result", toolResult("w1", "UI generated")),
+			entry(4, "pi.assistant", assistant([{ type: "text", text: "First chart." }])),
+			entry(5, "pi.assistant", assistant([{ type: "toolCall", id: "w2", name: "generateSandboxedUi", arguments: {} }])),
+			entry(6, "pi.tool-result", toolResult("w2", "UI generated")),
+			entry(7, "pi.assistant", assistant([{ type: "text", text: "Second chart." }])),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, []));
+	assert.deepEqual(
+		bubbles.map((bubble) => ({ text: bubble.text, widgets: bubble.widgets.length })),
+		[
+			{ text: "First chart.", widgets: 1 },
+			{ text: "Second chart.", widgets: 1 },
+		],
+	);
+});
+
+test("an ordinary tool result still opens a bubble of its own", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([{ type: "text", text: "Checking." }])),
+			entry(3, "pi.assistant", assistant([{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } }])),
+			entry(4, "pi.tool-result", toolResult("t1", "ok")),
+			entry(5, "pi.assistant", assistant([{ type: "text", text: "Done." }])),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, []));
+	assert.deepEqual(
+		bubbles.map((bubble) => ({ text: bubble.text, trace: bubble.trace.map((piece) => piece.kind) })),
+		[
+			{ text: "Checking.", trace: [] },
+			{ text: "Done.", trace: ["toolCall", "toolResult"] },
+		],
+	);
+});
+
+test("bubbleContent puts the text above the widget: a card never sits over the paragraph it introduces", () => {
+	const widget = { kind: "widget", id: "w1", callId: "w1", args: {}, streaming: false } as const;
+	// A model writes its lead-in and the tool call in one message, and the follow-up answer in another; the
+	// bubble holds all three, so render order is a rule of its own rather than the order the parts arrived in.
+	const bubble = { key: "a", trace: [], text: "Let me build that.", widgets: [widget] };
+	assert.deepEqual(
+		bubbleContent(bubble).map((content) => content.kind),
+		["text", "widget"],
+	);
+	const [first] = bubbleContent(bubble);
+	assert.equal(first?.kind === "text" ? first.text : undefined, "Let me build that.");
+	// a bubble that only produced a widget still renders the card
+	assert.deepEqual(
+		bubbleContent({ key: "c", trace: [], text: "  ", widgets: [widget] }).map((content) => content.kind),
+		["widget"],
+	);
+	// keys stay stable per piece, so reordering never re-mounts a widget
+	assert.equal(bubbleContent(bubble)[1]?.key, "w1");
 });
 
 test("pairToolResults matches results to calls and hands back the orphans", () => {
