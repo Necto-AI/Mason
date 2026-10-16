@@ -281,6 +281,12 @@ This streams exact Chord structural diffs to every connected browser tab over
 
 ### 4.3 Chat Area (apiary look)
 
+**The shell does not narrate itself.** `SessionBar` is a wordmark plus one overflow menu (compact, reset, diagnostics,
+and the run/model/tool/queue facts as text inside it): a personal agent is assumed to work, so there is no status dot,
+model pill or connection badge to read. A run's progress lives in the turn that is running, `Stop` sits in the composer
+where the send action is, the model name appears only in diagnostics, and a lost connection is announced once — above
+the composer, after a 1.2s grace period, so a reload does not flash a warning (`Composer` → `connection`).
+
 The browser client is the chat area of apiary (`DenisSud/apiary` → `packages/web`) re-implemented in React on our
 Chord subscription; `docs/UI-PLAN.md` is the porting plan and the decisions log. Two modes, one transcript:
 
@@ -381,6 +387,23 @@ Inspecting `vendor/open-intelligent-ui`:
 
 ---
 
+**The card has three phases, and the frame's height is a policy, not a measurement** (`src/web/lib/frame-height.ts`):
+
+| Phase | What renders | Height |
+| --- | --- | --- |
+| `placeholder` | shimmering skeleton + the model's `placeholderMessages`, cycling | the model's `initialHeight`, clamped to 96–480 |
+| `preview` | a second sandbox that morphs the partial body (Idiomorph); `PREVIEW_MEASUREMENT_JS` measures it | grows only, from the estimate as a floor, capped at 80% of the viewport |
+| `settled` | the complete document (CSP, importmap, design-system styles) with the host bridge | the document's own measurement, shrink included |
+
+The preview is not destroyed when the final document is built: both sandboxes are on screen through a 200ms crossfade,
+so the card never blanks. Behavior (`jsFunctions`, `jsExpressions`) is still withheld until the call settles — a
+half-streamed declaration would throw inside the iframe.
+
+Height reports are clamped (`CONTENT_MAX` 4000px, 50px floor), sub-2px changes are ignored so the CSS transition is not
+restarted on every report, and the height the settled document reported is cached per call id: the settled turn is a
+different React subtree, and since an iframe cannot be re-parented without reloading, the widget is mounted a second
+time. That mount starts at the cached height and skips the skeleton, which reduces the artifact to one repaint of the
+widget's own content.
 ## 6. Verification & Acceptance Criteria
 
 1. **`test/harness-env.test.ts`:**

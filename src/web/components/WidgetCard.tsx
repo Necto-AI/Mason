@@ -3,6 +3,9 @@
  * settled ones alike. The card itself is the adapted OpenIntelligentUI renderer; this places it and gives it the
  * screen when the widget is meant to be used rather than glanced at.
  *
+ * The card carries one strip of its own chrome above the sandbox; the control sits there rather than floating over
+ * the widget, where it covered whatever the widget had put in its own top-right corner.
+ *
  * Fullscreen keeps the card where it is: the wrapper switches to a fixed, viewport-filling box, so the sandbox and
  * everything the reader did inside it survive. The browser's own fullscreen is requested on top of that when it is
  * available, and the overlay stands on its own where it is not (iOS Safari has no element fullscreen).
@@ -74,43 +77,52 @@ export function WidgetCard({ piece, bridgeFor, debug }: WidgetCardProps) {
 			data-call-id={piece.callId}
 			data-fullscreen={fullscreen}
 		>
-			<button
-				type="button"
-				className="widget-action"
-				data-testid="widget-fullscreen"
-				aria-pressed={fullscreen}
-				aria-label={fullscreen ? "Exit widget fullscreen" : "Use this widget fullscreen"}
-				title={fullscreen ? "Exit fullscreen" : "Use this widget fullscreen"}
-				onClick={toggle}
-			>
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth={2}
-					strokeLinecap="round"
-					strokeLinejoin="round"
-					aria-hidden="true"
+			{/* Reserve the strip: the control lives outside the widget, so it never covers its own content. */}
+			<div className="widget-head">
+				<button
+					type="button"
+					className="widget-action"
+					data-testid="widget-fullscreen"
+					aria-pressed={fullscreen}
+					aria-label={fullscreen ? "Exit widget fullscreen" : "Use this widget fullscreen"}
+					title={fullscreen ? "Exit fullscreen" : "Use this widget fullscreen"}
+					onClick={toggle}
 				>
-					{fullscreen ? (
-						<>
-							<path d="M9 3H5a2 2 0 0 0-2 2v4" />
-							<path d="M15 3h4a2 2 0 0 1 2 2v4" />
-							<path d="M15 21h4a2 2 0 0 0 2-2v-4" />
-							<path d="M9 21H5a2 2 0 0 1-2-2v-4" />
-						</>
-					) : (
-						<>
-							<path d="M15 3h6v6" />
-							<path d="M9 21H3v-6" />
-							<path d="M21 3l-7 7" />
-							<path d="M3 21l7-7" />
-						</>
-					)}
-				</svg>
-				<span>{fullscreen ? "Exit" : "Fullscreen"}</span>
-			</button>
-			<SandboxedUiCard content={content} bridge={bridge} streaming={piece.streaming} fullscreen={fullscreen} />
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth={2}
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						aria-hidden="true"
+					>
+						{fullscreen ? (
+							<>
+								<path d="M9 3H5a2 2 0 0 0-2 2v4" />
+								<path d="M15 3h4a2 2 0 0 1 2 2v4" />
+								<path d="M15 21h4a2 2 0 0 0 2-2v-4" />
+								<path d="M9 21H5a2 2 0 0 1-2-2v-4" />
+							</>
+						) : (
+							<>
+								<path d="M15 3h6v6" />
+								<path d="M9 21H3v-6" />
+								<path d="M21 3l-7 7" />
+								<path d="M3 21l7-7" />
+							</>
+						)}
+					</svg>
+					<span>{fullscreen ? "Exit" : "Fullscreen"}</span>
+				</button>
+			</div>
+			<SandboxedUiCard
+				callId={piece.callId}
+				content={content}
+				bridge={bridge}
+				streaming={piece.streaming}
+				fullscreen={fullscreen}
+			/>
 		</div>
 	);
 }

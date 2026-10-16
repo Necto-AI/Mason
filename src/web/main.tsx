@@ -118,13 +118,10 @@ function App() {
 		<div id="app">
 			<div id="main">
 				<SessionBar
-					connection={connectionState}
 					status={status}
 					toolsRunning={tools.filter((slot) => slot.status === "running").length}
 					toolsTotal={committedTools + tools.length}
 					inboxCount={queued}
-					busy={busy}
-					pending={pending}
 					debug={debug}
 					onToggleDebug={() => {
 						setDebug((value) => {
@@ -133,7 +130,6 @@ function App() {
 							return next;
 						});
 					}}
-					onStop={() => run(() => connection.agent.abort())}
 					onCompact={() => run(() => connection.agent.compact({}))}
 					onReset={() => run(() => connection.agent.reset({}))}
 				/>
@@ -163,8 +159,12 @@ function App() {
 					busy={busy}
 					enabled={connectionState === "connected" && status !== undefined}
 					pending={pending}
+					connection={connectionState}
+					model={status?.model}
+					debug={debug}
 					onSubmit={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }))}
 					onSteer={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "steer" }))}
+					onStop={() => run(() => connection.agent.abort())}
 				/>
 				<JumpPill show={!pinned} running={busy} onClick={() => follower.jump(true)} />
 			</div>
