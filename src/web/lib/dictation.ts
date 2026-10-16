@@ -32,3 +32,31 @@ export function releaseOutcome(pressedMs: number): "talk" | "latch" {
 export function worthTranscribing(recordedMs: number): boolean {
 	return recordedMs >= MIN_MS;
 }
+
+/* ---- the listening meter ----
+   While recording, the button's square becomes a row of capsule bars driven by the captured level — the
+   signal that the mic is not just open but hearing something. The maths lives here, DOM-free. */
+
+/** How many bars the meter shows: one per captured block, oldest scrolling out on the left. */
+export const BAR_COUNT = 5;
+/** A bar's height in the 16-unit icon box: quiet blocks rest at `BAR_MIN`, loud ones peg at `BAR_MAX`. */
+export const BAR_MIN = 3;
+export const BAR_MAX = 14;
+/** RMS below this is the noise floor (a bar bottoms out); above this the bar pegs. */
+export const LEVEL_FLOOR = 0.005;
+export const LEVEL_CEIL = 0.25;
+
+/** One captured block's RMS, 0..1+, to a bar height: clamped to the rails, then a square-root gamma so
+    conversational levels (well under the ceiling) still read as motion. */
+function barHeight(level: number): number {
+	const t = Math.min(1, Math.max(0, (level - LEVEL_FLOOR) / (LEVEL_CEIL - LEVEL_FLOOR)));
+	return BAR_MIN + Math.sqrt(t) * (BAR_MAX - BAR_MIN);
+}
+
+/** The rolling level history as the bars to draw: the newest `count` blocks, oldest first, left-padded
+    with resting bars while the history is still building. */
+export function barHeights(levels: readonly number[], count: number): number[] {
+	const recent = levels.slice(-count);
+	const resting = Array.from({ length: count - recent.length }, () => BAR_MIN);
+	return [...resting, ...recent.map(barHeight)];
+}
