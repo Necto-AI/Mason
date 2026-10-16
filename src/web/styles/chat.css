@@ -1250,6 +1250,76 @@ body.widget-fullscreen #transcript {
 	height: 15px;
 }
 
+/* the dictation mic: hold to talk, release to transcribe. Quiet until pressed — a circle the size of the
+   send, in faint ink rather than a button, so the row keeps its rhythm in every state. */
+.composer-mic {
+	position: relative;
+	width: 32px;
+	height: 32px;
+	min-height: 32px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: none;
+	color: var(--faint);
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	touch-action: none; /* a hold must not turn into a scroll on touch */
+	user-select: none;
+	-webkit-user-select: none;
+	transition: background var(--dur-out) var(--ease), color var(--dur-out) var(--ease);
+}
+/* invisible collar so the small mic still carries a 44px touch target */
+.composer-mic::before {
+	content: "";
+	position: absolute;
+	inset: -6px;
+	border-radius: 50%;
+}
+.composer-mic svg {
+	width: 16px;
+	height: 16px;
+	pointer-events: none;
+}
+.composer-mic:hover:not(:disabled) {
+	background: var(--surface-2);
+	color: var(--text);
+}
+.composer-mic:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+.composer-mic[data-state="recording"] {
+	color: var(--error);
+	background: color-mix(in srgb, var(--error) 12%, transparent);
+	animation: mic-listen 1.4s var(--ease) infinite;
+}
+@keyframes mic-listen {
+	50% {
+		opacity: 0.55;
+	}
+}
+.composer-mic[data-state="transcribing"] svg {
+	display: none;
+}
+.composer-mic[data-state="transcribing"]::after {
+	content: "";
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 2px solid var(--border);
+	border-top-color: var(--text);
+	animation: mic-spin 0.8s linear infinite;
+}
+@keyframes mic-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 /* the model that answers, in diagnostics only */
 .composer-model {
 	margin-right: auto;
@@ -1287,6 +1357,16 @@ body.widget-fullscreen #transcript {
 }
 .composer-strip[data-state="connecting"] .dot {
 	background: var(--faint);
+}
+/* dictation failed — the reader pressed the mic, so this one is their problem and wears the error ink */
+.composer-strip[data-state="error"] {
+	border-color: color-mix(in srgb, var(--error) 35%, transparent);
+	background: var(--error-bg);
+	color: var(--error);
+}
+.composer-strip[data-state="error"] .dot {
+	background: var(--error);
+	animation: none;
 }
 
 /* ===== debug mode ===== */
