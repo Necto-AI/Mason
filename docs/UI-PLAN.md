@@ -173,7 +173,15 @@ and `Esc`, live resize inside the sandbox, bridge submission while fullscreen, n
 7. **A failed turn is not a dead end.** The newest turn that ended in a model error carries a Retry control, which
    fires the `retry-failed-run` hook — the same thing the server's run supervisor fires on its own schedule. See SPEC
    §4.4.
-8. **A widget is a block of the answer, not part of a sentence.** Cards render beside the bubble, at the column's
+8. **Queued submissions wait at the end of the chat, not ahead of the run.** A steer or follow-up submitted while a
+   turn runs shows below the working block — where the agent's next input lands once the boundary places it — because
+   the run that precedes it cannot matter to its position any more: while it waits it is below the latest text for
+   sure, and once placed it enters the transcript below the content the run had already written. The queue shows
+   whenever the inbox holds items — after a model error too, so the reader can see what the restart will pick up —
+   and the `×` control is a purely display-side rendering of when the durable backend can settle a submission: plain
+   queued user inputs withdraw at any time through `withdrawSubmission`; a write or hook-input item has left plain
+   text and loses the control.
+9. **A widget is a block of the answer, not part of a sentence.** Cards render beside the bubble, at the column's
    width: inside it a widget could only ever be as wide as the line that introduced it, which turned a three-column
    dashboard into one narrow column.
 
