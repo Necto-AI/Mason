@@ -2,9 +2,22 @@
  * The composer pill, ported from sibling's `packages/web/src/composer.ts`: one line grows with the text; past 14
  * lines it caps (scrollable, fading top) until the toggle calls for the expanded 27. While a turn runs there are
  * two send actions, matching the durable backend's queue modes: Steer lands at the next boundary (the end of the
- * tool round), Follow-up only when the run ends.
+ * tool round), Follow-up only when the run ends, and Stop ends the run where the send button would be.
+ *
+ * This is also where the session tells the truth about itself: a lost connection is announced here, next to the
+ * input it blocks, and nowhere else — the shell is not a dashboard.
  */
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+
+/** The model that answers is a diagnostic, not a headline: it shows up when diagnostics do. */
+function modelLabel(model: ComposerProps["model"], debug: boolean) {
+	if (!debug || model === undefined) return null;
+	return (
+		<span className="composer-model" data-testid="composer-model">
+			{`${model.provider}/${model.modelId}`}
+		</span>
+	);
+}
 
 /** px, mirrors --prompt-line in chat.css. */
 const PROMPT_LINE = 23;
@@ -13,12 +26,31 @@ export interface ComposerProps {
 	readonly busy: boolean;
 	readonly enabled: boolean;
 	readonly pending: boolean;
+	readonly connection: "connecting" | "connected" | "disconnected";
+	/** Model that answers, shown while diagnostics are on. */
+	readonly model?: { provider: string; modelId: string } | undefined;
+	readonly debug: boolean;
 	/** Idle: the message that starts a run. Busy: the follow-up that waits for the run to end. */
 	readonly onSubmit: (text: string) => void;
 	readonly onSteer: (text: string) => void;
+	/** Ends the running turn. */
+	readonly onStop: () => void;
 }
 
-export function Composer({ busy, enabled, pending, onSubmit, onSteer }: ComposerProps) {
+/** How long a connection blip may last before it is worth mentioning; a reload should not flash a warning. */
+const BLIP_MS = 1200;
+
+export function Composer({
+	busy,
+	enabled,
+	pending,
+	connection,
+	model,
+	debug,
+	onSubmit,
+	onSteer,
+	onStop,
+}: ComposerProps) {
 	const [text, setText] = useState("");
 	const [expanded, setExpanded] = useState(false);
 	const [multiline, setMultiline] = useState(false);
@@ -65,6 +97,18 @@ export function Composer({ busy, enabled, pending, onSubmit, onSteer }: Composer
 		else onSubmit(value);
 	};
 
+	// A connection that has been down for longer than a blip is worth saying out loud; a reconnecting socket is not
+	// the reader's problem until it stays down.
+	const [notice, setNotice] = useState(connection);
+	useEffect(() => {
+		if (connection !== "connected") {
+			const timer = setTimeout(() => setNotice(connection), BLIP_MS);
+			return () => clearTimeout(timer);
+		}
+		setNotice(connection);
+	}, [connection]);
+	const offline = connection !== "connected" && notice !== "connected";
+
 	const canSend = enabled && !pending && text.trim() !== "";
 	return (
 		<form
@@ -75,6 +119,12 @@ export function Composer({ busy, enabled, pending, onSubmit, onSteer }: Composer
 				send(busy ? "followUp" : "submit");
 			}}
 		>
+			{offline ? (
+				<div className="composer-strip" data-testid="connection-strip" data-state={connection}>
+					<span className="dot" aria-hidden="true" />
+					{connection === "disconnected" ? "Connection lost \u2014 reconnecting\u2026" : "Connecting\u2026"}
+				</div>
+			) : null}
 			<div
 				ref={box}
 				className={`composer${multiline ? " multiline" : ""}${expanded ? " expanded" : ""}${
@@ -98,6 +148,7 @@ export function Composer({ busy, enabled, pending, onSubmit, onSteer }: Composer
 					}}
 				/>
 				<div className="composer-actions">
+					{modelLabel(model, debug)}
 					{busy ? (
 						<>
 							<button
@@ -119,6 +170,18 @@ export function Composer({ busy, enabled, pending, onSubmit, onSteer }: Composer
 								onClick={() => send("followUp")}
 							>
 								Follow-up
+							</button>
+							<button
+								type="button"
+								className="composer-action composer-stop"
+								data-testid="stop"
+								title="Stop the run"
+								aria-label="Stop the run"
+								onClick={onStop}
+							>
+								<svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+									<rect x="6.5" y="6.5" width="11" height="11" rx="2" />
+								</svg>
 							</button>
 						</>
 					) : (

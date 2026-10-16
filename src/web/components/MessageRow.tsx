@@ -105,6 +105,18 @@ function MarkdownText({ text }: { text: string }) {
 	return <div className="text markdown" data-testid="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/**
+ * A bubble's content, split: text stays in the bubble, widgets render as their own full-width blocks beside it.
+ * Inside the bubble a card could only ever be as wide as the sentence that introduced it.
+ */
+function bubbleParts(bubble: Bubble) {
+	const items = bubbleContent(bubble);
+	return {
+		text: items.filter((item) => item.kind === "text"),
+		widgets: items.filter((item) => item.kind === "widget"),
+	};
+}
+
 interface BubbleProps {
 	readonly bubble: Bubble;
 	readonly debug: boolean;
@@ -114,17 +126,23 @@ interface BubbleProps {
 
 /** One bubble of a settled turn: its text and its widgets; the trace only survives in debug mode. */
 function SettledBubble({ bubble, debug, bridgeFor, onOpened }: BubbleProps) {
+	const { text, widgets } = bubbleParts(bubble);
 	return (
-		<div className="bubble">
-			{debug ? <Trace pieces={bubble.trace} live={false} debug onOpened={onOpened} /> : null}
-			{bubbleContent(bubble).map((content) =>
-				content.kind === "text" ? (
-					<MarkdownText key={content.key} text={content.text} />
-				) : (
-					<WidgetCard key={content.key} piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
-				),
-			)}
-		</div>
+		<>
+			{debug || text.length > 0 ? (
+				<div className="bubble">
+					{debug ? <Trace pieces={bubble.trace} live={false} debug onOpened={onOpened} /> : null}
+					{text.map((content) => (
+						<MarkdownText key={content.key} text={content.text} />
+					))}
+				</div>
+			) : null}
+			{widgets.map((content) => (
+				<div className="bubble-widgets" key={content.key}>
+					<WidgetCard piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
+				</div>
+			))}
+		</>
 	);
 }
 
@@ -163,21 +181,28 @@ function LiveBubble({
 	}, [produced, dropped, debug]);
 
 	const showTrace = debug || !dropped;
+	const { text, widgets } = bubbleParts(bubble);
+	const showBubble = showTrace || text.length > 0;
 	return (
-		<div className="bubble">
-			{showTrace ? (
-				<div className="trace-slot" ref={wrap}>
-					<Trace pieces={bubble.trace} live deferred={deferred} debug={debug} onOpened={onOpened} />
+		<>
+			{showBubble ? (
+				<div className="bubble">
+					{showTrace ? (
+						<div className="trace-slot" ref={wrap}>
+							<Trace pieces={bubble.trace} live deferred={deferred} debug={debug} onOpened={onOpened} />
+						</div>
+					) : null}
+					{text.map((content) => (
+						<StreamText key={content.key} text={content.text} />
+					))}
 				</div>
 			) : null}
-			{bubbleContent(bubble).map((content) =>
-				content.kind === "text" ? (
-					<StreamText key={content.key} text={content.text} />
-				) : (
-					<WidgetCard key={content.key} piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
-				),
-			)}
-		</div>
+			{widgets.map((content) => (
+				<div className="bubble-widgets" key={content.key}>
+					<WidgetCard piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
+				</div>
+			))}
+		</>
 	);
 }
 

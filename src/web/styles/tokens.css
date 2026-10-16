@@ -31,6 +31,8 @@
 	--warn: #b06e15;
 	--warn-bg: #faf4ea;
 	--composer-space: 63px; /* fallback; the composer publishes the real one */
+	--widget-head-h: 14px; /* the strip above a widget card: reserved, so no control ever covers the widget */
+	--widget-head-h-touch: 38px;
 	--bar-h: 56px; /* the glass bar floats; #transcript pads by it */
 	--r-chip: 6px;
 	--r-panel: 12px;

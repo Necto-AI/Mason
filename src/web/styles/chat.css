@@ -15,7 +15,7 @@
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	padding: 10px 16px;
+	padding: 0 12px 0 16px;
 	border-bottom: 1px solid var(--border);
 	min-height: var(--bar-h);
 	/* tinted glass: the transcript scrolls under the bar */
@@ -25,108 +25,102 @@
 }
 
 #session-title {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	font-size: 13px;
 	font-weight: 600;
+	letter-spacing: -0.01em;
 	min-width: 0;
+	color: var(--muted);
 }
 
 #session-title .title-name {
 	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
-/* status pill — the feedback vocabulary */
-#session-status {
-	flex: 1;
+/* one control: everything operational is one click away, and nothing is announced */
+#session-menu-wrap {
+	position: relative;
+}
+#session-menu-button {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	font-size: 12px;
-	font-weight: 500;
-	min-width: 0;
-	overflow: hidden;
-}
-#session-status .dot {
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--faint);
-	flex: none;
-}
-#session-status.idle {
-	color: var(--muted);
-}
-#session-status.idle .dot {
-	background: var(--faint);
-}
-#session-status.busy {
-	color: var(--accent);
-}
-#session-status.busy .dot {
-	background: var(--accent);
-	animation: breathe 2s var(--ease) infinite;
-}
-#session-status.error {
-	color: var(--error);
-}
-#session-status.error .dot {
-	background: var(--error);
-}
-#session-status .badge {
-	font-size: 11px;
-	color: var(--muted);
-	background: var(--elevated);
-	border: 1px solid var(--border);
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border: 1px solid transparent;
 	border-radius: var(--r-pill);
-	padding: 2px 8px;
-	white-space: nowrap;
+	background: transparent;
+	color: var(--faint);
+	cursor: pointer;
+	transition: background var(--dur-out) var(--ease), color var(--dur-out) var(--ease);
 }
-#session-status .badge[data-state="disconnected"] {
-	color: var(--error);
-	border-color: color-mix(in srgb, var(--error) 40%, transparent);
+#session-menu-button:hover,
+#session-menu-button[aria-expanded="true"] {
+	background: var(--surface-2);
+	color: var(--text);
+}
+#session-menu-button svg {
+	width: 17px;
+	height: 17px;
+}
+
+.session-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 4;
+	min-width: 236px;
+	display: flex;
+	flex-direction: column;
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-panel);
+	background: var(--elevated);
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+	animation: menu-in 140ms var(--ease);
+}
+@keyframes menu-in {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+}
+.session-menu .menu-facts {
+	display: grid;
+	gap: 2px;
+	padding: 6px 9px 8px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid var(--border);
+}
+.session-menu .menu-facts code {
+	font: 11px var(--mono);
+	color: var(--faint);
+}
+.session-menu button {
+	display: block;
+	width: 100%;
+	text-align: left;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: 400 13px var(--sans);
+	padding: 8px 9px;
+	border-radius: var(--r-chip);
+	cursor: pointer;
+}
+.session-menu button:hover {
+	background: var(--surface-2);
 }
 
 @keyframes breathe {
 	50% {
 		opacity: 0.35;
 	}
-}
-
-#session-actions {
-	display: flex;
-	gap: 6px;
-}
-
-#session-actions button {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	background: var(--elevated);
-	border: 1px solid var(--border);
-	color: var(--text);
-	border-radius: var(--r-pill);
-	padding: 6px 13px;
-	font: 500 12.5px/1.2 var(--sans);
-	cursor: pointer;
-	transition: background var(--dur-out) var(--ease);
-}
-#session-actions button svg {
-	width: 14px;
-	height: 14px;
-}
-#session-actions button:hover:not(:disabled) {
-	background: var(--surface-2);
-}
-#session-actions button:disabled {
-	opacity: 0.4;
-	cursor: not-allowed;
-}
-#toggle-debug[aria-pressed="true"] {
-	background: var(--accent-soft);
-	border-color: var(--accent);
-	color: var(--accent);
 }
 
 .error-banner {
@@ -269,15 +263,30 @@
 	color: var(--text);
 }
 
-/* answers may run to the right edge of the user bubble, not the 78% pill */
+/* Answers run the full column: a widget is a block of the answer and needs the width, while the sentences
+   around it keep hugging their own bubble. */
 .message.assistant {
-	align-self: flex-start;
+	align-self: stretch;
+	max-width: 100%;
+}
+.message.assistant .bubble {
+	width: fit-content;
 	max-width: 100%;
 }
 
 /* a settled turn keeps one bubble per message; the traces are gone */
 .message.assistant .bubble + .bubble {
 	margin-top: 10px;
+}
+
+/* A widget is a block of the answer, not part of the sentence that introduced it: it takes the column's width,
+   whatever the bubble above it had to hug. */
+.bubble-widgets {
+	width: 100%;
+	margin-top: 8px;
+}
+.bubble + .bubble-widgets {
+	margin-top: 6px;
 }
 
 /* a hook trigger: the agent woke on its own */
@@ -708,34 +717,36 @@
 	margin: 6px 0;
 }
 
-/* One quiet control, hovering over the card's empty corner: icon only, translucent so it never hides the
-   widget's own content, and a labelled pill once there is room for it in fullscreen. */
+/* A reserved strip, not an overlay: the control must never sit on the widget's own top-right corner. Collapsed to
+   a hairline until the card is hovered, so a page of widgets still reads as content. */
+.widget-head {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	height: var(--widget-head-h);
+}
+
+/* One quiet control: icon only, revealed on hover, and a labelled pill once there is room for it in fullscreen. */
 .widget-action {
-	position: absolute;
-	top: 6px;
-	right: 6px;
-	z-index: 2;
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	width: 28px;
-	height: 28px;
 	justify-content: center;
-	border: 1px solid var(--border);
+	gap: 6px;
+	width: 24px;
+	height: 24px;
+	border: 1px solid transparent;
 	border-radius: var(--r-pill);
-	background: color-mix(in srgb, var(--elevated) 80%, transparent);
-	-webkit-backdrop-filter: blur(8px);
-	backdrop-filter: blur(8px);
-	color: var(--muted);
+	background: transparent;
+	color: var(--faint);
 	font: 500 11.5px var(--sans);
 	padding: 0;
 	cursor: pointer;
 	opacity: 0;
-	transition: opacity var(--dur-out) var(--ease), background var(--dur-out) var(--ease);
+	transition: opacity var(--dur-out) var(--ease), background var(--dur-out) var(--ease), color var(--dur-out) var(--ease);
 }
 .widget-action svg {
-	width: 14px;
-	height: 14px;
+	width: 13px;
+	height: 13px;
 }
 .widget-action span {
 	display: none;
@@ -746,18 +757,21 @@
 	opacity: 1;
 }
 .widget-action:hover {
-	background: var(--elevated);
+	background: var(--surface-2);
 	color: var(--text);
 }
 @media (hover: none) {
+	.widget-head {
+		height: var(--widget-head-h-touch);
+	}
 	.widget-action {
 		opacity: 1;
-		width: 40px;
-		height: 40px;
+		width: 36px;
+		height: 36px;
 	}
 	.widget-action svg {
-		width: 17px;
-		height: 17px;
+		width: 16px;
+		height: 16px;
 	}
 }
 
@@ -784,14 +798,19 @@
 	border-radius: 0;
 }
 /* fullscreen has room for the word, and the way out should be unmissable */
+.widget.fullscreen .widget-head {
+	height: auto;
+	padding-bottom: 8px;
+}
 .widget.fullscreen .widget-action {
-	top: 12px;
-	right: 12px;
 	width: auto;
 	height: auto;
-	min-height: 36px;
-	padding: 7px 13px;
+	min-height: 32px;
+	padding: 6px 12px;
 	opacity: 1;
+	border-color: var(--border);
+	background: var(--elevated);
+	color: var(--muted);
 }
 .widget.fullscreen .widget-action span {
 	display: inline;
@@ -811,7 +830,6 @@ body.widget-fullscreen #transcript {
 	width: 100%;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
 }
 
 /* the card renders bare: the renderer's caption line is a debug detail */
@@ -821,46 +839,131 @@ body.widget-fullscreen #transcript {
 .widget.debug .genui-toolbar {
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 8px;
 	flex-wrap: wrap;
+	margin-bottom: 4px;
 }
-
-.genui-hint {
-	font-size: 12px;
+.widget.debug .genui-toolbar .badge {
+	font-size: 11px;
 	color: var(--muted);
+	background: var(--elevated);
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	padding: 2px 8px;
+}
+.genui-hint {
+	font: 11px var(--mono);
+	color: var(--faint);
 }
 
+/* The frame is the card: one surface, one border, and a height that animates between measurements instead of
+   snapping. While the widget streams, that height only grows (see frame-height.ts), so this reads as content
+   arriving rather than the box fighting the content. */
 .genui-frame {
 	position: relative;
 	width: 100%;
-	border: 1px dashed var(--border);
+	border: 1px solid var(--border);
 	border-radius: var(--r-panel);
-	background: var(--surface);
+	background: var(--elevated);
 	overflow: hidden;
+	transition: height 200ms var(--ease);
+}
+.genui-frame iframe {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: none;
+	opacity: 0;
+	transition: opacity 200ms var(--ease);
+}
+.genui-frame[data-phase="preview"] iframe[data-role="preview"],
+.genui-frame[data-phase="settled"] iframe[data-role="final"] {
+	opacity: 1;
 }
 
-.genui-frame-live {
-	border-style: solid;
-}
-
+/* Placeholder: a skeleton that suggests a widget taking shape, plus the model's own progress phrases. */
 .genui-loading {
 	position: absolute;
 	inset: 0;
 	display: flex;
-	align-items: center;
+	flex-direction: column;
 	justify-content: center;
-	gap: 8px;
+	gap: 14px;
+	padding: 18px;
+}
+.genui-skeleton {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.genui-skeleton span {
+	display: block;
+	height: 10px;
+	border-radius: 5px;
+	background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface) 40%, var(--surface-2) 80%);
+	background-size: 240% 100%;
+	animation: shimmer 1.8s var(--ease) infinite;
+}
+.genui-skeleton span:nth-child(1) {
+	width: 38%;
+	height: 14px;
+}
+.genui-skeleton span:nth-child(2) {
+	width: 82%;
+}
+.genui-skeleton span:nth-child(3) {
+	width: 64%;
+}
+.genui-phrase {
+	margin: 0;
 	color: var(--muted);
 	font-size: 13px;
+	animation: phrase-in 260ms var(--ease);
+}
+.genui-dots::after {
+	content: "";
+	animation: dots 1.6s steps(4, end) infinite;
 }
 
-.spinner {
-	width: 12px;
-	height: 12px;
-	border: 2px solid var(--border);
-	border-top-color: var(--accent);
-	border-radius: 50%;
-	animation: spin 0.8s linear infinite;
+@keyframes shimmer {
+	0% {
+		background-position: 120% 0;
+	}
+	100% {
+		background-position: -60% 0;
+	}
+}
+@keyframes phrase-in {
+	from {
+		opacity: 0;
+		transform: translateY(2px);
+	}
+}
+@keyframes dots {
+	0% {
+		content: "";
+	}
+	25% {
+		content: ".";
+	}
+	50% {
+		content: "..";
+	}
+	75% {
+		content: "...";
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.genui-skeleton span,
+	.genui-dots::after {
+		animation: none;
+	}
+	.genui-frame,
+	.genui-frame iframe {
+		transition: none;
+	}
 }
 
 /* ===== jump-to-latest floating pill (floats above the composer) ===== */
@@ -1120,6 +1223,62 @@ body.widget-fullscreen #transcript {
 	cursor: not-allowed;
 }
 
+/* the stop square: same footprint as the send circle, so the pill does not jump when a run starts */
+.composer-stop {
+	width: 32px;
+	height: 32px;
+	min-height: 32px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	flex: none;
+}
+.composer-stop svg {
+	width: 15px;
+	height: 15px;
+}
+
+/* the model that answers, in diagnostics only */
+.composer-model {
+	margin-right: auto;
+	padding-left: 6px;
+	font: 11px var(--mono);
+	color: var(--faint);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A lost connection is said where it blocks the reader, not in the header: a slim strip above the pill, in the
+   neutral surface colour until it is the reader's problem. */
+.composer-strip {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	margin: 0 auto 8px;
+	padding: 6px 13px;
+	width: fit-content;
+	border: 1px solid var(--border);
+	border-radius: var(--r-pill);
+	background: var(--elevated);
+	color: var(--muted);
+	font: 500 12px var(--sans);
+	box-shadow: var(--shadow-composer);
+}
+.composer-strip .dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--warn);
+	animation: breathe 2s var(--ease) infinite;
+}
+.composer-strip[data-state="connecting"] .dot {
+	background: var(--faint);
+}
+
 /* ===== debug mode ===== */
 .debug-panel {
 	margin: 10px 0;
@@ -1286,18 +1445,6 @@ body.widget-fullscreen #transcript {
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	/* icon-only actions: the labels cost more than they give at 390px */
-	#session-actions button {
-		gap: 0;
-		padding: 6px 10px;
-	}
-	#session-actions button span {
-		display: none;
-	}
-	#session-actions button svg {
-		width: 16px;
-		height: 16px;
 	}
 	.composer.busy #prompt {
 		padding-right: 142px;

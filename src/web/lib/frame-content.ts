@@ -107,7 +107,8 @@ export const EMBEDDED_FRAME_JS = `
 })();`;
 
 /** Continuous autosize: report the content height to the parent on every change. */
-export const MEASUREMENT_JS = `
+export function measurementJs(role: "preview" | "final"): string {
+	return `
 (function() {
   if (window.__oguiResizeInstalled) return;
   window.__oguiResizeInstalled = true;
@@ -119,7 +120,7 @@ export const MEASUREMENT_JS = `
     var cs = getComputedStyle(document.body);
     h += parseFloat(cs.marginTop) || 0;
     h += parseFloat(cs.marginBottom) || 0;
-    parent.postMessage({ type: '${RESIZE_MESSAGE_TYPE}', height: Math.ceil(h) }, '*');
+    parent.postMessage({ type: '${RESIZE_MESSAGE_TYPE}', role: '${role}', height: Math.ceil(h) }, '*');
   }
   var ro = new ResizeObserver(reportHeight);
   ro.observe(document.body);
@@ -130,3 +131,13 @@ export const MEASUREMENT_JS = `
   reportHeight();
 })();
 `;
+}
+
+/** The settled document's measurement. */
+export const MEASUREMENT_JS = measurementJs("final");
+
+/**
+ * The streaming preview measures itself the same way. Without this the preview sits at the model's estimated
+ * height, which crops a widget that is taller than the guess and squashes its layout while it streams.
+ */
+export const PREVIEW_MEASUREMENT_JS = measurementJs("preview");

@@ -2,9 +2,19 @@
  * The inline widget renderer for `generateSandboxedUi`, adapted from
  * `vendor/open-intelligent-ui/apps/app/src/components/generative-ui/open-generative-ui/renderer.tsx`.
  *
- * While the model streams the tool call, a preview sandbox shows the markup as it arrives (css first, then a morphed
- * body). Once the arguments are settled, a second sandbox loads the complete document — CSP, importmap, design-system
- * styles — and runs the widget's behavior. Buttons inside the widget reach the agent through the host bridge.
+ * A call moves through three phases, and each one is meant to look deliberate rather than half-built:
+ *
+ * 1. `placeholder` — the arguments are still arriving. A skeleton, the model's own progress phrases, and the
+ *    height the model estimated: the card must not resize on every delta.
+ * 2. `preview` — the css is complete and markup is arriving. A second sandbox morphs the partial body into place
+ *    and measures itself, and the frame may only *grow*: content that appeared is real, content that a morph
+ *    dropped is an artifact. Without measurement the preview would sit at the estimate and crop the widget.
+ * 3. `settled` — the call is committed. The complete document (CSP, importmap, design-system styles) replaces the
+ *    preview with a crossfade, so the card never blanks out between the two, and its own measurement decides the
+ *    height, shrink included.
+ *
+ * Behavior (`jsFunctions`, `jsExpressions`) only reaches the sandbox once settled: a half-streamed function
+ * declaration would throw inside the iframe.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IDIOMORPH_JS } from "../lib/idiomorph-inline.ts";
@@ -16,21 +26,26 @@ import {
 	FULLSCREEN_FRAME_JS,
 	MEASUREMENT_JS,
 	PREVIEW_FRAME_CONTENT,
+	PREVIEW_MEASUREMENT_JS,
 	RESIZE_MESSAGE_TYPE,
 } from "../lib/frame-content.ts";
+import {
+	CONTENT_MAX,
+	clampHeight,
+	mergeMeasuredHeight,
+	placeholderHeight,
+	streamingCeiling,
+} from "../lib/frame-height.ts";
 import type { OpenGenUIContent } from "../lib/open-genui-content.ts";
 import { extractCompleteStyles, processPartialHtml } from "../lib/process-partial-html.ts";
 import { loadWebsandbox, type SandboxInstance, type WidgetBridge } from "../lib/websandbox-loader.ts";
 
+/** One frame update per second while streaming: the widget is a preview, not a live console. */
 export const THROTTLE_MS = 1000;
-const MIN_HEIGHT = 50;
-const MAX_HEIGHT = 4000;
-
-/** Clamp a reported height; anything that is not a finite number is ignored. */
-export function clampReportedHeight(height: unknown): number | null {
-	if (typeof height !== "number" || !Number.isFinite(height)) return null;
-	return Math.max(MIN_HEIGHT, Math.min(Math.ceil(height), MAX_HEIGHT));
-}
+/** How long a progress phrase stays up before the next one. */
+const PHRASE_MS = 2600;
+/** Matches the frame's opacity transition in chat.css; the preview is dropped once it has faded out. */
+const CROSSFADE_MS = 200;
 
 export const FALLBACK_PHRASES = [
 	"Sketching pixels",
@@ -38,6 +53,11 @@ export const FALLBACK_PHRASES = [
 	"Painting gradients",
 	"Compiling visuals",
 ];
+
+/** Re-exported for the frame's own tests: the ceiling on a reported height. */
+export function clampReportedHeight(height: unknown): number | null {
+	return clampHeight(height, CONTENT_MAX, 50);
+}
 
 function shouldFlushImmediately(previous: OpenGenUIContent | null, next: OpenGenUIContent): boolean {
 	if (next.cssComplete && (previous === null || previous.cssComplete !== true)) return true;
@@ -49,14 +69,42 @@ function shouldFlushImmediately(previous: OpenGenUIContent | null, next: OpenGen
 	return false;
 }
 
-function styleIframe(iframe: HTMLIFrameElement): void {
+function styleIframe(iframe: HTMLIFrameElement, role: "preview" | "final"): void {
 	iframe.style.width = "100%";
 	iframe.style.height = "100%";
 	iframe.style.border = "none";
 	iframe.style.backgroundColor = "transparent";
+	iframe.dataset.role = role;
+	iframe.title = role === "final" ? "Interactive widget" : "Widget preview";
+}
+
+/**
+ * The height a widget last reported, per call, kept outside React.
+ *
+ * A widget is mounted twice: once in the live turn while the call streams, and again as a settled entry. The second
+ * mount is a fresh sandbox — the iframe cannot survive being re-parented — so without this the card would collapse
+ * to the model's estimate for the half second the new sandbox needs, right as the answer lands.
+ */
+const MEASURED_HEIGHTS = new Map<string, number>();
+const HEIGHT_CACHE_LIMIT = 64;
+
+function cachedHeight(callId: string): number | null {
+	return MEASURED_HEIGHTS.get(callId) ?? null;
+}
+
+function cacheHeight(callId: string, height: number): void {
+	MEASURED_HEIGHTS.delete(callId);
+	MEASURED_HEIGHTS.set(callId, height);
+	while (MEASURED_HEIGHTS.size > HEIGHT_CACHE_LIMIT) {
+		const oldest = MEASURED_HEIGHTS.keys().next();
+		if (oldest.done === true) break;
+		MEASURED_HEIGHTS.delete(oldest.value);
+	}
 }
 
 export interface SandboxedUiCardProps {
+	/** The tool call this card renders; identifies the height cache across the live and settled mounts. */
+	callId: string;
 	content: OpenGenUIContent;
 	bridge: WidgetBridge;
 	/** `true` while the model is still streaming the call; parts of `content` are then incomplete. */
@@ -65,7 +113,8 @@ export interface SandboxedUiCardProps {
 	fullscreen?: boolean;
 }
 
-export function SandboxedUiCard({ content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
+export function SandboxedUiCard({ callId, content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
+
 	const [throttled, setThrottled] = useState(content);
 	const [previous, setPrevious] = useState(content);
 	const latest = useRef(content);
@@ -105,13 +154,23 @@ export function SandboxedUiCard({ content, bridge, streaming, fullscreen }: Sand
 		[],
 	);
 
-	return <SandboxedUiFrame content={throttled} bridge={bridge} streaming={streaming} fullscreen={fullscreen} />;
+	return (
+		<SandboxedUiFrame callId={callId} content={throttled} bridge={bridge} streaming={streaming} fullscreen={fullscreen} />
+	);
 }
 
 type SandboxState = "idle" | "creating" | "ready" | "failed";
+type Phase = "placeholder" | "preview" | "settled";
 
-function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
-	const initialHeight = content.initialHeight ?? 200;
+/** The phrases the model wrote, or a generic cycle when it wrote none. */
+function phrasesOf(content: OpenGenUIContent): readonly string[] {
+	const phrases = (content.placeholderMessages ?? []).filter((phrase) => phrase.trim() !== "");
+	return phrases.length === 0 ? FALLBACK_PHRASES : phrases;
+}
+
+function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
+	/** Placeholder height: the model's estimate, clamped, and only used until something measures itself. */
+	const estimate = placeholderHeight(content.initialHeight);
 	// The bridge is rebuilt on every parent render, so the sandbox holds a stable forwarder instead: a changing
 	// `localApi` identity would tear the iframe down and lose the widget's own state.
 	const bridgeRef = useRef(bridge);
@@ -120,8 +179,15 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 		sendPrompt: (args) => bridgeRef.current.sendPrompt(args),
 		openLink: (args) => bridgeRef.current.openLink(args),
 	}).current;
-	const [autoHeight, setAutoHeight] = useState<number | null>(null);
+	const [phase, setPhase] = useState<Phase>("placeholder");
+	const [previewHeight, setPreviewHeight] = useState<number | null>(null);
+	// A remounted card starts at the height its widget last reported, so the box does not jump on the second mount.
+	const [settledHeight, setSettledHeight] = useState<number | null>(() => cachedHeight(callId));
+	const remembered = settledHeight !== null;
 	const [sandboxState, setSandboxState] = useState<SandboxState>("idle");
+	const [phraseIndex, setPhraseIndex] = useState(0);
+	const fullscreenRef = useRef(fullscreen === true);
+	fullscreenRef.current = fullscreen === true;
 
 	const localApi = useMemo(() => {
 		const api: Record<string, (args: unknown) => unknown> = {};
@@ -140,7 +206,6 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 	const previewBody = partialHtml === undefined ? undefined : processPartialHtml(partialHtml);
 	const previewStyles = partialHtml === undefined ? "" : extractCompleteStyles(partialHtml);
 	const hasPreview = cssReady && (previewBody?.trim().length ?? 0) > 0;
-	const hasVisibleSandbox = fullHtml !== undefined || hasPreview;
 
 	const containerRef = useRef<HTMLDivElement>(null);
 	const finalSandbox = useRef<SandboxInstance | null>(null);
@@ -150,6 +215,38 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 	const executedExpressions = useRef(0);
 	const pending = useRef<string[]>([]);
 	const jsFunctionsInjected = useRef(false);
+
+	// Every report lands here: `preview` grows the frame, `final` decides it. Heights arrive as numbers from the
+	// iframe's own `body.scrollHeight`, which a hostile widget could lie about, hence the clamp.
+	useEffect(() => {
+		const onMessage = (event: MessageEvent) => {
+			const data = event.data as { type?: string; role?: string; height?: unknown } | null;
+			if (data?.type !== RESIZE_MESSAGE_TYPE) return;
+			// Fullscreen ignores the content height: the frame is the viewport.
+			if (fullscreenRef.current) return;
+			const fromPreview = previewSandbox.current?.iframe.contentWindow === event.source;
+			const fromFinal = finalSandbox.current?.iframe.contentWindow === event.source;
+			if (!fromPreview && !fromFinal) return;
+			if (fromPreview) {
+				setPreviewHeight((current) =>
+					// The first report starts from the estimate: a preview whose body has barely begun is not
+					// grounds for shrinking the card to a sliver.
+					mergeMeasuredHeight(current ?? estimate, data.height, {
+						growOnly: true,
+						max: Math.min(streamingCeiling(window.innerHeight), CONTENT_MAX),
+					}),
+				);
+				return;
+			}
+			setSettledHeight((current) => {
+				const next = mergeMeasuredHeight(current, data.height, { growOnly: false, max: CONTENT_MAX });
+				if (next !== null) cacheHeight(callId, next);
+				return next;
+			});
+		};
+		window.addEventListener("message", onMessage);
+		return () => window.removeEventListener("message", onMessage);
+	}, [callId, estimate]);
 
 	// Preview sandbox: created once css is complete and some markup exists.
 	useEffect(() => {
@@ -164,7 +261,8 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 					{ frameContainer: container, frameContent: PREVIEW_FRAME_CONTENT, allowAdditionalAttributes: "" },
 				);
 				previewSandbox.current = sandbox;
-				styleIframe(sandbox.iframe);
+				styleIframe(sandbox.iframe, "preview");
+				setPhase("preview");
 				sandbox.promise.then(() => {
 					if (cancelled) return;
 					previewReady.current = true;
@@ -173,6 +271,8 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 						`document.head.innerHTML = ${JSON.stringify(buildPreviewHeadContent(css, previewStyles))}`,
 					);
 					if (previewBody !== undefined) sandbox.run(buildPreviewBodyMorph(previewBody));
+					// Only now does the preview know how tall it is; before this it would report zero.
+					void sandbox.run(PREVIEW_MEASUREMENT_JS);
 				});
 			})
 			.catch((error: unknown) => console.error("[gen-ui] preview sandbox failed:", error));
@@ -189,33 +289,18 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 		if (previewBody !== undefined) sandbox.run(buildPreviewBodyMorph(previewBody));
 	}, [previewBody, previewStyles, css]);
 
-	// Final sandbox: the complete document, with the host bridge.
+	// Final sandbox: the complete document, with the host bridge. The preview stays up underneath until this one
+	// has reported a height, so the card crossfades instead of blinking through an empty frame.
 	useEffect(() => {
 		const container = containerRef.current;
 		if (container === null || fullHtml === undefined) return;
-		if (previewSandbox.current !== null) {
-			previewSandbox.current.destroy();
-			previewSandbox.current = null;
-			previewReady.current = false;
-		}
 		let cancelled = false;
+		let dropPreview: ReturnType<typeof setTimeout> | null = null;
 		executedExpressions.current = 0;
 		jsFunctionsInjected.current = false;
 		finalReady.current = false;
 		pending.current = [];
 		setSandboxState("creating");
-
-		const onMessage = (event: MessageEvent) => {
-			const sandbox = finalSandbox.current;
-			if (sandbox === null) return;
-			if (event.source === sandbox.iframe.contentWindow && (event.data as { type?: string })?.type === RESIZE_MESSAGE_TYPE) {
-				// Fullscreen ignores the content height: the frame is the viewport.
-				if (fullscreenRef.current) return;
-				const height = clampReportedHeight((event.data as { height?: unknown }).height);
-				if (height !== null) setAutoHeight(height);
-			}
-		};
-		window.addEventListener("message", onMessage);
 
 		loadWebsandbox()
 			.then((Websandbox) => {
@@ -226,7 +311,7 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 					allowAdditionalAttributes: "",
 				});
 				finalSandbox.current = sandbox;
-				styleIframe(sandbox.iframe);
+				styleIframe(sandbox.iframe, "final");
 				sandbox.promise.then(() => {
 					if (cancelled) return;
 					finalReady.current = true;
@@ -237,6 +322,13 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 					void (async () => {
 						for (const code of queued) await sandbox.run(code);
 					})();
+					// Settled: the final frame fades in, the preview fades out and is destroyed.
+					setPhase("settled");
+					dropPreview = setTimeout(() => {
+						previewSandbox.current?.destroy();
+						previewSandbox.current = null;
+						previewReady.current = false;
+					}, CROSSFADE_MS);
 				});
 			})
 			.catch((error: unknown) => {
@@ -246,11 +338,15 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 
 		return () => {
 			cancelled = true;
-			window.removeEventListener("message", onMessage);
+			if (dropPreview !== null) clearTimeout(dropPreview);
 			finalSandbox.current?.destroy();
 			finalSandbox.current = null;
 			finalReady.current = false;
-			setAutoHeight(null);
+			previewSandbox.current?.destroy();
+			previewSandbox.current = null;
+			previewReady.current = false;
+			setSettledHeight(null);
+			setPreviewHeight(null);
 		};
 	}, [fullHtml, css, localApi]);
 
@@ -284,43 +380,63 @@ function SandboxedUiFrame({ content, bridge, streaming, fullscreen }: SandboxedU
 		}
 	}, [content.jsExpressions]);
 
-	const height = autoHeight ?? initialHeight;
-	const showLoading = streaming && !hasVisibleSandbox;
-	const fullscreenRef = useRef(fullscreen === true);
-	fullscreenRef.current = fullscreen === true;
-
-	// The embedded layout pins the content height; fullscreen hands the viewport to the widget instead.
+	// The embedded layout pins the content height; fullscreen hands the viewport to the widget instead. Keyed on
+	// the phase, so a widget that is expanded mid-stream gets the viewport rule on whichever sandbox is up, and
+	// again on the final one when it takes over.
 	useEffect(() => {
+		if (phase === "placeholder") return;
 		const sandbox = finalSandbox.current ?? previewSandbox.current;
-		if (sandbox === null || sandboxState === "idle") return;
+		if (sandbox === null) return;
 		void sandbox.run(fullscreen === true ? FULLSCREEN_FRAME_JS : EMBEDDED_FRAME_JS).catch((error: unknown) => {
 			console.error("[gen-ui] layout switch failed:", error);
 		});
 		// Entering fullscreen makes the last embedded measurement stale; the widget reports a fresh one on exit.
-		if (fullscreen === true) setAutoHeight(null);
-	}, [fullscreen, sandboxState]);
+		if (fullscreen === true) setSettledHeight(null);
+	}, [fullscreen, phase]);
+
+	// The progress phrases the model wrote; cycling them is the only sign of life until markup arrives.
+	//
+	// Two mounts do not want a skeleton: one whose document is already on the way (a call that settled while it was
+	// being written) and one that has rendered before (the settle re-mount). Both keep the frame at its known
+	// height and let the widget fade in, which is the whole of the artifact left by an iframe that cannot be
+	// re-parented.
+	const phrases = phrasesOf(content);
+	const showPlaceholder = phase === "placeholder" && fullHtml === undefined && !remembered;
+	useEffect(() => {
+		if (!showPlaceholder || phrases.length < 2) return;
+		const timer = setInterval(() => setPhraseIndex((index) => (index + 1) % phrases.length), PHRASE_MS);
+		return () => clearInterval(timer);
+	}, [showPlaceholder, phrases.length]);
+
+	// Height: the settled document wins, then the streaming preview, then the estimate.
+	const height = settledHeight ?? previewHeight ?? estimate;
+	const frameHeight = fullscreen === true ? "100%" : `${height}px`;
 
 	return (
-		<div className="genui" data-testid="genui-card">
+		<div className="genui">
 			<div className="genui-toolbar" data-testid="genui-status">
-				<span className={`badge ${streaming ? "badge-live" : "badge-done"}`}>
-					{streaming ? "GEN-UI • streaming" : "GEN-UI • settled"}
-				</span>
-				{content.placeholderMessages === undefined || !showLoading ? null : (
-					<span className="genui-hint">{content.placeholderMessages[0]}</span>
-				)}
+				<span className="badge">{streaming ? "GEN-UI • streaming" : "GEN-UI • settled"}</span>
+				<span className="genui-hint">{`estimate ${estimate}px · ${height}px · ${phase}`}</span>
 			</div>
 			<div
 				ref={containerRef}
-				className={`genui-frame ${hasVisibleSandbox ? "genui-frame-live" : ""}`}
+				className="genui-frame"
 				data-testid="genui-frame"
+				data-phase={phase}
 				data-sandbox-state={sandboxState}
-				style={{ height: fullscreen === true ? "100%" : `${height}px` }}
+				style={{ height: frameHeight }}
 			>
-				{showLoading ? (
-					<div className="genui-loading">
-						<span className="spinner" />
-						<span>{content.placeholderMessages?.[0] ?? FALLBACK_PHRASES[0]}…</span>
+				{showPlaceholder ? (
+					<div className="genui-loading" data-testid="genui-loading">
+						<div className="genui-skeleton" aria-hidden="true">
+							<span />
+							<span />
+							<span />
+						</div>
+						<p className="genui-phrase" key={phraseIndex} data-testid="genui-phrase">
+							{phrases[phraseIndex % phrases.length] ?? FALLBACK_PHRASES[0]}
+							<span className="genui-dots" aria-hidden="true" />
+						</p>
 					</div>
 				) : null}
 			</div>

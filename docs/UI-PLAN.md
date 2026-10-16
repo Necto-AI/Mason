@@ -173,3 +173,49 @@ and `Esc`, live resize inside the sandbox, bridge submission while fullscreen, n
 7. **A failed turn is not a dead end.** The newest turn that ended in a model error carries a Retry control, which
    fires the `retry-failed-run` hook — the same thing the server's run supervisor fires on its own schedule. See SPEC
    §4.4.
+8. **A widget is a block of the answer, not part of a sentence.** Cards render beside the bubble, at the column's
+   width: inside it a widget could only ever be as wide as the line that introduced it, which turned a three-column
+   dashboard into one narrow column.
+
+## 9. Beyond the port: a widget that streams without thrashing
+
+The first streaming pass was honest but unpleasant to watch: the card sat at the model's estimated height while the
+markup arrived (so a widget taller than the estimate was cropped mid-content), the preview had no measurement to
+report, and the settled document replaced it by destroying the preview first — a blank frame, then a jump.
+
+What it does now, and why:
+
+- **The preview measures itself** (`PREVIEW_MEASUREMENT_JS`), so the frame follows the widget's real layout instead of
+  the guess.
+- **The frame grows and holds while streaming** (`src/web/lib/frame-height.ts`): reports go through the estimate as a
+  floor, only ever raise the frame, and are clamped to 80% of the viewport; the ceiling is 4000px. A partial morph
+  that collapses does not drag the card with it, and a half-written widget cannot take the screen.
+- **The settled document may shrink it again**, undoing the streaming overshoot (a 486px frame settles at 482px).
+- **The two sandboxes crossfade**: the preview is kept until the final iframe has reported a height, then both fade
+  over 200ms and the preview is dropped. No blank frame, ever.
+- **The placeholder suggests a widget**: a shimmering skeleton, the model's own `placeholderMessages` cycling every
+  2.6s, and the model's `initialHeight` treated as a placeholder (clamped 96–480) rather than the truth.
+- **A re-mounted card keeps its height**: an iframe cannot be re-parented without reloading, and the settled turn is a
+  new subtree, so a widget is mounted twice. The second mount starts at the height the widget last reported (cached by
+  call id) and never shows the skeleton — the reader sees the same card repaint its content, not resize or blank.
+- **The fullscreen control left the widget's corner**: it sits in a reserved strip above the card, so it can no longer
+  cover whatever the widget put in its own top-right corner (a dashboard header, a legend, a close button).
+
+Known and accepted: the model's `initialHeight` is still only an estimate, and the second mount still costs one
+sandbox boot (~200ms of the widget's own background). Both are noted in SPEC §5.2.
+
+## 10. Beyond the port: the shell stops narrating itself
+
+The session bar was sibling's status pill — a dot, the run in words, the model, the connection, counters, four action
+buttons. It reads as a homelab dashboard, and it answers a question the reader only has when something is wrong. The
+bar is now a wordmark and one overflow control (`Compact`, `Reset`, diagnostics, and the run/model/tool facts as text
+inside the menu). Nothing in it changes while the agent works:
+
+- **A run's state belongs to the run.** The live bubble shows the work and the text as it streams; the bar says
+  nothing.
+- **Stop belongs where the send button is.** While a run is active the composer shows **Steer**, **Follow-up** and a
+  stop square; the bar has no Stop.
+- **The model is a diagnostic, not a headline** — it shows in the composer row only while diagnostics are on.
+- **A lost connection is announced next to the input it blocks** (a slim pill above the composer, after a 1.2s grace
+  so a reload does not flash it), and nowhere else. The reader assumes the agent works; when it does not, they are
+  told once, where it matters.
