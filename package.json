@@ -7,7 +7,8 @@
     "postinstall": "node scripts/link-vendor.mjs && node scripts/verify-vendor.mjs",
     "dev": "node --conditions=source --experimental-strip-types src/server/main.ts",
     "build:web": "node scripts/build-web.mjs",
-    "test": "node --conditions=source --experimental-strip-types --test test/*.test.ts"
+    "test": "node --conditions=source --experimental-strip-types --test test/*.test.ts",
+    "test:asr": "asr/run.sh asr/.venv/bin/python -m unittest discover -s asr/tests -v"
   },
   "dependencies": {
     "@jetbrains/websandbox": "1.2.1",
