@@ -1250,8 +1250,9 @@ body.widget-fullscreen #transcript {
 	height: 15px;
 }
 
-/* the dictation mic: hold to talk, release to transcribe. Quiet until pressed — a circle the size of the
-   send, in faint ink rather than a button, so the row keeps its rhythm in every state. */
+/* the dictation mic: click to record (a latched recording swaps the mic for a square), or hold to talk.
+   Quiet until pressed — a circle the size of the send, in faint ink rather than a button, so the row keeps
+   its rhythm in every state. */
 .composer-mic {
 	position: relative;
 	width: 32px;
@@ -1284,7 +1285,7 @@ body.widget-fullscreen #transcript {
 	height: 16px;
 	pointer-events: none;
 }
-.composer-mic:hover:not(:disabled) {
+.composer-mic:hover:not(:disabled):not([data-state="recording"]) {
 	background: var(--surface-2);
 	color: var(--text);
 }

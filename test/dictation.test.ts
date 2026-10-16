@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ASR_PORT, asrServiceUrl, encodeWavPcm16, floatToPcm16, SAMPLE_RATE } from "../src/web/lib/asr.ts";
+import { HOLD_MS, MIN_MS, pressOutcome, releaseOutcome, worthTranscribing } from "../src/web/lib/dictation.ts";
 
 // The pure part of dictation: where the service is found and what the bytes on the wire are. The microphone
 // itself is the browser's and is not tested here — these are the two places the audio format could drift.
@@ -51,4 +52,24 @@ test("a silent recording encodes to a valid, empty-bodied WAV", () => {
 	const wav = encodeWavPcm16(floatToPcm16(new Float32Array(0)));
 	assert.equal(wav.length, 44);
 	assert.equal(new DataView(wav.buffer).getUint32(40, true), 0);
+});
+
+test("a press starts, stops a latched recording, and does nothing while transcribing", () => {
+	assert.equal(pressOutcome("idle", false), "start");
+	assert.equal(pressOutcome("recording", true), "stop");
+	assert.equal(pressOutcome("recording", false), "ignore"); // a hold is in flight; its release decides
+	assert.equal(pressOutcome("transcribing", false), "ignore");
+	assert.equal(pressOutcome("transcribing", true), "ignore");
+});
+
+test("a quick release latches the recording; a hold is push-to-talk", () => {
+	assert.equal(releaseOutcome(0), "latch");
+	assert.equal(releaseOutcome(HOLD_MS - 1), "latch");
+	assert.equal(releaseOutcome(HOLD_MS), "talk");
+	assert.equal(releaseOutcome(2500), "talk");
+});
+
+test("a recording below the slip threshold is dropped instead of sent", () => {
+	assert.equal(worthTranscribing(MIN_MS - 1), false);
+	assert.equal(worthTranscribing(MIN_MS), true);
 });
