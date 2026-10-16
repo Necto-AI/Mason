@@ -1,5 +1,5 @@
 /**
- * The transcript: the conversation's blocks, the running turn's bubbles, and the queue ahead of them. Ported from
+ * The transcript: the conversation's blocks, the running turn's bubbles, and the queue after them. Ported from
  * sibling's transcript view: the settled part is appended to (never rebuilt, so open `<details>` survive), while
  * the live part re-derives its bubbles from the streaming message and the running tools on every update.
  */
@@ -107,9 +107,6 @@ export function Transcript({
 				);
 			})}
 			<div className="live">
-				<div className="live-queued">
-					<QueuedRows items={queued} onWithdraw={withdraw} debug={debug} />
-				</div>
 				<div className="live-bubbles">
 					<LiveChips live={live} busy={busy} debug={debug} now={now} />
 					<LiveBubbles
@@ -119,6 +116,9 @@ export function Transcript({
 						bridgeFor={bridgeFor}
 						onOpened={onOpened}
 					/>
+				</div>
+				<div className="live-queued">
+					<QueuedRows items={queued} onWithdraw={withdraw} debug={debug} />
 				</div>
 			</div>
 			{debug ? (

@@ -294,8 +294,12 @@ Chord subscription; `docs/UI-PLAN.md` is the porting plan and the decisions log.
 `retrying`, `compacting`, plus `connecting` and `disconnected` when the socket is not live (`data-testid="status-run"`,
 `data-testid="status-connection"`, `data-testid="status-tools"`, `data-testid="status-inbox"`, `data-testid="status-model"`).
 While a turn runs, the running turn's trace is open under a `Working` line, each tool row shows a spinner and streams its
-live output, and queued submissions render as faded user bubbles in front of it carrying their boundary
+live output, and queued submissions render as faded user bubbles at the very end of the chat — after the running turn,
+where the agent's next input lands anyway, for steers and follow-ups alike — each carrying its boundary
 (`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`).
+The queue renders whenever the inbox holds items, busy or dead: a provider error leaves the submissions displayed
+where they wait to be processed once the run (or process) comes back, and every submission that is still plain user
+text in the queue can be withdrawn through the durable backend until the moment it is placed.
 
 **Traces are temporary, widgets are not.** A bubble pairs the work with what it produced: the trace folds away the moment
 the bubble produces text or a widget, and settled turns keep only bubbles. `generateSandboxedUi` cards are the exception —

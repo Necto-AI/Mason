@@ -1,6 +1,13 @@
 /**
- * The durable inbox: submissions waiting for a boundary, shown as faded user bubbles in front of the running
- * turn, each tagged with the boundary it waits for and each withdrawable by id.
+ * The durable inbox: submissions waiting for a boundary, shown as faded user bubbles at the end of the chat —
+ * after the running turn, where the agent's next input lands anyway, each tagged with the boundary it waits for.
+ * The inbox is durable state, so the rows show whenever the queue holds items, busy or not, run alive or dead:
+ * a provider error leaves the queue in place for the restart to pick up.
+ *
+ * The withdraw button is the durable backend's only: while the server cannot settle a submission any more, the
+ * item is here for display, and the button goes. For plain user inputs that is never (withdrawable throughout
+ * the queue; placement empties the doc); an input meant to become a hook trigger or an entry write cannot be
+ * withdrawn any more once the inbox knows its entry.
  */
 import type { InboxItemLike, JsonValue } from "../view-types.ts";
 
@@ -30,6 +37,14 @@ function tagOf(mode: InboxItemLike["mode"]): string {
 	return "write";
 }
 
+/**
+ * Whether the inbox no longer holds plain queued user text, so there is nothing to withdraw: the item carries an
+ * entry — a write, or an input that fires a hook instead of starting a run.
+ */
+function withdrawable(item: InboxItemLike): boolean {
+	return item.entry === undefined;
+}
+
 export function QueuedRows({ items, onWithdraw, debug }: QueuedRowsProps) {
 	if (items.length === 0) return null;
 	return (
@@ -41,16 +56,18 @@ export function QueuedRows({ items, onWithdraw, debug }: QueuedRowsProps) {
 						<span className="tag" data-testid={`inbox-mode-${item.id}`}>
 							{tagOf(item.mode)}
 						</span>
-						<button
-							type="button"
-							className="withdraw"
-							title="withdraw this submission"
-							aria-label="withdraw"
-							data-testid={`withdraw-${item.id}`}
-							onClick={() => onWithdraw(item.id)}
-						>
-							{"\u2715"}
-						</button>
+						{withdrawable(item) ? (
+							<button
+								type="button"
+								className="withdraw"
+								title="withdraw this submission"
+								aria-label="withdraw"
+								data-testid={`withdraw-${item.id}`}
+								onClick={() => onWithdraw(item.id)}
+							>
+								{"\u2715"}
+							</button>
+						) : null}
 						{debug ? <code className="debug-inline">{`id=${item.id} mode=${item.mode}`}</code> : null}
 					</div>
 				</article>
