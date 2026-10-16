@@ -1,0 +1,4 @@
+# The ASR service runs in its own virtualenv, isolated from the Node stack.
+# onnxruntime-gpu is the default build: without a usable CUDA stack it falls back to CPUExecutionProvider.
+onnxruntime-gpu==1.31.0
+numpy==2.5.4
