@@ -338,6 +338,16 @@
 .trace > summary::-webkit-details-marker {
 	display: none;
 }
+/* the collapsed form: the step the run is on, truncated, no wrapping — one line, always */
+.trace-step {
+	color: var(--faint);
+	font: 12px var(--mono);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+	flex: 1;
+}
 .trace-body {
 	padding: 2px 0;
 }
