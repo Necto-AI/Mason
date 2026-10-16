@@ -242,10 +242,14 @@ function retryOptionsFromEnv(): { delaysMs?: number[]; maxAttempts?: number } {
 	const delays = process.env.PDA_RUN_RETRY_DELAYS_MS?.split(",")
 		.map((value) => Number(value.trim()))
 		.filter((value) => Number.isFinite(value) && value >= 0);
-	const attempts = Number(process.env.PDA_RUN_RETRY_ATTEMPTS);
+	// An unset or blank variable must stay unset here, or `Number("")`'s 0 would read as "the supervisor is off".
+	const attemptsEnv = process.env.PDA_RUN_RETRY_ATTEMPTS?.trim();
+	const attempts = attemptsEnv === undefined || attemptsEnv === "" ? Number.NaN : Number(attemptsEnv);
 	return {
 		...(delays === undefined || delays.length === 0 ? {} : { delaysMs: delays }),
-		...(Number.isFinite(attempts) && attempts > 0 ? { maxAttempts: attempts } : {}),
+		// `0` means the supervisor is off entirely (the budget is spent from the start): tests use it to keep a
+		// failed run failed.
+		...(Number.isFinite(attempts) && attempts >= 0 ? { maxAttempts: attempts } : {}),
 	};
 }
 
