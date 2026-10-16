@@ -5,9 +5,12 @@
  * tool round), Follow-up only when the run ends, and Stop ends the run where the send button would be.
  *
  * This is also where the session tells the truth about itself: a lost connection is announced here, next to the
- * input it blocks, and nowhere else — the shell is not a dashboard.
+ * input it blocks, and nowhere else — the shell is not a dashboard. The mic beside the actions is hold-to-talk
+ * dictation (see `DictationButton`): it only ever fills this box, never sends.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+
+import { DictationButton } from "./DictationButton.tsx";
 
 /** The model that answers is a diagnostic, not a headline: it shows up when diagnostics do. */
 function modelLabel(model: ComposerProps["model"], debug: boolean) {
@@ -55,6 +58,7 @@ export function Composer({
 	const [expanded, setExpanded] = useState(false);
 	const [multiline, setMultiline] = useState(false);
 	const [capped, setCapped] = useState(false);
+	const [dictationError, setDictationError] = useState<string | null>(null);
 	const input = useRef<HTMLTextAreaElement | null>(null);
 	const form = useRef<HTMLFormElement | null>(null);
 	const box = useRef<HTMLDivElement | null>(null);
@@ -97,6 +101,20 @@ export function Composer({
 		else onSubmit(value);
 	};
 
+	// Dictated words land where typed words land: appended to whatever is already in the box.
+	const applyTranscript = useCallback((transcript: string) => {
+		setDictationError(null);
+		setText((previous) => (previous === "" || /\s$/.test(previous) ? previous + transcript : `${previous} ${transcript}`));
+		input.current?.focus();
+	}, []);
+
+	// A failed dictation says so for a while, then stops occupying the strip.
+	useEffect(() => {
+		if (dictationError === null) return;
+		const timer = setTimeout(() => setDictationError(null), 8000);
+		return () => clearTimeout(timer);
+	}, [dictationError]);
+
 	// A connection that has been down for longer than a blip is worth saying out loud; a reconnecting socket is not
 	// the reader's problem until it stays down.
 	const [notice, setNotice] = useState(connection);
@@ -125,6 +143,12 @@ export function Composer({
 					{connection === "disconnected" ? "Connection lost \u2014 reconnecting\u2026" : "Connecting\u2026"}
 				</div>
 			) : null}
+			{dictationError === null ? null : (
+				<div className="composer-strip" data-testid="dictation-strip" data-state="error">
+					<span className="dot" aria-hidden="true" />
+					{dictationError}
+				</div>
+			)}
 			<div
 				ref={box}
 				className={`composer${multiline ? " multiline" : ""}${expanded ? " expanded" : ""}${
@@ -149,6 +173,7 @@ export function Composer({
 				/>
 				<div className="composer-actions">
 					{modelLabel(model, debug)}
+					<DictationButton onTranscript={applyTranscript} onError={setDictationError} disabled={!enabled} />
 					{busy ? (
 						<>
 							<button
