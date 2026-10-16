@@ -1,33 +1,20 @@
 /**
- * The dictation client: one POST to the ASR service, plus the audio packing the browser owes it.
+ * The dictation client: one multipart POST to the ASR service, plus the audio packing the browser owes it.
  *
- * The service is a separate process on its own port (`asr/`, port 8788) — the model is a GPU-sized ONNX
- * pipeline and has no business in the page. This module is only the contract: same host as the page unless
- * `?asr=<host[:port]|url>` points somewhere else (a phone on the LAN talking to the dev box, say). The service
- * takes exactly 16 kHz mono PCM16, so what is written here and resampled in `mic.ts` are the last places the
- * format can drift — everything downstream trusts it.
+ * The service is the official Phonon-2 container (ghcr.io/fermionresearch/phonon-cpu) running its
+ * OpenAI-compatible server — a separate process on its own port, with `--cors` because the page calls it
+ * cross-origin. Phonon-2 is the same Parakeet TDT v3 network the previous ONNX service ran, quantized to
+ * ~2.1 bits; the audio contract is unchanged: 16 kHz mono, resampled in `mic.ts`. Same host as the page
+ * unless `?asr=<host[:port]|url>` points somewhere else (a phone on the LAN talking to the dev box, say).
  */
 
 export const SAMPLE_RATE = 16_000;
-/** Where the service listens by default. */
-export const ASR_PORT = 8788;
+/** Where the service listens by default (the container maps port 8000). */
+export const ASR_PORT = 8000;
+/** The model the served endpoint must be; never silently transcribed by another. */
+export const ASR_MODEL = "phonon-2";
 
-export interface TranscriptWord {
-	readonly text: string;
-	readonly startMs: number;
-	readonly endMs: number;
-}
-
-export interface Transcript {
-	readonly text: string;
-	readonly words: readonly TranscriptWord[];
-	readonly durationMs: number;
-	readonly elapsedMs: number;
-	readonly rtf: number;
-	readonly model: string;
-}
-
-/** Trim the trailing slash a URL override may carry, so `${url}/transcribe` never doubles it. */
+/** Trim the trailing slash a URL override may carry, so `${url}/v1/...` never doubles it. */
 function trimSlash(url: string): string {
 	return url.endsWith("/") ? url.slice(0, -1) : url;
 }
@@ -80,24 +67,29 @@ export function encodeWavPcm16(pcm: Int16Array, sampleRate = SAMPLE_RATE): Uint8
 export async function transcribe(
 	samples: Float32Array,
 	options: { readonly endpoint?: string; readonly signal?: AbortSignal } = {},
-): Promise<Transcript> {
-	const endpoint =
-		options.endpoint ?? `${asrServiceUrl(window.location.href, new URLSearchParams(window.location.search).get("asr"))}/transcribe`;
-	const url = new URL(endpoint);
+): Promise<{ readonly text: string }> {
+	const base =
+		options.endpoint ?? asrServiceUrl(window.location.href, new URLSearchParams(window.location.search).get("asr"));
+	const url = `${base}/v1/audio/transcriptions`;
+	const form = new FormData();
+	form.append("file", new File([encodeWavPcm16(floatToPcm16(samples))], "recording.wav", { type: "audio/wav" }));
+	form.append("model", ASR_MODEL);
 	let response: Response;
 	try {
-		response = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "audio/wav" },
-			body: encodeWavPcm16(floatToPcm16(samples)),
-			signal: options.signal,
-		});
+		response = await fetch(url, { method: "POST", body: form, signal: options.signal });
 	} catch (error) {
-		throw new Error(`ASR service unreachable at ${url.host} (${error instanceof Error ? error.message : String(error)})`);
+		throw new Error(
+			`ASR service unreachable at ${new URL(url).host} (${error instanceof Error ? error.message : String(error)})`,
+		);
 	}
 	if (!response.ok) {
-		const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-		throw new Error(payload?.error ?? `ASR service returned ${response.status}`);
+		// the OpenAI error envelope, or whatever the reverse proxy puts in the way
+		const payload = (await response.json().catch(() => null)) as { error?: { message?: string } | string } | null;
+		const message =
+			typeof payload?.error === "object" ? payload.error.message : (payload?.error ?? undefined);
+		throw new Error(message ?? `ASR service returned ${response.status}`);
 	}
-	return (await response.json()) as Transcript;
+	const payload = (await response.json()) as { text?: string };
+	if (typeof payload.text !== "string") throw new Error("ASR service returned no transcript text");
+	return { text: payload.text };
 }
