@@ -1,7 +1,8 @@
 /**
  * Tool rows, in apiary's shape: the glyph, `name:`, a one-line summary, the duration on hover and a quiet state
  * glyph, opening into the arguments and the result. A running call also shows the output it has reported so far.
- * Debug mode adds what the durable backend knows and the normal view hides.
+ * Rows are collapsed by default, running ones included: the summary line is the compact form, and the body (args,
+ * live output, result) is asked for. Debug mode opens them and adds what the durable backend knows.
  */
 import { useEffect, useRef, useState } from "react";
 import { iconFor, pretty, stateIconFor, stepDuration, summarizeArgs, SVG_ATTRS } from "../lib/tool-view.ts";
@@ -159,8 +160,9 @@ export function ToolRow({
 	byTaskId,
 	onOpened,
 }: ToolRowProps) {
-	const openByDefault = status === "running" || status === "pending";
-	const [open, setOpen] = useState(openByDefault);
+	// Compact by default while the call runs too: the summary already carries the name, the arguments and the
+	// spinner. Diagnostics mode opens every row, which is what it is for.
+	const [open, setOpen] = useState(debug === true);
 	const ref = useRef<HTMLDetailsElement | null>(null);
 	useEffect(() => {
 		if (open && ref.current !== null) onOpened?.(ref.current);

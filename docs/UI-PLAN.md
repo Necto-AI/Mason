@@ -219,3 +219,15 @@ inside the menu). Nothing in it changes while the agent works:
 - **A lost connection is announced next to the input it blocks** (a slim pill above the composer, after a 1.2s grace
   so a reload does not flash it), and nowhere else. The reader assumes the agent works; when it does not, they are
   told once, where it matters.
+
+## 11. Beyond the port: the working block is compact by default
+
+The trace auto-expanded while a run was active — every thinking block, every tool row, every line of live output —
+which is apiary's shape and the wrong default for a reader who is waiting rather than inspecting. Now the block is
+one line that answers "what is it doing": `Working · bash: npm test`, or `Wait…` while a retry backs off, with a
+spinner. Nothing under it is open: thinking rows, running tool rows and their live output are all one click away,
+and the row summaries still carry the name and the arguments. Diagnostics mode (`?debug=1`) is the mode that opens
+everything, which is what it exists for.
+
+Related and unchanged: a settled turn keeps no trace at all unless diagnostics is on, and the live trace folds away
+as soon as its bubble produces text or a widget.
