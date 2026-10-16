@@ -20,6 +20,7 @@ class MicTap extends AudioWorkletProcessor {
 		super();
 		this._buffer = new Float32Array(BLOCK);
 		this._filled = 0;
+		this._sumSquares = 0;
 		this.port.onmessage = (event) => {
 			if (event.data !== null && event.data !== undefined && event.data.flush === true) {
 				this._flush();
@@ -31,8 +32,10 @@ class MicTap extends AudioWorkletProcessor {
 	_flush() {
 		if (this._filled === 0) return;
 		const samples = this._buffer.slice(0, this._filled);
+		const level = Math.sqrt(this._sumSquares / this._filled);
 		this._filled = 0;
-		this.port.postMessage({ samples }, [samples.buffer]);
+		this._sumSquares = 0;
+		this.port.postMessage({ samples, level }, [samples.buffer]);
 	}
 
 	process(inputs) {
@@ -42,6 +45,7 @@ class MicTap extends AudioWorkletProcessor {
 		while (offset < channel.length) {
 			const take = Math.min(BLOCK - this._filled, channel.length - offset);
 			this._buffer.set(channel.subarray(offset, offset + take), this._filled);
+			for (let i = offset; i < offset + take; i++) this._sumSquares += channel[i] * channel[i];
 			this._filled += take;
 			offset += take;
 			if (this._filled === BLOCK) this._flush();
@@ -58,6 +62,9 @@ export interface Recording {
 	stop(): Promise<Float32Array>;
 	/** Stops capture and drops the audio. */
 	cancel(): void;
+	/** Called with each captured block's RMS (about every 85 ms) while the mic is open; the meter listens.
+	    Set it once, as soon as the recording arrives — messages before that are simply dropped. */
+	onLevel: ((level: number) => void) | null;
 }
 
 function join(chunks: readonly Float32Array[]): Float32Array<ArrayBuffer> {
@@ -129,6 +136,8 @@ export async function startRecording(): Promise<Recording> {
 			tap.port.postMessage({ flush: true });
 		});
 
+	/** The meter's listener, held outside the recording so the message handler can be wired before it exists. */
+	const meter: { onLevel: ((level: number) => void) | null } = { onLevel: null };
 	try {
 		const moduleUrl = URL.createObjectURL(new Blob([TAP_SOURCE], { type: "text/javascript" }));
 		try {
@@ -141,8 +150,9 @@ export async function startRecording(): Promise<Recording> {
 		source = context.createMediaStreamSource(stream);
 		tap = new AudioWorkletNode(context, "pda-mic-tap");
 		tap.port.onmessage = (event: MessageEvent<unknown>) => {
-			const message = event.data as { samples?: Float32Array; flushed?: boolean };
+			const message = event.data as { samples?: Float32Array; flushed?: boolean; level?: number };
 			if (message.samples !== undefined) chunks.push(message.samples);
+			if (message.level !== undefined) meter.onLevel?.(message.level);
 			if (message.flushed === true && resolveFlush !== null) {
 				const resolve = resolveFlush;
 				resolveFlush = null;
@@ -169,7 +179,16 @@ export async function startRecording(): Promise<Recording> {
 			}
 			return stopping;
 		};
-		return { stop, cancel: () => void teardown() };
+		return {
+			stop,
+			cancel: () => void teardown(),
+			get onLevel() {
+				return meter.onLevel;
+			},
+			set onLevel(value: ((level: number) => void) | null) {
+				meter.onLevel = value;
+			},
+		};
 	} catch (error) {
 		await teardown();
 		throw error;

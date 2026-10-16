@@ -1250,9 +1250,9 @@ body.widget-fullscreen #transcript {
 	height: 15px;
 }
 
-/* the dictation mic: click to record (a latched recording swaps the mic for a square), or hold to talk.
+/* the dictation mic: click to record (a latched recording swaps the mic for level bars), or hold to talk.
    Quiet until pressed — a circle the size of the send, in faint ink rather than a button, so the row keeps
-   its rhythm in every state. */
+   its rhythm in every state. While recording the bars carry the liveness, so there is no pulse to double up. */
 .composer-mic {
 	position: relative;
 	width: 32px;
@@ -1296,29 +1296,19 @@ body.widget-fullscreen #transcript {
 .composer-mic[data-state="recording"] {
 	color: var(--error);
 	background: color-mix(in srgb, var(--error) 12%, transparent);
-	animation: mic-listen 1.4s var(--ease) infinite;
-}
-@keyframes mic-listen {
-	50% {
-		opacity: 0.55;
-	}
 }
 .composer-mic[data-state="transcribing"] svg {
 	display: none;
 }
+/* the same ring the transcript uses while a model is working (see .jump-ring, .step-spin) */
 .composer-mic[data-state="transcribing"]::after {
 	content: "";
-	width: 14px;
-	height: 14px;
+	width: 11px;
+	height: 11px;
 	border-radius: 50%;
-	border: 2px solid var(--border);
-	border-top-color: var(--text);
-	animation: mic-spin 0.8s linear infinite;
-}
-@keyframes mic-spin {
-	to {
-		transform: rotate(360deg);
-	}
+	border: 1.5px solid var(--surface-2);
+	border-top-color: var(--accent);
+	animation: spin 0.8s linear infinite;
 }
 
 /* the model that answers, in diagnostics only */

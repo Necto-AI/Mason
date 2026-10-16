@@ -3,14 +3,14 @@
  * — whichever the hand does first. The composer owns the textarea and receives the words; this button owns the
  * press, the microphone and the wait.
  *
- * The button always says what it will do next (title, and the square replacing the mic while recording), because
- * a latched recording that looks idle is the failure mode worth spending pixels on. Failures are reported
+ * The button always says what it will do next (title, and the level bars replacing the mic while recording),
+ * because a latched recording that looks idle is the failure mode worth spending pixels on. Failures are reported
  * instead of swallowed: a denied microphone or a service that is not running is exactly what the reader needs to
  * be told.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { transcribe } from "../lib/asr.ts";
-import { pressOutcome, releaseOutcome, type DictationPhase, worthTranscribing } from "../lib/dictation.ts";
+import { barHeights, BAR_COUNT, pressOutcome, releaseOutcome, type DictationPhase, worthTranscribing } from "../lib/dictation.ts";
 import { startRecording, type Recording } from "../lib/mic.ts";
 
 export interface DictationButtonProps {
@@ -37,6 +37,8 @@ export function DictationButton({ onTranscript, onError, disabled = false }: Dic
 	const startedAt = useRef(0);
 	const pressedAt = useRef(0);
 	const pressed = useRef(false);
+	// The captured level per block, newest last; the bars are the recent history. Reset on every recording.
+	const [levels, setLevels] = useState<number[]>([]);
 
 	const setPhase = useCallback((next: DictationPhase) => {
 		phaseRef.current = next;
@@ -52,9 +54,13 @@ export function DictationButton({ onTranscript, onError, disabled = false }: Dic
 		if (disabled || arming.current !== null) return;
 		startedAt.current = Date.now();
 		setLatch(false);
+		setLevels([]);
 		setPhase("recording");
 		const pending = startRecording();
 		arming.current = pending;
+		void pending.then((recording) => {
+			recording.onLevel = (level) => setLevels((prev) => [...prev.slice(-(BAR_COUNT - 1)), level]);
+		});
 		pending.catch((error: unknown) => {
 			if (arming.current !== pending) return; // finish() took it and will report it
 			arming.current = null;
@@ -185,8 +191,17 @@ export function DictationButton({ onTranscript, onError, disabled = false }: Dic
 			onContextMenu={(event) => event.preventDefault()}
 		>
 			{phase === "recording" ? (
-				<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-					<rect x="6.5" y="6.5" width="11" height="11" rx="2" />
+				<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+					{barHeights(levels, BAR_COUNT).map((height, index) => (
+						<rect
+							key={index}
+							x={index * 3.5}
+							y={(16 - height) / 2}
+							width={2}
+							height={height}
+							rx={1}
+						/>
+					))}
 				</svg>
 			) : (
 				<svg

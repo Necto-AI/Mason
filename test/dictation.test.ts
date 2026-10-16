@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ASR_PORT, asrServiceUrl, encodeWavPcm16, floatToPcm16, SAMPLE_RATE } from "../src/web/lib/asr.ts";
-import { HOLD_MS, MIN_MS, pressOutcome, releaseOutcome, worthTranscribing } from "../src/web/lib/dictation.ts";
+import {
+	BAR_COUNT,
+	BAR_MAX,
+	BAR_MIN,
+	barHeights,
+	HOLD_MS,
+	LEVEL_CEIL,
+	LEVEL_FLOOR,
+	MIN_MS,
+	pressOutcome,
+	releaseOutcome,
+	worthTranscribing,
+} from "../src/web/lib/dictation.ts";
 
 // The pure part of dictation: where the service is found and what the bytes on the wire are. The microphone
 // itself is the browser's and is not tested here — these are the two places the audio format could drift.
@@ -52,6 +64,30 @@ test("a silent recording encodes to a valid, empty-bodied WAV", () => {
 	const wav = encodeWavPcm16(floatToPcm16(new Float32Array(0)));
 	assert.equal(wav.length, 44);
 	assert.equal(new DataView(wav.buffer).getUint32(40, true), 0);
+});
+
+test("a block's RMS maps onto the bar range, clamped at both rails", () => {
+	const heights = barHeights([0, LEVEL_FLOOR, (LEVEL_FLOOR + LEVEL_CEIL) / 2, LEVEL_CEIL, 1], 5);
+	const [silent, floor, mid, ceil, hot] = heights;
+	assert.equal(silent, BAR_MIN); // below the floor: bottomed out, not vanished
+	assert.equal(floor, BAR_MIN);
+	assert.ok(mid > BAR_MIN && mid < BAR_MAX);
+	assert.equal(ceil, BAR_MAX);
+	assert.equal(hot, BAR_MAX); // above the ceiling: pegged, not overflowing
+	// a louder block is never a shorter bar
+	assert.ok(heights.every((h, i) => i === 0 || h >= heights[i - 1]));
+});
+
+test("the bars are the last levels, oldest first, padded on the left while history builds", () => {
+	assert.equal(BAR_COUNT, 5);
+	assert.deepEqual(barHeights([], BAR_COUNT), Array.from({ length: BAR_COUNT }, () => BAR_MIN));
+	// one loud block appears as the rightmost bar; the rest are still resting dots
+	const grown = barHeights([LEVEL_CEIL], BAR_COUNT);
+	assert.deepEqual(grown.slice(0, BAR_COUNT - 1), Array.from({ length: BAR_COUNT - 1 }, () => BAR_MIN));
+	assert.equal(grown[BAR_COUNT - 1], BAR_MAX);
+	// history longer than the bars: only the newest survive, order preserved
+	const scrolled = barHeights([0, LEVEL_CEIL, 0, LEVEL_CEIL, 0, LEVEL_CEIL], BAR_COUNT);
+	assert.deepEqual(scrolled, [BAR_MAX, BAR_MIN, BAR_MAX, BAR_MIN, BAR_MAX]);
 });
 
 test("a press starts, stops a latched recording, and does nothing while transcribing", () => {
