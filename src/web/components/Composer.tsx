@@ -5,8 +5,9 @@
  * tool round), Follow-up only when the run ends, and Stop ends the run where the send button would be.
  *
  * This is also where the session tells the truth about itself: a lost connection is announced here, next to the
- * input it blocks, and nowhere else — the shell is not a dashboard. The mic beside the actions is hold-to-talk
- * dictation (see `DictationButton`): it only ever fills this box, never sends.
+ * input it blocks, and nowhere else — the shell is not a dashboard. The mic beside the actions is dictation (see
+ * `DictationButton`): click to start and click again to stop, or hold to talk; it only ever fills this box, never
+ * sends.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
