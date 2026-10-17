@@ -50,6 +50,6 @@
   '';
 
   enterShell = ''
-    echo "personal-durable-agent dev shell (node $(node --version), cargo $(cargo --version))"
+    echo "mason dev shell (node $(node --version), cargo $(cargo --version))"
   '';
 }
