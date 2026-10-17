@@ -157,7 +157,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	});
 	const address = server.address();
 	const boundPort = typeof address === "object" && address !== null ? address.port : port;
-	console.log(`personal-durable-agent listening on http://${hostname}:${boundPort}`);
+	console.log(`mason listening on http://${hostname}:${boundPort}`);
 
 	return {
 		port: boundPort,

@@ -15,7 +15,7 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 ## 2. Repository Structure
 
 ```text
-/home/user/dev/personal-durable-agent/
+/home/user/dev/mason/
 ├── AGENTS.md
 ├── docs/
 │   └── SPEC.md                        # This specification

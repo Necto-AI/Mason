@@ -1,4 +1,4 @@
-# AGENTS.md — Personal Durable Agent
+# AGENTS.md — mason
 
 ## Overview
 
