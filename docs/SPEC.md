@@ -1,4 +1,4 @@
-# Personal Durable Agent — Technical Specification
+# mason — Technical Specification
 
 ## 1. Product Goal
 

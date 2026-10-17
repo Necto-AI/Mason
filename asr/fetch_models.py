@@ -23,7 +23,7 @@ import urllib.request
 DEFAULT_REPO = "ysdede/parakeet-tdt-0.6b-v3-onnx"
 DEFAULT_BASE_URL = f"https://huggingface.co/{DEFAULT_REPO}/resolve/main"
 PRECISIONS = ("fp32", "fp16", "int8")
-USER_AGENT = "personal-durable-agent-asr/0.1"
+USER_AGENT = "mason-asr/0.1"
 
 
 def files_for(encoder: str, decoder: str) -> list[str]:
