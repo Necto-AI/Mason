@@ -23,5 +23,3 @@ asr/models/
 __pycache__/
 *.pyc
 
-# Local issue tracker (docs/agents/issue-tracker.md)
-.scratch/
