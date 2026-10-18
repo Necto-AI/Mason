@@ -38,7 +38,7 @@ The browser client is the chat area of `sibling` re-implemented in React: [`docs
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/<feature-slug>/` in this repo. See `docs/agents/issue-tracker.md`.
+Issues and specs live as GitHub issues in the repo (`gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
