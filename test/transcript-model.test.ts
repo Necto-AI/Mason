@@ -535,6 +535,25 @@ test("a streaming send_to_user shows the message as it is written", () => {
 	assert.deepEqual(empty, []);
 });
 
+test("a whitespace-only send_to_user yields no message piece", () => {
+	// `minLength: 1` admits `" "`, which the renderer trims to nothing: a piece here would be the same padded empty
+	// bubble with the trace folded that an unstreamed argument is already spared.
+	const pieces = turnPieces(
+		{
+			entries: [
+				entry(2, "pi.assistant", assistant([sendCall("m1", " ")])),
+				entry(3, "pi.tool-result", toolResult("m1", "delivered")),
+			],
+		},
+		undefined,
+		[],
+	);
+	assert.deepEqual(
+		pieces.map((piece) => piece.kind),
+		["toolResult"],
+	);
+});
+
 test("two send_to_user calls are two bubbles in order, and the notes around them stay their own", () => {
 	const turn = {
 		entries: [

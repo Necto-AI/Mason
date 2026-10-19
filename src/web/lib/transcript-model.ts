@@ -237,9 +237,10 @@ export function turnPieces(
 			// A `send_to_user` call is the text the reader is meant to see: a tool row would hide it.
 			if (call.name === MESSAGE_TOOL) {
 				const text = deliveredText(call.arguments);
-				// Before the argument streams there is nothing to show, and the call is covered above — so neither an
-				// empty bubble nor a tool row appears, rather than a bubble that flashes empty and then fills in.
-				if (!settled && text === "") return;
+				// Blank text has nothing to show, and the call is covered above — so neither an empty bubble nor a tool
+				// row appears, rather than a bubble that flashes empty and then fills in. `minLength: 1` admits
+				// whitespace, which the renderer would otherwise pad into an empty bubble.
+				if (text.trim() === "") return;
 				pieces.push({
 					kind: "message",
 					id: call.id,
