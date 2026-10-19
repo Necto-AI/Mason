@@ -179,7 +179,7 @@ export interface TurnPieceOptions {
 }
 
 /** The text a call delivers: the `message` argument, as far as the model has streamed it. */
-export function deliveredText(args: JsonObject | undefined): string {
+function deliveredText(args: JsonObject | undefined): string {
 	const message = args?.message;
 	return typeof message === "string" ? message : "";
 }
@@ -236,11 +236,15 @@ export function turnPieces(
 			const nested = nestedByParent.get(call.id) ?? [];
 			// A `send_to_user` call is the text the reader is meant to see: a tool row would hide it.
 			if (call.name === MESSAGE_TOOL) {
+				const text = deliveredText(call.arguments);
+				// Before the argument streams there is nothing to show, and the call is covered above — so neither an
+				// empty bubble nor a tool row appears, rather than a bubble that flashes empty and then fills in.
+				if (!settled && text === "") return;
 				pieces.push({
 					kind: "message",
 					id: call.id,
 					callId: call.id,
-					text: deliveredText(call.arguments),
+					text,
 					streaming: !settled,
 					failed: outcome?.isError === true,
 				});
@@ -303,16 +307,17 @@ export interface Bubble {
 }
 
 /**
- * Group pieces into bubbles: a trace piece after produced content opens a new bubble; produced content (text
- * or a widget) always lands in the current one. So a bubble holds [trace] → [what the trace produced], and only
- * the last bubble of a running turn can still be trace-only. Render order inside the bubble comes from
+ * Group pieces into bubbles: a trace piece after produced content opens a new bubble; produced content (text,
+ * a message or a widget) always lands in the current one. So a bubble holds [trace] → [what the trace produced], and
+ * only the last bubble of a running turn can still be trace-only. Render order inside the bubble comes from
  * `bubbleContent`, not from this grouping.
  *
  * A widget is the exception three times over. Its call's own result is that card's completion rather than new work, so
  * it stays in the card's bubble instead of opening a new one — otherwise the paragraph the model writes about the
  * widget (its tool result and the reasoning that follows sit between the call and that paragraph in the stream) would
  * land *below* the card. Reasoning after a card stays with it for the same reason. And a widget opens a bubble of its
- * own when the current one already holds cards, so two cards never stack under a single shared caption.
+ * own when the current one already holds cards, so two cards never stack under a single shared caption, or a
+ * delivered message, so a card is never appended below what the agent sent the reader.
  *
  * A delivered message is a bubble of its own, holding the trace that led to it: two `send_to_user` calls are two
  * bubbles in order, never one bubble of joined text, and the notes the model writes around them — before or after —
@@ -326,9 +331,8 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 		bubbles.push(bubble);
 		return bubble;
 	};
-	/** A bubble that has produced nothing yet — no text, no message, no card: the work a piece can still join. */
-	const blank = (bubble: Bubble): boolean =>
-		bubble.text === "" && bubble.widgets.length === 0 && bubble.messages.length === 0;
+	/** The work a piece can still join: a bubble that has produced nothing yet. */
+	const blank = (bubble: Bubble): boolean => !bubbleHasContent(bubble);
 	for (const piece of pieces) {
 		if (piece.kind === "text") {
 			// Prose after a delivered message is the model's own note about it, not part of what it sent.
@@ -343,7 +347,8 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 			continue;
 		}
 		if (piece.kind === "widget") {
-			if (current === undefined || current.widgets.length > 0) current = start(piece);
+			// Cards never stack, and a card never joins the bubble of a message the agent sent.
+			if (current === undefined || current.widgets.length > 0 || current.messages.length > 0) current = start(piece);
 			current.widgets.push(piece);
 			continue;
 		}
@@ -351,8 +356,7 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 		const answered =
 			piece.kind === "toolResult" &&
 			current !== undefined &&
-			(current.widgets.some((widget) => widget.callId === piece.message.toolCallId) ||
-				current.messages.some((message) => message.callId === piece.message.toolCallId));
+			producedCallIds(current).includes(piece.message.toolCallId);
 		if (answered) {
 			current?.trace.push(piece);
 			continue;
@@ -368,6 +372,11 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 		current.trace.push(piece);
 	}
 	return bubbles;
+}
+
+/** The calls a bubble's produced content came from: the message it delivered, or the card it built. */
+function producedCallIds(bubble: Bubble): string[] {
+	return [...bubble.messages, ...bubble.widgets].map((piece) => piece.callId);
 }
 
 export interface ToolPairing {
@@ -391,11 +400,6 @@ export function pairToolResults(pieces: readonly TracePiece[]): ToolPairing {
 	return { byCall, orphans };
 }
 
-/** True when a bubble has something to show besides its trace. */
-export function bubbleHasContent(bubble: Bubble): boolean {
-	return bubble.text.trim() !== "" || bubble.widgets.length > 0 || bubble.messages.length > 0;
-}
-
 /** Produced content in the order the view renders it: the text, then the messages, then the widgets it introduces. */
 export type BubbleContent =
 	| { kind: "text"; key: string; text: string }
@@ -404,6 +408,9 @@ export type BubbleContent =
 
 /**
  * What a bubble shows, in render order: the text first, then delivered messages, widgets last.
+ *
+ * This is the one statement of what counts as produced content — `bubbleHasContent` and the grouping's notion of a
+ * blank bubble are read off it, so the view and the grouping cannot disagree about when a bubble has something to show.
  *
  * A model writes its lead-in text and then calls the tool, but call and text land in the same bubble and the
  * two are not in stream order by the time a turn is read back — a message may carry text, a widget call, and
@@ -419,6 +426,11 @@ export function bubbleContent(bubble: Bubble): BubbleContent[] {
 	for (const piece of bubble.messages) content.push({ kind: "message", key: piece.id, piece });
 	for (const piece of bubble.widgets) content.push({ kind: "widget", key: piece.id, piece });
 	return content;
+}
+
+/** True when a bubble has something to show besides its trace. */
+export function bubbleHasContent(bubble: Bubble): boolean {
+	return bubbleContent(bubble).length > 0;
 }
 
 /* ---------- readers for the view ---------- */

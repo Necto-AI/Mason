@@ -123,7 +123,7 @@ function DeliveredBubble({ piece, live }: { piece: MessagePiece; live: boolean }
 		>
 			{piece.text.trim() === "" ? null : <Text text={piece.text} />}
 			{piece.failed ? (
-				<div className="error-line delivery-failed" data-testid="msg-delivered-failed">
+				<div className="delivery-failed" data-testid="msg-delivered-failed">
 					This message may not have reached you.
 				</div>
 			) : null}
