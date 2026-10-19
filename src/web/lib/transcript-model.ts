@@ -20,13 +20,11 @@ import {
 	isToolCall,
 	textOf,
 } from "../view-types.ts";
+import { HOOK_ENTRY_KIND, MESSAGE_TOOL } from "../../shared/contract.ts";
 import { stepDuration, summarizeArgs } from "./tool-view.ts";
 
 /** The tool whose calls render as widget cards instead of tool rows. */
 export const WIDGET_TOOL = "generateSandboxedUi";
-
-/** The tool whose calls are the messages the reader sees: its `message` argument is the bubble's text. */
-export const MESSAGE_TOOL = "send_to_user";
 
 /** Entry kinds that belong to the assistant's turn; everything else is a boundary or a note. */
 const TURN_KINDS: ReadonlySet<string> = new Set(["pi.assistant", "pi.tool-result", "pi.system"]);
@@ -57,7 +55,7 @@ export function groupEntries(entries: readonly EntryLike[]): Block[] {
 			continue;
 		}
 		// A hook is a turn boundary too: the agent speaks first, with no user message before it.
-		if (entry.kind === "app.hook") {
+		if (entry.kind === HOOK_ENTRY_KIND) {
 			flush();
 			blocks.push({ kind: "hook", entry });
 			continue;
