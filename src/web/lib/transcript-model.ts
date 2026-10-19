@@ -448,9 +448,13 @@ export function bubbleHasContent(bubble: Bubble): boolean {
 
 /* ---------- readers for the view ---------- */
 
-/** The text a note entry carries: a compaction summary, a reset handoff, or nothing. */
+/**
+ * The text a note entry carries: a compaction summary, a reset handoff, or `""` when it carries none the reader could
+ * see. A summary of nothing but a format character is blank, and the note must not offer to expand onto it.
+ */
 export function noteText(entry: EntryLike): string {
-	return textOf(entryMessage(entry)).trim();
+	const text = textOf(entryMessage(entry));
+	return isBlank(text) ? "" : text.trim();
 }
 
 /** The one-line summary of an unknown tool call, for a row or a debug line. */

@@ -8,6 +8,7 @@ import {
 	type Block,
 	groupBubbles,
 	groupEntries,
+	noteText,
 	pairToolResults,
 	toolOutcomes,
 	toolStatus,
@@ -673,4 +674,14 @@ test("a zero-width-only send_to_user yields no message piece", () => {
 		["toolResult"],
 	);
 	assert.deepEqual(groupBubbles(pieces).filter(bubbleHasContent), []);
+});
+
+test("a note whose body is a format character carries no body", () => {
+	// A compaction summary of nothing but a format character must read as no summary: the note stays a bare label
+	// rather than expanding onto an empty block. Real text keeps its own body, trimmed as before.
+	for (const [character, name] of FORMAT_CHARACTERS) {
+		assert.equal(noteText(entry(2, "pi.compaction", { role: "user", content: character })), "", name);
+	}
+	assert.equal(noteText(entry(3, "pi.compaction", { role: "user", content: "  summarised\n" })), "summarised");
+	assert.equal(noteText(entry(4, "pi.reset", { role: "user", content: "\u200bhandoff" })), "\u200bhandoff");
 });
