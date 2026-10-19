@@ -214,7 +214,7 @@ describe("durable harness + pi-env", () => {
 			assert.equal(hook.enabled, false);
 			assert.equal((hook as { intervalMs?: number }).intervalMs, undefined);
 
-			const submission = await runtime.hooks.fire("retry-failed-run", "Connection error.");
+			const submission = await runtime.hooks.fire("retry-failed-run", { payload: "Connection error." });
 			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
 
 			const entries = await readEntries(runtime);

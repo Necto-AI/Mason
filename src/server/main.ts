@@ -12,7 +12,8 @@ import type { ConversationId, ConversationView, SubmissionId } from "@earendil-w
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
 import { AgentService, AgentStatusSchema, type AgentStatus } from "../shared/contract.ts";
-import { UnknownHookError } from "./hooks.ts";
+import { whenBusyFor } from "./admission.ts";
+import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
 import { deriveAgentStatus } from "./status.ts";
@@ -78,7 +79,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
 		// The supervisor re-arms a run that a provider outage killed; it reads the committed view only.
 		const supervisor = new RunRetrySupervisor(async (error) => {
-			await runtime.hooks.fire(RETRY_HOOK_ID, error);
+			// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
+			await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
 		}, retryOptionsFromEnv());
 
 		self.on("viewSync", viewResource, (next, ctx) => {
@@ -99,8 +101,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				// The reader is driving now: a scheduled retry would talk over them.
 				supervisor.acted();
 				const conversation = await runtime.conversation();
+				const placement = whenBusyFor("user", whenBusy);
 				const submission = await conversation.submit(
-					{ type: "input", content, ...(whenBusy === undefined ? {} : { whenBusy }) },
+					{ type: "input", content, ...(placement === undefined ? {} : { whenBusy: placement }) },
 					BACKGROUND_CONTEXT,
 				);
 				return { submissionId: submission.id };
@@ -119,9 +122,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			compact: async (args) => {
 				await (await runtime.conversation()).compact(args?.instructions, BACKGROUND_CONTEXT);
 			},
-			fireHook: async ({ hookId, payload }, ctx) => {
+			fireHook: async ({ hookId, payload, requestId }, ctx) => {
 				if (hookId !== RETRY_HOOK_ID) supervisor.acted();
-				const submission = await runtime.hooks.fire(hookId, payload);
+				// Pressing a control in the transcript is a gesture: no id means one fire per press. A caller that does
+				// have an event identity passes it, and is deduplicated exactly like a named webhook delivery.
+				const submission = await runtime.hooks.fire(hookId, {
+					...(payload === undefined ? {} : { payload }),
+					...(requestId === undefined ? {} : { requestId: explicitRequestId(hookId, requestId) }),
+				});
 				refreshStatus(ctx);
 				return { submissionId: submission.id };
 			},
@@ -203,8 +211,18 @@ async function handleRequest(
 		const body = await readJson(request);
 		const payload =
 			typeof body.message === "string" ? body.message : typeof body.data === "string" ? body.data : undefined;
+		const hookId = decodeURIComponent(fire[1] as string);
+		// A webhook delivery has an identity. A sender that names it is exact and permanent; one that cannot is one
+		// event per body per window, so its queue's redelivery collapses while tomorrow's identical body still fires.
+		const senderId = senderRequestId(request, body);
 		try {
-			const submission = await runtime.hooks.fire(decodeURIComponent(fire[1] as string), payload);
+			const submission = await runtime.hooks.fire(hookId, {
+				...(payload === undefined ? {} : { payload }),
+				requestId:
+					senderId === undefined
+						? bodyRequestId(hookId, body, Date.now())
+						: explicitRequestId(hookId, senderId),
+			});
 			return json(response, 200, { submissionId: submission.id });
 		} catch (error) {
 			if (error instanceof UnknownHookError) return json(response, 404, { error: error.message });
@@ -273,6 +291,14 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 	} catch {
 		return {};
 	}
+}
+
+/** The id a webhook sender gave its delivery: in the JSON body or the `x-request-id` header, else none. */
+function senderRequestId(request: IncomingMessage, body: Record<string, unknown>): string | undefined {
+	if (typeof body.requestId === "string" && body.requestId !== "") return body.requestId;
+	const header = request.headers["x-request-id"];
+	const value = Array.isArray(header) ? header[0] : header;
+	return value === undefined || value === "" ? undefined : value;
 }
 
 /** `ConversationId` of the root conversation, for scripts and logs. */
