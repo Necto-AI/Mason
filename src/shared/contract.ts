@@ -5,6 +5,14 @@
 import { hostNamed, method, remote } from "@earendil-works/chord";
 import { Type } from "typebox";
 
+/**
+ * The names the server and the client have to spell the same way: the tool whose calls are the messages the reader
+ * sees, and the entry kind a proactive hook trigger is placed as. Spelled once here, so a rename cannot land on one
+ * side of the wire only.
+ */
+export const MESSAGE_TOOL = "send_to_user";
+export const HOOK_ENTRY_KIND = "app.hook";
+
 export const HookSummarySchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),

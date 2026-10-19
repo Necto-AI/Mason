@@ -7,6 +7,7 @@
  * source never steers: only the user may interrupt a running turn.
  */
 import type { InputEntry, JsonObject } from "@earendil-works/pi-durable";
+import { HOOK_ENTRY_KIND } from "../shared/contract.ts";
 
 /** Where an input came from. `user` is the same human who owns the conversation; `hook` is an event hook firing. */
 export type Origin = "user" | "hook";
@@ -20,13 +21,13 @@ export function entryKindFor(origin: Origin): string | undefined {
 		case "user":
 			return undefined;
 		case "hook":
-			return "app.hook";
+			return HOOK_ENTRY_KIND;
 	}
 }
 
 /** The origin a placed input came from; anything that is not a trigger kind is the user's own text. */
 export function originOfEntryKind(kind: string | undefined): Origin {
-	return kind === "app.hook" ? "hook" : "user";
+	return kind === HOOK_ENTRY_KIND ? "hook" : "user";
 }
 
 /** The entry an input is placed as, or `undefined` for the default `pi.user`. `data` is what the transcript shows

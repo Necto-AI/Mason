@@ -12,6 +12,7 @@
  */
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
+import { MESSAGE_TOOL } from "../../shared/contract.ts";
 
 export const SendToUserParams = Type.Object({
 	message: Type.String({
@@ -21,7 +22,7 @@ export const SendToUserParams = Type.Object({
 });
 
 export const sendToUserTool = defineTool({
-	name: "send_to_user",
+	name: MESSAGE_TOOL,
 	description:
 		"Send the user a message. Only messages sent this way are seen by the user; everything else you write in a turn is working notes. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
 	parameters: SendToUserParams,

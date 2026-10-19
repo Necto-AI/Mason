@@ -10,6 +10,7 @@
  * withdrawn any more once the inbox knows its entry.
  */
 import type { InboxItemLike, JsonValue } from "../view-types.ts";
+import { HOOK_ENTRY_KIND } from "../../shared/contract.ts";
 
 export interface QueuedRowsProps {
 	readonly items: readonly InboxItemLike[];
@@ -27,7 +28,7 @@ function labelOf(item: InboxItemLike): string {
 			.join("");
 	}
 	const data = item.entry?.data as { hookName?: string } | undefined;
-	if (item.entry?.kind === "app.hook") return `hook: ${data?.hookName ?? "event"}`;
+	if (item.entry?.kind === HOOK_ENTRY_KIND) return `hook: ${data?.hookName ?? "event"}`;
 	return item.entry?.kind ?? "submission";
 }
 
