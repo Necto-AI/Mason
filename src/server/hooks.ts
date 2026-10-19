@@ -3,7 +3,7 @@
  * A hook submits an input whose entry kind is `app.hook`, so clients can tell a proactive trigger
  * from a human message, and the durable run that answers it starts immediately.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
@@ -17,11 +17,19 @@ export interface EventHookConfig {
 	enabled: boolean;
 	/**
 	 * When set, the hook fires periodically while enabled. Authoring rule: an interval shorter than
-	 * `BODY_DEDUPE_WINDOW_MS` is only safe for senders that pass their own id — a body-identified fire is deduplicated
-	 * per `BODY_DEDUPE_WINDOW_MS`, so a hook that fires more often than that from a dumb sender loses fires. `define()`
-	 * warns about it.
+	 * `IDENTITY_WINDOW_MS` is only safe for a hook whose fires are identified exactly — a body-identified fire is
+	 * deduplicated per `IDENTITY_WINDOW_MS`, so a hook that fires more often than that from a dumb sender loses fires.
+	 * Declare that in `identify`; `define()` warns about it otherwise.
 	 */
 	intervalMs?: number;
+	/**
+	 * How this hook's senders identify a fire, so `define()` knows whether the identity window can lose anything.
+	 * `"request"`: every sender passes an explicit id (`explicitRequestId()`), so no fire is ever deduplicated by body.
+	 * `"body"`: the body itself names the delivery (a unique event id in it), so the body's hash differs per event and
+	 * the window cannot collapse two of them. Either way the hook is safe to fire faster than `IDENTITY_WINDOW_MS`.
+	 * Absent: `define()` assumes a body-identified sender that cannot name its deliveries, and warns.
+	 */
+	identify?: "request" | "body";
 	promptTemplate: string;
 	lastFiredAt?: string;
 	fireCount: number;
@@ -36,19 +44,22 @@ type PersistedHookState = Record<string, { enabled?: boolean; lastFiredAt?: stri
  *
  * The key belongs to the caller, because only the caller knows what "the same event" means:
  * - a sender that names its delivery, through `explicitRequestId()`: exact, and permanent;
- * - a sender that cannot, through `bodyRequestId()`: one event per `BODY_DEDUPE_WINDOW_MS`, so a redelivery inside the
+ * - a sender that cannot, through `bodyRequestId()`: one event per `IDENTITY_WINDOW_MS`, so a redelivery inside the
  *   window collapses and tomorrow's identical digest still fires;
  * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
  * - a gesture — the Retry control, the run supervisor, a chord `fireHook` — passes none: a click is an intent, so two
- *   clicks are two fires, and `fire()` gives each its own key.
+ *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
  */
 export interface FireOptions {
 	readonly payload?: string;
 	readonly requestId?: string;
 }
 
-/** The window a body-identified fire is deduplicated in: replays inside it collapse, the next window fires again. */
-export const BODY_DEDUPE_WINDOW_MS = 60_000;
+/**
+ * The window fire identity is bucketed in: a body-identified fire collapses inside one window, a scheduled slot is
+ * never coarser than this by default, and a hook is not expected to fire faster than it unless its identity is exact.
+ */
+export const IDENTITY_WINDOW_MS = 60_000;
 
 export interface HooksManagerOptions {
 	/** Resolves the root conversation a hook submits to. */
@@ -71,8 +82,6 @@ export class HooksManager {
 	readonly #timers = new Map<string, NodeJS.Timeout>();
 	readonly #options: HooksManagerOptions;	readonly #now: () => Date;
 	readonly #persisted: PersistedHookState;
-	/** Distinguishes two gesture fires of the same hook made in the same millisecond. */
-	#fireSeq = 0;
 	#closed = false;
 
 	constructor(options: HooksManagerOptions) {
@@ -84,9 +93,10 @@ export class HooksManager {
 	/**
 	 * Registers (or replaces) a hook definition; persisted runtime state is kept.
 	 *
-	 * Authoring rule, enforced here as a warning: a hook must not fire more often than `BODY_DEDUPE_WINDOW_MS` unless
-	 * its senders pass their own id (`explicitRequestId()`). Below that interval a body-identified fire lands in the
-	 * same dedupe window twice and the second fire is collapsed; at or above it, the window is enough.
+	 * Authoring rule, enforced here as a warning: a hook must not fire more often than `IDENTITY_WINDOW_MS` unless every
+	 * fire's identity is exact. Below that interval a body-identified fire lands in the same window twice and the second
+	 * fire is collapsed; at or above it, the window is enough. A hook whose senders always name the delivery says so in
+	 * `identify`, and is not warned about.
 	 */
 	define(config: Omit<EventHookConfig, "fireCount"> & { fireCount?: number }): EventHookConfig {
 		const previous = this.#hooks.get(config.id);
@@ -100,9 +110,9 @@ export class HooksManager {
 				: { lastFiredAt: config.lastFiredAt ?? state?.lastFiredAt ?? previous?.lastFiredAt },
 		};
 		this.#hooks.set(hook.id, hook);
-		if (hook.intervalMs !== undefined && hook.intervalMs < BODY_DEDUPE_WINDOW_MS) {
+		if (hook.intervalMs !== undefined && hook.intervalMs < IDENTITY_WINDOW_MS && hook.identify === undefined) {
 			console.warn(
-				`[hooks] ${hook.id} fires every ${hook.intervalMs}ms, inside the ${BODY_DEDUPE_WINDOW_MS}ms body-dedupe window: only senders that pass an explicit request id are safe at this rate`,
+				`[hooks] ${hook.id} fires every ${hook.intervalMs}ms, inside the ${IDENTITY_WINDOW_MS}ms identity window: only fires whose senders name them (\`identify\`) are safe at this rate`,
 			);
 		}
 		if (hook.enabled) this.#arm(hook.id);
@@ -160,7 +170,7 @@ export class HooksManager {
 				content: `[EVENT HOOK: ${hook.name}]\n${formatPrompt(hook, payload, firedAt)}`,
 				entry: entryFor("hook", { hookId: hook.id, hookName: hook.name, payload: payload ?? null, firedAt }),
 				whenBusy: whenBusyFor("hook"),
-				requestId: options.requestId ?? `hook:${hook.id}:gesture:${firedAt}:${++this.#fireSeq}`,
+				requestId: options.requestId ?? gestureRequestId(hook.id),
 			},
 			BACKGROUND_CONTEXT,
 		);
@@ -244,13 +254,22 @@ export function explicitRequestId(hookId: string, senderId: string): string {
 }
 
 /**
- * A sender that cannot name its delivery: the same body is the same event inside one `BODY_DEDUPE_WINDOW_MS` window.
+ * A sender that cannot name its delivery: the same body is the same event inside one `IDENTITY_WINDOW_MS` window.
  * Bucketed by time rather than hashed forever, because pi-durable never forgets a request id — a byte-identical daily
  * digest would otherwise fire once, ever.
  */
 export function bodyRequestId(hookId: string, body: unknown, nowMs: number): string {
 	const hash = createHash("sha256").update(canonicalJson(body)).digest("hex").slice(0, 16);
-	return `hook:${hookId}:body:${hash}:${Math.floor(nowMs / BODY_DEDUPE_WINDOW_MS)}`;
+	return `hook:${hookId}:body:${hash}:${Math.floor(nowMs / IDENTITY_WINDOW_MS)}`;
+}
+
+/**
+ * A gesture: a click, a retry, a control the reader pressed, with no identity but its own intent. Two gestures must be
+ * two fires, and the key must stay unique across a restart — a per-process counter is not, since the request ids
+ * pi-durable holds are permanent — so every gesture draws a fresh random id.
+ */
+export function gestureRequestId(hookId: string, gestureId: string = randomUUID()): string {
+	return `hook:${hookId}:gesture:${gestureId}`;
 }
 
 /**
@@ -259,7 +278,7 @@ export function bodyRequestId(hookId: string, body: unknown, nowMs: number): str
  * straddle two timers; the slot is still the best identity there is until scheduling is checkpointed.
  */
 export function scheduledRequestId(hook: Pick<EventHookConfig, "id" | "intervalMs">, nowMs: number): string {
-	const slotMs = Math.max(hook.intervalMs ?? BODY_DEDUPE_WINDOW_MS, 1_000);
+	const slotMs = Math.max(hook.intervalMs ?? IDENTITY_WINDOW_MS, 1_000);
 	return `hook:${hook.id}:slot:${Math.floor(nowMs / slotMs)}`;
 }
 

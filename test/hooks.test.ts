@@ -16,10 +16,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import {
-	BODY_DEDUPE_WINDOW_MS,
 	bodyRequestId,
 	explicitRequestId,
+	gestureRequestId,
 	HooksManager,
+	IDENTITY_WINDOW_MS,
 	scheduledRequestId,
 } from "../src/server/hooks.ts";
 import { openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
@@ -31,7 +32,7 @@ interface TestClock {
 	advance(ms: number): void;
 }
 
-/** Half a second past a minute boundary: inside one `BODY_DEDUPE_WINDOW_MS` window with room on both sides. */
+/** Half a second past a minute boundary: inside one `IDENTITY_WINDOW_MS` window with room on both sides. */
 const ALIGNED_START = "2026-10-19T09:00:00.500Z";
 
 function testClock(startIso: string): TestClock {
@@ -143,7 +144,7 @@ describe("a fire's identity", () => {
 			await first.wait(BACKGROUND_CONTEXT);
 
 			// A redelivery of the same bytes, seconds later: one event, one turn.
-			clock.advance(BODY_DEDUPE_WINDOW_MS - 1_000);
+			clock.advance(IDENTITY_WINDOW_MS - 1_000);
 			const replay = await hooks.fire("digest", { requestId: bodyRequestId("digest", body, clock.at()) });
 			assert.equal(replay.id, first.id);
 			assert.equal(await hookEntryCount(runtime), 1);
@@ -182,7 +183,8 @@ describe("a fire's identity", () => {
 
 	it("is fresh for a gesture, so a click is an intent and two clicks are two fires", async () => {
 		await withFiringManager(async (hooks, runtime) => {
-			// Both fires share one frozen millisecond: the manager's own sequence keeps them apart.
+			// Both fires share one frozen millisecond, and a restart would reset any counter: only a fresh id per
+			// gesture keeps two presses apart, however close together they land.
 			const first = await hooks.fire("digest", { payload: "retry" });
 			await first.wait(BACKGROUND_CONTEXT);
 			const second = await hooks.fire("digest", { payload: "retry" });
@@ -191,6 +193,12 @@ describe("a fire's identity", () => {
 			assert.equal(await hookEntryCount(runtime), 2);
 			assert.equal(hooks.get("digest")?.fireCount, 2);
 		});
+	});
+
+	it("names a gesture per fire, so no two gestures can collide", () => {
+		assert.notEqual(gestureRequestId("digest"), gestureRequestId("digest"));
+		assert.match(gestureRequestId("digest"), /^hook:digest:gesture:[0-9a-f-]{36}$/);
+		assert.equal(gestureRequestId("digest", "pressed-once"), "hook:digest:gesture:pressed-once");
 	});
 
 	it("hashes a body's meaning, not its key order or its array placeholders", () => {
@@ -210,7 +218,7 @@ describe("a fire's identity", () => {
 });
 
 describe("a hook's authoring rule", () => {
-	it("warns when it fires inside the body-dedupe window, and is quiet above it", () => {
+	it("warns when it fires inside the identity window, and is quiet above it", () => {
 		const warnings: string[] = [];
 		const warn = console.warn;
 		console.warn = (message: string) => {
@@ -218,12 +226,29 @@ describe("a hook's authoring rule", () => {
 		};
 		try {
 			const hooks = managerWithClock(testClock(ALIGNED_START));
-			hooks.define({ ...digest, id: "fast", intervalMs: BODY_DEDUPE_WINDOW_MS - 1 });
-			assert.equal(warnings.length, 1, "a hook faster than the dedupe window is warned about");
-			assert.match(warnings[0] ?? "", /body-dedupe window/);
-			hooks.define({ ...digest, id: "slow", intervalMs: BODY_DEDUPE_WINDOW_MS });
+			hooks.define({ ...digest, id: "fast", intervalMs: IDENTITY_WINDOW_MS - 1 });
+			assert.equal(warnings.length, 1, "a hook faster than the identity window is warned about");
+			assert.match(warnings[0] ?? "", /identity window/);
+			hooks.define({ ...digest, id: "slow", intervalMs: IDENTITY_WINDOW_MS });
 			hooks.define({ ...digest, id: "manual" });
 			assert.equal(warnings.length, 1, "at the window, and with no interval at all, there is nothing to warn about");
+		} finally {
+			console.warn = warn;
+		}
+	});
+
+	it("is quiet for a fast hook whose senders name their fires, however they name them", () => {
+		const warnings: string[] = [];
+		const warn = console.warn;
+		console.warn = (message: string) => {
+			warnings.push(message);
+		};
+		try {
+			const hooks = managerWithClock(testClock(ALIGNED_START));
+			const fast = { ...digest, intervalMs: 5_000 };
+			hooks.define({ ...fast, id: "named-ids", identify: "request" });
+			hooks.define({ ...fast, id: "named-bodies", identify: "body" });
+			assert.deepEqual(warnings, [], "a declared identity is exact, so the window cannot lose a fire");
 		} finally {
 			console.warn = warn;
 		}
