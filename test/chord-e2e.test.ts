@@ -67,7 +67,7 @@ type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["get"]> 
 	submit(args: { content: string; whenBusy?: "followUp" | "steer" | "reject" }): Promise<{ submissionId: number }>;
 	withdrawSubmission(args: { submissionId: number }): Promise<void>;
 	abort(): Promise<void>;
-	fireHook(args: { hookId: string; payload?: string }): Promise<{ submissionId: number }>;
+	fireHook(args: { hookId: string; payload?: string; requestId?: string }): Promise<{ submissionId: number }>;
 	toggleHook(args: { hookId: string; enabled: boolean }): Promise<void>;
 	setSandboxedUiEnabled(args: { enabled: boolean }): Promise<void>;
 };
@@ -140,11 +140,31 @@ function entries(view: ConversationView | undefined) {
 	return [...(view?.entries ?? [])];
 }
 
-function messageText(entry: { model?: readonly unknown[] } | undefined): string {
-	const content = (entry?.model?.[0] as { content?: unknown } | undefined)?.content;
+/** POST a hook fire the way an external script or a cron timer would. */
+async function fireWebhook(
+	port: number,
+	hookId: string,
+	body: Record<string, unknown>,
+	headers: Record<string, string> = {},
+): Promise<{ submissionId: number }> {
+	const response = await fetch(`http://127.0.0.1:${port}/api/hooks/${hookId}/fire`, {
+		method: "POST",
+		headers: { "content-type": "application/json", ...headers },
+		body: JSON.stringify(body),
+	});
+	assert.equal(response.status, 200);
+	return (await response.json()) as { submissionId: number };
+}
+
+function textOf(message: { content?: unknown } | undefined): string {
+	const content = message?.content;
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) return content.map((part) => (part as { text?: string }).text ?? "").join("");
 	return "";
+}
+
+function messageText(entry: { model?: readonly unknown[] } | undefined): string {
+	return textOf(entry?.model?.[0] as { content?: unknown } | undefined);
 }
 
 function sections(view: ConversationView | undefined): Record<string, string | null>[] {
@@ -251,6 +271,40 @@ describe("chord client <-> server", () => {
 		}
 	});
 
+	it("lets the reader's steer cut into a running turn", async () => {
+		const client = await openClient();
+		const { agent, state, faux } = client;
+		try {
+			await agent.ready;
+			// The run's second round is recorded: a steer that cut in is in the context the running turn continues with.
+			let afterSteer: { content?: unknown }[] = [];
+			faux.setResponses([
+				toolCall("bash", { command: "sleep 0.6" }, "slow"),
+				(context) => {
+					afterSteer = context.messages;
+					return fauxAssistantMessage(fauxText("Watching stderr now."));
+				},
+			]);
+
+			await agent.submit({ content: "Run something slow." });
+			await waitFor("running tools", () => (state.agentStatus?.runStatus === "running_tools" ? true : undefined));
+			await agent.submit({ content: "Also watch stderr.", whenBusy: "steer" });
+
+			await waitFor("the steered answer", () =>
+				entries(state.view).some((entry) => messageText(entry) === "Watching stderr now.") ? true : undefined,
+			);
+			assert.match(
+				afterSteer.map((message) => textOf(message)).join("\n"),
+				/Also watch stderr\./,
+				"the steer reached the turn that was already running",
+			);
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+			assert.equal(inboxItems(state.view).length, 0, "the steer was placed, not left waiting");
+		} finally {
+			await client.close();
+		}
+	});
+
 	it("shows the failed run's queue and lets it be withdrawn while nothing runs", async () => {
 		// The supervisor would re-fire the failed run in the background; budgeted to 0, the queue has
 		// nobody to pick it up, which is exactly what the user sees while the provider is down.
@@ -301,24 +355,26 @@ describe("chord client <-> server", () => {
 		}
 	});
 
-	it("drains a queue that waited out a failed run once the provider is back", async () => {
+	it("drains a queue that waited out a failed run as one batched turn", async () => {
 		const previous = process.env.PDA_RUN_RETRY_ATTEMPTS;
 		process.env.PDA_RUN_RETRY_ATTEMPTS = "0"; // the manual hook fire plays the provider coming back
 		const client = await openClient();
 		try {
 			const { agent, state, faux } = client;
 			await agent.ready;
+			// The batched turn's own context is recorded: batching is only real if the model saw all three inputs at once.
+			let batched: { content?: unknown }[] = [];
 			faux.setResponses([
 				toolCall("bash", { command: "sleep 0.3" }, "brief"),
 				fauxAssistantMessage(fauxText("Answering would need the provider."), {
 					stopReason: "error",
 					errorMessage: "usage limit reached",
 				}),
-				// The provider is back: the resumed runs answer each waiting submission in turn, one per
-				// final boundary (`steeringMode`/`followUpMode` default to one-at-a-time), the retry hook last.
-				fauxAssistantMessage(fauxText("Back on. First queued wish done.")),
-				fauxAssistantMessage(fauxText("Second queued wish done.")),
-				fauxAssistantMessage(fauxText("Resumed from the failure.")),
+				// `followUpMode: "all"`: whatever is waiting drains as one turn, and the model prioritises between it.
+				(context) => {
+					batched = context.messages;
+					return fauxAssistantMessage(fauxText("Back on. All three wishes done."));
+				},
 			]);
 
 			await agent.submit({ content: "Fail for me." });
@@ -335,23 +391,28 @@ describe("chord client <-> server", () => {
 					: undefined;
 			});
 
-			// The same hook the server's supervisor fires on its own schedule: the queue drains one submission
-			// per final boundary, then the hook input runs.
+			// The same hook the server's supervisor fires on its own schedule. Its input is a follow-up like any
+			// other, so it joins the batch instead of opening a turn of its own.
 			await agent.fireHook({ hookId: RETRY_HOOK_ID, payload: "usage limit reached" });
-			await waitFor("the first queued answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Back on. First queued wish done.")
+			await waitFor("the batched answer", () =>
+				entries(state.view).some((entry) => messageText(entry) === "Back on. All three wishes done.")
 					? true
 					: undefined,
-			);
-			await waitFor("the second queued answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Second queued wish done.") ? true : undefined,
-			);
-			await waitFor("the hook's own answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Resumed from the failure.") ? true : undefined,
 			);
 			await waitFor("idle, queue empty", () =>
 				state.agentStatus?.busy === false && inboxItems(state.view).length === 0 ? true : undefined,
 			);
+
+			// One turn, not three: the failed run's tool call, its error, and a single answer for the whole batch.
+			assert.equal(
+				entries(state.view).filter((entry) => entry.kind === "pi.assistant").length,
+				3,
+				"the three queued inputs were answered together",
+			);
+			const answered = batched.map((message) => textOf(message)).join("\n");
+			assert.match(answered, /First wish\./);
+			assert.match(answered, /Second wish\./);
+			assert.match(answered, /\[EVENT HOOK: Retry a failed run\]/);
 			assert.equal(entries(state.view).filter((entry) => entry.kind === "app.hook").length, 1);
 			assert.equal(
 				entries(state.view).filter((entry) => entry.kind === "pi.user").length,
@@ -361,6 +422,44 @@ describe("chord client <-> server", () => {
 		} finally {
 			if (previous === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
 			else process.env.PDA_RUN_RETRY_ATTEMPTS = previous;
+			await client.close();
+		}
+	});
+
+	it("takes a webhook delivery's id from the sender, or its body per window", async () => {
+		const client = await openClient();
+		const { agent, state, faux, server } = client;
+		try {
+			await agent.ready;
+			faux.setResponses(Array.from({ length: 4 }, (_, index) => fauxAssistantMessage(fauxText(`answer ${index}`))));
+			const deliveries = (): number => entries(state.view).filter((entry) => entry.kind === "app.hook").length;
+
+			// A dumb sender: the body is the delivery's identity inside the window, so the same POST retried is one event.
+			const first = await fireWebhook(server.port, "workspace-check", { message: "ping" });
+			const replay = await fireWebhook(server.port, "workspace-check", { message: "ping" });
+			assert.equal(replay.submissionId, first.submissionId, "a redelivered body is one submission");
+			await waitFor("the first delivery", () => (deliveries() === 1 ? true : undefined));
+
+			// A sender that names its delivery is exact, whether the id comes in the body or in the header.
+			const named = await fireWebhook(
+				server.port,
+				"workspace-check",
+				{ message: "ping" },
+				{ "x-request-id": "delivery-9" },
+			);
+			assert.notEqual(named.submissionId, first.submissionId, "a named delivery is an event of its own");
+			await waitFor("the named delivery", () => (deliveries() === 2 ? true : undefined));
+
+			const again = await fireWebhook(server.port, "workspace-check", { message: "pong", requestId: "delivery-10" });
+			assert.notEqual(again.submissionId, named.submissionId);
+			const againLater = await fireWebhook(server.port, "workspace-check", {
+				message: "pong",
+				requestId: "delivery-10",
+			});
+			assert.equal(againLater.submissionId, again.submissionId, "the same delivery id is the same event");
+			await waitFor("the third delivery", () => (deliveries() === 3 ? true : undefined));
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+		} finally {
 			await client.close();
 		}
 	});
