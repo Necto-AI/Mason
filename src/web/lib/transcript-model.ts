@@ -132,13 +132,13 @@ export function toolStatus(
 /* ---------- blankness ---------- */
 
 /**
- * What counts as nothing: a bubble, a piece or a message that carries no text the reader could see. Unicode Zs
- * whitespace is what `trim()` removes, so the invisible format characters have to go first — U+200B/200C/200D
- * (zero-width space, non-joiner, joiner), U+2060 (word joiner) and U+FEFF (zero-width no-break space). Providers emit
- * some of these alone, and a bubble holding only one would render as an empty padded blob.
+ * What counts as nothing: a bubble, a piece or a message that carries no text the reader could see. `trim()` strips
+ * only Unicode Zs whitespace, so every Cf (format) character has to go first — the zero-width space, non-joiner and
+ * joiner, the direction marks, the soft hyphen, the word joiner, the zero-width no-break space among them. Providers
+ * emit some of these alone, and a bubble holding only one would render as an empty padded blob.
  */
 export function isBlank(text: string): boolean {
-	return text.replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, "").trim() === "";
+	return text.replace(/\p{Cf}/gu, "").trim() === "";
 }
 
 /* ---------- pieces ---------- */
