@@ -10,6 +10,7 @@ import {
 	bubbleContent,
 	bubbleHasContent,
 	groupBubbles,
+	isBlank,
 	type Bubble,
 	type MessagePiece,
 	type Piece,
@@ -121,7 +122,7 @@ function DeliveredBubble({ piece, live }: { piece: MessagePiece; live: boolean }
 			data-testid="msg-delivered"
 			data-failed={piece.failed}
 		>
-			{piece.text.trim() === "" ? null : <Text text={piece.text} />}
+			{isBlank(piece.text) ? null : <Text text={piece.text} />}
 			{piece.failed ? (
 				<div className="delivery-failed" data-testid="msg-delivered-failed">
 					This message may not have reached you.
