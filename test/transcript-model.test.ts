@@ -600,3 +600,62 @@ test("a failed or interrupted send_to_user keeps its text and marks the bubble",
 	const [content] = bubbleContent(bubbles[0]);
 	assert.equal(content.kind === "message" ? content.piece.failed : undefined, true);
 });
+
+/* ---------- invisible text ---------- */
+
+// `String.prototype.trim()` removes Unicode Zs whitespace, not the format characters a provider may emit alone: a
+// U+200B ZERO WIDTH SPACE is `Cf`, so a text block holding one passed every `trim() === ""` guard and rendered as an
+// empty padded bubble — one per block, because each counted as produced content.
+
+test("a turn whose only text is a zero-width space yields no piece and no bubble", () => {
+	const turn = { entries: [entry(2, "pi.assistant", assistant([{ type: "text", text: "\u200b" }]))] };
+	const pieces = turnPieces(turn, undefined, []);
+	assert.deepEqual(pieces, []);
+	assert.deepEqual(groupBubbles(pieces), []);
+});
+
+test("two zero-width-only text blocks are not two bubbles", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([{ type: "text", text: "\u200b" }])),
+			entry(3, "pi.assistant", assistant([{ type: "text", text: "\u200b" }])),
+		],
+	};
+	// The old guard counted both as produced content, so each opened a bubble of its own: a row of empty blobs.
+	assert.deepEqual(groupBubbles(turnPieces(turn, undefined, [])), []);
+});
+
+test("real text beside a zero-width-only block is one text bubble holding only the real text", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([{ type: "text", text: "\u200b" }])),
+			entry(3, "pi.assistant", assistant([{ type: "text", text: "All done." }])),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, [])).filter(bubbleHasContent);
+	assert.equal(bubbles.length, 1);
+	assert.equal(bubbles[0].text, "All done.");
+	assert.deepEqual(
+		bubbleContent(bubbles[0]).map((content) => (content.kind === "text" ? content.text : content.kind)),
+		["All done."],
+	);
+});
+
+test("a zero-width-only send_to_user yields no message piece", () => {
+	// Same rule as `""`: the call is covered, so there is neither a message bubble nor the tool row it replaces.
+	const pieces = turnPieces(
+		{
+			entries: [
+				entry(2, "pi.assistant", assistant([sendCall("m1", "\u200b")])),
+				entry(3, "pi.tool-result", toolResult("m1", "delivered")),
+			],
+		},
+		undefined,
+		[],
+	);
+	assert.deepEqual(
+		pieces.map((piece) => piece.kind),
+		["toolResult"],
+	);
+	assert.deepEqual(groupBubbles(pieces).filter(bubbleHasContent), []);
+});

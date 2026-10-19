@@ -129,6 +129,18 @@ export function toolStatus(
 	return settled ? "done" : "pending";
 }
 
+/* ---------- blankness ---------- */
+
+/**
+ * What counts as nothing: a bubble, a piece or a message that carries no text the reader could see. Unicode Zs
+ * whitespace is what `trim()` removes, so the invisible format characters have to go first — U+200B/200C/200D
+ * (zero-width space, non-joiner, joiner), U+2060 (word joiner) and U+FEFF (zero-width no-break space). Providers emit
+ * some of these alone, and a bubble holding only one would render as an empty padded blob.
+ */
+export function isBlank(text: string): boolean {
+	return text.replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, "").trim() === "";
+}
+
 /* ---------- pieces ---------- */
 
 export type TracePiece =
@@ -218,12 +230,12 @@ export function turnPieces(
 		}
 		blocksOf(message).forEach((block, index) => {
 			if (isThinkingBlock(block)) {
-				if (block.thinking.trim() === "") return;
+				if (isBlank(block.thinking)) return;
 				pieces.push({ kind: "thinking", id: `${prefix}:${index}`, text: block.thinking });
 				return;
 			}
 			if (isTextBlock(block)) {
-				if (block.text.trim() === "") return;
+				if (isBlank(block.text)) return;
 				pieces.push({ kind: "text", id: `${prefix}:${index}`, text: block.text });
 				return;
 			}
@@ -239,8 +251,8 @@ export function turnPieces(
 				const text = deliveredText(call.arguments);
 				// Blank text has nothing to show, and the call is covered above — so neither an empty bubble nor a tool
 				// row appears, rather than a bubble that flashes empty and then fills in. `minLength: 1` admits
-				// whitespace, which the renderer would otherwise pad into an empty bubble.
-				if (text.trim() === "") return;
+				// whitespace — and a lone zero-width space — which the renderer would otherwise pad into an empty bubble.
+				if (isBlank(text)) return;
 				pieces.push({
 					kind: "message",
 					id: call.id,
@@ -423,7 +435,7 @@ export type BubbleContent =
  */
 export function bubbleContent(bubble: Bubble): BubbleContent[] {
 	const content: BubbleContent[] = [];
-	if (bubble.text.trim() !== "") content.push({ kind: "text", key: `${bubble.key}:text`, text: bubble.text });
+	if (!isBlank(bubble.text)) content.push({ kind: "text", key: `${bubble.key}:text`, text: bubble.text });
 	for (const piece of bubble.messages) content.push({ kind: "message", key: piece.id, piece });
 	for (const piece of bubble.widgets) content.push({ kind: "widget", key: piece.id, piece });
 	return content;
