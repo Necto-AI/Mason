@@ -11,6 +11,7 @@ import {
 	bubbleHasContent,
 	groupBubbles,
 	isBlank,
+	noteText,
 	type Bubble,
 	type MessagePiece,
 	type Piece,
@@ -76,8 +77,10 @@ export function HookRow({ entry, debug }: { entry: EntryLike; debug: boolean }) 
 export function NoteRow({ entry, debug }: { entry: EntryLike; debug: boolean }) {
 	const label =
 		entry.kind === "pi.compaction" ? "compacted" : entry.kind === "pi.reset" ? "session reset" : entry.kind;
-	// A compaction's summary is what the transcript shows; a reset's handoff text is a debug detail.
-	const body = entry.kind === "pi.reset" && !debug ? "" : textOf(entryMessage(entry)).trim();
+	// A compaction's summary is what the transcript shows; a reset's handoff text is a debug detail. `noteText`
+	// answers `""` for a body that is only invisible characters, so the note stays a bare label rather than
+	// expanding onto nothing.
+	const body = entry.kind === "pi.reset" && !debug ? "" : noteText(entry);
 	const reason = (entry.data as { reason?: string } | undefined)?.reason;
 	const [open, setOpen] = useState(false);
 	if (body === "" && !debug) return <div className="note" data-testid={`entry-${entry.kind}`}>{label}</div>;
