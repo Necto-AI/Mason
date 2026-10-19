@@ -26,11 +26,15 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
 import { AgentIdentity } from "./extensions/agent-identity.ts";
+import { Delivery } from "./extensions/delivery.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
-/** The extensions every conversation gets unless it says otherwise. `sandboxed-ui` is opt-in. */
-export const BASE_EXTENSIONS: readonly Extension[] = [CodingTools, AgentIdentity];
+/**
+ * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
+ * agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is opt-in.
+ */
+export const BASE_EXTENSIONS: readonly Extension[] = [CodingTools, AgentIdentity, Delivery];
 export const SANDBOXED_UI_EXTENSION: Extension = GenerateSandboxedUiExtension;
 
 export interface AgentModelRef {
