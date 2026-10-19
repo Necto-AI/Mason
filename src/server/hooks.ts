@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { HookSummary } from "../shared/contract.ts";
+import { entryFor, whenBusyFor } from "./admission.ts";
 
 export interface EventHookConfig {
 	id: string;
@@ -32,6 +33,27 @@ export interface HooksManagerOptions {
 	onReport?(error: unknown): void;
 }
 
+export interface FireOptions {
+	readonly payload?: string;
+	/**
+	 * Idempotency key. A second fire with the same key returns the submission already made instead of starting a
+	 * second turn. Callers with an event identity (a webhook delivery id, a schedule slot) pass one; a gesture that
+	 * the user made — pressing Retry — passes nothing and gets a fresh key.
+	 */
+	readonly requestId?: string;
+}
+
+/** The scheduler's key: one fire per interval slot, so a re-arm cannot double-fire.
+ *
+ * `setInterval` fires late by a variable amount, so a slot boundary can straddle two timers. Slice 7
+ * (`mason.schedule`) replaces this with a checkpointed `nextFireAt`; until then the slot is the best identity there
+ * is.
+ */
+export function scheduledRequestId(hook: Pick<EventHookConfig, "id" | "intervalMs">, nowMs: number): string {
+	const slotMs = Math.max(hook.intervalMs ?? 60_000, 1_000);
+	return `hook:${hook.id}:slot:${Math.floor(nowMs / slotMs)}`;
+}
+
 export class UnknownHookError extends Error {
 	constructor(id: string) {
 		super(`Unknown event hook ${id}`);
@@ -44,6 +66,8 @@ export class HooksManager {
 	readonly #timers = new Map<string, NodeJS.Timeout>();
 	readonly #options: HooksManagerOptions;	readonly #now: () => Date;
 	readonly #persisted: PersistedHookState;
+	/** Distinguishes two fires of the same hook made in the same millisecond. */
+	#fireSeq = 0;
 	#closed = false;
 
 	constructor(options: HooksManagerOptions) {
@@ -106,21 +130,24 @@ export class HooksManager {
 	/**
 	 * Fires a hook now: the promise settles once the submission is durably admitted, not when the answer arrives.
 	 */
-	async fire(id: string, payload?: string): Promise<Submission> {
+	async fire(id: string, options: FireOptions = {}): Promise<Submission> {
 		if (this.#closed) throw new Error("Hooks manager is closed");
 		const hook = this.#require(id);
+		const payload = options.payload;
 		const firedAt = this.#now().toISOString();
 		const conversation = await this.#options.conversation();
 		const submission = await conversation.submit(
 			{
 				type: "input",
-				content: `[EVENT HOOK: ${hook.name}]\n${formatPrompt(hook, payload ?? undefined, firedAt)}`,
-				entry: {
-					kind: "app.hook",
-					data: { hookId: hook.id, hookName: hook.name, payload: payload ?? null, firedAt },
-				},
-				whenBusy: "followUp",
-				requestId: `hook:${hook.id}:${Date.now()}`,
+				content: `[EVENT HOOK: ${hook.name}]\n${formatPrompt(hook, payload, firedAt)}`,
+				entry: entryFor("hook", {
+					hookId: hook.id,
+					hookName: hook.name,
+					payload: payload ?? null,
+					firedAt,
+				}),
+				whenBusy: whenBusyFor("hook"),
+				requestId: options.requestId ?? `hook:${hook.id}:fire:${firedAt}:${++this.#fireSeq}`,
 			},
 			BACKGROUND_CONTEXT,
 		);
@@ -143,10 +170,14 @@ export class HooksManager {
 
 	#arm(id: string): void {
 		const hook = this.#hooks.get(id);
-		if (hook === undefined || hook.intervalMs === undefined || this.#closed) return;
+		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this — a fresh
+		// `define()`, `setEnabled()`, or `start()` walking every hook at startup.
+		if (hook === undefined || !hook.enabled || hook.intervalMs === undefined || this.#closed) return;
 		if (this.#timers.has(id)) return;
 		const timer = setInterval(() => {
-			this.fire(id).catch((error: unknown) => this.#report(error));
+			this.fire(id, { requestId: scheduledRequestId(hook, this.#now().getTime()) }).catch((error: unknown) =>
+				this.#report(error),
+			);
 		}, Math.max(hook.intervalMs, 1_000));
 		// A pending timer never keeps the process alive; a durable agent is stopped explicitly.
 		timer.unref();

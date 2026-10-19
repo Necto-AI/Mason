@@ -2,6 +2,7 @@
  * HTTP + WebSocket server: a Chord host serving `AgentService` to browsers, the webhook trigger for
  * event hooks, and the built web client.
  */
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
@@ -12,6 +13,7 @@ import type { ConversationId, ConversationView, SubmissionId } from "@earendil-w
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
 import { AgentService, AgentStatusSchema, type AgentStatus } from "../shared/contract.ts";
+import { whenBusyFor } from "./admission.ts";
 import { UnknownHookError } from "./hooks.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
@@ -78,7 +80,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
 		// The supervisor re-arms a run that a provider outage killed; it reads the committed view only.
 		const supervisor = new RunRetrySupervisor(async (error) => {
-			await runtime.hooks.fire(RETRY_HOOK_ID, error);
+			await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
 		}, retryOptionsFromEnv());
 
 		self.on("viewSync", viewResource, (next, ctx) => {
@@ -100,7 +102,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				supervisor.acted();
 				const conversation = await runtime.conversation();
 				const submission = await conversation.submit(
-					{ type: "input", content, ...(whenBusy === undefined ? {} : { whenBusy }) },
+					{ type: "input", content, whenBusy: whenBusyFor("user", whenBusy) },
 					BACKGROUND_CONTEXT,
 				);
 				return { submissionId: submission.id };
@@ -119,9 +121,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			compact: async (args) => {
 				await (await runtime.conversation()).compact(args?.instructions, BACKGROUND_CONTEXT);
 			},
-			fireHook: async ({ hookId, payload }, ctx) => {
+			fireHook: async ({ hookId, payload, requestId }, ctx) => {
 				if (hookId !== RETRY_HOOK_ID) supervisor.acted();
-				const submission = await runtime.hooks.fire(hookId, payload);
+				const submission = await runtime.hooks.fire(hookId, {
+					...(payload === undefined ? {} : { payload }),
+					...(requestId === undefined ? {} : { requestId }),
+				});
 				refreshStatus(ctx);
 				return { submissionId: submission.id };
 			},
@@ -204,7 +209,12 @@ async function handleRequest(
 		const payload =
 			typeof body.message === "string" ? body.message : typeof body.data === "string" ? body.data : undefined;
 		try {
-			const submission = await runtime.hooks.fire(decodeURIComponent(fire[1] as string), payload);
+			// A webhook delivery has an identity: the same body arriving twice is one event, whether the sender
+			// retried or its queue redelivered. A sender that needs distinct identical events passes `requestId`.
+			const submission = await runtime.hooks.fire(decodeURIComponent(fire[1] as string), {
+				...(payload === undefined ? {} : { payload }),
+				requestId: typeof body.requestId === "string" ? body.requestId : webhookRequestId(fire[1] as string, body),
+			});
 			return json(response, 200, { submissionId: submission.id });
 		} catch (error) {
 			if (error instanceof UnknownHookError) return json(response, 404, { error: error.message });
@@ -273,6 +283,12 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 	} catch {
 		return {};
 	}
+}
+
+/** A webhook delivery's identity, for senders that do not pass one: the same body twice is the same event. */
+function webhookRequestId(hookId: string, body: Record<string, unknown>): string {
+	const canonical = JSON.stringify(body, Object.keys(body).sort());
+	return `hook:${decodeURIComponent(hookId)}:body:${createHash("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
 
 /** `ConversationId` of the root conversation, for scripts and logs. */

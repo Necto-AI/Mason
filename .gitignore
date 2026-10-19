@@ -9,6 +9,10 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 
+# Local scratch and one-off research runs: notes, not the product
+.scratch/
+docs/research/grokbot-insights/
+
 # Node / Build / Runtime state
 node_modules/
 dist/

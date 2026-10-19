@@ -150,6 +150,10 @@ export async function openAgentRuntime(
 
 	const settings: HarnessSettings = {
 		...options.settings,
+		// Admission: only the user's steer cuts in. Batching follow-ups into one turn (`followUpMode: "all"`) is a
+		// deliberate, separate decision: it merges queued submissions into a single answer, and chord-e2e pins the
+		// one-turn-per-submission behaviour today.
+		steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
 		// The base selection leaves `sandboxed-ui` out until a conversation adds it.
 		extensions: selectionFor(extensionList, sandboxedUiEnabled),
 	};
