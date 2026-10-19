@@ -14,6 +14,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
+import { turnPieces } from "../src/web/lib/transcript-model.ts";
+import type { EntryLike } from "../src/web/view-types.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -111,6 +113,54 @@ describe("durable harness + pi-env", () => {
 				.join("\n");
 			assert.match(system, /SOUL-MARKER/);
 			assert.ok(system.includes(directory), "the cwd section names the working directory");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("send_to_user is offered in every conversation, and its call is the message the client renders", async () => {
+		const directory = await tempDir("pda-deliver-");
+		const { access, faux } = fauxAccess();
+		faux.setResponses([
+			toolCall("send_to_user", { message: "Standup moved to nine." }, "m1"),
+			fauxAssistantMessage(fauxText("Nothing else to report.")),
+		]);
+		const runtime = await openFor(directory, access, { storage: "memory" });
+		try {
+			const submission = await (await runtime.conversation()).submit(
+				{ type: "input", content: "Anything new?" },
+				BACKGROUND_CONTEXT,
+			);
+			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
+
+			const entries = await readEntries(runtime);
+			// The call ran, so the tool was offered: it is in the base extension list, not behind a toggle.
+			const result = entries
+				.filter(ToolResultEntry.is)
+				.find((entry) => (entry.model?.[0] as { toolName?: string }).toolName === "send_to_user");
+			assert.ok(result, "the call reached the tool");
+			assert.equal((result.model?.[0] as { isError?: boolean }).isError, false);
+			assert.match(textOf(result.model?.[0]), /delivered/);
+
+			// What the client reads out of the same transcript is a message, not a tool row. The client's view shapes are
+			// narrower than the storage records, which is all the cast says.
+			const turn = {
+				entries: entries.filter(
+					(entry) => entry.kind === "pi.assistant" || entry.kind === "pi.tool-result",
+				) as unknown as EntryLike[],
+			};
+			const delivered = turnPieces(turn, undefined, []).filter((piece) => piece.kind === "message");
+			assert.deepEqual(
+				delivered.map((piece) => (piece.kind === "message" ? piece.text : "")),
+				["Standup moved to nine."],
+			);
+
+			// The invariant the client relies on is in the prompt, not just in the tool description.
+			const system = entries
+				.filter((entry) => entry.kind === "pi.system")
+				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
+				.join("\n");
+			assert.match(system, /Only messages sent via `send_to_user` are seen by the user/);
 		} finally {
 			await runtime.close();
 		}
