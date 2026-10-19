@@ -55,7 +55,7 @@ Differences from apiary: `pi.system` does **not** flush a turn (it is the positi
 - `toolCall` / `toolResult` / `toolLive` — maintained apiary pairing via `toolCallId`; `toolLive` covers running slots without a committed call (e.g. after compaction)
 - `text`
 - **`widget` (new)** — a settled-or-streaming `generateSandboxedUi` call: `{ callId, args, streaming }`
-- **`message` (new)** — a settled-or-streaming `send_to_user` call: the text the reader is meant to read, `{ callId, text, streaming, failed }`. A streaming call before its `message` argument arrives is not a piece at all: the call counts as covered, so neither an empty bubble nor a tool row takes its place.
+- **`message` (new)** — a settled-or-streaming `send_to_user` call: the text the reader is meant to read, `{ callId, text, streaming, failed }`. A call whose trimmed text is empty — before the `message` argument arrives, or settled blank/invalid — is not a piece at all: the call counts as covered, so neither an empty bubble nor a tool row takes its place, and a blank call with a failed or interrupted result leaves no visible artifact at all.
 
 Nested tool slots attach to their parent tool call piece as child rows (debug detail; shown while the parent runs).
 
