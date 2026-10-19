@@ -14,7 +14,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
-import { turnPieces } from "../src/web/lib/transcript-model.ts";
+import { groupEntries, turnPieces } from "../src/web/lib/transcript-model.ts";
 import type { EntryLike } from "../src/web/view-types.ts";
 
 const directories = new Set<string>();
@@ -169,7 +169,11 @@ describe("durable harness + pi-env", () => {
 	it("an event hook appends an app.hook entry and the agent answers on its own", async () => {
 		const directory = await tempDir("pda-hook-");
 		const { access, faux } = fauxAccess();
-		faux.setResponses([fauxAssistantMessage(fauxText("Workspace is clean."))]);
+		// The proactive turn delivers through `send_to_user` like any other: a message, then a working note.
+		faux.setResponses([
+			toolCall("send_to_user", { message: "Workspace is clean." }, "h1"),
+			fauxAssistantMessage(fauxText("Nothing else to report.")),
+		]);
 		const runtime = await openFor(directory, access, { storage: "memory" });
 		try {
 			assert.deepEqual(
@@ -191,8 +195,22 @@ describe("durable harness + pi-env", () => {
 
 			// The hook input started a run, and the model's answer is the proactive message.
 			const answers = entries.filter((entry) => entry.kind === "pi.assistant");
-			assert.equal(answers.length, 1);
-			assert.match(textOf(answers[0]?.model?.[0]), /Workspace is clean\./);
+			assert.equal(answers.length, 2, "the delivered call, then the wrap-up");
+			assert.match(textOf(answers[1]?.model?.[0]), /Nothing else to report\./);
+
+			// What the client reads out of the same transcript is the reader's bubble: the hook turn's pieces are the
+			// message `send_to_user` delivered, not a tool row.
+			const blocks = groupEntries(entries as unknown as EntryLike[]);
+			const trigger = blocks.findIndex((block) => block.kind === "hook");
+			assert.ok(trigger >= 0, "the hook is a turn boundary of its own");
+			const proactive = blocks[trigger + 1];
+			assert.equal(proactive?.kind, "turn");
+			if (proactive?.kind !== "turn") return;
+			const delivered = turnPieces(proactive.turn, undefined, []).filter((piece) => piece.kind === "message");
+			assert.deepEqual(
+				delivered.map((piece) => (piece.kind === "message" ? piece.text : "")),
+				["Workspace is clean."],
+			);
 
 			const hook = runtime.hooks.get("workspace-check");
 			assert.equal(hook?.fireCount, 1);

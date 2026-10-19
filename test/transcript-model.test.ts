@@ -324,6 +324,31 @@ test("a second widget opens its own bubble rather than stacking under the first 
 	);
 });
 
+test("a widget after a delivered message opens its own bubble, so no card sits under what was sent", () => {
+	const turn = {
+		entries: [
+			entry(
+				2,
+				"pi.assistant",
+				assistant([{ type: "text", text: "Building it." }, sendCall("m1", "The chart is on its way.")]),
+			),
+			entry(3, "pi.tool-result", toolResult("m1", "delivered")),
+			entry(4, "pi.assistant", assistant([{ type: "toolCall", id: "w1", name: "generateSandboxedUi", arguments: {} }])),
+			entry(5, "pi.tool-result", toolResult("w1", "UI generated")),
+			entry(6, "pi.assistant", assistant([{ type: "text", text: "It is live." }])),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, [])).filter(bubbleHasContent);
+	assert.deepEqual(
+		bubbles.map((bubble) => ({ text: bubble.text, messages: bubble.messages.length, widgets: bubble.widgets.length })),
+		[
+			{ text: "Building it.", messages: 0, widgets: 0 },
+			{ text: "", messages: 1, widgets: 0 },
+			{ text: "It is live.", messages: 0, widgets: 1 },
+		],
+	);
+});
+
 test("an ordinary tool result still opens a bubble of its own", () => {
 	const turn = {
 		entries: [
@@ -500,9 +525,14 @@ test("a streaming send_to_user shows the message as it is written", () => {
 	const piece = streaming[0];
 	assert.equal(piece.kind === "message" ? piece.streaming : undefined, true);
 	assert.equal(piece.kind === "message" ? piece.text : undefined, "Half a sen");
-	// Partial JSON parses to an empty object before the first chunk of the argument: the bubble appears empty.
-	const empty = turnPieces(undefined, assistant([{ type: "toolCall", id: "m2", name: "send_to_user", arguments: {} }]), []);
-	assert.equal(empty[0].kind === "message" ? empty[0].text : undefined, "");
+	// Partial JSON parses to an empty object before the first chunk of the argument, and the call is already covered:
+	// there is no piece at all, so the view gets neither an empty bubble nor the tool row the message replaces.
+	const empty = turnPieces(
+		undefined,
+		assistant([{ type: "toolCall", id: "m2", name: "send_to_user", arguments: {} }]),
+		[{ callId: "m2", name: "send_to_user", status: "running" }],
+	);
+	assert.deepEqual(empty, []);
 });
 
 test("two send_to_user calls are two bubbles in order, and the notes around them stay their own", () => {
