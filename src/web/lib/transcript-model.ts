@@ -2,8 +2,8 @@
  * The transcript's pure structure, ported from sibling's `packages/web/src/turns.ts` and adapted to pi-durable's
  * `ConversationView`: entries grouped into user/hook turns and notes, a turn flattened into pieces at message
  * boundaries, and pieces grouped into the bubbles the view renders. Traces are temporary — a bubble pairs the
- * work with what it produced; the view drops the trace once the text arrives, and widget cards are the one
- * trace piece that survives settlement.
+ * work with what it produced; the view drops the trace once the text arrives, and widget cards and delivered
+ * messages are the two trace pieces that survive settlement.
  */
 import {
 	type EntryLike,
@@ -24,6 +24,9 @@ import { stepDuration, summarizeArgs } from "./tool-view.ts";
 
 /** The tool whose calls render as widget cards instead of tool rows. */
 export const WIDGET_TOOL = "generateSandboxedUi";
+
+/** The tool whose calls are the messages the reader sees: its `message` argument is the bubble's text. */
+export const MESSAGE_TOOL = "send_to_user";
 
 /** Entry kinds that belong to the assistant's turn; everything else is a boundary or a note. */
 const TURN_KINDS: ReadonlySet<string> = new Set(["pi.assistant", "pi.tool-result", "pi.system"]);
@@ -150,13 +153,37 @@ export interface WidgetPiece {
 	streaming: boolean;
 }
 
-export type Piece = TracePiece | { kind: "text"; id: string; text: string } | WidgetPiece;
+/**
+ * A `send_to_user` call: the message the reader is meant to see, rendered as a bubble of its own rather than as a
+ * tool row. The text is the call's `message` argument, so a streaming call shows the message as it is written.
+ */
+export interface MessagePiece {
+	kind: "message";
+	id: string;
+	callId: string;
+	text: string;
+	/** `true` while the model is still streaming the call. */
+	streaming: boolean;
+	/**
+	 * The call settled as an error — a validation failure, or an `interrupted` result after a restart. The message may
+	 * not have reached the reader, because a crash between the call's commit and its result's is not observable here.
+	 */
+	failed: boolean;
+}
+
+export type Piece = TracePiece | { kind: "text"; id: string; text: string } | WidgetPiece | MessagePiece;
 
 export interface TurnPieceOptions {
 	/** `pi.live.nestedTools`: sub-calls a running tool made, attached to their parent's row. */
 	readonly nested?: readonly NestedToolSlotLike[];
 	/** Debug mode keeps the tool row of a widget call, with its arguments, above the card. */
 	readonly widgetRows?: boolean;
+}
+
+/** The text a call delivers: the `message` argument, as far as the model has streamed it. */
+export function deliveredText(args: JsonObject | undefined): string {
+	const message = args?.message;
+	return typeof message === "string" ? message : "";
 }
 
 /**
@@ -209,6 +236,18 @@ export function turnPieces(
 			const slot = slots.get(call.id);
 			const status = toolStatus(outcome, slot, settled);
 			const nested = nestedByParent.get(call.id) ?? [];
+			// A `send_to_user` call is the text the reader is meant to see: a tool row would hide it.
+			if (call.name === MESSAGE_TOOL) {
+				pieces.push({
+					kind: "message",
+					id: call.id,
+					callId: call.id,
+					text: deliveredText(call.arguments),
+					streaming: !settled,
+					failed: outcome?.isError === true,
+				});
+				return;
+			}
 			const widget = call.name === WIDGET_TOOL && outcome?.isError !== true;
 			if (widget) {
 				if (options?.widgetRows === true) {
@@ -260,6 +299,8 @@ export interface Bubble {
 	key: string;
 	trace: TracePiece[];
 	widgets: WidgetPiece[];
+	/** The `send_to_user` calls of this bubble: the messages the reader was meant to see. */
+	messages: MessagePiece[];
 	text: string;
 }
 
@@ -274,19 +315,33 @@ export interface Bubble {
  * widget (its tool result and the reasoning that follows sit between the call and that paragraph in the stream) would
  * land *below* the card. Reasoning after a card stays with it for the same reason. And a widget opens a bubble of its
  * own when the current one already holds cards, so two cards never stack under a single shared caption.
+ *
+ * A delivered message is a bubble of its own, holding the trace that led to it: two `send_to_user` calls are two
+ * bubbles in order, never one bubble of joined text, and the notes the model writes around them — before or after —
+ * stay in bubbles of their own. What the reader was sent is never glued to what the model was thinking.
  */
 export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 	const bubbles: Bubble[] = [];
 	let current: Bubble | undefined;
 	const start = (piece: Piece): Bubble => {
-		const bubble: Bubble = { key: piece.id, trace: [], widgets: [], text: "" };
+		const bubble: Bubble = { key: piece.id, trace: [], widgets: [], messages: [], text: "" };
 		bubbles.push(bubble);
 		return bubble;
 	};
+	/** A bubble that has produced nothing yet — no text, no message, no card: the work a piece can still join. */
+	const blank = (bubble: Bubble): boolean =>
+		bubble.text === "" && bubble.widgets.length === 0 && bubble.messages.length === 0;
 	for (const piece of pieces) {
 		if (piece.kind === "text") {
+			// Prose after a delivered message is the model's own note about it, not part of what it sent.
+			if (current !== undefined && current.messages.length > 0) current = start(piece);
 			current ??= start(piece);
 			current.text = current.text === "" ? piece.text : `${current.text}\n\n${piece.text}`;
+			continue;
+		}
+		if (piece.kind === "message") {
+			if (current === undefined || !blank(current)) current = start(piece);
+			current.messages.push(piece);
 			continue;
 		}
 		if (piece.kind === "widget") {
@@ -294,12 +349,14 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 			current.widgets.push(piece);
 			continue;
 		}
-		if (
+		// The call's own result is that content's completion, not new work: it stays in its bubble.
+		const answered =
 			piece.kind === "toolResult" &&
 			current !== undefined &&
-			current.widgets.some((widget) => widget.callId === piece.message.toolCallId)
-		) {
-			current.trace.push(piece);
+			(current.widgets.some((widget) => widget.callId === piece.message.toolCallId) ||
+				current.messages.some((message) => message.callId === piece.message.toolCallId));
+		if (answered) {
+			current?.trace.push(piece);
 			continue;
 		}
 		// Reasoning that follows a card is the model thinking about what it just built; the paragraph it leads to
@@ -309,7 +366,7 @@ export function groupBubbles(pieces: readonly Piece[]): Bubble[] {
 			current.trace.push(piece);
 			continue;
 		}
-		if (current === undefined || current.text !== "" || current.widgets.length > 0) current = start(piece);
+		if (current === undefined || !blank(current)) current = start(piece);
 		current.trace.push(piece);
 	}
 	return bubbles;
@@ -338,25 +395,30 @@ export function pairToolResults(pieces: readonly TracePiece[]): ToolPairing {
 
 /** True when a bubble has something to show besides its trace. */
 export function bubbleHasContent(bubble: Bubble): boolean {
-	return bubble.text.trim() !== "" || bubble.widgets.length > 0;
+	return bubble.text.trim() !== "" || bubble.widgets.length > 0 || bubble.messages.length > 0;
 }
 
-/** Produced content in the order the view renders it: the text, then the widgets it introduces. */
+/** Produced content in the order the view renders it: the text, then the messages, then the widgets it introduces. */
 export type BubbleContent =
 	| { kind: "text"; key: string; text: string }
+	| { kind: "message"; key: string; piece: MessagePiece }
 	| { kind: "widget"; key: string; piece: WidgetPiece };
 
 /**
- * What a bubble shows, in render order: the text first, widgets last.
+ * What a bubble shows, in render order: the text first, then delivered messages, widgets last.
  *
  * A model writes its lead-in text and then calls the tool, but call and text land in the same bubble and the
  * two are not in stream order by the time a turn is read back — a message may carry text, a widget call, and
  * more text, and the follow-up answer arrives in a message of its own. The text is what the model wrote *about*
  * the widget, so the widget closes the bubble: a card never appears above the paragraph that introduces it.
+ *
+ * A delivered message needs no such ordering rule: text never shares its bubble with one (see `groupBubbles`), so
+ * the reader's bubble holds only what the agent sent.
  */
 export function bubbleContent(bubble: Bubble): BubbleContent[] {
 	const content: BubbleContent[] = [];
 	if (bubble.text.trim() !== "") content.push({ kind: "text", key: `${bubble.key}:text`, text: bubble.text });
+	for (const piece of bubble.messages) content.push({ kind: "message", key: piece.id, piece });
 	for (const piece of bubble.widgets) content.push({ kind: "widget", key: piece.id, piece });
 	return content;
 }
