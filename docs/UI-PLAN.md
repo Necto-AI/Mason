@@ -55,12 +55,13 @@ Differences from sibling: `pi.system` does **not** flush a turn (it is the posit
 - `toolCall` / `toolResult` / `toolLive` — maintained sibling pairing via `toolCallId`; `toolLive` covers running slots without a committed call (e.g. after compaction)
 - `text`
 - **`widget` (new)** — a settled-or-streaming `generateSandboxedUi` call: `{ callId, args, streaming }`
+- **`message` (new)** — a settled-or-streaming `send_to_user` call: the text the reader is meant to read, `{ callId, text, streaming, failed }`. A streaming call before its `message` argument arrives is not a piece at all: the call counts as covered, so neither an empty bubble nor a tool row takes its place.
 
 Nested tool slots attach to their parent tool call piece as child rows (debug detail; shown while the parent runs).
 
 ### 2.3 Bubbles
 
-`groupBubbles(pieces)` → bubbles, sibling rule kept: a trace piece after produced content opens a new bubble; produced content always lands in the current one. Extended: produced content = `text` **or** `widget`. Bubble shape: `{ key, trace: TracePiece[], widgets: WidgetPiece[], text: string }`; render order inside a bubble is `trace → widgets → text`.
+`groupBubbles(pieces)` → bubbles, sibling rule kept: a trace piece after produced content opens a new bubble; produced content always lands in the current one. Extended: produced content = `text` **or** `widget` **or** `message`. Bubble shape: `{ key, trace: TracePiece[], widgets: WidgetPiece[], messages: MessagePiece[], text: string }`; render order inside a bubble is `trace → widgets → text`, with delivered messages as blocks of their own beside it (text after one opens a new bubble, and a card never joins one).
 
 ### 2.4 Live vs settled vs debug
 
@@ -70,6 +71,7 @@ Nested tool slots attach to their parent tool call piece as child rows (debug de
 | tool rows | in "Working" trace `details`, open; state glyph spinner/check/alert; live `output` pre (truncated with "show all"); nested children indented | dropped | kept: args + result + status + duration + `byTaskId` + diagnostics + `details` JSON |
 | widget cards | rendered in bubble (never inside the collapsing trace) | **kept**, bare | kept, plus raw args JSON |
 | text | tail-reveal stream (sibling `stream.ts`) | markdown bubbles | + badge `[assistant · settled · stopReason=… · attempt · durationMs · usage]` |
+| delivered messages | own bubble as the call streams (tail reveal), the trace it sits in folding away | **kept** as a bubble of their own | + the call id and the failed/interrupted note |
 | trace collapse | animated height→0 when text/widget arrives | — | n/a |
 | `pi.system` | — | hidden | row `[system • sections: …]` + tools added/removed |
 | `pi.reset` | — | quiet note "session reset" | note + handoff text |
@@ -119,7 +121,7 @@ Kept: `SandboxedUiCard.tsx` and `lib/{frame-content,process-partial-html,idiomor
 
 ## 4. Actions (contract unchanged)
 
-`AgentService` stays as-is (`submit`, `withdrawSubmission`, `abort`, `reset`, `compact`, `fireHook`, `toggleHook`, `setSandboxedUiEnabled`).
+`AgentService` stays as-is — the same methods (`submit`, `withdrawSubmission`, `abort`, `reset`, `compact`, `fireHook`, `toggleHook`, `setSandboxedUiEnabled`) plus one added optional field, `fireHook.requestId?`: a caller that already holds an event identity passes it and that fire is deduplicated exactly, while a control pressed in the transcript passes none and is a gesture of its own.
 
 - Composer: idle → one send button → `submit({ content })`. Busy → two send buttons, matching the backend's queue modes exactly (`applyBoundary` in durable: steers at the `postTools` boundary, follow-ups only at `final`):
   - **Steer** → `submit({ content, whenBusy: "steer" })` — placed when the current tool round ends (before the next model step); if the generation produces no tools, it lands at run end.

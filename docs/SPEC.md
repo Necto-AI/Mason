@@ -30,9 +30,11 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   │   └── contract.ts                # Shared @earendil-works/chord remote contract (AgentService)
 │   ├── server/
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
+│   │   ├── admission.ts               # Where a submission came from, and where it waits (hook vs. user)
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view
 │   │   ├── extensions/
 │   │   │   ├── agent-identity.ts      # Preamble / SOUL.md / cwd prompt sections
+│   │   │   ├── delivery.ts            # The send_to_user tool: the one channel that reaches the user
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + OpenIntelligentUI prompt section
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, HTTP webhook trigger, proactive submit)
 │   │   ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
@@ -71,7 +73,9 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 └── test/
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
     ├── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, UI tool
-    └── transcript-model.test.ts       # Pure chat model: grouping, pieces, bubbles, formatters, pinning
+    ├── transcript-model.test.ts       # Pure chat model: grouping, pieces, bubbles, formatters, pinning
+    ├── admission.test.ts              # Which origin an input is placed as, and where it waits
+    └── delivery.test.ts               # The send_to_user tool's registration facts
 ```
 
 ---
@@ -134,13 +138,14 @@ export interface EventHookConfig {
   description: string;
   enabled: boolean;
   intervalMs?: number; // If set, runs periodically when enabled
+  identify?: "request" | "body"; // How this hook's senders name a fire, when they all do
   promptTemplate: string;
   lastFiredAt?: string;
   fireCount: number;
 }
 ```
 
-- **How a hook fires (`fireHook(hookId, payload?)`):**
+- **How a hook fires (`fire(id, { payload?, requestId? })`):**
   1. Formats the prompt from `promptTemplate` and optional `payload`.
   2. Submits to the root conversation using a custom entry kind so the UI can distinguish proactive hook triggers from human user messages:
      ```ts
@@ -158,16 +163,23 @@ export interface EventHookConfig {
            },
          },
          whenBusy: "followUp",
-         requestId: `hook:${hook.id}:${Date.now()}`,
+         requestId,
        },
        context,
      );
      ```
   3. Because `entry.kind === "app.hook"` carries `model: [{ role: "user", content: ... }]` under the hood (per `pi-durable` custom input entries), `pi-durable` immediately starts a generation run! Every connected web client watching the conversation sees the `app.hook` entry appear and the assistant proactively stream its message.
+  4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
+     - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Exact, and permanent.
+     - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity window (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the window collapses while tomorrow's identical digest still fires.
+     - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
+     - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
+     `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about.
+  5. A hook trigger never steers: `whenBusyFor("hook")` places it as a follow-up, because only the user may interrupt a running turn (`src/server/admission.ts`).
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time.
+  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per window.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -242,7 +254,12 @@ export const AgentService = remote("personal.agent", {
         reset: method(Type.Optional(Type.Object({ handoff: Type.Optional(Type.String()) }))),
         compact: method(Type.Optional(Type.Object({ instructions: Type.Optional(Type.String()) }))),
         fireHook: method(
-          Type.Object({ hookId: Type.String(), payload: Type.Optional(Type.String()) }),
+          Type.Object({
+            hookId: Type.String(),
+            payload: Type.Optional(Type.String()),
+            // Idempotency key; omit for a gesture such as pressing the transcript's Retry control.
+            requestId: Type.Optional(Type.String()),
+          }),
           Type.Object({ submissionId: Type.Number() }),
         ),
         toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
@@ -302,7 +319,8 @@ where they wait to be processed once the run (or process) comes back, and every 
 text in the queue can be withdrawn through the durable backend until the moment it is placed.
 
 **Traces are temporary, widgets are not.** A bubble pairs the work with what it produced: the trace folds away the moment
-the bubble produces text or a widget, and settled turns keep only bubbles. `generateSandboxedUi` cards are the exception —
+the bubble produces text, a message or a widget, and settled turns keep only bubbles. `send_to_user` calls render as the
+message they deliver — a bubble of their own, never a tool row — and `generateSandboxedUi` cards are the other exception:
 they render bare (no caption) at the call's position, live and settled alike.
 
 **A widget can take the screen** (`data-testid="widget-fullscreen"`): a quiet icon in the card's corner, revealed on hover
