@@ -143,7 +143,9 @@ export class HooksManager {
 
 	#arm(id: string): void {
 		const hook = this.#hooks.get(id);
-		if (hook === undefined || hook.intervalMs === undefined || this.#closed) return;
+		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this — a fresh
+		// `define()`, `setEnabled()`, or `start()` walking every hook at startup.
+		if (hook === undefined || !hook.enabled || hook.intervalMs === undefined || this.#closed) return;
 		if (this.#timers.has(id)) return;
 		const timer = setInterval(() => {
 			this.fire(id).catch((error: unknown) => this.#report(error));
