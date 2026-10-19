@@ -289,6 +289,17 @@
 	margin-top: 6px;
 }
 
+/* A delivered message keeps its text when the call that sent it failed: the reader is told it may not have arrived. */
+.bubble.delivered.failed {
+	border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+	background: var(--error-bg);
+}
+.delivery-failed {
+	margin-top: 6px;
+	color: var(--error);
+	font-size: 12px;
+}
+
 /* a hook trigger: the agent woke on its own */
 .message.hook {
 	align-self: center;
