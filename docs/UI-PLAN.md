@@ -61,7 +61,7 @@ Nested tool slots attach to their parent tool call piece as child rows (debug de
 
 ### 2.3 Bubbles
 
-`groupBubbles(pieces)` → bubbles, apiary rule kept: a trace piece after produced content opens a new bubble; produced content always lands in the current one. Extended: produced content = `text` **or** `widget` **or** `message`. Bubble shape: `{ key, trace: TracePiece[], widgets: WidgetPiece[], messages: MessagePiece[], text: string }`; render order inside a bubble is `trace → widgets → text`, with delivered messages as blocks of their own beside it (text after one opens a new bubble, and a card never joins one).
+`groupBubbles(pieces)` → bubbles, apiary rule kept: a trace piece after produced content opens a new bubble; produced content always lands in the current one. Extended: produced content = `text` **or** `widget` **or** `message`. Bubble shape: `{ key, trace: TracePiece[], widgets: WidgetPiece[], messages: MessagePiece[], text: string }`; render order inside a bubble is `trace → text → messages → widgets`, with delivered messages as blocks of their own beside it (text after one opens a new bubble, and a card never joins one).
 
 ### 2.4 Live vs settled vs debug
 
@@ -119,7 +119,7 @@ Kept: `SandboxedUiCard.tsx` and `lib/{frame-content,process-partial-html,idiomor
 
 `session.ts`/`auth.ts`/`onboarding*`/`panel.ts`/`bots.ts`/`blob.ts` (no bots/sidebar), `skill-block.ts` (decided: no skill chips; skills are not wired into the durable harness), `branch_summary` (no such entry), `main.ts` (our `main.tsx` shell stays).
 
-## 4. Actions (contract unchanged)
+## 4. Actions
 
 `AgentService` stays as-is — the same methods (`submit`, `withdrawSubmission`, `abort`, `reset`, `compact`, `fireHook`, `toggleHook`, `setSandboxedUiEnabled`) plus one added optional field, `fireHook.requestId?`: a caller that already holds an event identity passes it and that fire is deduplicated exactly, while a control pressed in the transcript passes none and is a gesture of its own.
 
