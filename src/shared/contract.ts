@@ -79,7 +79,12 @@ export const AgentService = remote("personal.agent", {
 				reset: method(Type.Optional(Type.Object({ handoff: Type.Optional(Type.String()) }))),
 				compact: method(Type.Optional(Type.Object({ instructions: Type.Optional(Type.String()) }))),
 				fireHook: method(
-					Type.Object({ hookId: Type.String(), payload: Type.Optional(Type.String()) }),
+					Type.Object({
+						hookId: Type.String(),
+						payload: Type.Optional(Type.String()),
+						/** Idempotency key; omit for a gesture such as pressing the transcript's Retry control. */
+						requestId: Type.Optional(Type.String()),
+					}),
 					Type.Object({ submissionId: Type.Number() }),
 				),
 				toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
