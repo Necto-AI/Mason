@@ -4,6 +4,7 @@ import { pinnedAfterScroll } from "../src/web/lib/follower.ts";
 import { singleLine, stepDuration, summarizeArgs } from "../src/web/lib/tool-view.ts";
 import {
 	bubbleContent,
+	bubbleHasContent,
 	type Block,
 	groupBubbles,
 	groupEntries,
@@ -346,7 +347,7 @@ test("bubbleContent puts the text above the widget: a card never sits over the p
 	const widget = { kind: "widget", id: "w1", callId: "w1", args: {}, streaming: false } as const;
 	// A model writes its lead-in and the tool call in one message, and the follow-up answer in another; the
 	// bubble holds all three, so render order is a rule of its own rather than the order the parts arrived in.
-	const bubble = { key: "a", trace: [], text: "Let me build that.", widgets: [widget] };
+	const bubble = { key: "a", trace: [], text: "Let me build that.", widgets: [widget], messages: [] };
 	assert.deepEqual(
 		bubbleContent(bubble).map((content) => content.kind),
 		["text", "widget"],
@@ -355,7 +356,7 @@ test("bubbleContent puts the text above the widget: a card never sits over the p
 	assert.equal(first?.kind === "text" ? first.text : undefined, "Let me build that.");
 	// a bubble that only produced a widget still renders the card
 	assert.deepEqual(
-		bubbleContent({ key: "c", trace: [], text: "  ", widgets: [widget] }).map((content) => content.kind),
+		bubbleContent({ key: "c", trace: [], text: "  ", widgets: [widget], messages: [] }).map((content) => content.kind),
 		["widget"],
 	);
 	// keys stay stable per piece, so reordering never re-mounts a widget
@@ -458,4 +459,95 @@ test("pinnedAfterScroll reads intent: up unpins, the end repins, shrinking is no
 	// moving down but not at the end keeps the state it had
 	assert.equal(pinnedAfterScroll(true, { top: 100, height: 1000 }, { top: 200, height: 1000 }, false), true);
 	assert.equal(pinnedAfterScroll(false, { top: 100, height: 1000 }, { top: 200, height: 1000 }, false), false);
+});
+
+/* ---------- delivered messages ---------- */
+
+const sendCall = (id: string, message: string) => ({ type: "toolCall", id, name: "send_to_user", arguments: { message } });
+
+test("a send_to_user call is the message it delivers, not a tool row", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([sendCall("m1", "Standup moved to nine.")])),
+			entry(3, "pi.tool-result", toolResult("m1", "delivered")),
+		],
+	};
+	const pieces = turnPieces(turn, undefined, []);
+	assert.deepEqual(
+		pieces.map((piece) => piece.kind),
+		["message", "toolResult"],
+	);
+	const piece = pieces[0];
+	// The argument is the bubble's text: the call is the delivery, not the record of one.
+	assert.equal(piece.kind === "message" ? piece.text : undefined, "Standup moved to nine.");
+	assert.equal(piece.kind === "message" ? piece.streaming : undefined, false);
+	assert.equal(piece.kind === "message" ? piece.failed : undefined, false);
+	const bubbles = groupBubbles(pieces).filter(bubbleHasContent);
+	assert.deepEqual(
+		bubbleContent(bubbles[0]).map((content) => content.kind),
+		["message"],
+	);
+	// The call's own result is the message's completion, so it rides in the bubble's trace (debug) rather than
+	// opening a bubble of its own after it.
+	assert.deepEqual(
+		bubbles[0].trace.map((trace) => trace.kind),
+		["toolResult"],
+	);
+});
+
+test("a streaming send_to_user shows the message as it is written", () => {
+	const streaming = turnPieces(undefined, assistant([sendCall("m1", "Half a sen")]), []);
+	const piece = streaming[0];
+	assert.equal(piece.kind === "message" ? piece.streaming : undefined, true);
+	assert.equal(piece.kind === "message" ? piece.text : undefined, "Half a sen");
+	// Partial JSON parses to an empty object before the first chunk of the argument: the bubble appears empty.
+	const empty = turnPieces(undefined, assistant([{ type: "toolCall", id: "m2", name: "send_to_user", arguments: {} }]), []);
+	assert.equal(empty[0].kind === "message" ? empty[0].text : undefined, "");
+});
+
+test("two send_to_user calls are two bubbles in order, and the notes around them stay their own", () => {
+	const turn = {
+		entries: [
+			entry(
+				2,
+				"pi.assistant",
+				assistant([{ type: "text", text: "Checking the deploy." }, sendCall("m1", "Deploy is running.")]),
+			),
+			entry(3, "pi.tool-result", toolResult("m1", "delivered")),
+			entry(4, "pi.assistant", assistant([{ type: "text", text: "Waiting for the health check." }])),
+			entry(5, "pi.assistant", assistant([sendCall("m2", "Deploy is live.")])),
+			entry(6, "pi.tool-result", toolResult("m2", "delivered")),
+			entry(7, "pi.assistant", assistant([{ type: "text", text: "Nothing left to watch." }])),
+		],
+	};
+	const bubbles = groupBubbles(turnPieces(turn, undefined, [])).filter(bubbleHasContent);
+	assert.deepEqual(
+		bubbles.map((bubble) => ({ text: bubble.text, messages: bubble.messages.map((piece) => piece.text) })),
+		[
+			{ text: "Checking the deploy.", messages: [] },
+			{ text: "", messages: ["Deploy is running."] },
+			{ text: "Waiting for the health check.", messages: [] },
+			{ text: "", messages: ["Deploy is live."] },
+			{ text: "Nothing left to watch.", messages: [] },
+		],
+	);
+});
+
+test("a failed or interrupted send_to_user keeps its text and marks the bubble", () => {
+	const turn = {
+		entries: [
+			entry(2, "pi.assistant", assistant([sendCall("m1", "The backup finished.")])),
+			// `interrupted` is one of these results: replay is unsafe, so a call a restart interrupted is never
+			// re-executed and settles as an error. The text stays — the reader may well have seen it.
+			entry(3, "pi.tool-result", toolResult("m1", "Tool send_to_user was interrupted and may have partially run", { isError: true })),
+		],
+	};
+	const pieces = turnPieces(turn, undefined, []);
+	const piece = pieces[0];
+	assert.equal(piece.kind === "message" ? piece.text : undefined, "The backup finished.");
+	assert.equal(piece.kind === "message" ? piece.failed : undefined, true);
+	const bubbles = groupBubbles(pieces).filter(bubbleHasContent);
+	assert.equal(bubbles.length, 1);
+	const [content] = bubbleContent(bubbles[0]);
+	assert.equal(content.kind === "message" ? content.piece.failed : undefined, true);
 });

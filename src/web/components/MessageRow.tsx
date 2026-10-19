@@ -1,6 +1,7 @@
 /**
  * The message-level rows of the transcript: the user's bubbles, the hook banner, system notes and the assistant
- * turn — settled (bubbles only, traces dropped) or live (one article per bubble, traces folding away).
+ * turn — settled (bubbles only, traces dropped) or live (one article per bubble, traces folding away). A `send_to_user`
+ * call renders here as a bubble of its own: it is the one text the reader is meant to read.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { renderMarkdown } from "../lib/markdown.ts";
@@ -10,6 +11,7 @@ import {
 	bubbleHasContent,
 	groupBubbles,
 	type Bubble,
+	type MessagePiece,
 	type Piece,
 	type Turn,
 	turnErrors,
@@ -106,13 +108,38 @@ function MarkdownText({ text }: { text: string }) {
 }
 
 /**
- * A bubble's content, split: text stays in the bubble, widgets render as their own full-width blocks beside it.
- * Inside the bubble a card could only ever be as wide as the sentence that introduced it.
+ * A `send_to_user` call: the only text the reader is meant to read, so it renders as a message bubble of its own —
+ * not as a tool row and not inside the bubble that holds the model's working notes. A call whose result failed or was
+ * interrupted after a restart keeps its text and says it may not have arrived.
+ */
+function DeliveredBubble({ piece, live }: { piece: MessagePiece; live: boolean }) {
+	// The message is written by the model while the call streams: the tail fades in, then it is markdown.
+	const Text = live && piece.streaming ? StreamText : MarkdownText;
+	return (
+		<div
+			className={`bubble delivered${piece.failed ? " failed" : ""}`}
+			data-testid="msg-delivered"
+			data-failed={piece.failed}
+		>
+			{piece.text.trim() === "" ? null : <Text text={piece.text} />}
+			{piece.failed ? (
+				<div className="error-line delivery-failed" data-testid="msg-delivered-failed">
+					This message may not have reached you.
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * A bubble's content, split: text stays in the bubble, delivered messages and widgets render as their own blocks
+ * beside it. Inside the bubble a card could only ever be as wide as the sentence that introduced it.
  */
 function bubbleParts(bubble: Bubble) {
 	const items = bubbleContent(bubble);
 	return {
 		text: items.filter((item) => item.kind === "text"),
+		messages: items.filter((item) => item.kind === "message"),
 		widgets: items.filter((item) => item.kind === "widget"),
 	};
 }
@@ -124,9 +151,9 @@ interface BubbleProps {
 	readonly onOpened: OpenTracker;
 }
 
-/** One bubble of a settled turn: its text and its widgets; the trace only survives in debug mode. */
+/** One bubble of a settled turn: its text, the messages it delivered and its widgets; traces survive in debug only. */
 function SettledBubble({ bubble, debug, bridgeFor, onOpened }: BubbleProps) {
-	const { text, widgets } = bubbleParts(bubble);
+	const { text, messages, widgets } = bubbleParts(bubble);
 	return (
 		<>
 			{debug || text.length > 0 ? (
@@ -137,6 +164,9 @@ function SettledBubble({ bubble, debug, bridgeFor, onOpened }: BubbleProps) {
 					))}
 				</div>
 			) : null}
+			{messages.map((content) => (
+				<DeliveredBubble key={content.key} piece={content.piece} live={false} />
+			))}
 			{widgets.map((content) => (
 				<div className="bubble-widgets" key={content.key}>
 					<WidgetCard piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
@@ -181,7 +211,7 @@ function LiveBubble({
 	}, [produced, dropped, debug]);
 
 	const showTrace = debug || !dropped;
-	const { text, widgets } = bubbleParts(bubble);
+	const { text, messages, widgets } = bubbleParts(bubble);
 	const showBubble = showTrace || text.length > 0;
 	return (
 		<>
@@ -197,6 +227,9 @@ function LiveBubble({
 					))}
 				</div>
 			) : null}
+			{messages.map((content) => (
+				<DeliveredBubble key={content.key} piece={content.piece} live />
+			))}
 			{widgets.map((content) => (
 				<div className="bubble-widgets" key={content.key}>
 					<WidgetCard piece={content.piece} bridgeFor={bridgeFor} debug={debug} />
