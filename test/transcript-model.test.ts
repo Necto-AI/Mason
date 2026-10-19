@@ -605,13 +605,28 @@ test("a failed or interrupted send_to_user keeps its text and marks the bubble",
 
 // `String.prototype.trim()` removes Unicode Zs whitespace, not the format characters a provider may emit alone: a
 // U+200B ZERO WIDTH SPACE is `Cf`, so a text block holding one passed every `trim() === ""` guard and rendered as an
-// empty padded bubble — one per block, because each counted as produced content.
+// empty padded bubble — one per block, because each counted as produced content. `isBlank` drops the whole `Cf` class,
+// so every format character behaves the same way, whether or not this client has seen it emitted alone before.
 
-test("a turn whose only text is a zero-width space yields no piece and no bubble", () => {
-	const turn = { entries: [entry(2, "pi.assistant", assistant([{ type: "text", text: "\u200b" }]))] };
-	const pieces = turnPieces(turn, undefined, []);
-	assert.deepEqual(pieces, []);
-	assert.deepEqual(groupBubbles(pieces), []);
+/** A representative `Cf` set: the zero-width characters, both direction marks, the soft hyphen and the BOM. */
+const FORMAT_CHARACTERS = [
+	["\u200b", "U+200B ZERO WIDTH SPACE"],
+	["\u200c", "U+200C ZERO WIDTH NON-JOINER"],
+	["\u200d", "U+200D ZERO WIDTH JOINER"],
+	["\u200e", "U+200E LEFT-TO-RIGHT MARK"],
+	["\u200f", "U+200F RIGHT-TO-LEFT MARK"],
+	["\u00ad", "U+00AD SOFT HYPHEN"],
+	["\u2060", "U+2060 WORD JOINER"],
+	["\ufeff", "U+FEFF ZERO WIDTH NO-BREAK SPACE"],
+] as const;
+
+test("a turn whose only text is a format character yields no piece and no bubble", () => {
+	for (const [character, name] of FORMAT_CHARACTERS) {
+		const turn = { entries: [entry(2, "pi.assistant", assistant([{ type: "text", text: character }]))] };
+		const pieces = turnPieces(turn, undefined, []);
+		assert.deepEqual(pieces, [], `${name} alone is no piece`);
+		assert.deepEqual(groupBubbles(pieces), [], `${name} alone opens no bubble`);
+	}
 });
 
 test("two zero-width-only text blocks are not two bubbles", () => {
