@@ -41,6 +41,27 @@ export function DeliveredRow({ text, failed, streaming }: { text: string; failed
 	);
 }
 
+/**
+ * The agent working: a bubble that says what it is doing, with three dots pulsing.
+ *
+ * It is not a transcript row and is never stored — it is derived from the status, so it exists exactly while a turn
+ * runs and disappears the moment the turn ends. Nothing about the work stays in the chat afterwards.
+ */
+export function WorkingRow({ label }: { label: string }) {
+	return (
+		<article className="message working" data-testid="working" aria-live="polite">
+			<div className="bubble working-bubble">
+				<span className="working-label">{label}</span>
+				<span className="working-dots" aria-hidden="true">
+					<i />
+					<i />
+					<i />
+				</span>
+			</div>
+		</article>
+	);
+}
+
 /** A failed run, said in the reader's terms. The machine's error belongs to the trace, not to the chat. */
 export function NoticeRow({ text }: { text: string }) {
 	return (

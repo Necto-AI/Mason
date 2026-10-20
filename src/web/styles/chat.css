@@ -296,28 +296,56 @@
 	border-radius: var(--r-pill);
 }
 
-/* The working line: what the agent is doing, as a name and a verb. It is the whole of what a reader is told about
-   the machine while it works. */
-.working {
+/* The agent working: a message that says what it is doing, with three dots pulsing. Derived from the status, never
+   stored, so it vanishes the moment the turn ends — the reader is told that work is happening, not left with a log of
+   it in the conversation. */
+.message.working {
 	align-self: flex-start;
-	display: flex;
+	max-width: 100%;
+}
+.working-bubble {
+	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	margin: 6px 0 0;
-	padding: 0 2px;
+	padding: 8px 13px;
 	color: var(--muted);
 	font: 12.5px var(--mono);
 }
-.working-dot {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--accent);
-	animation: working-pulse 1.4s ease-in-out infinite;
+.working-dots {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
 }
-@keyframes working-pulse {
-	0%, 100% { opacity: 0.25; }
-	50% { opacity: 1; }
+.working-dots i {
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: working-dot 1.2s ease-in-out infinite;
+}
+.working-dots i:nth-child(2) {
+	animation-delay: 0.16s;
+}
+.working-dots i:nth-child(3) {
+	animation-delay: 0.32s;
+}
+@keyframes working-dot {
+	0%,
+	70%,
+	100% {
+		opacity: 0.22;
+		transform: translateY(0);
+	}
+	35% {
+		opacity: 1;
+		transform: translateY(-1.5px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.working-dots i {
+		animation: none;
+		opacity: 0.55;
+	}
 }
 
 /* the live slot: the running turn's bubbles, the queue ahead of them */
