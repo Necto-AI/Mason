@@ -222,7 +222,18 @@ describe("chord client <-> server", () => {
 		const { agent, state } = client;
 		try {
 			await agent.ready;
-			client.faux.setResponses([fauxAssistantMessage(fauxText("Hello from the agent."))]);
+			// A turn delivers before it ends: the answer and the `send_to_user` call are one message, and the turn closes
+			// with a working note.
+			client.faux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxText("Hello from the agent."),
+						fauxToolCall(MESSAGE_TOOL, { message: "Hello from the agent." }, { id: "hello" }),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(fauxText("Nothing else to report.")),
+			]);
 
 			const initial = await waitFor("the initial view", () => state.serverView);
 			assert.deepEqual(entries(initial), []);
@@ -243,11 +254,13 @@ describe("chord client <-> server", () => {
 				return found === undefined ? undefined : found;
 			});
 			assert.equal(messageText(answer), "Hello from the agent.");
+			await waitFor("idle again", () => (state.agentStatus?.busy === false ? true : undefined));
+			// Read once the turn settles: the delivery step commits the call's result and the note that closes the turn
+			// after the answer.
 			assert.deepEqual(
 				entries(state.serverView).map((entry) => entry.kind),
-				["pi.user", "pi.system", "pi.assistant"],
+				["pi.user", "pi.system", "pi.assistant", "pi.tool-result", "pi.assistant"],
 			);
-			await waitFor("idle again", () => (state.agentStatus?.busy === false ? true : undefined));
 			assert.ok(state.runStatuses.includes("generating"), `saw generating: ${state.runStatuses.join(",")}`);
 			assert.equal(state.agentStatus?.runStatus, "idle");
 		} finally {
@@ -262,7 +275,15 @@ describe("chord client <-> server", () => {
 			await agent.ready;
 			client.faux.setResponses([
 				toolCall("bash", { command: "sleep 1.5" }, "slow"),
-				fauxAssistantMessage(fauxText("Slow command finished.")),
+				// The answer is sent in the same message, so the turn delivers instead of ending in silence.
+				fauxAssistantMessage(
+					[
+						fauxText("Slow command finished."),
+						fauxToolCall(MESSAGE_TOOL, { message: "Slow command finished." }, { id: "slow-done" }),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(fauxText("Nothing else to report.")),
 			]);
 
 			await agent.submit({ content: "Run something slow." });
@@ -415,8 +436,16 @@ describe("chord client <-> server", () => {
 				// `followUpMode: "all"`: whatever is waiting drains as one turn, and the model prioritises between it.
 				(context) => {
 					batched = context.messages;
-					return fauxAssistantMessage(fauxText("Back on. All three wishes done."));
+					// The batch's answer is delivered in the same message, so the turn does not end in silence.
+					return fauxAssistantMessage(
+						[
+							fauxText("Back on. All three wishes done."),
+							fauxToolCall(MESSAGE_TOOL, { message: "Back on. All three wishes done." }, { id: "batched" }),
+						],
+						{ stopReason: "toolUse" },
+					);
 				},
+				fauxAssistantMessage(fauxText("Nothing else to report.")),
 			]);
 
 			await agent.submit({ content: "Fail for me." });
@@ -445,10 +474,11 @@ describe("chord client <-> server", () => {
 				state.agentStatus?.busy === false && inboxItems(state.serverView).length === 0 ? true : undefined,
 			);
 
-			// One turn, not three: the failed run's tool call, its error, and a single answer for the whole batch.
+			// One turn, not three: the failed run's tool call, its error, the batch's single answer, and the note that
+			// closes the turn after the delivery.
 			assert.equal(
 				entries(state.serverView).filter((entry) => entry.kind === "pi.assistant").length,
-				3,
+				4,
 				"the three queued inputs were answered together",
 			);
 			const answered = batched.map((message) => textOf(message)).join("\n");
@@ -625,7 +655,8 @@ describe("chord client <-> server", () => {
 		try {
 			await agent.ready;
 			// A turn with everything the reader must not see: reasoning, a tool call with a secret in its arguments, a
-			// tool result with a secret in its output, and prose that is working notes. One `send_to_user` at the end.
+			// tool result with a secret in its output, and prose that is working notes. One `send_to_user`, then the note
+			// that closes the turn.
 			faux.setResponses([
 				fauxAssistantMessage(
 					[
@@ -638,6 +669,7 @@ describe("chord client <-> server", () => {
 					fauxText("Working notes: the endpoint answered with token hunter2."),
 					fauxToolCall(MESSAGE_TOOL, { message: "The endpoint is up." }, { id: "sent" }),
 				]),
+				fauxAssistantMessage(fauxText("Nothing else to report.")),
 			]);
 
 			await agent.submit({ content: "Check the endpoint." });
