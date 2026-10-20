@@ -12,6 +12,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
 import { projectTranscript } from "../../src/server/projection.ts";
+import { DELIVERY_REMINDER } from "../../src/shared/contract.ts";
 import { formatPrompt } from "../../src/server/hooks.ts";
 import { openAgentRuntime } from "../../src/server/runtime.ts";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
@@ -163,6 +164,7 @@ function collect(
 		model: `${model.provider}/${model.modelId}`,
 		delivered,
 		notices,
+		reminders: remindersOf(view),
 		toolCalls: calls,
 		widgets: widgets.length,
 		widgetArguments: widgetCall?.args as Record<string, unknown> | undefined,
@@ -171,6 +173,18 @@ function collect(
 		turns,
 		finished: true,
 	};
+}
+
+/** How often the delivery gate had to intervene: one reminder entry per rescued turn. */
+function remindersOf(view: ConversationView): number {
+	let count = 0;
+	for (const entry of view.entries) {
+		if (entry.kind !== "pi.user") continue;
+		const message = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
+		const text = typeof message === "string" ? message : "";
+		if (text.trim() === DELIVERY_REMINDER.trim()) count += 1;
+	}
+	return count;
 }
 
 /** The model's tool calls in transcript order, read from the entries the harness committed. */
