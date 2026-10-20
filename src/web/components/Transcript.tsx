@@ -7,7 +7,7 @@
  */
 import type { QueuedItem, TranscriptItem } from "../../shared/contract.ts";
 import type { WidgetBridge } from "../lib/websandbox-loader.ts";
-import { DeliveredRow, HookRow, NoticeRow, UserRow } from "./MessageRow.tsx";
+import { DeliveredRow, NoticeRow, UserRow } from "./MessageRow.tsx";
 import { QueuedRows } from "./QueuedRows.tsx";
 import { WidgetCard } from "./WidgetCard.tsx";
 
@@ -32,8 +32,6 @@ export function Transcript({ transcript, queued, onWithdraw, bridgeFor, connecti
 				switch (item.kind) {
 					case "user":
 						return <UserRow key={item.id} text={item.text} />;
-					case "hook":
-						return <HookRow key={item.id} hookName={item.hookName} firedAt={item.firedAt} payload={item.payload} />;
 					case "delivered":
 						return <DeliveredRow key={item.id} text={item.text} failed={item.failed === true} streaming={item.streaming === true} />;
 					case "widget":

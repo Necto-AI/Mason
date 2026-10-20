@@ -67,7 +67,8 @@ export type AgentStatus = {
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`send_to_user`), the widgets it built for them, the trigger that woke it, and a coarse notice when a run failed.
+ * (`send_to_user`), the widgets it built for them, and a coarse notice when a run failed. A trigger leaves no row of
+ * its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
  * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
  * a trace endpoint can expose them later, deliberately and separately.
  */
@@ -77,13 +78,6 @@ export const TranscriptItemSchema = Type.Union([
 		id: Type.String(),
 		text: Type.String(),
 		at: Type.Optional(Type.Number()),
-	}),
-	Type.Object({
-		kind: Type.Literal("hook"),
-		id: Type.String(),
-		hookName: Type.String(),
-		firedAt: Type.String(),
-		payload: Type.Optional(Type.String()),
 	}),
 	Type.Object({
 		kind: Type.Literal("delivered"),
@@ -102,7 +96,6 @@ export const TranscriptItemSchema = Type.Union([
 ]);
 export type TranscriptItem =
 	| { kind: "user"; id: string; text: string; at?: number }
-	| { kind: "hook"; id: string; hookName: string; firedAt: string; payload?: string }
 	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
 	| { kind: "widget"; id: string; streaming: boolean; content: unknown }
 	| { kind: "notice"; id: string; text: string };

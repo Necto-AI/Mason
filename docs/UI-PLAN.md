@@ -53,7 +53,6 @@ Also: entries are a **tree on the server** (`fork()`, `head` markers) but the vi
 | item | from | renders as |
 |---|---|---|
 | `user` | `pi.user` | the reader's bubble, right-aligned |
-| `hook` | `app.hook` | the trigger banner: name, time, payload ("the agent woke on its own") |
 | `delivered` | a `send_to_user` call | a message bubble of its own; `streaming` while the call streams, `failed` when its result failed or was interrupted |
 | `widget` | a `generateSandboxedUi` call | the sandbox card, bare, at its position; `content` is the mapped `OpenGenUIContent`, never the call |
 | `notice` | a run that died | one coarse line: something went wrong, the turn did not finish |
@@ -63,7 +62,8 @@ Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, w
 
 ### 2.2 What cannot arrive
 
-Reasoning, tool calls, tool arguments, tool output, `pi.system` sections, usage, entries, `byTaskId`, diagnostics. The
+Reasoning, tool calls, tool arguments, tool output, `pi.system` sections, usage, entries, `byTaskId`, diagnostics, and
+hook triggers (a proactive turn is the message it sent; the schedule stays in the schedule). The
 projection is a whitelist: an item exists only because `src/server/projection.ts` names its kind, so a new tool or a new
 entry kind is invisible until that file says otherwise. `test/projection.test.ts` pins it from both sides — what the
 reader needs arrives, and a secret planted in a tool's arguments and output does not.
@@ -182,6 +182,11 @@ Widgets are meant to be used, not only glanced at: dashboards and controls need 
 `frame-content.ts` swaps the sandbox between the measurement layout and a viewport layout (`FULLSCREEN_FRAME_JS`). The
 sandbox is not re-created, so widget state survives. Verified at 1280×900 and 390×844 (enter via button, exit via button
 and `Esc`, live resize inside the sandbox, bridge submission while fullscreen, no clipped edges).
+
+15. **A trigger shows no banner.** "triggered Morning brief" told the reader about the scheduler, not the conversation:
+    a hook's name, payload and fire time are machine-side detail, so no row is sent for one. Titles live in the hook
+    definition, which is where the reader goes to change it. Any future "this is proactive" signal has to earn its place
+    in the transcript; the delivered message does not need it.
 
 6. **A widget closes its bubble.** The model writes its lead-in and then calls the tool, and the follow-up answer
    arrives in a message of its own, so `groupBubbles` keeps a widget's own result (and the reasoning that follows it)

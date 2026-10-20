@@ -202,11 +202,11 @@ describe("durable harness + pi-env", () => {
 			assert.equal(answers.length, 2, "the delivered call, then the wrap-up");
 			assert.match(textOf(answers[1]?.model?.[0]), /Nothing else to report\./);
 
-			// What leaves the server for a proactive turn is the trigger and the message, nothing else.
+			// What leaves the server for a proactive turn is the message, and not the trigger that produced it.
 			const transcript = await readTranscript(runtime);
 			assert.deepEqual(
 				transcript.map((item) => item.kind),
-				["hook", "delivered"],
+				["delivered"],
 			);
 			assert.deepEqual(
 				transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),

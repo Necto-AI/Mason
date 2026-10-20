@@ -34,22 +34,6 @@ export function runningToolNames(view: ConversationView | undefined): string[] {
 	return names;
 }
 
-/** The hook data an `app.hook` entry carries. */
-export function hookData(entry: { data?: unknown }): {
-	hookId: string;
-	hookName: string;
-	firedAt: string;
-	payload: string | null;
-} {
-	const data = (entry.data ?? {}) as { hookId?: unknown; hookName?: unknown; firedAt?: unknown; payload?: unknown };
-	return {
-		hookId: typeof data.hookId === "string" ? data.hookId : "",
-		hookName: typeof data.hookName === "string" ? data.hookName : "event",
-		firedAt: typeof data.firedAt === "string" ? data.firedAt : "",
-		payload: typeof data.payload === "string" ? data.payload : null,
-	};
-}
-
 export function queuedSubmissions(view: ConversationView | undefined): number {
 	return inboxOf(view)?.items.length ?? 0;
 }

@@ -320,37 +320,6 @@
 	50% { opacity: 1; }
 }
 
-/* a hook trigger: the agent woke on its own */
-.message.hook {
-	align-self: center;
-	max-width: 100%;
-	width: 100%;
-}
-.message.hook .bubble {
-	background: var(--warn-bg);
-	border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
-	border-radius: var(--r-panel);
-	color: var(--text);
-}
-.message.hook .hook-head {
-	display: flex;
-	align-items: center;
-	gap: 7px;
-	font: 500 12.5px var(--sans);
-	color: var(--warn);
-}
-.message.hook .hook-mark {
-	font-size: 9px;
-}
-.message.hook .hook-when {
-	color: var(--faint);
-	font-weight: 400;
-}
-.message.hook .step-block.payload {
-	margin: 6px 0 0;
-}
-
-
 /* the live slot: the running turn's bubbles, the queue ahead of them */
 
 .step > summary {
@@ -386,33 +355,6 @@
 
 
 
-.step-block {
-	margin: 5px 0 3px;
-	padding: 9px 12px;
-	background: var(--surface);
-	border-radius: 10px;
-	overflow-x: auto;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-	font: 12px/1.5 var(--mono);
-	color: var(--muted);
-}
-
-.step-block.args {
-	max-height: 260px;
-	overflow-y: auto;
-}
-
-
-.step.tool .step-block.result {
-	color: var(--ok);
-	background: var(--ok-bg);
-}
-
-.step.tool.error .step-block.result {
-	color: var(--error);
-	background: var(--error-bg);
-}
 
 
 

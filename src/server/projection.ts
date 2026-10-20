@@ -14,7 +14,6 @@ import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/p
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import { HOOK_ENTRY_KIND, MESSAGE_TOOL } from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
-import { hookData } from "./status.ts";
 
 /** The tool whose calls are user-facing artifacts rather than working notes. */
 export const WIDGET_TOOL = "generateSandboxedUi";
@@ -73,7 +72,8 @@ function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean 
  *
  * `pi.assistant` contributes only the calls this file names — its prose, its reasoning and every other call are
  * working notes. A `send_to_user` call is the message; a widget call is the artifact. Tool results are read for
- * failure alone, never forwarded.
+ * failure alone, never forwarded. A hook trigger contributes nothing: a proactive turn is the message it sent, and
+ * the schedule that woke it is not part of the conversation.
  *
  * The round in flight contributes the same two shapes, streaming: a message appears as the model writes it, a widget
  * as its markup arrives, exactly as they will stand once committed. A half-written message is the one thing the reader
@@ -94,17 +94,6 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 		if (entry.kind === "pi.user") {
 			const text = textOfMessage(messageOf(entry)).trim();
 			if (text !== "") items.push({ kind: "user", id: String(entry.id), text });
-			continue;
-		}
-		if (entry.kind === HOOK_ENTRY_KIND) {
-			const data = hookData(entry);
-			items.push({
-				kind: "hook",
-				id: String(entry.id),
-				hookName: data.hookName,
-				firedAt: data.firedAt,
-				...(data.payload === null ? {} : { payload: data.payload }),
-			});
 			continue;
 		}
 		if (entry.kind === "pi.assistant") {

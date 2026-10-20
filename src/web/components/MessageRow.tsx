@@ -1,9 +1,9 @@
 /**
  * The rows of the reader's transcript.
  *
- * A user message and a sent message are the two things a person wrote or received; a hook row says what woke the
- * agent; a notice says a run failed, without the machine's reason. There is no trace, no tool row and no reasoning
- * here by construction — the server does not send them.
+ * A user message and a sent message are the two things a person wrote or received; a notice says a run failed, without
+ * the machine's reason. There is no trace, no tool row, no reasoning and no trigger banner here by construction — the
+ * server does not send them, so a proactive turn is simply the message the agent sent.
  */
 import { useMemo } from "react";
 import { renderMarkdown } from "../lib/markdown.ts";
@@ -19,25 +19,6 @@ export function UserRow({ text }: { text: string }) {
 	return (
 		<article className="message user" data-testid="msg-user">
 			<div className="bubble">{text}</div>
-		</article>
-	);
-}
-
-/** A trigger: the agent speaks first, so the reader is told what woke it. */
-export function HookRow({ hookName, firedAt, payload }: { hookName: string; firedAt: string; payload?: string }) {
-	const time = firedAt === "" ? "" : new Date(firedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-	return (
-		<article className="message hook" data-testid="msg-hook">
-			<div className="bubble">
-				<div className="hook-head">
-					<span className="hook-mark" aria-hidden="true">
-						{"\u25c6"}
-					</span>
-					triggered {hookName}
-					{time === "" ? null : <time className="hook-when">{time}</time>}
-				</div>
-				{payload === undefined || payload === "" ? null : <p className="step-block payload">{payload}</p>}
-			</div>
 		</article>
 	);
 }

@@ -85,17 +85,22 @@ describe("the transcript the client is sent", () => {
 		assert.deepEqual(transcript, []);
 	});
 
-	it("carries a hook trigger with its name and time, so the reader knows what woke the agent", () => {
+	it("leaves no row for a trigger: a proactive turn is the message it sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "app.hook", [{ role: "user", content: "[EVENT HOOK: Morning brief]" }], {
 					data: { hookId: "morning-brief", hookName: "Morning brief", firedAt: "2026-10-20T09:00:00.000Z", payload: "go" },
 				}),
+				assistant(2, [call(MESSAGE_TOOL, { message: "Morning: three things need you." }, "m1")]),
+				result(3, "m1", "delivered"),
 			]),
 		);
-		assert.deepEqual(transcript, [
-			{ kind: "hook", id: "1", hookName: "Morning brief", firedAt: "2026-10-20T09:00:00.000Z", payload: "go" },
-		]);
+		assert.deepEqual(transcript, [{ kind: "delivered", id: "m1", text: "Morning: three things need you." }]);
+		// The schedule, its payload and the prompt it built stay on the server.
+		const wire = JSON.stringify(transcript);
+		for (const leak of ["Morning brief", "app.hook", "EVENT HOOK", "firedAt"]) {
+			assert.ok(!wire.includes(leak), `the trigger's ${leak} does not reach the reader`);
+		}
 	});
 
 	it("sends a widget as the artifact it is, never as the call that built it", () => {
