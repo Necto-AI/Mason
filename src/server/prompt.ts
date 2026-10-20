@@ -38,7 +38,9 @@ When you receive one, you were woken by a schedule or an external trigger, not b
  * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
  * writes is working notes nobody reads.
  */
-export const DELIVERY_INVARIANT = `Only messages sent via \`send_to_user\` are seen by the user. All other text is working notes.`;
+export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the user: the chat renders only messages sent with \`send_to_user\`.
+If you do not call it, the reader gets nothing at all. Answer every turn with a \`send_to_user\` call, even a one-line
+answer to a direct question; everything else you write is working notes.`;
 
 /**
  * The widget tool in one paragraph. The manual — parameter order, design system, sandbox limits — is the
@@ -79,10 +81,11 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	section("preamble", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
 	section("cwd", (input) => input.env?.cwd),
 	section("proactive_guidelines", () => PROACTIVE_GUIDELINES),
-	section("delivery", () => DELIVERY_INVARIANT),
 	section("skills", () => renderSkills(discoverSkills())),
 	section("profile", () => renderProfile()),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),
+	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.
+	section("delivery", () => DELIVERY_INVARIANT),
 ];
 
 /** The only extension in the runtime that has sections. Everything else contributes tools, hooks or state. */
