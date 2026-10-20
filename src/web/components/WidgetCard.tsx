@@ -11,23 +11,24 @@
  * available, and the overlay stands on its own where it is not (iOS Safari has no element fullscreen).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { contentFromToolCall } from "../lib/open-genui-content.ts";
-import type { WidgetPiece } from "../lib/transcript-model.ts";
+import type { OpenGenUIContent } from "../../shared/genui-content.ts";
 import type { WidgetBridge } from "../lib/websandbox-loader.ts";
 import { SandboxedUiCard } from "./SandboxedUiCard.tsx";
 
 export interface WidgetCardProps {
-	readonly piece: WidgetPiece;
+	readonly callId: string;
+	/** The artifact, mapped server-side: the client never receives the call's arguments. */
+	readonly content: unknown;
+	readonly streaming: boolean;
 	readonly bridgeFor: (callId: string) => WidgetBridge;
-	readonly debug?: boolean;
 }
 
-export function WidgetCard({ piece, bridgeFor, debug }: WidgetCardProps) {
+export function WidgetCard({ callId, content: raw, streaming, bridgeFor }: WidgetCardProps) {
 	const [fullscreen, setFullscreen] = useState(false);
 	const wrapper = useRef<HTMLDivElement | null>(null);
 	// The bridge and the content keep their identity per call, so a parent render never restarts the sandbox.
-	const bridge = useMemo(() => bridgeFor(piece.callId), [bridgeFor, piece.callId]);
-	const content = useMemo(() => contentFromToolCall(piece.args, !piece.streaming), [piece.args, piece.streaming]);
+	const bridge = useMemo(() => bridgeFor(callId), [bridgeFor, callId]);
+	const content = raw as OpenGenUIContent;
 
 	const exit = useCallback((): void => {
 		setFullscreen(false);
@@ -72,9 +73,9 @@ export function WidgetCard({ piece, bridgeFor, debug }: WidgetCardProps) {
 	return (
 		<div
 			ref={wrapper}
-			className={`widget${debug === true ? " debug" : ""}${fullscreen ? " fullscreen" : ""}`}
+			className={`widget${fullscreen ? " fullscreen" : ""}`}
 			data-testid="widget"
-			data-call-id={piece.callId}
+			data-call-id={callId}
 			data-fullscreen={fullscreen}
 		>
 			{/* Reserve the strip: the control lives outside the widget, so it never covers its own content. */}
@@ -117,10 +118,10 @@ export function WidgetCard({ piece, bridgeFor, debug }: WidgetCardProps) {
 				</button>
 			</div>
 			<SandboxedUiCard
-				callId={piece.callId}
+				callId={callId}
 				content={content}
 				bridge={bridge}
-				streaming={piece.streaming}
+				streaming={streaming}
 				fullscreen={fullscreen}
 			/>
 		</div>

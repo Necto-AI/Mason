@@ -1,10 +1,14 @@
 /**
- * The client shell: connect to the server's Chord host, keep a subscription on the conversation state, and render
- * the session bar, the transcript (with its queue and jump pill) and the composer.
+ * The client shell: connect to the server's Chord host, keep a subscription on the state it publishes, and render the
+ * session bar, the transcript (with its queue and working line) and the composer.
+ *
+ * The state is the reader's, not the machine's: a transcript of messages, widgets and triggers, the queue behind the
+ * running turn, and a status. Reasoning, tool calls and tool output are not part of the contract, so this file cannot
+ * show them even by accident.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentStatus } from "../shared/contract.ts";
+import type { AgentStatus, QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import { connectAgent, type AgentConnection } from "./client.ts";
 import { Composer } from "./components/Composer.tsx";
 import { JumpPill } from "./components/JumpPill.tsx";
@@ -12,43 +16,41 @@ import { SessionBar } from "./components/SessionBar.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
-import { inbox as inboxOf, live as liveOf, toolCallsOf, type ConversationViewLike } from "./view-types.ts";
+import { workingLabel } from "./lib/working.ts";
 import "./styles/tokens.css";
 import "./styles/chat.css";
-
-const DEBUG_KEY = "pda-debug";
 
 function webSocketUrl(): string {
 	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	return `${protocol}//${window.location.host}/`;
 }
 
-function debugFromUrl(): boolean {
-	return new URLSearchParams(window.location.search).has("debug");
-}
-
 function useAgent(): {
 	connection: AgentConnection;
 	connectionState: "connecting" | "connected" | "disconnected";
-	view: ConversationViewLike | undefined;
+	transcript: TranscriptItem[];
+	queued: QueuedItem[];
 	status: AgentStatus | undefined;
 	error: string | undefined;
 	clearError: () => void;
 } {
 	const connection = useMemo(() => connectAgent({ url: webSocketUrl() }), []);
 	const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("connecting");
-	const [view, setView] = useState<ConversationViewLike | undefined>(undefined);
+	const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+	const [queued, setQueued] = useState<QueuedItem[]>([]);
 	const [status, setStatus] = useState<AgentStatus | undefined>(undefined);
 	const [error, setError] = useState<string | undefined>(undefined);
 
 	useEffect(() => {
 		const off = connection.subscribe((state) => setConnectionState(state));
-		// Both states are subscribed for the page's lifetime: a Chord remote state hydrates only while subscribed.
-		const offView = connection.agent.view.subscribe((value) => setView(value as ConversationViewLike | undefined));
+		// Every cell is subscribed for the page's lifetime: a Chord remote state hydrates only while subscribed.
+		const offTranscript = connection.agent.transcript.subscribe((value) => setTranscript(value ?? []));
+		const offQueued = connection.agent.queued.subscribe((value) => setQueued(value ?? []));
 		const offStatus = connection.agent.agentStatus.subscribe(setStatus);
 		return () => {
 			off();
-			offView();
+			offTranscript();
+			offQueued();
 			offStatus();
 		};
 	}, [connection]);
@@ -66,7 +68,8 @@ function useAgent(): {
 	return {
 		connection,
 		connectionState,
-		view,
+		transcript,
+		queued,
 		status,
 		error,
 		clearError: () => setError(undefined),
@@ -74,8 +77,7 @@ function useAgent(): {
 }
 
 function App() {
-	const { connection, connectionState, view, status, error, clearError } = useAgent();
-	const [debug, setDebug] = useState(() => debugFromUrl() || window.localStorage.getItem(DEBUG_KEY) === "1");
+	const { connection, connectionState, transcript, queued, status, error, clearError } = useAgent();
 	const [pending, setPending] = useState(false);
 	const listRef = useRef<HTMLDivElement | null>(null);
 	const [pinned, setPinned] = useState(true);
@@ -104,32 +106,14 @@ function App() {
 		[connection, run],
 	);
 
-	const live = liveOf(view);
-	const tools = live?.tools ?? [];
-	// Tool calls that already settled live in the transcript; the rest are only in the live state.
-	const committedTools = (view?.entries ?? []).reduce(
-		(total, entry) => total + toolCallsOf(entry.model?.[0]).length,
-		0,
-	);
 	const busy = status?.busy ?? false;
-	const queued = inboxOf(view)?.items.length ?? 0;
+	const working = workingLabel(status);
 
 	return (
 		<div id="app">
 			<div id="main">
 				<SessionBar
 					status={status}
-					toolsRunning={tools.filter((slot) => slot.status === "running").length}
-					toolsTotal={committedTools + tools.length}
-					inboxCount={queued}
-					debug={debug}
-					onToggleDebug={() => {
-						setDebug((value) => {
-							const next = !value;
-							window.localStorage.setItem(DEBUG_KEY, next ? "1" : "0");
-							return next;
-						});
-					}}
 					onCompact={() => run(() => connection.agent.compact({}))}
 					onReset={() => run(() => connection.agent.reset({}))}
 				/>
@@ -139,29 +123,18 @@ function App() {
 					</button>
 				)}
 				<Transcript
-					view={view}
-					busy={busy}
-					debug={debug}
+					transcript={transcript}
+					queued={queued}
+					working={working}
 					bridgeFor={bridgeFor}
-					onWithdraw={(submissionId) => run(() => connection.agent.withdrawSubmission({ submissionId }))}
-					listRef={listRef}
-					onOpened={(element) => follower.markOpened(element)}
 					connection={connectionState}
-					status={status}
-					pending={pending}
-					onFireHook={(hookId, payload) =>
-						run(() => connection.agent.fireHook({ hookId, ...(payload === undefined ? {} : { payload }) }))
-					}
-					onToggleHook={(hookId, enabled) => run(() => connection.agent.toggleHook({ hookId, enabled }))}
-					onToggleGenUi={(enabled) => run(() => connection.agent.setSandboxedUiEnabled({ enabled }))}
+					onWithdraw={(submissionId) => run(() => connection.agent.withdrawSubmission({ submissionId }))}
 				/>
 				<Composer
 					busy={busy}
 					enabled={connectionState === "connected" && status !== undefined}
 					pending={pending}
 					connection={connectionState}
-					model={status?.model}
-					debug={debug}
 					onSubmit={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }))}
 					onSteer={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "steer" }))}
 					onStop={() => run(() => connection.agent.abort())}

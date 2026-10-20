@@ -11,13 +11,14 @@ import { after, describe, it } from "node:test";
 import { createHost, type Host, webSocketLink, type WebSocketLike } from "@earendil-works/chord";
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { WebSocket } from "ws";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
-import { AgentService, type AgentStatus } from "../src/shared/contract.ts";
+import { AgentService, MESSAGE_TOOL, type AgentStatus, type QueuedItem, type TranscriptItem } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -47,10 +48,16 @@ async function waitFor<T>(what: string, read: () => T | undefined, timeoutMs = 1
 
 /** A remote state hydrates only while someone subscribes, so the client keeps a subscription and a snapshot. */
 interface State {
-	view?: ConversationView;
+	/** What the client receives: the projection. */
+	transcript?: TranscriptItem[];
+	queued?: QueuedItem[];
 	agentStatus?: AgentStatus;
+	/** What only the server sees: the committed conversation the projection is derived from. */
+	serverView?: ConversationView;
 	readonly runStatuses: string[];
 }
+
+
 
 interface Client {
 	readonly server: RunningServer;
@@ -62,12 +69,13 @@ interface Client {
 }
 
 type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["get"]> & {
-	view: { subscribe(listener: (value: ConversationView | undefined) => void): () => void };
+	transcript: { subscribe(listener: (value: TranscriptItem[] | undefined) => void): () => void };
+	queued: { subscribe(listener: (value: QueuedItem[] | undefined) => void): () => void };
 	agentStatus: { subscribe(listener: (value: AgentStatus | undefined) => void): () => void };
 	submit(args: { content: string; whenBusy?: "followUp" | "steer" | "reject" }): Promise<{ submissionId: number }>;
 	withdrawSubmission(args: { submissionId: number }): Promise<void>;
 	abort(): Promise<void>;
-	fireHook(args: { hookId: string; payload?: string }): Promise<{ submissionId: number }>;
+	fireHook(args: { hookId: string; payload?: string; requestId?: string }): Promise<{ submissionId: number }>;
 	toggleHook(args: { hookId: string; enabled: boolean }): Promise<void>;
 	setSandboxedUiEnabled(args: { enabled: boolean }): Promise<void>;
 };
@@ -102,8 +110,16 @@ async function openClient(
 	});
 	const agent = browser.get(AgentService, {}) as unknown as Ref;
 	const state: State = { runStatuses: [] };
-	agent.view.subscribe((value) => {
-		state.view = value;
+	// The raw view, subscribed server-side: the tests assert both what the client is sent and what stays behind.
+	const raw = await server.runtime.viewState(BACKGROUND_CONTEXT);
+	raw.subscribe((value) => {
+		state.serverView = value;
+	});
+	agent.transcript.subscribe((value) => {
+		state.transcript = value;
+	});
+	agent.queued.subscribe((value) => {
+		state.queued = value;
 	});
 	agent.agentStatus.subscribe((value) => {
 		state.agentStatus = value;
@@ -116,6 +132,7 @@ async function openClient(
 		agent,
 		state,
 		async close() {
+			raw.dispose();
 			await browser.close();
 			await server.close();
 		},
@@ -140,11 +157,31 @@ function entries(view: ConversationView | undefined) {
 	return [...(view?.entries ?? [])];
 }
 
-function messageText(entry: { model?: readonly unknown[] } | undefined): string {
-	const content = (entry?.model?.[0] as { content?: unknown } | undefined)?.content;
+/** POST a hook fire the way an external script or a cron timer would. */
+async function fireWebhook(
+	port: number,
+	hookId: string,
+	body: Record<string, unknown>,
+	headers: Record<string, string> = {},
+): Promise<{ submissionId: number }> {
+	const response = await fetch(`http://127.0.0.1:${port}/api/hooks/${hookId}/fire`, {
+		method: "POST",
+		headers: { "content-type": "application/json", ...headers },
+		body: JSON.stringify(body),
+	});
+	assert.equal(response.status, 200);
+	return (await response.json()) as { submissionId: number };
+}
+
+function textOf(message: { content?: unknown } | undefined): string {
+	const content = message?.content;
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) return content.map((part) => (part as { text?: string }).text ?? "").join("");
 	return "";
+}
+
+function messageText(entry: { model?: readonly unknown[] } | undefined): string {
+	return textOf(entry?.model?.[0] as { content?: unknown } | undefined);
 }
 
 function sections(view: ConversationView | undefined): Record<string, string | null>[] {
@@ -161,7 +198,7 @@ describe("chord client <-> server", () => {
 			await agent.ready;
 			client.faux.setResponses([fauxAssistantMessage(fauxText("Hello from the agent."))]);
 
-			const initial = await waitFor("the initial view", () => state.view);
+			const initial = await waitFor("the initial view", () => state.serverView);
 			assert.deepEqual(entries(initial), []);
 			const status = await waitFor("the initial status", () => state.agentStatus);
 			assert.equal(status.runStatus, "idle");
@@ -177,12 +214,12 @@ describe("chord client <-> server", () => {
 			assert.equal(typeof submissionId, "number");
 
 			const answer = await waitFor("the answer", () => {
-				const found = entries(state.view).find((entry) => entry.kind === "pi.assistant");
+				const found = entries(state.serverView).find((entry) => entry.kind === "pi.assistant");
 				return found === undefined ? undefined : found;
 			});
 			assert.equal(messageText(answer), "Hello from the agent.");
 			assert.deepEqual(
-				entries(state.view).map((entry) => entry.kind),
+				entries(state.serverView).map((entry) => entry.kind),
 				["pi.user", "pi.system", "pi.assistant"],
 			);
 			await waitFor("idle again", () => (state.agentStatus?.busy === false ? true : undefined));
@@ -208,7 +245,7 @@ describe("chord client <-> server", () => {
 				state.agentStatus?.runStatus === "running_tools" ? true : undefined,
 			);
 			const running = await waitFor("a running tool slot", () =>
-				live(state.view)?.tools?.find((slot) => slot.status === "running"),
+				live(state.serverView)?.tools?.find((slot) => slot.status === "running"),
 			);
 			assert.equal(running.name, "bash");
 			assert.equal(state.agentStatus?.busy, true);
@@ -216,14 +253,14 @@ describe("chord client <-> server", () => {
 			// A queued follow-up is visible to every client, and can be taken back while it waits.
 			const queued = await agent.submit({ content: "Then check the logs.", whenBusy: "followUp" });
 			const item = await waitFor("the queued item", () =>
-				inboxItems(state.view).find((entry) => entry.id === queued.submissionId),
+				inboxItems(state.serverView).find((entry) => entry.id === queued.submissionId),
 			);
 			assert.equal(item.mode, "followUp");
 
 			// A steer queues the same durable way, so the one row style and withdraw control cover both modes.
 			const steered = await agent.submit({ content: "Also watch stderr.", whenBusy: "steer" });
 			const steerItem = await waitFor("the queued steer", () =>
-				inboxItems(state.view).find((entry) => entry.id === steered.submissionId),
+				inboxItems(state.serverView).find((entry) => entry.id === steered.submissionId),
 			);
 			assert.equal(steerItem.mode, "steer");
 
@@ -231,21 +268,55 @@ describe("chord client <-> server", () => {
 			await agent.withdrawSubmission({ submissionId: queued.submissionId });
 			await agent.withdrawSubmission({ submissionId: steered.submissionId });
 			await waitFor("both withdrawn items", () =>
-				inboxItems(state.view).some(
+				inboxItems(state.serverView).some(
 					(entry) => entry.id === queued.submissionId || entry.id === steered.submissionId,
 				) ? undefined : true,
 			);
 
 			// The withdrawn submissions never run: the first answer ends the run.
 			await waitFor("the answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Slow command finished.") ? true : undefined,
+				entries(state.serverView).some((entry) => messageText(entry) === "Slow command finished.") ? true : undefined,
 			);
 			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
 			assert.equal(
-				entries(state.view).filter((entry) => entry.kind === "pi.user").length,
+				entries(state.serverView).filter((entry) => entry.kind === "pi.user").length,
 				1,
 				"the withdrawn follow-up was never placed",
 			);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("lets the reader's steer cut into a running turn", async () => {
+		const client = await openClient();
+		const { agent, state, faux } = client;
+		try {
+			await agent.ready;
+			// The run's second round is recorded: a steer that cut in is in the context the running turn continues with.
+			let afterSteer: { content?: unknown }[] = [];
+			faux.setResponses([
+				toolCall("bash", { command: "sleep 0.6" }, "slow"),
+				(context) => {
+					afterSteer = context.messages;
+					return fauxAssistantMessage(fauxText("Watching stderr now."));
+				},
+			]);
+
+			await agent.submit({ content: "Run something slow." });
+			await waitFor("running tools", () => (state.agentStatus?.runStatus === "running_tools" ? true : undefined));
+			await agent.submit({ content: "Also watch stderr.", whenBusy: "steer" });
+
+			await waitFor("the steered answer", () =>
+				entries(state.serverView).some((entry) => messageText(entry) === "Watching stderr now.") ? true : undefined,
+			);
+			assert.match(
+				afterSteer.map((message) => textOf(message)).join("\n"),
+				/Also watch stderr\./,
+				"the steer reached the turn that was already running",
+			);
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+			assert.equal(inboxItems(state.serverView).length, 0, "the steer was placed, not left waiting");
 		} finally {
 			await client.close();
 		}
@@ -274,7 +345,7 @@ describe("chord client <-> server", () => {
 			// The run dies on the limit, nothing re-arms it, and the queued submission is still there: durable
 			// inbox state for the restart to pick up, visible to the reader exactly as it will be processed.
 			await waitFor("the failed answer", () =>
-				entries(state.view).some(
+				entries(state.serverView).some(
 					(entry) =>
 						entry.kind === "pi.assistant" &&
 						(entry.model?.[0] as { stopReason?: string } | undefined)?.stopReason === "error",
@@ -284,15 +355,15 @@ describe("chord client <-> server", () => {
 			);
 			await waitFor("idle after the failure", () => (state.agentStatus?.busy === false ? true : undefined));
 			assert.deepEqual(
-				inboxItems(state.view).map((item) => ({ id: item.id, mode: item.mode })),
+				inboxItems(state.serverView).map((item) => ({ id: item.id, mode: item.mode })),
 				[{ id: queued.submissionId, mode: "followUp" }],
 			);
-			assert.equal(live(state.view)?.run, undefined);
+			assert.equal(live(state.serverView)?.run, undefined);
 
 			// A queued submission stays the durable backend's to take back while the agent sits dead.
 			await agent.withdrawSubmission({ submissionId: queued.submissionId });
 			await waitFor("the withdrawn item", () =>
-				inboxItems(state.view).some((entry) => entry.id === queued.submissionId) ? undefined : true,
+				inboxItems(state.serverView).some((entry) => entry.id === queued.submissionId) ? undefined : true,
 			);
 		} finally {
 			if (previous === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
@@ -301,24 +372,26 @@ describe("chord client <-> server", () => {
 		}
 	});
 
-	it("drains a queue that waited out a failed run once the provider is back", async () => {
+	it("drains a queue that waited out a failed run as one batched turn", async () => {
 		const previous = process.env.PDA_RUN_RETRY_ATTEMPTS;
 		process.env.PDA_RUN_RETRY_ATTEMPTS = "0"; // the manual hook fire plays the provider coming back
 		const client = await openClient();
 		try {
 			const { agent, state, faux } = client;
 			await agent.ready;
+			// The batched turn's own context is recorded: batching is only real if the model saw all three inputs at once.
+			let batched: { content?: unknown }[] = [];
 			faux.setResponses([
 				toolCall("bash", { command: "sleep 0.3" }, "brief"),
 				fauxAssistantMessage(fauxText("Answering would need the provider."), {
 					stopReason: "error",
 					errorMessage: "usage limit reached",
 				}),
-				// The provider is back: the resumed runs answer each waiting submission in turn, one per
-				// final boundary (`steeringMode`/`followUpMode` default to one-at-a-time), the retry hook last.
-				fauxAssistantMessage(fauxText("Back on. First queued wish done.")),
-				fauxAssistantMessage(fauxText("Second queued wish done.")),
-				fauxAssistantMessage(fauxText("Resumed from the failure.")),
+				// `followUpMode: "all"`: whatever is waiting drains as one turn, and the model prioritises between it.
+				(context) => {
+					batched = context.messages;
+					return fauxAssistantMessage(fauxText("Back on. All three wishes done."));
+				},
 			]);
 
 			await agent.submit({ content: "Fail for me." });
@@ -327,7 +400,7 @@ describe("chord client <-> server", () => {
 
 			await waitFor("the run to fail", () => (state.agentStatus?.busy === false ? true : undefined));
 			await waitFor("both submissions still queued", () => {
-				const ids = inboxItems(state.view).map((item) => item.id);
+				const ids = inboxItems(state.serverView).map((item) => item.id);
 				return ids.length === 2 &&
 					[...ids].sort((a, b) => a - b).join(",") ===
 						[first.submissionId, second.submissionId].sort((a, b) => a - b).join(",")
@@ -335,32 +408,75 @@ describe("chord client <-> server", () => {
 					: undefined;
 			});
 
-			// The same hook the server's supervisor fires on its own schedule: the queue drains one submission
-			// per final boundary, then the hook input runs.
+			// The same hook the server's supervisor fires on its own schedule. Its input is a follow-up like any
+			// other, so it joins the batch instead of opening a turn of its own.
 			await agent.fireHook({ hookId: RETRY_HOOK_ID, payload: "usage limit reached" });
-			await waitFor("the first queued answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Back on. First queued wish done.")
+			await waitFor("the batched answer", () =>
+				entries(state.serverView).some((entry) => messageText(entry) === "Back on. All three wishes done.")
 					? true
 					: undefined,
 			);
-			await waitFor("the second queued answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Second queued wish done.") ? true : undefined,
-			);
-			await waitFor("the hook's own answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Resumed from the failure.") ? true : undefined,
-			);
 			await waitFor("idle, queue empty", () =>
-				state.agentStatus?.busy === false && inboxItems(state.view).length === 0 ? true : undefined,
+				state.agentStatus?.busy === false && inboxItems(state.serverView).length === 0 ? true : undefined,
 			);
-			assert.equal(entries(state.view).filter((entry) => entry.kind === "app.hook").length, 1);
+
+			// One turn, not three: the failed run's tool call, its error, and a single answer for the whole batch.
 			assert.equal(
-				entries(state.view).filter((entry) => entry.kind === "pi.user").length,
+				entries(state.serverView).filter((entry) => entry.kind === "pi.assistant").length,
+				3,
+				"the three queued inputs were answered together",
+			);
+			const answered = batched.map((message) => textOf(message)).join("\n");
+			assert.match(answered, /First wish\./);
+			assert.match(answered, /Second wish\./);
+			assert.match(answered, /\[EVENT HOOK: Retry a failed run\]/);
+			assert.equal(entries(state.serverView).filter((entry) => entry.kind === "app.hook").length, 1);
+			assert.equal(
+				entries(state.serverView).filter((entry) => entry.kind === "pi.user").length,
 				3,
 				"the two waiting submissions and the original prompt",
 			);
 		} finally {
 			if (previous === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
 			else process.env.PDA_RUN_RETRY_ATTEMPTS = previous;
+			await client.close();
+		}
+	});
+
+	it("takes a webhook delivery's id from the sender, or its body per window", async () => {
+		const client = await openClient();
+		const { agent, state, faux, server } = client;
+		try {
+			await agent.ready;
+			faux.setResponses(Array.from({ length: 4 }, (_, index) => fauxAssistantMessage(fauxText(`answer ${index}`))));
+			const deliveries = (): number => entries(state.serverView).filter((entry) => entry.kind === "app.hook").length;
+
+			// A dumb sender: the body is the delivery's identity inside the window, so the same POST retried is one event.
+			const first = await fireWebhook(server.port, "workspace-check", { message: "ping" });
+			const replay = await fireWebhook(server.port, "workspace-check", { message: "ping" });
+			assert.equal(replay.submissionId, first.submissionId, "a redelivered body is one submission");
+			await waitFor("the first delivery", () => (deliveries() === 1 ? true : undefined));
+
+			// A sender that names its delivery is exact, whether the id comes in the body or in the header.
+			const named = await fireWebhook(
+				server.port,
+				"workspace-check",
+				{ message: "ping" },
+				{ "x-request-id": "delivery-9" },
+			);
+			assert.notEqual(named.submissionId, first.submissionId, "a named delivery is an event of its own");
+			await waitFor("the named delivery", () => (deliveries() === 2 ? true : undefined));
+
+			const again = await fireWebhook(server.port, "workspace-check", { message: "pong", requestId: "delivery-10" });
+			assert.notEqual(again.submissionId, named.submissionId);
+			const againLater = await fireWebhook(server.port, "workspace-check", {
+				message: "pong",
+				requestId: "delivery-10",
+			});
+			assert.equal(againLater.submissionId, again.submissionId, "the same delivery id is the same event");
+			await waitFor("the third delivery", () => (deliveries() === 3 ? true : undefined));
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+		} finally {
 			await client.close();
 		}
 	});
@@ -384,7 +500,7 @@ describe("chord client <-> server", () => {
 				state.agentStatus?.runStatus === "idle" ? true : undefined,
 			);
 			assert.equal(
-				entries(state.view).filter((entry) => entry.kind === "pi.assistant" && messageText(entry) !== "").length,
+				entries(state.serverView).filter((entry) => entry.kind === "pi.assistant" && messageText(entry) !== "").length,
 				0,
 			);
 		} finally {
@@ -401,12 +517,12 @@ describe("chord client <-> server", () => {
 		t.after(() => client.close());
 		const { agent, state } = client;
 		try {
-			await waitFor("the initial view", () => state.view);
+			await waitFor("the initial view", () => state.serverView);
 			// The threshold is measured against the usage of the previous request, so a first turn records it.
 			client.faux.setResponses([fauxAssistantMessage(fauxText("Hello there."))]);
 			await agent.submit({ content: "Hello" });
 			await waitFor("the first answer", () =>
-				(state.view?.entries ?? []).some((entry) => entry.kind === "pi.assistant") ? true : undefined,
+				(state.serverView?.entries ?? []).some((entry) => entry.kind === "pi.assistant") ? true : undefined,
 			);
 			// Second response is the summary the compaction task asks for, third the answer to the second prompt.
 			client.faux.setResponses([
@@ -415,7 +531,7 @@ describe("chord client <-> server", () => {
 			]);
 			await agent.submit({ content: "Hello again" });
 			const compaction = await waitFor("a compaction entry", () =>
-				(state.view?.entries ?? []).find((entry) => entry.kind === "pi.compaction"),
+				(state.serverView?.entries ?? []).find((entry) => entry.kind === "pi.compaction"),
 			);
 			assert.ok(
 				["threshold", "overflow"].includes((compaction.data as { reason?: string } | undefined)?.reason ?? ""),
@@ -423,7 +539,7 @@ describe("chord client <-> server", () => {
 			);
 			// Compaction replaces the compacted span, so the check is on the answer's text, not on a count.
 			await waitFor("the second answer", () =>
-				(state.view?.entries ?? []).some(
+				(state.serverView?.entries ?? []).some(
 					(entry) =>
 						entry.kind === "pi.assistant" &&
 						((entry.model?.[0] as { content?: { type: string; text?: string }[] } | undefined)?.content ?? []).some(
@@ -449,11 +565,11 @@ describe("chord client <-> server", () => {
 			]);
 			await agent.fireHook({ hookId: "workspace-check" });
 			const hookEntry = await waitFor("the hook entry", () =>
-				entries(state.view).find((entry) => entry.kind === "app.hook"),
+				entries(state.serverView).find((entry) => entry.kind === "app.hook"),
 			);
 			assert.equal((hookEntry.data as { hookName: string }).hookName, "Workspace check");
 			await waitFor("the proactive answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Proactive check done.") ? true : undefined,
+				entries(state.serverView).some((entry) => messageText(entry) === "Proactive check done.") ? true : undefined,
 			);
 			await waitFor("the hook counter", () =>
 				state.agentStatus?.hooks.find((hook) => hook.id === "workspace-check")?.fireCount === 1 ? true : undefined,
@@ -469,10 +585,83 @@ describe("chord client <-> server", () => {
 			const body = (await response.json()) as { submissionId: number };
 			assert.equal(typeof body.submissionId, "number");
 			await waitFor("the webhook answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Webhook check done.") ? true : undefined,
+				entries(state.serverView).some((entry) => messageText(entry) === "Webhook check done.") ? true : undefined,
 			);
-			const webhook = entries(state.view).find((entry) => entry.kind === "app.hook" && messageText(entry).includes("the build is red"));
+			const webhook = entries(state.serverView).find((entry) => entry.kind === "app.hook" && messageText(entry).includes("the build is red"));
 			assert.ok(webhook, "the webhook payload reaches the agent");
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("sends the reader's conversation and never the machine behind it", async () => {
+		const client = await openClient();
+		const { agent, state, faux } = client;
+		try {
+			await agent.ready;
+			// A turn with everything the reader must not see: reasoning, a tool call with a secret in its arguments, a
+			// tool result with a secret in its output, and prose that is working notes. One `send_to_user` at the end.
+			faux.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxThinking("The token in the environment is hunter2, I will use it."),
+						fauxToolCall("bash", { command: "curl -H 'authorization: Bearer hunter2' example.invalid" }, { id: "leaky" }),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([
+					fauxText("Working notes: the endpoint answered with token hunter2."),
+					fauxToolCall(MESSAGE_TOOL, { message: "The endpoint is up." }, { id: "sent" }),
+				]),
+			]);
+
+			await agent.submit({ content: "Check the endpoint." });
+			await waitFor("the delivered message", () =>
+				state.transcript?.some((item) => item.kind === "delivered") === true ? true : undefined,
+			);
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+
+			// What arrived is the conversation: the reader's message and the message the agent chose to send.
+			assert.deepEqual(
+				state.transcript?.map((item) => item.kind),
+				["user", "delivered"],
+			);
+			assert.deepEqual(
+				state.transcript?.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
+				["The endpoint is up."],
+			);
+
+			// Nothing of the machine is on the wire: no reasoning, no tool call, no tool output, no entries.
+			const wire = JSON.stringify({ transcript: state.transcript, queued: state.queued, status: state.agentStatus });
+			for (const leak of ["hunter2", "thinking", "toolCall", "toolResult", "pi.assistant", "pi.user", "text:"]) {
+				assert.ok(!wire.includes(leak), `the wire carries no ${leak}`);
+			}
+			// The status names what runs, and nothing more: a tool name is the whole of it.
+			assert.deepEqual(state.agentStatus?.runningTools, []);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("names the tools of a running round without their arguments or output", async () => {
+		const client = await openClient();
+		const { agent, state, faux } = client;
+		try {
+			await agent.ready;
+			faux.setResponses([
+				toolCall("bash", { command: "sleep 0.8 && echo hunter2" }, "secretive"),
+				fauxAssistantMessage(fauxText("Done.")),
+			]);
+
+			await agent.submit({ content: "Run something secret." });
+			// The working line a reader sees while tools run: the name, never the command.
+			const names = await waitFor("the running tool names", () =>
+				state.agentStatus?.runningTools.length === 0 ? undefined : state.agentStatus?.runningTools,
+			);
+			assert.deepEqual(names, ["bash"]);
+			const wire = JSON.stringify({ status: state.agentStatus, transcript: state.transcript });
+			assert.ok(!wire.includes("hunter2"), "the command never reaches the client");
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
 		} finally {
 			await client.close();
 		}
@@ -483,10 +672,10 @@ describe("chord client <-> server", () => {
 		const { agent, state } = client;
 		try {
 			await agent.ready;
-			await waitFor("the initial view", () => state.view);
+			await waitFor("the initial view", () => state.serverView);
 			assert.equal(state.agentStatus?.sandboxedUiEnabled, false);
 			assert.equal(
-				sections(state.view).some((section) => "generative_ui" in section),
+				sections(state.serverView).some((section) => "generative_ui" in section),
 				false,
 				"the widget prompt is off until the toggle",
 			);
@@ -517,21 +706,21 @@ describe("chord client <-> server", () => {
 
 			await agent.submit({ content: "Show me a widget." });
 			const slot = await waitFor("the widget tool slot", () =>
-				live(state.view)?.tools?.find((entry) => entry.name === "generateSandboxedUi"),
+				live(state.serverView)?.tools?.find((entry) => entry.name === "generateSandboxedUi"),
 			);
 			assert.ok(["pending", "running", "done"].includes(slot.status));
 
 			await waitFor("the widget tool result", () =>
-				entries(state.view).some(
+				entries(state.serverView).some(
 					(entry) => entry.kind === "pi.tool-result" && (entry.model?.[0] as { toolName?: string }).toolName === "generateSandboxedUi",
 				) ? true : undefined,
 			);
 			await waitFor("the answer", () =>
-				entries(state.view).some((entry) => messageText(entry) === "Here is the widget.") ? true : undefined,
+				entries(state.serverView).some((entry) => messageText(entry) === "Here is the widget.") ? true : undefined,
 			);
 
 			// What the renderer reads: the settled arguments of the tool call in the assistant entry.
-			const call = entries(state.view)
+			const call = entries(state.serverView)
 				.flatMap((entry) => (entry.kind === "pi.assistant" ? (entry.model?.[0] as { content?: unknown[] }).content ?? [] : []))
 				.find((part) => (part as { name?: string }).name === "generateSandboxedUi") as
 				| { arguments: { css?: string; html?: string[]; jsExpressions?: string[] } }
@@ -541,7 +730,7 @@ describe("chord client <-> server", () => {
 			assert.deepEqual(call?.arguments.jsExpressions, ["boot()"]);
 
 			// The prompt section is in effect for the next request of this conversation.
-			assert.ok(sections(state.view).some((section) => "generative_ui" in section));
+			assert.ok(sections(state.serverView).some((section) => "generative_ui" in section));
 		} finally {
 			await client.close();
 		}

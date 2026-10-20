@@ -14,6 +14,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
+import { projectTranscript } from "../src/server/projection.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -51,6 +52,16 @@ function openFor(
 		extensions: options.extensions,
 		onReport: () => {},
 	});
+}
+
+/** The transcript as the client receives it: the projection, not the entries behind it. */
+async function readTranscript(runtime: AgentRuntime) {
+	const view = await runtime.viewState(BACKGROUND_CONTEXT);
+	try {
+		return projectTranscript(view.value);
+	} finally {
+		view.dispose();
+	}
 }
 
 async function readEntries(runtime: AgentRuntime) {
@@ -116,10 +127,57 @@ describe("durable harness + pi-env", () => {
 		}
 	});
 
+	it("send_to_user is offered in every conversation, and its call is the message the client renders", async () => {
+		const directory = await tempDir("pda-deliver-");
+		const { access, faux } = fauxAccess();
+		faux.setResponses([
+			toolCall("send_to_user", { message: "Standup moved to nine." }, "m1"),
+			fauxAssistantMessage(fauxText("Nothing else to report.")),
+		]);
+		const runtime = await openFor(directory, access, { storage: "memory" });
+		try {
+			const submission = await (await runtime.conversation()).submit(
+				{ type: "input", content: "Anything new?" },
+				BACKGROUND_CONTEXT,
+			);
+			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
+
+			const entries = await readEntries(runtime);
+			// The call ran, so the tool was offered: it is in the base extension list, not behind a toggle.
+			const result = entries
+				.filter(ToolResultEntry.is)
+				.find((entry) => (entry.model?.[0] as { toolName?: string }).toolName === "send_to_user");
+			assert.ok(result, "the call reached the tool");
+			assert.equal((result.model?.[0] as { isError?: boolean }).isError, false);
+			assert.match(textOf(result.model?.[0]), /delivered/);
+
+			// What leaves the server for the client is the reader's transcript: the message, and nothing of the working
+			// notes beside it — no prose, no reasoning, no call.
+			const transcript = await readTranscript(runtime);
+			assert.deepEqual(
+				transcript.filter((item) => item.kind !== "user"),
+				[{ kind: "delivered", id: "m1", text: "Standup moved to nine." }],
+			);
+
+			// The invariant the client relies on is in the prompt, not just in the tool description.
+			const system = entries
+				.filter((entry) => entry.kind === "pi.system")
+				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
+				.join("\n");
+			assert.match(system, /Only messages sent via `send_to_user` are seen by the user/);
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	it("an event hook appends an app.hook entry and the agent answers on its own", async () => {
 		const directory = await tempDir("pda-hook-");
 		const { access, faux } = fauxAccess();
-		faux.setResponses([fauxAssistantMessage(fauxText("Workspace is clean."))]);
+		// The proactive turn delivers through `send_to_user` like any other: a message, then a working note.
+		faux.setResponses([
+			toolCall("send_to_user", { message: "Workspace is clean." }, "h1"),
+			fauxAssistantMessage(fauxText("Nothing else to report.")),
+		]);
 		const runtime = await openFor(directory, access, { storage: "memory" });
 		try {
 			assert.deepEqual(
@@ -141,8 +199,19 @@ describe("durable harness + pi-env", () => {
 
 			// The hook input started a run, and the model's answer is the proactive message.
 			const answers = entries.filter((entry) => entry.kind === "pi.assistant");
-			assert.equal(answers.length, 1);
-			assert.match(textOf(answers[0]?.model?.[0]), /Workspace is clean\./);
+			assert.equal(answers.length, 2, "the delivered call, then the wrap-up");
+			assert.match(textOf(answers[1]?.model?.[0]), /Nothing else to report\./);
+
+			// What leaves the server for a proactive turn is the message, and not the trigger that produced it.
+			const transcript = await readTranscript(runtime);
+			assert.deepEqual(
+				transcript.map((item) => item.kind),
+				["delivered"],
+			);
+			assert.deepEqual(
+				transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
+				["Workspace is clean."],
+			);
 
 			const hook = runtime.hooks.get("workspace-check");
 			assert.equal(hook?.fireCount, 1);
@@ -164,7 +233,7 @@ describe("durable harness + pi-env", () => {
 			assert.equal(hook.enabled, false);
 			assert.equal((hook as { intervalMs?: number }).intervalMs, undefined);
 
-			const submission = await runtime.hooks.fire("retry-failed-run", "Connection error.");
+			const submission = await runtime.hooks.fire("retry-failed-run", { payload: "Connection error." });
 			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
 
 			const entries = await readEntries(runtime);

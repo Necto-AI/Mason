@@ -263,8 +263,7 @@
 	color: var(--text);
 }
 
-/* Answers run the full column: a widget is a block of the answer and needs the width, while the sentences
-   around it keep hugging their own bubble. */
+/* A delivered message runs the column when a widget follows it, and hugs its own bubble otherwise. */
 .message.assistant {
 	align-self: stretch;
 	max-width: 100%;
@@ -274,110 +273,82 @@
 	max-width: 100%;
 }
 
-/* a settled turn keeps one bubble per message; the traces are gone */
-.message.assistant .bubble + .bubble {
-	margin-top: 10px;
-}
+/* A widget is a block of the answer: it takes the column's width, whatever the bubble above it had to hug. */
 
-/* A widget is a block of the answer, not part of the sentence that introduced it: it takes the column's width,
-   whatever the bubble above it had to hug. */
-.bubble-widgets {
-	width: 100%;
-	margin-top: 8px;
+/* A delivered message keeps its text when the call that sent it failed: the reader is told it may not have arrived. */
+.bubble.delivered.failed {
+	border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+	background: var(--error-bg);
 }
-.bubble + .bubble-widgets {
+.delivery-failed {
 	margin-top: 6px;
-}
-
-/* a hook trigger: the agent woke on its own */
-.message.hook {
-	align-self: center;
-	max-width: 100%;
-	width: 100%;
-}
-.message.hook .bubble {
-	background: var(--warn-bg);
-	border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
-	border-radius: var(--r-panel);
-	color: var(--text);
-}
-.message.hook .hook-head {
-	display: flex;
-	align-items: center;
-	gap: 7px;
-	font: 500 12.5px var(--sans);
-	color: var(--warn);
-}
-.message.hook .hook-mark {
-	font-size: 9px;
-}
-.message.hook .hook-when {
-	color: var(--faint);
-	font-weight: 400;
-}
-.message.hook .step-block.payload {
-	margin: 6px 0 0;
-}
-
-/* the work behind a running answer: one row that opens into the trace */
-.trace {
-	margin: 0;
-}
-.trace:not(:last-child) {
-	margin-bottom: 6px;
-}
-.trace > summary {
-	list-style: none;
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	color: var(--muted);
-	font-size: 13px;
-	padding: 1px 0 2px;
-}
-.trace > summary::-webkit-details-marker {
-	display: none;
-}
-/* the collapsed form: the step the run is on, truncated, no wrapping — one line, always */
-.trace-step {
-	color: var(--faint);
-	font: 12px var(--mono);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 0;
-	flex: 1;
-}
-.trace-body {
-	padding: 2px 0;
-}
-
-.message.assistant.error .text,
-.message.assistant.error .markdown {
 	color: var(--error);
+	font-size: 12px;
+}
+
+/* A run that died, said in the reader's terms: no error text, no stack, no reason. */
+.notice {
+	align-self: center;
+	color: var(--muted);
+	font-size: 12.5px;
+	padding: 2px 10px;
+	border: 1px dashed var(--border);
+	border-radius: var(--r-pill);
+}
+
+/* The agent working: a message that says what it is doing, with three dots pulsing. Derived from the status, never
+   stored, so it vanishes the moment the turn ends — the reader is told that work is happening, not left with a log of
+   it in the conversation. */
+.message.working {
+	align-self: flex-start;
+	max-width: 100%;
+}
+.working-bubble {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 13px;
+	color: var(--muted);
+	font: 12.5px var(--mono);
+}
+.working-dots {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+}
+.working-dots i {
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: currentColor;
+	animation: working-dot 1.2s ease-in-out infinite;
+}
+.working-dots i:nth-child(2) {
+	animation-delay: 0.16s;
+}
+.working-dots i:nth-child(3) {
+	animation-delay: 0.32s;
+}
+@keyframes working-dot {
+	0%,
+	70%,
+	100% {
+		opacity: 0.22;
+		transform: translateY(0);
+	}
+	35% {
+		opacity: 1;
+		transform: translateY(-1.5px);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.working-dots i {
+		animation: none;
+		opacity: 0.55;
+	}
 }
 
 /* the live slot: the running turn's bubbles, the queue ahead of them */
-.live {
-	display: contents;
-}
-.live-queued,
-.live-bubbles {
-	display: contents;
-}
-
-.chip-row {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin: 2px 0 8px;
-	align-self: flex-start;
-}
-
-/* ===== tool rows: collapsed by default, a quiet state glyph trails ===== */
-.step {
-	margin: 4px 0;
-}
 
 .step > summary {
 	list-style: none;
@@ -395,58 +366,13 @@
 }
 
 /* the row trails: hover duration, then the quiet state glyph */
-.step-dur {
-	font: 11px var(--sans);
-	color: var(--faint);
-	flex: none;
-	opacity: 0;
-	transition: opacity 150ms var(--ease);
-}
-.step > summary:hover .step-dur {
-	opacity: 1;
-}
-.step-state {
-	width: 15px;
-	height: 15px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	flex: none;
-	align-self: center;
-	color: var(--faint);
-}
-.step-state svg {
-	width: 13px;
-	height: 13px;
-}
-.step-spin {
-	width: 11px;
-	height: 11px;
-	border: 1.5px solid var(--surface-2);
-	border-top-color: var(--accent);
-	border-radius: 50%;
-	animation: spin 0.8s linear infinite;
-}
 
 /* quiet when done, loud only when it failed */
 .step.tool.error .step-name,
 .step.tool.error .step-text,
 .step.tool.error .step-icon,
-.step.tool.error .step-state {
-	color: var(--error);
-}
 
 /* the tool's glyph leads the row; the state glyph trails it */
-.step-icon {
-	display: inline-flex;
-	flex: none;
-	align-self: center;
-	color: var(--faint);
-}
-.step-icon svg {
-	width: 13px;
-	height: 13px;
-}
 
 @keyframes spin {
 	to {
@@ -454,172 +380,17 @@
 	}
 }
 
-.step-name {
-	color: var(--muted);
-	flex: none;
-}
-.step-name::after {
-	content: ":";
-	color: var(--faint);
-}
 
-.step-text {
-	color: var(--muted);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	min-width: 0;
-}
 
-.step[open] > summary .step-text {
-	white-space: pre-wrap;
-	overflow: visible;
-}
 
-.step-block {
-	margin: 5px 0 3px;
-	padding: 9px 12px;
-	background: var(--surface);
-	border-radius: 10px;
-	overflow-x: auto;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-	font: 12px/1.5 var(--mono);
-	color: var(--muted);
-}
 
-.step-block.args {
-	max-height: 260px;
-	overflow-y: auto;
-}
 
-.step-block.live {
-	color: var(--muted);
-	border-left: 2px solid var(--surface-2);
-}
-
-.step.tool .step-block.result {
-	color: var(--ok);
-	background: var(--ok-bg);
-}
-
-.step.tool.error .step-block.result {
-	color: var(--error);
-	background: var(--error-bg);
-}
-
-.step-more {
-	margin: 0 0 2px;
-}
-.step-toggle {
-	border: none;
-	background: none;
-	color: var(--muted);
-	font: 11px var(--sans);
-	cursor: pointer;
-	padding: 2px 0;
-	text-decoration: underline;
-	text-underline-offset: 2px;
-}
-
-.nested {
-	margin-left: 18px;
-	border-left: 1px solid var(--border);
-	padding-left: 10px;
-}
 
 /* reasoning: quieter than tools — dim italic line, no color */
-.reason-row {
-	margin: 3px 0;
-}
-.reason-row > summary {
-	list-style: none;
-	cursor: pointer;
-	display: flex;
-	align-items: baseline;
-	gap: 7px;
-	font: italic 13px/1.6 var(--sans);
-	color: var(--faint);
-}
-.reason-row > summary::-webkit-details-marker {
-	display: none;
-}
-.reason-row .chev {
-	flex: none;
-	color: var(--faint);
-	font-style: normal;
-	font-size: 11px;
-	transition: transform var(--dur-out) var(--ease);
-}
-.reason-row[open] > summary .chev {
-	transform: rotate(90deg);
-}
-.reason-row .rbody {
-	margin: 4px 0 6px;
-	padding: 8px 12px;
-	border-left: 2px solid var(--border);
-	color: var(--muted);
-	font: 13px/1.6 var(--sans);
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
 
 /* orphan tool results (no step to live in) */
-.message.toolResult {
-	align-self: stretch;
-	max-width: 720px;
-}
-.message.toolResult .tool-label {
-	font-size: 10px;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--faint);
-	margin-bottom: 3px;
-}
 
 /* system notes */
-.note {
-	align-self: center;
-	max-width: 720px;
-	color: var(--faint);
-	font-size: 12px;
-	text-align: center;
-	margin: 10px 0;
-}
-.note > summary {
-	cursor: pointer;
-	list-style: none;
-}
-.note > summary::-webkit-details-marker {
-	display: none;
-}
-.note[open] > summary {
-	margin-bottom: 5px;
-}
-.note .step-block {
-	text-align: left;
-}
-.note.error-note {
-	color: var(--error);
-}
-.error-note .error-line + .error-line {
-	margin-top: 2px;
-	opacity: 0.75;
-}
-.retry-run {
-	margin-top: 8px;
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	background: var(--surface-2);
-	color: var(--text);
-	font: 500 12px var(--sans);
-	padding: 4px 12px;
-	cursor: pointer;
-}
-.retry-run:hover {
-	background: var(--elevated);
-}
 
 /* ===== markdown ===== */
 .markdown > *:first-child,
@@ -845,21 +616,6 @@ body.widget-fullscreen #transcript {
 /* the card renders bare: the renderer's caption line is a debug detail */
 .widget .genui-toolbar {
 	display: none;
-}
-.widget.debug .genui-toolbar {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	margin-bottom: 4px;
-}
-.widget.debug .genui-toolbar .badge {
-	font-size: 11px;
-	color: var(--muted);
-	background: var(--elevated);
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	padding: 2px 8px;
 }
 .genui-hint {
 	font: 11px var(--mono);
@@ -1298,10 +1054,6 @@ body.widget-fullscreen #transcript {
 	background: color-mix(in srgb, var(--error) 12%, transparent);
 }
 .composer-mic[data-state="transcribing"] svg {
-	display: none;
-}
-/* the same ring the transcript uses while a model is working (see .jump-ring, .step-spin) */
-.composer-mic[data-state="transcribing"]::after {
 	content: "";
 	width: 11px;
 	height: 11px;
@@ -1312,15 +1064,6 @@ body.widget-fullscreen #transcript {
 }
 
 /* the model that answers, in diagnostics only */
-.composer-model {
-	margin-right: auto;
-	padding-left: 6px;
-	font: 11px var(--mono);
-	color: var(--faint);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
 
 /* A lost connection is said where it blocks the reader, not in the header: a slim strip above the pill, in the
    neutral surface colour until it is the reader's problem. */
@@ -1360,134 +1103,6 @@ body.widget-fullscreen #transcript {
 	animation: none;
 }
 
-/* ===== debug mode ===== */
-.debug-panel {
-	margin: 10px 0;
-	border: 1px solid var(--border);
-	border-radius: var(--r-panel);
-	background: var(--surface);
-	padding: 8px 12px;
-	align-self: stretch;
-}
-.debug-panel > summary {
-	cursor: pointer;
-	font: 600 11px var(--sans);
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--faint);
-}
-.debug-facts {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 14px;
-	margin: 6px 0;
-	font: 11.5px var(--mono);
-	color: var(--muted);
-}
-.debug-facts code {
-	color: var(--muted);
-}
-.debug-facts .step-block.details,
-.debug-facts pre {
-	flex-basis: 100%;
-	margin: 2px 0;
-}
-.debug-line {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	margin: 4px 0;
-	font: 11.5px var(--mono);
-	color: var(--muted);
-}
-.debug-inline {
-	margin-left: 6px;
-	color: var(--faint);
-}
-.debug-diagnostic {
-	color: var(--warn);
-}
-.debug-hooks h4 {
-	margin: 8px 0 4px;
-	font: 600 11px var(--sans);
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--faint);
-}
-.debug-hooks label {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-}
-.debug-payload {
-	width: 100%;
-	margin-top: 6px;
-	background: var(--elevated);
-	border: 1px solid var(--border);
-	border-radius: var(--r-chip);
-	color: var(--text);
-	font: 12px var(--mono);
-	padding: 6px 8px;
-	resize: vertical;
-}
-.debug-doc {
-	margin: 4px 0;
-}
-.debug-doc > summary {
-	cursor: pointer;
-	font: 11.5px var(--mono);
-	color: var(--muted);
-}
-.chip {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	border: 1px solid var(--border);
-	border-radius: var(--r-pill);
-	background: var(--elevated);
-	color: var(--muted);
-	font: 500 11.5px var(--sans);
-	padding: 3px 10px;
-	cursor: pointer;
-}
-.chip code {
-	font: 11px var(--mono);
-	color: var(--faint);
-}
-.chip:disabled {
-	opacity: 0.4;
-	cursor: not-allowed;
-}
-.chip-on {
-	background: var(--accent-soft);
-	border-color: var(--accent);
-	color: var(--accent);
-}
-.chip-error {
-	color: var(--error);
-	border-color: color-mix(in srgb, var(--error) 35%, transparent);
-	background: var(--error-bg);
-	cursor: default;
-}
-.usage {
-	border-collapse: collapse;
-	margin: 6px 0;
-	font: 11.5px var(--mono);
-	color: var(--muted);
-	width: 100%;
-}
-.usage th,
-.usage td {
-	border: 1px solid var(--border);
-	padding: 3px 7px;
-	text-align: right;
-}
-.usage th:first-child,
-.usage td:first-child {
-	text-align: left;
-}
-
 /* ===== phones: same components, tighter chrome ===== */
 @media (max-width: 800px) {
 	#transcript {
@@ -1505,14 +1120,6 @@ body.widget-fullscreen #transcript {
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	/* the pill already says what the connection is doing; the badges cost more than they give */
-	#session-status .badge {
-		display: none;
-	}
-	#session-status .badge[data-testid="status-tools"],
-	#session-status .badge[data-testid="status-inbox"] {
-		display: inline-block;
 	}
 	#session-title {
 		min-width: 0;

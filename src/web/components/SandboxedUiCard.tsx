@@ -36,7 +36,7 @@ import {
 	placeholderHeight,
 	streamingCeiling,
 } from "../lib/frame-height.ts";
-import type { OpenGenUIContent } from "../lib/open-genui-content.ts";
+import type { OpenGenUIContent } from "../../shared/genui-content.ts";
 import { extractCompleteStyles, processPartialHtml } from "../lib/process-partial-html.ts";
 import { loadWebsandbox, type SandboxInstance, type WidgetBridge } from "../lib/websandbox-loader.ts";
 
