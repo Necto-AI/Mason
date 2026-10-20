@@ -25,11 +25,6 @@ export function entryKindFor(origin: Origin): string | undefined {
 	}
 }
 
-/** The origin a placed input came from; anything that is not a trigger kind is the user's own text. */
-export function originOfEntryKind(kind: string | undefined): Origin {
-	return kind === HOOK_ENTRY_KIND ? "hook" : "user";
-}
-
 /** The entry an input is placed as, or `undefined` for the default `pi.user`. `data` is what the transcript shows
  * about the trigger — for a hook, its id, name, payload and fire time. */
 export function entryFor(origin: Origin, data?: JsonObject): InputEntry | undefined {

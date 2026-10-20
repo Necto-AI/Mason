@@ -22,7 +22,7 @@ When you receive one, you were woken by a schedule or an external trigger, not b
  * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
  * writes is working notes nobody reads. Slice 2 owns prompt hygiene; this is the one rule the client depends on.
  */
-export const DELIVERY_INVARIANT = `Only messages sent via \`send_to_user\` are seen by the user. All other text is working notes.`;
+const DELIVERY_INVARIANT = `Only messages sent via \`send_to_user\` are seen by the user. All other text is working notes.`;
 
 /** Where the agent's identity text lives, relative to the workspace the tools see. */
 const SOUL_FILES = ["SOUL.md", "AGENT_SOUL.md"] as const;

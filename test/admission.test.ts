@@ -7,18 +7,12 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { entryFor, entryKindFor, originOfEntryKind, whenBusyFor } from "../src/server/admission.ts";
+import { entryFor, entryKindFor, whenBusyFor } from "../src/server/admission.ts";
 
 describe("an input's origin", () => {
-	it("maps both ways between an origin and the entry kind pi-durable places", () => {
+	it("maps an origin to the entry kind pi-durable places", () => {
 		assert.equal(entryKindFor("user"), undefined, "the user's own text is pi's default entry, `pi.user`");
 		assert.equal(entryKindFor("hook"), "app.hook");
-		assert.equal(originOfEntryKind("app.hook"), "hook");
-		assert.equal(originOfEntryKind("pi.user"), "user");
-		assert.equal(originOfEntryKind(undefined), "user", "anything that is not a trigger kind is the user's");
-		for (const origin of ["user", "hook"] as const) {
-			assert.equal(originOfEntryKind(entryKindFor(origin)), origin, `${origin} round-trips through its kind`);
-		}
 	});
 
 	it("builds the entry an origin is placed as", () => {

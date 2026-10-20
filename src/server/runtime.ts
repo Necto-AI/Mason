@@ -190,8 +190,15 @@ export async function openAgentRuntime(
 		},
 	});
 	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
-	// would leave the conversation without it.
-	await appendMissingBaseExtensions(root, context);
+	// would leave the conversation without it. A failed repair is a failed guarantee, so the server does not start
+	// with it — but it also does not start with the hooks and the env manager left open.
+	try {
+		await appendMissingBaseExtensions(root, context);
+	} catch (error) {
+		await hooks.close();
+		await envManager.close();
+		throw error;
+	}
 	hooks.start();
 	// Picks up a run the last process left unfinished.
 	harness.resume();
