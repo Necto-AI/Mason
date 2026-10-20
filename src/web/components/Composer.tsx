@@ -13,16 +13,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { DictationButton } from "./DictationButton.tsx";
 
-/** The model that answers is a diagnostic, not a headline: it shows up when diagnostics do. */
-function modelLabel(model: ComposerProps["model"], debug: boolean) {
-	if (!debug || model === undefined) return null;
-	return (
-		<span className="composer-model" data-testid="composer-model">
-			{`${model.provider}/${model.modelId}`}
-		</span>
-	);
-}
-
 /** px, mirrors --prompt-line in chat.css. */
 const PROMPT_LINE = 23;
 
@@ -31,9 +21,6 @@ export interface ComposerProps {
 	readonly enabled: boolean;
 	readonly pending: boolean;
 	readonly connection: "connecting" | "connected" | "disconnected";
-	/** Model that answers, shown while diagnostics are on. */
-	readonly model?: { provider: string; modelId: string } | undefined;
-	readonly debug: boolean;
 	/** Idle: the message that starts a run. Busy: the follow-up that waits for the run to end. */
 	readonly onSubmit: (text: string) => void;
 	readonly onSteer: (text: string) => void;
@@ -49,8 +36,6 @@ export function Composer({
 	enabled,
 	pending,
 	connection,
-	model,
-	debug,
 	onSubmit,
 	onSteer,
 	onStop,
@@ -173,7 +158,6 @@ export function Composer({
 					}}
 				/>
 				<div className="composer-actions">
-					{modelLabel(model, debug)}
 					<DictationButton onTranscript={applyTranscript} onError={setDictationError} disabled={!enabled} />
 					{busy ? (
 						<>

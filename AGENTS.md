@@ -6,7 +6,7 @@ A proactive, always-on personal agent built on `@earendil-works/pi-durable`, `@e
 
 Full architecture, contracts, and milestone specifications live in [`docs/SPEC.md`](docs/SPEC.md). Read `docs/SPEC.md` before writing code.
 
-The browser client is the chat area of `apiary` re-implemented in React: [`docs/UI-PLAN.md`](docs/UI-PLAN.md) is the porting plan, the rendering model and the decisions log. The pure part of it (`src/web/lib/transcript-model.ts` and friends) is covered by `test/transcript-model.test.ts`; keep that model free of DOM. A root `npm install` prunes `vendor/pi`'s nested dependencies (`scripts/verify-vendor.mjs` repairs them on the next install).
+The browser client is the chat area of `apiary` re-implemented in React: [`docs/UI-PLAN.md`](docs/UI-PLAN.md) is the porting plan, the rendering model and the decisions log. **The client is sent the reader's transcript, never the conversation:** `src/server/projection.ts` derives `transcript` / `queued` / `agentStatus` from the durable view, and reasoning, tool calls, tool arguments and tool output do not cross the wire (`test/projection.test.ts` pins both halves). Add a new user-facing surface by naming it there first — a new tool or entry kind is invisible until the whitelist says otherwise. A root `npm install` prunes `vendor/pi`'s nested dependencies (`scripts/verify-vendor.mjs` repairs them on the next install).
 
 ## Non-Negotiable Rules
 

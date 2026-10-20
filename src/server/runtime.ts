@@ -11,6 +11,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
+	AgentDoc,
 	type Conversation,
 	type ConversationId,
 	type ConversationView,
@@ -26,11 +27,15 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
 import { AgentIdentity } from "./extensions/agent-identity.ts";
+import { Delivery } from "./extensions/delivery.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
-/** The extensions every conversation gets unless it says otherwise. `sandboxed-ui` is opt-in. */
-export const BASE_EXTENSIONS: readonly Extension[] = [CodingTools, AgentIdentity];
+/**
+ * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
+ * agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is opt-in.
+ */
+export const BASE_EXTENSIONS: readonly Extension[] = [CodingTools, AgentIdentity, Delivery];
 export const SANDBOXED_UI_EXTENSION: Extension = GenerateSandboxedUiExtension;
 
 export interface AgentModelRef {
@@ -150,6 +155,10 @@ export async function openAgentRuntime(
 
 	const settings: HarnessSettings = {
 		...options.settings,
+		// Admission: only the user's steer cuts in, and queued follow-ups drain as one turn — the model prioritises
+		// between them, because nothing here can rank a fired hook against a wish the reader typed.
+		followUpMode: options.settings?.followUpMode ?? "all",
+		steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
 		// The base selection leaves `sandboxed-ui` out until a conversation adds it.
 		extensions: selectionFor(extensionList, sandboxedUiEnabled),
 	};
@@ -180,6 +189,16 @@ export async function openAgentRuntime(
 			extensions: selectionFor(extensionList, sandboxedUiEnabled),
 		},
 	});
+	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
+	// would leave the conversation without it. A failed repair is a failed guarantee, so the server does not start
+	// with it — but it also does not start with the hooks and the env manager left open.
+	try {
+		await appendMissingBaseExtensions(root, context);
+	} catch (error) {
+		await hooks.close();
+		await envManager.close();
+		throw error;
+	}
 	hooks.start();
 	// Picks up a run the last process left unfinished.
 	harness.resume();
@@ -206,6 +225,23 @@ export async function openAgentRuntime(
 			await envManager.close();
 		},
 	};
+}
+
+/**
+ * Return the base extensions a stored explicit selection lacks, appended in `BASE_EXTENSIONS` order.
+ *
+ * Only `BASE_EXTENSIONS` are unconditional, and no conversation may be without `delivery`, so a `pi.agent` doc that
+ * predates one of them — an array is used verbatim — gets it back on open. `sandboxed-ui` is not a base extension and
+ * stays out; the stored order is kept and nothing is pruned. An unset or `{ add, remove }` selection already unions
+ * with the settings, so it needs nothing.
+ */
+async function appendMissingBaseExtensions(root: Conversation, context: Context): Promise<void> {
+	await root.commit(async (tx) => {
+		const stored = (await tx.doc(AgentDoc, root.id)).extensions;
+		if (!Array.isArray(stored)) return;
+		const missing = BASE_EXTENSIONS.filter((extension) => !stored.includes(extension.name));
+		if (missing.length > 0) stored.push(...missing.map((extension) => extension.name));
+	}, context);
 }
 
 /** The explicit extension selection: objects, so `configure` records their names and nothing stale survives. */

@@ -6,9 +6,9 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (cron/interval timers, webhooks, manual triggers) so the agent can proactively message the user first.
 2. **Chord Client-Server Transport:** Uses `@earendil-works/chord` (`createHost`, `remote`, `acceptWebSockets`, `webSocketLink`) to replicate the durable `ConversationView` and hook status to browser clients in real time.
 3. **Mobile-Ready Web UI + OpenIntelligentUI Superset:**
-   - **Stage 1 (Milestone 2):** Clean, mobile-responsive web client over `@earendil-works/chord` with **explicit text status indicators** for connection state, run state (`idle` / `generating` / `running_tools` / `retrying` / `compacting`), message states, tool call statuses (`pending` / `running` / `done` / `error` + live output), inbox queue (`steer` / `followUp` + withdraw button), and proactive event hook triggers.
+   - **Stage 1 (Milestone 2):** Clean, mobile-responsive web client over `@earendil-works/chord` with **explicit text status indicators** for connection state, run state (`idle` / `generating` / `running_tools` / `retrying` / `compacting`), the names of running tools (never their arguments or output), the inbox queue (`steer` / `followUp` + withdraw button), and proactive event hook triggers. The client is sent the reader's transcript only — see §4.1a.
    - **Stage 2 (Milestone 3):** Integrates `CopilotKit/OpenIntelligentUI` (`vendor/open-intelligent-ui`) components directly into the web client — including its design system (`@repo/design-system`), markdown reveal renderer, and the `generateSandboxedUi` streaming `Websandbox` iframe renderer.
-   - **Decoupled Tool Activation:** The web UI always knows how to render `generateSandboxedUi` tool calls (both live-streaming and settled). On the backend, `generateSandboxedUi` is packaged as an optional `pi-durable` extension (`GenerateSandboxedUiExtension`, toggled via env/config or UI toggle). When not enabled on the agent, the UI behaves as a standard chat + tool-trace interface; when enabled, the agent can stream interactive HTML/CSS/JS widgets inline.
+   - **Decoupled Tool Activation:** The web UI always knows how to render a `generateSandboxedUi` artifact (both live-streaming and settled): the server maps the call's arguments to widget content, and only that content crosses the wire. On the backend, `generateSandboxedUi` is packaged as an optional `pi-durable` extension (`GenerateSandboxedUiExtension`, toggled via env/config or UI toggle). When not enabled on the agent, the client is a plain conversation; when enabled, the agent can stream interactive HTML/CSS/JS widgets inline.
 
 ---
 
@@ -30,48 +30,47 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   │   └── contract.ts                # Shared @earendil-works/chord remote contract (AgentService)
 │   ├── server/
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
+│   │   ├── admission.ts               # Where a submission came from, and where it waits (hook vs. user)
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view
 │   │   ├── extensions/
 │   │   │   ├── agent-identity.ts      # Preamble / SOUL.md / cwd prompt sections
+│   │   │   ├── delivery.ts            # The send_to_user tool: the one channel that reaches the user
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + OpenIntelligentUI prompt section
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, HTTP webhook trigger, proactive submit)
+│   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
 │   │   ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
 │   │   └── main.ts                    # HTTP + WebSocket server + Chord host serving AgentService
 │   └── web/
 │       ├── index.html                 # Mobile-first HTML shell (viewport-fit=cover, dvh layout)
 │       ├── main.tsx                   # React root + Chord browser host connection
 │       ├── client.ts                  # Chord webSocketLink wrapper + reconnect state
-│       ├── view-types.ts              # JSON shapes the client reads out of ConversationView
-│       ├── lib/                        # Pure model + renderers (see docs/UI-PLAN.md)
-│       │   ├── transcript-model.ts     # Entries -> blocks -> pieces -> bubbles (apiary's turns.ts, adapted)
-│       │   ├── tool-view.ts            # Tool row formatters: summary, duration, icons, dialects
+│       ├── lib/                        # Pure helpers + renderers (see docs/UI-PLAN.md)
+│       │   ├── working.ts              # The one line that says what the agent is doing
 │       │   ├── markdown.ts             # marked + link hardening (apiary's markdown.ts, verbatim)
 │       │   ├── stream-text.tsx         # Settled markdown + fading tail reveal (apiary's stream.ts)
 │       │   ├── follower.ts             # Scroll pinning: pinnedAfterScroll + useFollower (apiary's scroll.ts)
 │       │   ├── frame-content.ts        # CSP, importmap, design-system styles, preview morph, measurement
 │       │   ├── process-partial-html.ts # Incomplete-tag-tolerant streaming markup
-│       │   ├── open-genui-content.ts   # Partial tool arguments -> OpenGenUIContent
 │       │   ├── websandbox-loader.ts    # @jetbrains/websandbox UMD loader + widget bridge type
 │       │   └── idiomorph-inline.ts     # Idiomorph IIFE, inlined for the sandbox (no network)
 │       ├── components/
-│       │   ├── SessionBar.tsx         # Status pill (idle/busy/disconnected) + stop/compact/reset/debug
-│       │   ├── Transcript.tsx         # Blocks, the running turn, the queue, the jump pill wiring
-│       │   ├── MessageRow.tsx         # User, hook banner, system note, live and settled assistant turns
-│       │   ├── Trace.tsx              # Thinking rows + tool rows of one bubble
-│       │   ├── ToolRow.tsx            # Icon, one-line summary, hover duration, live output, debug facts
+│       │   ├── SessionBar.tsx         # Wordmark + overflow menu (compact, reset, model)
+│       │   ├── Transcript.tsx         # The projected rows, then the queue
+│       │   ├── MessageRow.tsx         # User, hook banner, delivered message, failed-run notice
 │       │   ├── WidgetCard.tsx         # Places a `generateSandboxedUi` card at its call's position (bare)
 │       │   ├── SandboxedUiCard.tsx    # Adapted from vendor/open-intelligent-ui renderer.tsx
 │       │   ├── QueuedRows.tsx         # Queued steers/follow-ups: faded bubbles, mode tag, withdraw
-│       │   ├── DebugBits.tsx          # LiveChips (retry/deferred/compaction), usage panel, debug sheet
 │       │   ├── JumpPill.tsx           # Jump-to-latest pill, shown only while scrolled away from the end
 │       │   └── Composer.tsx           # Pill that grows/caps; Send when idle, Steer + Follow-up when busy
 │       └── styles/
 │           ├── tokens.css             # apiary's design tokens (light + dark), app/main column
-│           └── chat.css               # Chat sheet: session bar, transcript, messages, tools, composer, debug
+│           └── chat.css               # Chat sheet: session bar, transcript, messages, composer
 └── test/
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
     ├── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, UI tool
-    └── transcript-model.test.ts       # Pure chat model: grouping, pieces, bubbles, formatters, pinning
+    ├── projection.test.ts             # The wire boundary: what the reader is sent, and what stays behind
+    ├── admission.test.ts              # Which origin an input is placed as, and where it waits
+    └── delivery.test.ts               # The send_to_user tool's registration facts
 ```
 
 ---
@@ -134,13 +133,14 @@ export interface EventHookConfig {
   description: string;
   enabled: boolean;
   intervalMs?: number; // If set, runs periodically when enabled
+  identify?: "request" | "body"; // How this hook's senders name a fire, when they all do
   promptTemplate: string;
   lastFiredAt?: string;
   fireCount: number;
 }
 ```
 
-- **How a hook fires (`fireHook(hookId, payload?)`):**
+- **How a hook fires (`fire(id, { payload?, requestId? })`):**
   1. Formats the prompt from `promptTemplate` and optional `payload`.
   2. Submits to the root conversation using a custom entry kind so the UI can distinguish proactive hook triggers from human user messages:
      ```ts
@@ -158,16 +158,23 @@ export interface EventHookConfig {
            },
          },
          whenBusy: "followUp",
-         requestId: `hook:${hook.id}:${Date.now()}`,
+         requestId,
        },
        context,
      );
      ```
   3. Because `entry.kind === "app.hook"` carries `model: [{ role: "user", content: ... }]` under the hood (per `pi-durable` custom input entries), `pi-durable` immediately starts a generation run! Every connected web client watching the conversation sees the `app.hook` entry appear and the assistant proactively stream its message.
+  4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
+     - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Exact, and permanent.
+     - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity bucket (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the bucket collapses while tomorrow's identical digest still fires. The bucket is a division of the clock, not a span of time: a redelivery that crosses a bucket boundary is a new event, however close it is.
+     - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
+     - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
+     `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about.
+  5. A hook trigger never steers: `whenBusyFor("hook")` places it as a follow-up, because only the user may interrupt a running turn (`src/server/admission.ts`).
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time.
+  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -176,6 +183,9 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `agent-identity`, `delivery` — is what every conversation gets. `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is not a base extension and stays opt-in.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends the missing base names to a stored list, in base order, in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; `sandboxed-ui` is never added; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: only the user's own steer cuts in, and a trigger source that asks to steer is downgraded to a follow-up.
 
 ---
 
@@ -209,6 +219,8 @@ export const AgentStatusSchema = Type.Object({
   ]),
   busy: Type.Boolean(),
   activeRunTaskId: Type.Optional(Type.String()),
+  // Names only: no arguments, no output. What runs is not what the reader reads.
+  runningTools: Type.Array(Type.String()),
   sandboxedUiEnabled: Type.Boolean(),
   model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
   cwd: Type.Optional(Type.String()),
@@ -222,8 +234,11 @@ export const AgentService = remote("personal.agent", {
   variants: {
     owner: {
       state: {
-        // Raw ConversationView from pi-durable (entries + docs["pi.live"], docs["pi.inbox"], docs["pi.usage"], docs["pi.agent"])
-        view: Type.Unknown(),
+        // The reader's transcript: their words, the messages the agent sent, widgets, triggers, coarse notices.
+        // Never the raw conversation: reasoning, tool calls, tool arguments and tool output stay on the server.
+        transcript: Type.Array(TranscriptItemSchema),
+        // The queue behind the running turn, labelled for the reader.
+        queued: Type.Array(QueuedItemSchema),
         // Not `status`: Chord reserves that name on references (`RESERVED_MEMBERS`), so the status cell is `agentStatus`.
         agentStatus: AgentStatusSchema,
       },
@@ -242,7 +257,12 @@ export const AgentService = remote("personal.agent", {
         reset: method(Type.Optional(Type.Object({ handoff: Type.Optional(Type.String()) }))),
         compact: method(Type.Optional(Type.Object({ instructions: Type.Optional(Type.String()) }))),
         fireHook: method(
-          Type.Object({ hookId: Type.String(), payload: Type.Optional(Type.String()) }),
+          Type.Object({
+            hookId: Type.String(),
+            payload: Type.Optional(Type.String()),
+            // Idempotency key; omit for a gesture such as pressing the transcript's Retry control.
+            requestId: Type.Optional(Type.String()),
+          }),
           Type.Object({ submissionId: Type.Number() }),
         ),
         toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
@@ -252,6 +272,31 @@ export const AgentService = remote("personal.agent", {
   },
 });
 ```
+
+### 4.1a What the client is sent — the wire boundary
+
+The client never receives the conversation. `src/server/projection.ts` derives three cells from the durable view, and
+they are the whole contract:
+
+| Cell | Holds | Never holds |
+|---|---|---|
+| `transcript` | `user`, `delivered` (`send_to_user`), `widget` (`generateSandboxedUi`), `notice` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
+| `queued` | the inbox, labelled: the reader's text, or `hook: <name>` | submission records, entry kinds, modes beyond a display tag |
+| `agentStatus` | run status, busy, the **names** of running tools, model, hooks, cwd | per-tool arguments or output, usage, provider payloads |
+
+Two rules keep it honest:
+
+- **A whitelist, not a filter.** A transcript item exists only because `projection.ts` names its kind and reads its
+  fields. A new entry kind or a new tool is invisible until that file says otherwise, so nothing leaks by default.
+- **The machine's shape never survives.** A `send_to_user` call crosses as `{ kind: "delivered", text }` — the call's
+  id, name and result are not forwarded, only the message. A widget crosses as its mapped content (`OpenGenUIContent`),
+  never as the call that built it. A failed run crosses as one coarse notice, never as the provider's error text. A hook
+  trigger crosses as nothing at all: a proactive turn is the message it sent, and the schedule, its payload and the
+  prompt it built are the schedule's business, not the conversation's.
+
+Consequences, deliberately accepted: the chat cannot show a trace, a tool row, reasoning, usage or an error's cause.
+The raw view stays available server-side (the run supervisor reads it), and a trace endpoint can expose it later —
+separately, deliberately, and with its own access rules.
 
 ### 4.2 Bridging `Conversation.viewState()` to Chord State on the Server
 
@@ -265,45 +310,55 @@ const viewResource = self.resource("viewState", {
   close: (vs) => vs.dispose(),
 });
 
-const view = self.state("view", Type.Unknown(), {
-  init: () => viewResource.value.value,
+// The projection, not the view: three cells a reader can be sent (see 4.1a).
+const transcript = self.state("transcript", Type.Array(TranscriptItemSchema), {
+  init: () => projectTranscript(viewResource.value.value),
+});
+const queued = self.state("queued", Type.Array(QueuedItemSchema), {
+  init: () => projectQueued(viewResource.value.value),
 });
 
 self.on("viewSync", viewResource, (nextView, ctx) => {
-  view.replace(ctx, nextView);
+  transcript.replace(ctx, projectTranscript(nextView));
+  queued.replace(ctx, projectQueued(nextView));
   agentStatus.replace(ctx, statusFor(nextView));
 });
 ```
-`statusFor()` is `deriveAgentStatus()` from `src/server/status.ts`: a pure function of the committed view
+`projectTranscript()` / `projectQueued()` are pure functions in `src/server/projection.ts`; `statusFor()` is
+`deriveAgentStatus()` from `src/server/status.ts`: a pure function of the committed view
 (`pi.live`, `pi.inbox`, `pi.agent`), the hook list, the sandboxed-UI flag and the model reference.
 This streams exact Chord structural diffs to every connected browser tab over
 `acceptWebSockets(wss, host, { principal: () => ({ kind: "owner" }) })`.
 
 ### 4.3 Chat Area (apiary look)
 
-**The shell does not narrate itself.** `SessionBar` is a wordmark plus one overflow menu (compact, reset, diagnostics,
-and the run/model/tool/queue facts as text inside it): a personal agent is assumed to work, so there is no status dot,
-model pill or connection badge to read. A run's progress lives in the turn that is running, `Stop` sits in the composer
-where the send action is, the model name appears only in diagnostics, and a lost connection is announced once — above
+**The shell does not narrate itself.** `SessionBar` is a wordmark plus one overflow menu (compact, reset, and the
+run/model facts as text inside it): a personal agent is assumed to work, so there is no status dot, model pill or
+connection badge to read. A run's progress is one line under the transcript — `working: bash` — and `Stop` sits in the
+composer where the send action is; a lost connection is announced once — above
 the composer, after a 1.2s grace period, so a reload does not flash a warning (`Composer` → `connection`).
 
 The browser client is the chat area of apiary (`DenisSud/apiary` → `packages/web`) re-implemented in React on our
-Chord subscription; `docs/UI-PLAN.md` is the porting plan and the decisions log. Two modes, one transcript:
+Chord subscription; `docs/UI-PLAN.md` is the porting plan and the decisions log. One transcript, and it is the
+reader's:
 
-**Status, always explicit.** The session bar carries the run status in words — `idle`, `generating`, `running_tools`,
-`retrying`, `compacting`, plus `connecting` and `disconnected` when the socket is not live (`data-testid="status-run"`,
-`data-testid="status-connection"`, `data-testid="status-tools"`, `data-testid="status-inbox"`, `data-testid="status-model"`).
-While a turn runs, the running turn's trace is open under a `Working` line, each tool row shows a spinner and streams its
-live output, and queued submissions render as faded user bubbles at the very end of the chat — after the running turn,
-where the agent's next input lands anyway, for steers and follow-ups alike — each carrying its boundary
-(`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`).
-The queue renders whenever the inbox holds items, busy or dead: a provider error leaves the submissions displayed
-where they wait to be processed once the run (or process) comes back, and every submission that is still plain user
-text in the queue can be withdrawn through the durable backend until the moment it is placed.
+**The transcript is the conversation, not the trace.** Rows arrive already projected (see 4.1a) and render in order:
+the reader's messages, the messages the agent sent (`data-testid="msg-user"`, `data-testid="msg-delivered"`), widget
+cards, and one coarse notice when a run died (`data-testid="msg-notice"`). A proactive turn shows no trigger banner:
+the message stands on its own, and nothing tells the reader which schedule woke the agent or what payload it carried. Nothing renders reasoning, a tool row, a tool's arguments or its output, because none of
+it arrives. A delivered message keeps its text when the call that sent it failed, and says it may not have arrived.
 
-**Traces are temporary, widgets are not.** A bubble pairs the work with what it produced: the trace folds away the moment
-the bubble produces text or a widget, and settled turns keep only bubbles. `generateSandboxedUi` cards are the exception —
-they render bare (no caption) at the call's position, live and settled alike.
+**The working line is the whole of the machine.** While a turn runs, one line under the transcript says what it is
+doing — `working`, `working: bash`, `compacting context`, `retrying` (`data-testid="working"`, from
+`src/web/lib/working.ts`). A tool name is all the reader is told: it makes work visible without exposing what the work
+touches. The session bar carries the run status in words inside its menu, plus `connecting` and `disconnected` when the
+socket is not live.
+
+Queued submissions render as faded user bubbles at the very end of the chat, each carrying its boundary
+(`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`). The queue
+renders whenever the inbox holds items, busy or dead: a provider error leaves the submissions displayed where they wait
+to be processed once the run (or process) comes back, and every submission that is still plain user text in the queue
+can be withdrawn through the durable backend until the moment it is placed.
 
 **A widget can take the screen** (`data-testid="widget-fullscreen"`): a quiet icon in the card's corner, revealed on hover
 and always visible where there is no hover. The wrapper becomes a fixed, viewport-filling overlay (`data-fullscreen="true"`)
@@ -313,12 +368,9 @@ fade (a mask, which would clip the overlay) is dropped while it is up. Exit is t
 fullscreen. Widgets are therefore authored to be fluid — the sandbox instruction tells the model to fill the available
 height and re-render on `resize`.
 
-**Debug mode** (`?debug=1` or the session bar's `DEBUG` button, remembered in `localStorage`) reuses the same transcript
-and adds everything the durable backend exposes: tool arguments, results, `taskId`/`byTaskId`, diagnostics, `details`,
-thinking rows, `pi.system` sections and tool changes, per-answer `stopReason`/duration/usage, hook ids and prompts,
-retry/deferred and compaction chips, the `pi.usage` ledger, and a raw inspector over `pi.live`/`pi.inbox`/`pi.agent`/`pi.provider`
-(`data-testid="debug-sheet"`, `data-testid="usage-panel"`). The hooks list with its `enabled` toggle, `fireCount` and
-**Fire now** button lives there too (`data-testid="fire-<hookId>"`), so proactive turns can be triggered by hand.
+**No debug mode, no trace panel.** `?debug=1`, the diagnostics sheet, the usage ledger and the raw `pi.live` /
+`pi.inbox` / `pi.agent` inspector were removed with the raw view: they existed to browse state the client no longer
+receives. Inspecting a run's trace is a server-side concern now, and a future endpoint can expose it deliberately.
 
 ---
 

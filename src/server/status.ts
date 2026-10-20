@@ -24,6 +24,16 @@ export function countTools(view: ConversationView | undefined): { running: numbe
 	return { running: tools.filter((tool) => tool.status !== "done").length, total: tools.length };
 }
 
+/** The names of the tools the running round has not finished. Names only — never arguments, never output. */
+export function runningToolNames(view: ConversationView | undefined): string[] {
+	const names: string[] = [];
+	for (const tool of liveOf(view)?.tools ?? []) {
+		if (tool.status === "done") continue;
+		if (!names.includes(tool.name)) names.push(tool.name);
+	}
+	return names;
+}
+
 export function queuedSubmissions(view: ConversationView | undefined): number {
 	return inboxOf(view)?.items.length ?? 0;
 }
@@ -57,6 +67,7 @@ export function deriveAgentStatus(view: ConversationView | undefined, options: D
 		runStatus: deriveRunStatus(view),
 		busy: live?.run !== undefined,
 		...(runTaskId === undefined ? {} : { activeRunTaskId: String(runTaskId) }),
+		runningTools: runningToolNames(view),
 		sandboxedUiEnabled: options.sandboxedUiEnabled,
 		hooks: options.hooks,
 		...(options.model === undefined ? {} : { model: options.model }),
