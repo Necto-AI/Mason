@@ -1,6 +1,6 @@
 # Execution targets: from a local directory to the agent's own machine
 
-Status: design note, 2026-10-20. Not implemented beyond step 1 (the workspace default).
+Status: design note, 2026-10-20. Step 1 (the workspace default) is implemented; the rest is not.
 
 The question: pi's coding agent starts in a local directory and treats that directory as the boundary. In a Firecracker
 microVM the agent has a whole machine of its own, so "do not leave this directory" is no longer the shape of the
@@ -62,8 +62,18 @@ boot for every wake-up, and would lose every long-lived process the agent starte
 - So: create on first use, **pause-snapshot when idle**, restore on the next generation prepare. The snapshot id lives in
   `TargetDoc`; `env()` restoring on demand is the reconnect point, and it is called once per turn, which is the right
   frequency.
-- Isolation unit = durable conversation. One VM per conversation, cloned from a template snapshot; "fork a conversation"
-  becomes "restore its snapshot under a new id" (copy-on-write disk).
+- Isolation unit = durable conversation: one VM per conversation, created from a template image.
+
+**Decided (Denis, 2026-10-20): a fork reuses the conversation's machine. No snapshot is taken for a fork and no copy of
+the disk is made.** A forked conversation points at the same VM and the same workspace, so a branch that edits a file
+edits it for both. That is the deliberate trade: one machine per conversation is the isolation unit, and a fork is a
+second view of the same work rather than a sandbox. `TargetDoc`'s `fork: "current"` already means exactly this — the
+child inherits the target as it stands.
+
+There is no fork mechanism in mason today (no UI, no method), so this constrains a future one rather than describing an
+existing behaviour. If a fork later needs its own machine, that is a new decision with a new doc rule, not a migration.
+Snapshot/restore remains available as a *lifecycle* optimisation for one conversation (idle pause), which is a different
+question from forking and can be added or dropped without changing this.
 
 ### Memory stays on the host; the workspace is the guest
 
