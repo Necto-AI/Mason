@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
@@ -58,6 +58,19 @@ test("logPathFor() names the file by the local date, not UTC", async () => {
 	assert.equal(logPathFor(paths, new Date(2026, 0, 5, 23, 59)), join(paths.logDir, "2026-01-05.md"));
 	assert.equal(logPathFor(paths, new Date(2026, 11, 31, 0, 0)), join(paths.logDir, "2026-12-31.md"));
 	assert.equal(logPathFor(paths, new Date(2026, 0, 6, 0, 0)), join(paths.logDir, "2026-01-06.md"));
+});
+
+test("a leading ~ in MASON_HOME is a home directory, not a directory named ~", () => {
+	const previous = process.env.MASON_HOME;
+	process.env.MASON_HOME = "~/mason-home-probe";
+	try {
+		const paths = housePaths();
+		assert.equal(paths.home, join(homedir(), "mason-home-probe"));
+		assert.equal(paths.soul, join(homedir(), "mason-home-probe", "soul.md"));
+	} finally {
+		if (previous === undefined) delete process.env.MASON_HOME;
+		else process.env.MASON_HOME = previous;
+	}
 });
 
 test("ensureHouse() creates log/ and skills/ and writes the default soul", async () => {

@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -45,8 +45,14 @@ export function configureHouse(paths: HousePaths): HousePaths {
 	return paths;
 }
 
-/** Where a home is: the path given, else `MASON_HOME`, else `~/.mason`. */
+/**
+ * Where a home is: the path given, else `MASON_HOME`, else `~/.mason`.
+ *
+ * `~` is expanded here because `MASON_HOME=~/x` is what a person writes in a shell, and a literal `~` in a path is a
+ * directory name no file is ever in.
+ */
 export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".mason")): HousePaths {
+	home = resolve(home.startsWith("~/") ? join(homedir(), home.slice(2)) : home);
 	return {
 		home,
 		soul: join(home, "soul.md"),
