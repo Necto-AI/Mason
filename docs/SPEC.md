@@ -580,6 +580,20 @@ widget's own content.
 4. **Browser / Mobile Verification:**
    - `npm run build:web && npm run dev` serves the mobile-responsive web app on `http://127.0.0.1:8787`.
 
+### 6.1 Behaviour evals (`npm run eval`)
+
+The suites above pin mechanisms; `evals/` pins the behaviour they are meant to produce. Six scenarios run the real
+prompt, the real harness and the real projection against one model and check what a reader would have seen: a fired
+hook acted on and reported once, a quiet check-in that stays quiet and invents nothing, a question answered without a
+tool call, a file read before its number is claimed, a preference written to the log and read back the next turn, a
+chart delivered as a widget with `css` before `html`. `bash`, `read`, `write` and `edit` are stubs that answer from the
+scenario, and each run gets a throwaway temp home and workspace, so the only variable is the model.
+
+`npm run eval` runs all six against `opencode-go/deepseek-v4.1-flash` for about a cent, writes traces to
+`.data/evals/` and exits non-zero on a failed check; `npm run eval:judge -- .data/evals/<run>` scores stored traces
+on message quality against `evals/rubric.md`. Scenario shape, flags, trace fields and how to add a scenario:
+[`evals/README.md`](../evals/README.md).
+
 ---
 
 ## 7. Notes from building this (Chord behaviour worth knowing)
