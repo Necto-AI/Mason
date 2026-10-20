@@ -17,6 +17,9 @@ dist/
 *.sqlite-wal
 *.sqlite-shm
 
+# Scratch (agent working notes, handoff reports)
+.scratch/
+
 # Python (asr/)
 asr/.venv/
 asr/models/
