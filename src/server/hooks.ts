@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { fenceUntrusted } from "./untrusted.ts";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { HookSummary } from "../shared/contract.ts";
 import { entryFor, whenBusyFor } from "./admission.ts";
@@ -304,14 +305,15 @@ function canonicalJson(value: unknown): string {
 	return JSON.stringify(value) ?? "null";
 }
 
-/** `{{payload}}`, `{{date}}`, `{{hook}}` are substituted; an unused payload is appended. */
+/** `{{payload}}`, `{{date}}`, `{{hook}}` are substituted; an unused payload is appended, fenced as untrusted data. */
 export function formatPrompt(hook: EventHookConfig, payload: string | undefined, firedAt: string): string {
+	const fenced = payload === undefined ? undefined : fenceUntrusted(payload);
 	let text = hook.promptTemplate
 		.replaceAll("{{hook}}", hook.name)
 		.replaceAll("{{date}}", firedAt)
-		.replaceAll("{{payload}}", payload ?? "(none)");
+		.replaceAll("{{payload}}", fenced ?? "(none)");
 	const mentionsPayload = hook.promptTemplate.includes("{{payload}}");
-	if (payload !== undefined && !mentionsPayload) text = `${text}\n\nPayload:\n${payload}`;
+	if (fenced !== undefined && !mentionsPayload) text = `${text}\n\nPayload:\n${fenced}`;
 	return text;
 }
 

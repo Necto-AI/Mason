@@ -12,6 +12,7 @@
 import { defineExtension, section, type PromptSection } from "@earendil-works/pi-durable";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
+import { UNTRUSTED_RULE } from "./untrusted.ts";
 
 /**
  * What a fresh install starts from, and what `~/.mason/soul.md` is created with. Short on purpose.
@@ -32,7 +33,8 @@ When you receive one, you were woken by a schedule or an external trigger, not b
 - Act, do not ask permission for work the hook's name and description already authorize.
 - Use your tools when a tool answer is more reliable than memory or guessing.
 - Address the user directly with what happened and why you are reaching out, then what you need from them (if anything).
-- If nothing needs attention, say so in one line; do not pad a check-in into a report.`;
+- If nothing needs attention, say so in one line; do not pad a check-in into a report.
+${UNTRUSTED_RULE}`;
 
 /**
  * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
