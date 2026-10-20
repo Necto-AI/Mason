@@ -280,7 +280,7 @@ they are the whole contract:
 
 | Cell | Holds | Never holds |
 |---|---|---|
-| `transcript` | `user`, `delivered` (`send_to_user`), `widget` (`generateSandboxedUi`), `hook`, `notice` | entries, reasoning, tool calls, tool arguments, tool output, usage |
+| `transcript` | `user`, `delivered` (`send_to_user`), `widget` (`generateSandboxedUi`), `notice` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
 | `queued` | the inbox, labelled: the reader's text, or `hook: <name>` | submission records, entry kinds, modes beyond a display tag |
 | `agentStatus` | run status, busy, the **names** of running tools, model, hooks, cwd | per-tool arguments or output, usage, provider payloads |
 
@@ -290,7 +290,9 @@ Two rules keep it honest:
   fields. A new entry kind or a new tool is invisible until that file says otherwise, so nothing leaks by default.
 - **The machine's shape never survives.** A `send_to_user` call crosses as `{ kind: "delivered", text }` — the call's
   id, name and result are not forwarded, only the message. A widget crosses as its mapped content (`OpenGenUIContent`),
-  never as the call that built it. A failed run crosses as one coarse notice, never as the provider's error text.
+  never as the call that built it. A failed run crosses as one coarse notice, never as the provider's error text. A hook
+  trigger crosses as nothing at all: a proactive turn is the message it sent, and the schedule, its payload and the
+  prompt it built are the schedule's business, not the conversation's.
 
 Consequences, deliberately accepted: the chat cannot show a trace, a tool row, reasoning, usage or an error's cause.
 The raw view stays available server-side (the run supervisor reads it), and a trace endpoint can expose it later —
@@ -342,8 +344,8 @@ reader's:
 
 **The transcript is the conversation, not the trace.** Rows arrive already projected (see 4.1a) and render in order:
 the reader's messages, the messages the agent sent (`data-testid="msg-user"`, `data-testid="msg-delivered"`), widget
-cards, the trigger that woke the agent (`data-testid="msg-hook"`), and one coarse notice when a run died
-(`data-testid="msg-notice"`). Nothing renders reasoning, a tool row, a tool's arguments or its output, because none of
+cards, and one coarse notice when a run died (`data-testid="msg-notice"`). A proactive turn shows no trigger banner:
+the message stands on its own, and nothing tells the reader which schedule woke the agent or what payload it carried. Nothing renders reasoning, a tool row, a tool's arguments or its output, because none of
 it arrives. A delivered message keeps its text when the call that sent it failed, and says it may not have arrived.
 
 **The working line is the whole of the machine.** While a turn runs, one line under the transcript says what it is
