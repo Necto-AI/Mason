@@ -125,16 +125,11 @@ function App() {
 				<Transcript
 					transcript={transcript}
 					queued={queued}
+					working={working}
 					bridgeFor={bridgeFor}
 					connection={connectionState}
 					onWithdraw={(submissionId) => run(() => connection.agent.withdrawSubmission({ submissionId }))}
 				/>
-				{working === undefined ? null : (
-					<div className="working" data-testid="working" aria-live="polite">
-						<span className="working-dot" aria-hidden="true" />
-						{working}
-					</div>
-				)}
 				<Composer
 					busy={busy}
 					enabled={connectionState === "connected" && status !== undefined}
