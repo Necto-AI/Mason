@@ -4,9 +4,15 @@
  * `execute()` delivers by returning.
  */
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { AgentIdentity } from "../src/server/extensions/agent-identity.ts";
 import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
-import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
+import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
 
 test("send_to_user is replay-unsafe, so a restart never delivers the same message twice", () => {
 	assert.equal(sendToUserTool.name, "send_to_user");
@@ -24,6 +30,50 @@ test("the delivery extension rides in the base extension list, not behind a togg
 		BASE_EXTENSIONS.some((extension) => extension.name === Delivery.name),
 		"every conversation can speak",
 	);
+});
+
+/** The same agent over the same storage in the same directory: a restart. */
+function openRuntime(directory: string): Promise<AgentRuntime> {
+	return openAgentRuntime(BACKGROUND_CONTEXT, {
+		dataDir: join(directory, "data"),
+		workspaceDir: directory,
+		faux: true,
+		enableSandboxedUi: false,
+		onReport: () => {},
+	});
+}
+
+test("a selection stored before delivery existed still speaks after a reopen", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "mason-stale-extensions-"));
+	try {
+		const before = await openRuntime(directory);
+		try {
+			// A `pi.agent` doc from before slice 1: an explicit array of names, without `delivery`. A stored array is
+			// used verbatim, so nothing else brings delivery back.
+			const root = await before.conversation();
+			await root.configure({ extensions: [CodingTools, AgentIdentity] }, BACKGROUND_CONTEXT);
+		} finally {
+			await before.close();
+		}
+
+		const after = await openRuntime(directory);
+		try {
+			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
+			assert.deepEqual(
+				agent.extensions.map((extension) => extension.name),
+				["coding-tools", "agent-identity", "delivery"],
+				"the missing base names are appended in base order, and the stored order survives",
+			);
+			assert.ok(
+				agent.tools.some((tool) => tool.name === sendToUserTool.name),
+				"the model is offered the one way it can reach the reader",
+			);
+		} finally {
+			await after.close();
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("execute only returns: the committed call is the delivery", async () => {

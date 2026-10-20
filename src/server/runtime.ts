@@ -11,6 +11,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
+	AgentDoc,
 	type Conversation,
 	type ConversationId,
 	type ConversationView,
@@ -188,6 +189,9 @@ export async function openAgentRuntime(
 			extensions: selectionFor(extensionList, sandboxedUiEnabled),
 		},
 	});
+	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
+	// would leave the conversation without it.
+	await appendMissingBaseExtensions(root, context);
 	hooks.start();
 	// Picks up a run the last process left unfinished.
 	harness.resume();
@@ -214,6 +218,23 @@ export async function openAgentRuntime(
 			await envManager.close();
 		},
 	};
+}
+
+/**
+ * Return the base extensions a stored explicit selection lacks, appended in `BASE_EXTENSIONS` order.
+ *
+ * Only `BASE_EXTENSIONS` are unconditional, and no conversation may be without `delivery`, so a `pi.agent` doc that
+ * predates one of them — an array is used verbatim — gets it back on open. `sandboxed-ui` is not a base extension and
+ * stays out; the stored order is kept and nothing is pruned. An unset or `{ add, remove }` selection already unions
+ * with the settings, so it needs nothing.
+ */
+async function appendMissingBaseExtensions(root: Conversation, context: Context): Promise<void> {
+	await root.commit(async (tx) => {
+		const stored = (await tx.doc(AgentDoc, root.id)).extensions;
+		if (!Array.isArray(stored)) return;
+		const missing = BASE_EXTENSIONS.filter((extension) => !stored.includes(extension.name));
+		if (missing.length > 0) stored.push(...missing.map((extension) => extension.name));
+	}, context);
 }
 
 /** The explicit extension selection: objects, so `configure` records their names and nothing stale survives. */
