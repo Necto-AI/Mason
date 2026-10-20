@@ -4,9 +4,19 @@ Status: draft for review. Scope: chat area only. Author: agent, 2026-10-14.
 
 ## 0. Summary of decisions
 
+> **Revision (2026-10-20): the client is sent the reader's transcript, not the conversation.** §§2–3 below describe
+> the first port, which rendered the raw `ConversationView` (entries, reasoning, tool rows, usage) in the browser and
+> hid the machine only by folding traces away. That is gone: `src/server/projection.ts` is the wire boundary and sends
+> three cells — `transcript`, `queued`, `agentStatus` — and nothing else (§4.1a in `docs/SPEC.md`). The rendering model
+> is now a list of projected items (`user`, `hook`, `delivered`, `widget`, `notice`) plus one working line; the trace
+> components, `view-types.ts`, `transcript-model.ts` and the debug mode were deleted with it. The apiary material below
+> is kept as the record of how the look was ported, not as the current contract. Denis's reason, and it is the whole
+> reason: reasoning, tool calls and tool results are dense model work, and they can carry secrets — they stay on the
+> server, where they can be inspected through a trace endpoint later, deliberately.
+
 1. **Take the chat area from apiary** (`DenisSud/apiary` → `packages/web`): turns/bubbles structure, temporary traces, thinking collapsibles, tool rows, streaming tail reveal, append-only DOM behavior, scroll follower + jump pill, composer pill, markdown rules, design tokens — all from `packages/web/src/{turns,transcript,stream,tools,composer,scroll,markdown}.ts` + the chat sections of `style.css`.
 2. **One addition to the "traces are not kept" rule:** `generateSandboxedUi` widget cards persist in settled turns. They are the only trace piece that survives settlement; tool rows and thinking still collapse away.
-3. **Debug mode** reuses the same transcript and adds every note the durable backend exposes: tool statuses + live output, assistant message badges, system-prompt entries, hook payloads, nested tools, retry/deferred, compaction status/failure, inbox ids, usage ledger, raw state inspector.
+3. **~~Debug mode~~** — removed with the raw view (see the revision above). There is no diagnostics mode; the trace is a server-side concern.
 4. **Re-implement as React components** (confirmed) on our existing Chord shell (`src/web/client.ts` subscription stays), porting apiary's pure logic and CSS nearly verbatim. apiary's manual append-only DOM diffing is replaced by stable React keys — same emergent behavior (open `<details>` survive, entries animate once).
 5. **Out of scope:** sidebar, bot list, onboarding, panel/drawer, blobatars, setup chip, auth. Minimal session bar stays (status + actions), restyled to apiary's session-bar look.
 6. **Decided details:** hook triggers render as a full banner in normal mode; the composer has two send actions while busy (**Steer** / **Follow-up**) and one while idle; no skill chips; widget cards render bare (no caption).
@@ -34,86 +44,74 @@ apiary's UI consumed a `TranscriptSnapshot` from the old `pi-client`/`pi-server`
 
 Also: entries are a **tree on the server** (`fork()`, `head` markers) but the view shows one active path; `pi.compaction`/`pi.reset` entries can replace spans, so the entries list can shrink between updates. React keys handle this; the transcript must not assume append-only.
 
-## 2. Rendering model (adapted from apiary's `turns.ts`)
+## 2. Rendering model (revision: the projected transcript)
 
-### 2.1 Blocks
+### 2.1 What arrives
 
-`groupEntries(entries)` → ordered blocks:
+`TranscriptItem[]`, in order, each item already finished by the server:
 
-- `user` — `pi.user` (turn boundary)
-- `hook` — `app.hook` (turn boundary; new kind)
-- `turn` — run of `pi.assistant` + `pi.tool-result` (+ `pi.system` kept in-place, rendered only in debug)
-- `note` — `pi.compaction` (summary text), `pi.reset` (handoff text), unknown kinds (kind + data summary)
+| item | from | renders as |
+|---|---|---|
+| `user` | `pi.user` | the reader's bubble, right-aligned |
+| `hook` | `app.hook` | the trigger banner: name, time, payload ("the agent woke on its own") |
+| `delivered` | a `send_to_user` call | a message bubble of its own; `streaming` while the call streams, `failed` when its result failed or was interrupted |
+| `widget` | a `generateSandboxedUi` call | the sandbox card, bare, at its position; `content` is the mapped `OpenGenUIContent`, never the call |
+| `notice` | a run that died | one coarse line: something went wrong, the turn did not finish |
 
-Differences from apiary: `pi.system` does **not** flush a turn (it is the positional prompt marker that lands between user and assistant in every request); unknown kinds become notes (debug-only content).
+Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, with `withdrawable`), and `AgentStatus`
+(run status, busy, the **names** of running tools, model, hooks, cwd).
 
-### 2.2 Pieces
+### 2.2 What cannot arrive
 
-`turnPieces(turn, live.generation?.message, live.tools, live.nestedTools?)` → ordered pieces:
+Reasoning, tool calls, tool arguments, tool output, `pi.system` sections, usage, entries, `byTaskId`, diagnostics. The
+projection is a whitelist: an item exists only because `src/server/projection.ts` names its kind, so a new tool or a new
+entry kind is invisible until that file says otherwise. `test/projection.test.ts` pins it from both sides — what the
+reader needs arrives, and a secret planted in a tool's arguments and output does not.
 
-- `thinking` (text)
-- `toolCall` / `toolResult` / `toolLive` — maintained apiary pairing via `toolCallId`; `toolLive` covers running slots without a committed call (e.g. after compaction)
-- `text`
-- **`widget` (new)** — a settled-or-streaming `generateSandboxedUi` call: `{ callId, args, streaming }`
-- **`message` (new)** — a settled-or-streaming `send_to_user` call: the text the reader is meant to read, `{ callId, text, streaming, failed }`. A call whose text is empty once whitespace and invisible format characters are removed — before the `message` argument arrives, or settled blank/invalid — is not a piece at all: the call counts as covered, so neither an empty bubble nor a tool row takes its place, and a blank call with a failed or interrupted result leaves no visible artifact at all.
+### 2.3 The working line
 
-Nested tool slots attach to their parent tool call piece as child rows (debug detail; shown while the parent runs).
+`src/web/lib/working.ts` turns `AgentStatus` into one line under the transcript: `working`, `working: bash`,
+`working: bash, edit`, `compacting context`, `retrying`; nothing when idle. A tool name is the whole of what a reader is
+told about a running tool — visible work, no exposure of what the work touches.
 
-### 2.3 Bubbles
+### 2.4 What is gone, and why
 
-`groupBubbles(pieces)` → bubbles, apiary rule kept: a trace piece after produced content opens a new bubble; produced content always lands in the current one. Extended: produced content = `text` **or** `widget` **or** `message`. Bubble shape: `{ key, trace: TracePiece[], widgets: WidgetPiece[], messages: MessagePiece[], text: string }`; render order inside a bubble is `trace → text → messages → widgets`, with delivered messages as blocks of their own beside it (text after one opens a new bubble, and a card never joins one).
+| removed | why |
+|---|---|
+| `transcript-model.ts` (blocks → pieces → bubbles) | there is nothing to group: the server sends rows, and a user message, a hook banner and a delivered bubble are separate items |
+| `ToolRow.tsx`, `Trace.tsx` | the rows they rendered no longer exist on the wire |
+| `DebugBits.tsx`, `?debug=1`, `npm` toggle | it inspected `pi.live` / `pi.inbox` / `pi.agent`, which the client does not receive |
+| `view-types.ts` | it described the raw `ConversationView`; the client now types the projected cells from `src/shared/contract.ts` |
+| `lib/tool-view.ts` | summaries, durations and icons of tool calls — no tool calls to summarize |
 
-### 2.4 Live vs settled vs debug
-
-| | live turn | settled turn (normal) | settled turn (debug) |
-|---|---|---|---|
-| thinking | `details.reason-row`, open, italic quiet line | dropped | kept as collapsible |
-| tool rows | in "Working" trace `details`, open; state glyph spinner/check/alert; live `output` pre (truncated with "show all"); nested children indented | dropped | kept: args + result + status + duration + `byTaskId` + diagnostics + `details` JSON |
-| widget cards | rendered in bubble (never inside the collapsing trace) | **kept**, bare | kept, plus raw args JSON |
-| text | tail-reveal stream (apiary `stream.ts`) | markdown bubbles | + badge `[assistant · settled · stopReason=… · attempt · durationMs · usage]` |
-| delivered messages | own bubble as the call streams (tail reveal), the trace it sits in folding away | **kept** as a bubble of their own | + the call id and the failed/interrupted note |
-| trace collapse | animated height→0 when text/widget arrives | — | n/a |
-| `pi.system` | — | hidden | row `[system • sections: …]` + tools added/removed |
-| `pi.reset` | — | quiet note "session reset" | note + handoff text |
-| `pi.compaction` | live `compactions[]` chip (blocking/attempt/retry) | note "compacted" + summary | note + reason + taskId + retry |
-| retry / deferred | chips: `[retry in Xs — error]`, "Waiting" | hidden after settle (it settled) | chips + raw values |
-| hook entries | — | full banner: hook name, `firedAt`, payload ("agent woke on its own" styling) | banner + `hookId` + prompt text |
-| inbox | queued user bubbles, faded, tag `steering`/`follow-up`, withdraw button per item | — | + submission id + mode + entry kind |
-| compaction failure | — | hidden | error banner |
-| usage | — | — | footer/panel: `pi.usage` models+tools totals |
-| raw state | — | — | inspector: `live`, `inbox`, `agent`, `provider` docs as collapsible JSON |
-
-### 2.5 Widget persistence (the exception)
-
-- Widget cards render at the tool call's position in the flow, in both live and settled turns.
-- During live, the trace collapse must never take the widget with it: the widget is a sibling of `details.trace` inside the bubble, added as soon as its tool call piece exists.
-- Widget card = existing `SandboxedUiCard` wrapped in a `.widget` container; streaming preview while the call streams, final sandbox once settled (already implemented behavior in `src/web/components/SandboxedUiCard.tsx`). **No caption/label** (decided): the card renders bare; debug mode shows the tool row with args above it.
-- Errors (`isError` result) fall back to a normal tool row (debug) / nothing (normal).
-- Multiple widgets per turn are allowed; order = call order.
+Kept: `markdown.ts`, `stream-text.tsx` (a delivered message still streams as it is written), `follower.ts`,
+`frame-content.ts`, `process-partial-html.ts`, `idiomorph-inline.ts`, `websandbox-loader.ts`, `SandboxedUiCard.tsx`,
+`WidgetCard.tsx`. `open-genui-content.ts` moved to `src/shared/genui-content.ts`: the server maps a widget call to
+content, and both sides spell the shape.
 
 ## 3. Files
 
-### Ported from apiary (logic, near-verbatim → `src/web/lib/`)
+### Current client shape
 
-| apiary file | our file | notes |
-|---|---|---|
-| `turns.ts` | `lib/transcript-model.ts` | adapted to `EntryRecord`; hook block; widget pieces; system-in-turn; no timestamps |
-| `markdown.ts` | `lib/markdown.ts` | verbatim |
-| `tools.ts` (helpers) | `lib/tool-view.ts` | `summarizeArgs`, `singleLine`, `stepDuration`, icon map (+ `generateSandboxedUi` icon) |
-| `stream.ts` | `lib/stream-text.tsx` | same DOM algorithm (settled markdown + fading tail) as a React component |
-| `scroll.ts` | `lib/follower.ts` | `pinnedAfterScroll` pure fn + follower class; mounted by the transcript component |
-| `style.css` | `styles/tokens.css` + `styles/chat.css` | chat sections only; drop sidebar/drawer/onboarding/blobatar rules |
+| file | role |
+|---|---|
+| `src/shared/contract.ts` | the three cells and the item shapes both sides spell |
+| `src/shared/genui-content.ts` | a widget call's arguments → `OpenGenUIContent` (mapped server-side) |
+| `src/server/projection.ts` | the wire boundary: conversation → `transcript`, `queued` |
+| `src/web/lib/working.ts` | `AgentStatus` → the one working line |
+| `src/web/lib/markdown.ts`, `stream-text.tsx` | ported from apiary, unchanged: a delivered message renders and streams as markdown |
+| `src/web/lib/follower.ts` | apiary's scroll pinning, unchanged |
+| `src/web/components/Transcript.tsx` | maps items to rows, then the queue |
+| `src/web/components/MessageRow.tsx` | `UserRow`, `HookRow`, `DeliveredRow`, `NoticeRow` |
+| `src/web/components/QueuedRows.tsx` | faded queued bubbles, mode tag, withdraw |
+| `src/web/components/{WidgetCard,SandboxedUiCard}.tsx` | the sandbox card, unchanged except its input: content, not call args |
+| `src/web/components/{SessionBar,Composer,JumpPill,DictationButton}.tsx` | unchanged in intent; `SessionBar` lost the tool counters and the debug toggle, `Composer` lost the model label |
 
-### Replaced components (`src/web/components/`)
+### Ported from apiary, and what survived
 
-`StatusBanner` → `SessionBar.tsx` (title, status pill idle/busy/error, stop/compact actions, gen-ui toggle, debug toggle; hooks fold into debug).
-`TranscriptView` → `Transcript.tsx` (blocks → bubbles; live slot; jump pill wiring).
-`ToolRow` → `ToolRow.tsx` (apiary row: icon, `name:`, one-line summary, hover duration, state glyph, expandable args/result; debug extras).
-`InboxBar` → `QueuedRows.tsx` (apiary faded user bubbles + tag + withdraw).
-`Composer` → `Composer.tsx` (apiary pill math: grow, cap 14 lines, expand 27, send circle, 44px touch collar).
-New: `MessageRow.tsx` (user/hook/assistant/note variants), `Trace.tsx` (thinking + tool rows + live output), `WidgetCard.tsx` (wraps `SandboxedUiCard`), `JumpPill.tsx`, `debug/DebugBits.tsx` (badges, inspectors).
-Kept: `SandboxedUiCard.tsx` and `lib/{frame-content,process-partial-html,idiomorph-inline,websandbox-loader,open-genui-content}.ts` as-is.
-`view-types.ts` extended: nested tools, usage doc, message `timestamp`/`durationMs`/`usage`/`stopReason`, entry `byTaskId`, diagnostics.
+`markdown.ts` and `stream.ts` are still verbatim ports; `scroll.ts` is `follower.ts`. `turns.ts` and `tools.ts` are
+gone: their job was to reconstruct bubbles and tool rows from raw entries, and the projection now does the only part of
+that a reader needs. `style.css` kept its chat sections minus the trace, tool-row, debug and usage rules.
 
 ### Explicitly skipped from apiary
 
@@ -129,16 +127,15 @@ Kept: `SandboxedUiCard.tsx` and `lib/{frame-content,process-partial-html,idiomor
   Busy placeholder "Steer or follow-up…". Queued bubbles label the mode (`steering` / `follow-up`).
 - Stop: `abort()`; queued items stay visible (durable inbox) instead of apiary's restore-to-composer.
 - Compact: `compact()` while idle.
-- Debug sheet: hook list with enable toggle + "Fire now" (replaces `HooksPanel`), model/cwd display, raw inspectors.
+- ~~Debug sheet~~ — removed with the raw view. Firing a hook by hand is a server-side or webhook action now; a UI for it
+  belongs to the trace endpoint that replaces the inspector.
 - Widget bridge unchanged: `sendPrompt` → `submit({ whenBusy: "followUp" })`, `openLink` → new tab.
 
 ## 5. Phases
 
-1. **Pure model + tests** — `transcript-model.ts`, `tool-view.ts`, `markdown.ts`, follower pure fn; port apiary's `test/core.test.ts` cases and add: system-in-turn grouping, hook turns, widget bubble grouping/persistence, shrink-after-compaction.
-2. **Components + wiring** — transcript/message/trace/tool/composer/jump-pill/session-bar on the existing chord subscription; delete Stage-1 components.
-3. **Styles** — port tokens + chat CSS, widget card + debug styles, mobile passes at 390px/800px/desktop, dark mode.
-4. **Debug mode** — badges, notes, live extras, inspectors; `?debug=1` + localStorage; data-testids on debug rows.
-5. **Verify** — `npm test` unchanged, new pure tests, browser pass with `agent-browser` (below).
+Phases 1–5 were run against the raw-view port. The revision replaced phase 1 with the projection (`projection.ts` +
+`test/projection.test.ts`) and deleted the debug phase; the look, the composer, the follower and the widget card carry
+over unchanged.
 
 ## 6. Verification (agent-browser)
 
@@ -151,6 +148,24 @@ Kept: `SandboxedUiCard.tsx` and `lib/{frame-content,process-partial-html,idiomor
 7. Kill/restart server mid-run → reconnect banner → resumed run streams into the same transcript (durable bonus).
 
 ## 7. Decisions log (all resolved)
+
+Resolved (2026-10-20) — the wire boundary:
+
+10. **The client is sent the reader's transcript, not the conversation.** Denis: reasoning, tool calls and tool
+    results are dense model work and can carry secrets, so they stay on the server; the client receives user messages,
+    delivered messages, widgets, triggers, coarse notices, the labelled queue and a status whose tool list is names
+    only. A trace endpoint can expose the rest later, deliberately.
+11. **The transcript is a whitelist, not a filter.** `src/server/projection.ts` names every item kind it forwards. A
+    new tool or entry kind is invisible until it is named there, so nothing leaks by accident — and the same file is
+    the one place a reviewer has to read.
+12. **Widgets stay, as artifacts.** A `generateSandboxedUi` card is output built for the reader, not the machine's
+    working notes, so it crosses as mapped content (`OpenGenUIContent`), never as the call that built it. Deleting the
+    feature would have been a bigger decision than this one.
+13. **A failed run is one coarse notice.** "Something went wrong, and the turn did not finish" — the provider's error
+    text stays on the server. The Retry control went with it: retrying is the supervisor's job and a server action, not
+    a button over a message the reader can no longer diagnose.
+14. **No debug mode.** `?debug=1`, the diagnostics sheet and the usage panel inspected state the client no longer
+    receives; keeping the flag would have meant keeping the raw view on the wire for the sake of a toggle.
 
 Resolved (2026-10-14):
 

@@ -11,9 +11,16 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/conte
 import type { ConversationId, ConversationView, SubmissionId } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
-import { AgentService, AgentStatusSchema, type AgentStatus } from "../shared/contract.ts";
+import {
+	AgentService,
+	AgentStatusSchema,
+	QueuedItemSchema,
+	TranscriptItemSchema,
+	type AgentStatus,
+} from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
+import { projectQueued, projectTranscript } from "./projection.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
 import { deriveAgentStatus } from "./status.ts";
@@ -74,7 +81,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			open: async ({ signal }) => runtime.viewState(withAbortSignal(signal, BACKGROUND_CONTEXT)),
 			close: (view) => view.dispose(),
 		});
-		const view = self.state("view", Type.Unknown(), { init: () => viewResource.value.value });
+		// The raw view never leaves the server: the cells below are the projection in `projection.ts`, which forwards the
+		// reader's transcript and the queue and nothing else — no entries, no reasoning, no tool calls, no usage.
+		const transcript = self.state("transcript", Type.Array(TranscriptItemSchema), {
+			init: () => projectTranscript(viewResource.value.value),
+		});
+		const queued = self.state("queued", Type.Array(QueuedItemSchema), {
+			init: () => projectQueued(viewResource.value.value),
+		});
 		const agentStatus = self.state("agentStatus", AgentStatusSchema, { init: () => statusFor(viewResource.value.value) });
 
 		// The supervisor re-arms a run that a provider outage killed; it reads the committed view only.
@@ -84,18 +98,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		}, retryOptionsFromEnv());
 
 		self.on("viewSync", viewResource, (next, ctx) => {
-			view.replace(ctx, next);
+			transcript.replace(ctx, projectTranscript(next));
+			queued.replace(ctx, projectQueued(next));
 			agentStatus.replace(ctx, statusFor(next));
 			supervisor.observe(next);
 		});
 
 		const refreshStatus = (ctx: Ctx): void => {
-			agentStatus.replace(ctx, statusFor(view.value as ConversationView));
+			agentStatus.replace(ctx, statusFor(viewResource.value.value));
 		};
 
 		return {
 			variant: "owner",
-			view,
+			transcript,
+			queued,
 			agentStatus,
 			submit: async ({ content, whenBusy }) => {
 				// The reader is driving now: a scheduled retry would talk over them.

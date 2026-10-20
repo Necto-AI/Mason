@@ -14,10 +14,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
-// The transcript model is DOM-free by design (`AGENTS.md`), so a server suite may read it: it is the shared
-// vocabulary of what a turn produced.
-import { groupEntries, turnPieces } from "../src/web/lib/transcript-model.ts";
-import type { EntryLike } from "../src/web/view-types.ts";
+import { projectTranscript } from "../src/server/projection.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -55,6 +52,16 @@ function openFor(
 		extensions: options.extensions,
 		onReport: () => {},
 	});
+}
+
+/** The transcript as the client receives it: the projection, not the entries behind it. */
+async function readTranscript(runtime: AgentRuntime) {
+	const view = await runtime.viewState(BACKGROUND_CONTEXT);
+	try {
+		return projectTranscript(view.value);
+	} finally {
+		view.dispose();
+	}
 }
 
 async function readEntries(runtime: AgentRuntime) {
@@ -144,17 +151,12 @@ describe("durable harness + pi-env", () => {
 			assert.equal((result.model?.[0] as { isError?: boolean }).isError, false);
 			assert.match(textOf(result.model?.[0]), /delivered/);
 
-			// What the client reads out of the same transcript is a message, not a tool row. The client's view shapes are
-			// narrower than the storage records, which is all the cast says.
-			const turn = {
-				entries: entries.filter(
-					(entry) => entry.kind === "pi.assistant" || entry.kind === "pi.tool-result",
-				) as unknown as EntryLike[],
-			};
-			const delivered = turnPieces(turn, undefined, []).filter((piece) => piece.kind === "message");
+			// What leaves the server for the client is the reader's transcript: the message, and nothing of the working
+			// notes beside it — no prose, no reasoning, no call.
+			const transcript = await readTranscript(runtime);
 			assert.deepEqual(
-				delivered.map((piece) => (piece.kind === "message" ? piece.text : "")),
-				["Standup moved to nine."],
+				transcript.filter((item) => item.kind !== "user"),
+				[{ kind: "delivered", id: "m1", text: "Standup moved to nine." }],
 			);
 
 			// The invariant the client relies on is in the prompt, not just in the tool description.
@@ -200,17 +202,14 @@ describe("durable harness + pi-env", () => {
 			assert.equal(answers.length, 2, "the delivered call, then the wrap-up");
 			assert.match(textOf(answers[1]?.model?.[0]), /Nothing else to report\./);
 
-			// What the client reads out of the same transcript is the reader's bubble: the hook turn's pieces are the
-			// message `send_to_user` delivered, not a tool row.
-			const blocks = groupEntries(entries as unknown as EntryLike[]);
-			const trigger = blocks.findIndex((block) => block.kind === "hook");
-			assert.ok(trigger >= 0, "the hook is a turn boundary of its own");
-			const proactive = blocks[trigger + 1];
-			assert.equal(proactive?.kind, "turn");
-			if (proactive?.kind !== "turn") return;
-			const delivered = turnPieces(proactive.turn, undefined, []).filter((piece) => piece.kind === "message");
+			// What leaves the server for a proactive turn is the trigger and the message, nothing else.
+			const transcript = await readTranscript(runtime);
 			assert.deepEqual(
-				delivered.map((piece) => (piece.kind === "message" ? piece.text : "")),
+				transcript.map((item) => item.kind),
+				["hook", "delivered"],
+			);
+			assert.deepEqual(
+				transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 				["Workspace is clean."],
 			);
 
