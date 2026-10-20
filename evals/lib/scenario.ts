@@ -37,6 +37,8 @@ export interface Expected {
 	readonly log?: readonly string[];
 	/** A widget must reach the reader, built with `css` before `html`. */
 	readonly widget?: boolean;
+	/** Bounds how often the delivery gate had to rescue a turn, so a model that stops delivering is visible. */
+	readonly reminders?: { readonly min?: number; readonly max?: number };
 	/** The run must not send more prompt tokens than this. */
 	readonly maxInputTokens?: number;
 	/** Tool calls spent on work — everything except `send_to_user`, which is the delivery channel, not effort. */
@@ -56,6 +58,8 @@ export interface Trace {
 	readonly model: string;
 	readonly delivered: string[];
 	readonly notices: string[];
+	/** How many times the delivery gate had to remind the model that nothing had been sent this turn. */
+	readonly reminders: number;
 	readonly toolCalls: { name: string; args: unknown }[];
 	readonly widgets: number;
 	readonly widgetArguments: Record<string, unknown> | undefined;
@@ -96,6 +100,13 @@ export function check(trace: Trace, expected: Expected, logText: string): Check[
 					? `${rule.then} was never called`
 					: `${rule.tool} at ${first}, ${rule.then} at ${later}`,
 		);
+	}
+	if (expected.reminders !== undefined) {
+		const bound = expected.reminders;
+		const ok =
+			(bound.min === undefined || trace.reminders >= bound.min) &&
+			(bound.max === undefined || trace.reminders <= bound.max);
+		add("reminders", ok, `${trace.reminders} (expected ${bound.min ?? 0}..${bound.max ?? "∞"})`);
 	}
 	for (const needle of expected.text ?? []) {
 		add(`text.${needle}`, delivered.includes(needle.toLowerCase()), delivered === "" ? "nothing delivered" : "");
