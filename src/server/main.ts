@@ -19,6 +19,8 @@ import {
 	type AgentStatus,
 } from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
+import { authenticate, ensureToken, pairingUrls, type TokenRecord } from "./auth.ts";
+import { currentHouse } from "./house.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
@@ -52,6 +54,11 @@ export interface RunningServer {
 	readonly runtime: AgentRuntime;
 	/** `AgentService` reached over the server's own host, for tests and scripts. */
 	readonly host: Host<Principal>;
+	/**
+	 * The token this process minted for a home that had none, so a test (or the log line) can pair without reading a
+	 * hash. Absent on a restart: the plaintext is shown once and never stored.
+	 */
+	readonly pairingToken: string | undefined;
 	close(): Promise<void>;
 }
 
@@ -165,15 +172,29 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		};
 	});
 
+	// One owner, a few credentials. Read once per process: a token minted while the server runs is picked up by the
+	// next start, which is what `npm run token -- revoke` says.
+	const { token: pairingToken, records: tokens } = await ensureToken(currentHouse().home);
+
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir).catch((error: unknown) => {
+		handleRequest(request, response, runtime, webDir, tokens).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
 		});
 	});
 	const sockets = new WebSocketServer({ server });
-	acceptWebSockets(sockets, host, { principal: () => ({ kind: "owner" }) as Principal });
+	// A socket is the reader: no token, no owner. Chord closes the link itself when the principal is `undefined`.
+	acceptWebSockets(sockets, host, {
+		principal: (request) => {
+			const auth = authenticate(request, tokens);
+			if (!auth.ok) {
+				console.warn(`[auth] refused a socket (${auth.reason}) from ${request.headers.origin ?? "a program"}`);
+				return undefined;
+			}
+			return { kind: "owner" } as Principal;
+		},
+	});
 
 	const port = options.port ?? Number(process.env.PORT ?? 8787);
 	const hostname = options.hostname ?? process.env.HOST ?? "127.0.0.1";
@@ -187,11 +208,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const address = server.address();
 	const boundPort = typeof address === "object" && address !== null ? address.port : port;
 	console.log(`mason listening on http://${hostname}:${boundPort}`);
+	if (pairingToken !== undefined) {
+		console.log(`[auth] minted a token for this home; open one of these once, per browser or device:`);
+		for (const url of pairingUrls(hostname, boundPort, pairingToken)) console.log(`[auth]   ${url}`);
+	} else {
+		console.log(`[auth] ${tokens.length} token(s); add one with: npm run token -- add --label phone`);
+	}
+	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
+		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);
+	}
 
 	return {
 		port: boundPort,
 		runtime,
 		host,
+		pairingToken,
 		async close() {
 			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
 			await runWatch.stop();
@@ -214,8 +245,24 @@ async function handleRequest(
 	response: ServerResponse,
 	runtime: AgentRuntime,
 	webDir: string,
+	tokens: readonly TokenRecord[],
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+
+	// Everything under `/api` is the owner's, except the liveness probe. The static shell is public on purpose: it is
+	// a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
+		const auth = authenticate(request, tokens);
+		if (!auth.ok) {
+			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
+			response.writeHead(401, {
+				"content-type": "application/json; charset=utf-8",
+				"www-authenticate": 'Bearer realm="mason"',
+			});
+			response.end(JSON.stringify({ error: "unauthorized" }));
+			return;
+		}
+	}
 
 	if (url.pathname === "/api/status") {
 		const view = await runtime.viewState(BACKGROUND_CONTEXT);

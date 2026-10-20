@@ -108,7 +108,10 @@ async function openClient(
 		name: "browser",
 		kind: "client",
 		upstream: {
-			link: webSocketLink(new WebSocket(`ws://127.0.0.1:${server.port}/`) as unknown as WebSocketLike),
+			// A fresh home mints a token on first start; a real browser takes the same one from `?token=` once.
+			link: webSocketLink(
+				new WebSocket(`ws://127.0.0.1:${server.port}/?token=${server.pairingToken ?? ""}`) as unknown as WebSocketLike,
+			),
 			principal: { kind: "server" },
 		},
 		onError: () => {},
@@ -164,16 +167,20 @@ function entries(view: ConversationView | undefined) {
 	return [...(view?.entries ?? [])];
 }
 
-/** POST a hook fire the way an external script or a cron timer would. */
+/** POST a hook fire the way an external script or a cron timer would: with the server's own token. */
 async function fireWebhook(
-	port: number,
+	server: RunningServer,
 	hookId: string,
 	body: Record<string, unknown>,
 	headers: Record<string, string> = {},
 ): Promise<{ submissionId: number }> {
-	const response = await fetch(`http://127.0.0.1:${port}/api/hooks/${hookId}/fire`, {
+	const response = await fetch(`http://127.0.0.1:${server.port}/api/hooks/${hookId}/fire`, {
 		method: "POST",
-		headers: { "content-type": "application/json", ...headers },
+		headers: {
+			"content-type": "application/json",
+			authorization: `Bearer ${server.pairingToken ?? ""}`,
+			...headers,
+		},
 		body: JSON.stringify(body),
 	});
 	assert.equal(response.status, 200);
@@ -507,14 +514,14 @@ describe("chord client <-> server", () => {
 			const deliveries = (): number => entries(state.serverView).filter((entry) => entry.kind === "app.hook").length;
 
 			// A dumb sender: the body is the delivery's identity inside the window, so the same POST retried is one event.
-			const first = await fireWebhook(server.port, "workspace-check", { message: "ping" });
-			const replay = await fireWebhook(server.port, "workspace-check", { message: "ping" });
+			const first = await fireWebhook(server, "workspace-check", { message: "ping" });
+			const replay = await fireWebhook(server, "workspace-check", { message: "ping" });
 			assert.equal(replay.submissionId, first.submissionId, "a redelivered body is one submission");
 			await waitFor("the first delivery", () => (deliveries() === 1 ? true : undefined));
 
 			// A sender that names its delivery is exact, whether the id comes in the body or in the header.
 			const named = await fireWebhook(
-				server.port,
+				server,
 				"workspace-check",
 				{ message: "ping" },
 				{ "x-request-id": "delivery-9" },
@@ -522,9 +529,9 @@ describe("chord client <-> server", () => {
 			assert.notEqual(named.submissionId, first.submissionId, "a named delivery is an event of its own");
 			await waitFor("the named delivery", () => (deliveries() === 2 ? true : undefined));
 
-			const again = await fireWebhook(server.port, "workspace-check", { message: "pong", requestId: "delivery-10" });
+			const again = await fireWebhook(server, "workspace-check", { message: "pong", requestId: "delivery-10" });
 			assert.notEqual(again.submissionId, named.submissionId);
-			const againLater = await fireWebhook(server.port, "workspace-check", {
+			const againLater = await fireWebhook(server, "workspace-check", {
 				message: "pong",
 				requestId: "delivery-10",
 			});
@@ -633,7 +640,10 @@ describe("chord client <-> server", () => {
 			// An external script or timer wakes the agent through HTTP.
 			const response = await fetch(`http://127.0.0.1:${client.server.port}/api/hooks/morning-brief/fire`, {
 				method: "POST",
-				headers: { "content-type": "application/json" },
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${client.server.pairingToken ?? ""}`,
+				},
 				body: JSON.stringify({ message: "the build is red" }),
 			});
 			assert.equal(response.status, 200);

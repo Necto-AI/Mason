@@ -24,7 +24,8 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   └── open-intelligent-ui/           # Local clone of CopilotKit/OpenIntelligentUI
 ├── scripts/
 │   ├── link-vendor.mjs                # Symlinks vendor packages into node_modules/
-│   └── build-web.mjs                  # esbuild bundler for src/web -> dist/web
+│   ├── build-web.mjs                  # esbuild bundler for src/web -> dist/web
+│   └── token.ts                       # `npm run token -- add|list|revoke`: the credentials that may connect
 ├── skills/
 │   └── generative-ui/SKILL.md         # The widget manual: the prompt carries only the pointer (§3.5)
 ├── src/
@@ -33,6 +34,7 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   ├── server/
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
 │   │   ├── admission.ts               # Where a submission came from, and where it waits (hook vs. user)
+│   │   ├── auth.ts                    # Who may talk to the server: token file, bearer/query, Origin gate
 │   │   ├── house.ts                   # The agent's home: ~/.mason paths, soul/profile reads, log, git
 │   │   ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view, and the cache report
@@ -51,6 +53,7 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │       ├── client.ts                  # Chord webSocketLink wrapper + reconnect state
 │       ├── lib/                        # Pure helpers + renderers (see docs/UI-PLAN.md)
 │       │   ├── working.ts              # The one line that says what the agent is doing
+│       │   ├── token.ts                # The browser's credential: taken from `?token=` once, kept, put on the socket
 │       │   ├── markdown.ts             # marked + link hardening (apiary's markdown.ts, verbatim)
 │       │   ├── stream-text.tsx         # Settled markdown + fading tail reveal (apiary's stream.ts)
 │       │   ├── follower.ts             # Scroll pinning: pinnedAfterScroll + useFollower (apiary's scroll.ts)
@@ -73,6 +76,8 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 └── test/
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
     ├── house.test.ts                  # ~/.mason: paths, the log, the caps, the git repository
+    ├── auth.test.ts                   # The door: token mint/verify/revoke, `/api` 401s, the socket's principal check
+    ├── web-token.test.ts              # The browser's side of pairing: `?token=` once, then storage, then the socket URL
     ├── prompt.test.ts                 # The resident prompt: soul, profile, skills index, the widget pointer
     ├── cache-telemetry.test.ts        # The [cache] line of a finished run
     ├── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, UI tool
@@ -223,6 +228,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 ~/.mason/
 ├── soul.md                 # The first section of the system prompt: the agent's own voice
 ├── profile.md              # Who Denis is: agent-managed, resident, capped
+├── config.json             # Credentials that may talk to the server: one hashed token per device (§4.1b)
 ├── log/2026-10-20.md       # Dated facts, one per line, read on demand
 ├── skills/<name>/SKILL.md  # Denis's own skills; they shadow the shipped ones
 └── workspace/              # The directory the agent works in; not the repo that runs it
@@ -398,6 +404,60 @@ Two rules keep it honest:
 Consequences, deliberately accepted: the chat cannot show a trace, a tool row, reasoning, usage or an error's cause.
 The raw view stays available server-side (the run supervisor reads it), and a trace endpoint can expose it later —
 separately, deliberately, and with its own access rules.
+
+### 4.1b Who may talk to the server — the door
+
+There is one owner, so every entry point proves it: the Chord socket, `/api/*`, the webhook. `src/server/auth.ts` owns
+the rule; `src/server/main.ts` applies it in exactly two places, the socket's `principal(request)` and the top of
+`handleRequest`.
+
+**The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` — mode 0600, home 0700.
+Only the hash is stored: that file is exactly the kind of thing that gets pasted into a bug report or a backup, and a
+file that cannot leak a live token is worth a little inconvenience. `npm run token -- add --label phone` prints a new
+token once; `list` shows what exists, `revoke <id>` kills one device without touching the others. A fresh home mints a
+`browser` token on first start and logs the URLs to open, once:
+
+```text
+mason listening on http://0.0.0.0:8787
+[auth] minted a token for this home; open one of these once, per browser or device:
+[auth]   http://127.0.0.1:8787/?token=mason_…
+[auth]   http://192.168.1.20:8787/?token=mason_…
+[auth] 0.0.0.0 is not loopback: the token crosses the network in clear text until TLS lands
+```
+
+The server reads its tokens at startup, so a mint or a revoke takes effect on the next start — which is the right
+moment to also throw away a lost phone's session.
+
+**How a request presents it.** Two ways, because two kinds of client have different powers:
+
+| Client | Presents | Why |
+|---|---|---|
+| native app, curl, a webhook sender | `Authorization: Bearer <token>` | a header is the normal way, and the app keeps the token in the OS keystore |
+| the browser client | `?token=…` on the socket URL | a browser cannot set a header on a WebSocket, so the query string is the one place a credential has to travel |
+
+The page takes the token out of `?token=` on its first visit, keeps it in `localStorage`, and replaces the address bar
+with the bare path, so it stops travelling in URLs. A browser with no token is not paired and says so — an empty
+transcript would look like a broken agent instead of a closed door.
+
+**The second gate: Origin.** A token says *which device*; `Origin` says *which page*.
+
+- `Origin` absent means a program — curl, the native app, a test — and the token alone decides.
+- `Origin` present must equal the request's `Host`; `Origin: null` (a sandboxed frame, a `file://` page) is refused.
+
+A page on `evil.example` cannot read this origin's `localStorage`, so it cannot learn a token; the Origin check is the
+belt to that pair of braces, and it also stops such a page from opening a socket at all. Both gates are checked on the
+socket and on `/api/*`. `GET /api/health` stays open, because a monitor that needs a credential is a monitor nobody
+runs, and the static shell stays public: it is a bundle with no secrets in it, and it is where the reader is told their
+browser is not paired.
+
+A refusal is explicit, never silence: Chord closes the link with `{"t":"bye","reason":"unauthorized"}` (so no frame
+of state is ever sent), and `/api/*` answers `401` with `WWW-Authenticate: Bearer`.
+
+**What this is not.** It is not transport security. On a non-loopback address the token, the transcript and every reply
+cross the network in clear text: an SSH tunnel, or a TLS proxy, is the honest answer for a phone on an untrusted
+network, and the machine boundary (§`docs/EXECUTION-TARGETS.md`) is where a real one lands. It also does not make
+*text* trustworthy: a webhook payload still arrives as an instruction-shaped string, which is the next slice —
+`authorize` answers *may this caller speak*, and nothing here answers *should the agent obey what it said*.
 
 ### 4.2 Bridging `Conversation.viewState()` to Chord State on the Server
 
