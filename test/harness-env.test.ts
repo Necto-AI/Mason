@@ -14,6 +14,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
+// The transcript model is DOM-free by design (`AGENTS.md`), so a server suite may read it: it is the shared
+// vocabulary of what a turn produced.
 import { groupEntries, turnPieces } from "../src/web/lib/transcript-model.ts";
 import type { EntryLike } from "../src/web/view-types.ts";
 

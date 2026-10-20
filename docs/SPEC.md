@@ -171,7 +171,7 @@ export interface EventHookConfig {
   3. Because `entry.kind === "app.hook"` carries `model: [{ role: "user", content: ... }]` under the hood (per `pi-durable` custom input entries), `pi-durable` immediately starts a generation run! Every connected web client watching the conversation sees the `app.hook` entry appear and the assistant proactively stream its message.
   4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
      - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Exact, and permanent.
-     - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity window (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the window collapses while tomorrow's identical digest still fires.
+     - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity bucket (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the bucket collapses while tomorrow's identical digest still fires. The bucket is a division of the clock, not a span of time: a redelivery that crosses a bucket boundary is a new event, however close it is.
      - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
      - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
      `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about.
@@ -179,7 +179,7 @@ export interface EventHookConfig {
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per window.
+  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -188,6 +188,9 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `agent-identity`, `delivery` — is what every conversation gets. `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is not a base extension and stays opt-in.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends the missing base names to a stored list, in base order, in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; `sandboxed-ui` is never added; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: only the user's own steer cuts in, and a trigger source that asks to steer is downgraded to a follow-up.
 
 ---
 

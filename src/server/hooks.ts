@@ -56,7 +56,7 @@ export interface FireOptions {
 }
 
 /**
- * The window fire identity is bucketed in: a body-identified fire collapses inside one window, a scheduled slot is
+ * The window fire identity is bucketed in: a body-identified fire collapses inside one bucket, a scheduled slot is
  * never coarser than this by default, and a hook is not expected to fire faster than it unless its identity is exact.
  */
 export const IDENTITY_WINDOW_MS = 60_000;
@@ -111,8 +111,10 @@ export class HooksManager {
 		};
 		this.#hooks.set(hook.id, hook);
 		if (hook.intervalMs !== undefined && hook.intervalMs < IDENTITY_WINDOW_MS && hook.identify === undefined) {
-			console.warn(
-				`[hooks] ${hook.id} fires every ${hook.intervalMs}ms, inside the ${IDENTITY_WINDOW_MS}ms identity window: only fires whose senders name them (\`identify\`) are safe at this rate`,
+			// An authoring-rule violation, not a failure: it goes to the host's report channel, and to the log when the
+			// host has none, so it is not lost either way.
+			this.#warn(
+				`[hooks] ${hook.id} fires every ${hook.intervalMs}ms, inside the ${IDENTITY_WINDOW_MS}ms identity bucket: only fires whose senders name them (\`identify\`) are safe at this rate`,
 			);
 		}
 		if (hook.enabled) this.#arm(hook.id);
@@ -219,6 +221,13 @@ export class HooksManager {
 		else console.error(error);
 	}
 
+	/** A rule violation: the host's report channel when it has one, and the log when it has none. */
+	#warn(message: string): void {
+		const report = this.#options.onReport;
+		if (report !== undefined) report(message);
+		else console.warn(message);
+	}
+
 	#readState(): PersistedHookState {
 		const path = this.#options.statePath;
 		if (path === undefined) return {};
@@ -254,9 +263,10 @@ export function explicitRequestId(hookId: string, senderId: string): string {
 }
 
 /**
- * A sender that cannot name its delivery: the same body is the same event inside one `IDENTITY_WINDOW_MS` window.
+ * A sender that cannot name its delivery: the same body is the same event inside one `IDENTITY_WINDOW_MS` bucket.
  * Bucketed by time rather than hashed forever, because pi-durable never forgets a request id — a byte-identical daily
- * digest would otherwise fire once, ever.
+ * digest would otherwise fire once, ever. The bucket is a clock division, not a span of time: a redelivery that
+ * crosses a bucket boundary is a new event, however close it is.
  */
 export function bodyRequestId(hookId: string, body: unknown, nowMs: number): string {
 	const hash = createHash("sha256").update(canonicalJson(body)).digest("hex").slice(0, 16);

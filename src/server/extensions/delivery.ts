@@ -14,7 +14,7 @@ import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { MESSAGE_TOOL } from "../../shared/contract.ts";
 
-export const SendToUserParams = Type.Object({
+const SendToUserParams = Type.Object({
 	message: Type.String({
 		minLength: 1,
 		description: "What the user reads, written in full — this text is the message, not a note about it",

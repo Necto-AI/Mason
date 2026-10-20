@@ -47,12 +47,13 @@ function testClock(startIso: string): TestClock {
 }
 
 /** A manager that never submits: enough for `define()` and for building keys. */
-function managerWithClock(clock: TestClock): HooksManager {
+function managerWithClock(clock: TestClock, onReport?: (error: unknown) => void): HooksManager {
 	return new HooksManager({
 		conversation: async () => {
 			throw new Error("this manager only defines hooks");
 		},
 		now: clock.now,
+		...(onReport === undefined ? {} : { onReport }),
 	});
 }
 
@@ -218,7 +219,18 @@ describe("a fire's identity", () => {
 });
 
 describe("a hook's authoring rule", () => {
-	it("warns when it fires inside the identity window, and is quiet above it", () => {
+	it("warns through the report channel when it fires inside the identity bucket, and is quiet above it", () => {
+		const reports: unknown[] = [];
+		const hooks = managerWithClock(testClock(ALIGNED_START), (error) => reports.push(error));
+		hooks.define({ ...digest, id: "fast", intervalMs: IDENTITY_WINDOW_MS - 1 });
+		assert.equal(reports.length, 1, "a hook faster than the identity bucket is warned about");
+		assert.match(String(reports[0] ?? ""), /identity bucket/);
+		hooks.define({ ...digest, id: "slow", intervalMs: IDENTITY_WINDOW_MS });
+		hooks.define({ ...digest, id: "manual" });
+		assert.equal(reports.length, 1, "at the bucket, and with no interval at all, there is nothing to warn about");
+	});
+
+	it("warns in the log when the host has no report channel", () => {
 		const warnings: string[] = [];
 		const warn = console.warn;
 		console.warn = (message: string) => {
@@ -227,31 +239,19 @@ describe("a hook's authoring rule", () => {
 		try {
 			const hooks = managerWithClock(testClock(ALIGNED_START));
 			hooks.define({ ...digest, id: "fast", intervalMs: IDENTITY_WINDOW_MS - 1 });
-			assert.equal(warnings.length, 1, "a hook faster than the identity window is warned about");
-			assert.match(warnings[0] ?? "", /identity window/);
-			hooks.define({ ...digest, id: "slow", intervalMs: IDENTITY_WINDOW_MS });
-			hooks.define({ ...digest, id: "manual" });
-			assert.equal(warnings.length, 1, "at the window, and with no interval at all, there is nothing to warn about");
+			assert.equal(warnings.length, 1, "the warning is not lost when nobody is listening to reports");
 		} finally {
 			console.warn = warn;
 		}
 	});
 
 	it("is quiet for a fast hook whose senders name their fires, however they name them", () => {
-		const warnings: string[] = [];
-		const warn = console.warn;
-		console.warn = (message: string) => {
-			warnings.push(message);
-		};
-		try {
-			const hooks = managerWithClock(testClock(ALIGNED_START));
-			const fast = { ...digest, intervalMs: 5_000 };
-			hooks.define({ ...fast, id: "named-ids", identify: "request" });
-			hooks.define({ ...fast, id: "named-bodies", identify: "body" });
-			assert.deepEqual(warnings, [], "a declared identity is exact, so the window cannot lose a fire");
-		} finally {
-			console.warn = warn;
-		}
+		const reports: unknown[] = [];
+		const hooks = managerWithClock(testClock(ALIGNED_START), (error) => reports.push(error));
+		const fast = { ...digest, intervalMs: 5_000 };
+		hooks.define({ ...fast, id: "named-ids", identify: "request" });
+		hooks.define({ ...fast, id: "named-bodies", identify: "body" });
+		assert.deepEqual(reports, [], "a declared identity is exact, so the bucket cannot lose a fire");
 	});
 });
 
