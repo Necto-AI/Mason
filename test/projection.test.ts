@@ -9,9 +9,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { MESSAGE_TOOL } from "../src/shared/contract.ts";
+import { MESSAGE_TOOL, type AgentStatus } from "../src/shared/contract.ts";
 import { projectQueued, projectTranscript } from "../src/server/projection.ts";
-import { workingLabel } from "../src/web/lib/working.ts";
+import { createWorkingMachine, TOOL_LABEL_HOLD_MS } from "../src/web/lib/working.ts";
 
 type Entry = Record<string, unknown>;
 
@@ -232,23 +232,70 @@ describe("the queue the client is sent", () => {
 });
 
 describe("the working line", () => {
-	const status = (patch: Record<string, unknown>) =>
-		({ runStatus: "idle", busy: false, runningTools: [], hooks: [], ...patch }) as never;
+	const status = (patch: Partial<AgentStatus>): AgentStatus => ({
+		runStatus: "idle",
+		busy: false,
+		runningTools: [],
+		hooks: [],
+		...patch,
+	});
+	const started = (start = 1_000) => {
+		const clock = { at: start };
+		return { clock, machine: createWorkingMachine({ now: () => clock.at }) };
+	};
 
-	it("names the tools of the running round and nothing else about them", () => {
-		assert.equal(workingLabel(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");
+	it("names the latest tool call of the round and nothing else about it", () => {
+		const { machine } = started();
+		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");
 		assert.equal(
-			workingLabel(status({ runStatus: "running_tools", busy: true, runningTools: ["bash", "edit"] })),
-			"working: bash, edit",
+			machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash", "edit"] })),
+			"working: edit",
 		);
 	});
 
-	it("says what stage it is in when no tool is running, and nothing at all when idle", () => {
-		assert.equal(workingLabel(status({ runStatus: "generating", busy: true })), "working");
-		assert.equal(workingLabel(status({ runStatus: "compacting", busy: true })), "compacting context");
-		assert.equal(workingLabel(status({ runStatus: "retrying", busy: true })), "retrying");
-		assert.equal(workingLabel(status({ runStatus: "idle", busy: true })), "working");
-		assert.equal(workingLabel(status({})), undefined);
-		assert.equal(workingLabel(undefined), undefined);
+	it("keeps a tool that finished in milliseconds on the line long enough to read", () => {
+		const { clock, machine } = started();
+		const generating = status({ runStatus: "generating", busy: true });
+		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");
+		clock.at += 30;
+		// The tool returned after 30 ms; the reader still sees the name it has only just been shown.
+		assert.equal(machine.label(generating), "working: bash");
+		assert.equal(machine.holdRemainingMs(), TOOL_LABEL_HOLD_MS - 30);
+		clock.at += TOOL_LABEL_HOLD_MS - 30;
+		assert.equal(machine.label(generating), "working");
+		assert.equal(machine.holdRemainingMs(), undefined);
+	});
+
+	it("forgets the tool as soon as the turn is not busy", () => {
+		const { clock, machine } = started();
+		machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] }));
+		clock.at += 10;
+		assert.equal(machine.label(status({ busy: false })), undefined);
+		// The next turn starts from nothing, even inside the previous hold window.
+		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working");
+	});
+
+	it("replaces an earlier tool with the one that ran after it", () => {
+		const { clock, machine } = started();
+		machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] }));
+		clock.at += 30;
+		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working: bash");
+		clock.at += 30;
+		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["edit"] })), "working: edit");
+		clock.at += 30;
+		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working: edit");
+	});
+
+	it("lets compacting and retrying outrank the remembered tool, and says what stage it is in otherwise", () => {
+		const { clock, machine } = started();
+		machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] }));
+		clock.at += 10;
+		assert.equal(machine.label(status({ runStatus: "compacting", busy: true })), "compacting context");
+		assert.equal(machine.label(status({ runStatus: "retrying", busy: true })), "retrying");
+		// A stage is later activity than the tool, so the old name does not come back after it.
+		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working");
+		assert.equal(machine.label(status({ runStatus: "idle", busy: true })), "working");
+		assert.equal(machine.label(status({})), undefined);
+		assert.equal(machine.label(undefined), undefined);
 	});
 });

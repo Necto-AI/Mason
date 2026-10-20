@@ -71,8 +71,11 @@ reader needs arrives, and a secret planted in a tool's arguments and output does
 ### 2.3 The working line
 
 `src/web/lib/working.ts` turns `AgentStatus` into one line under the transcript: `working`, `working: bash`,
-`working: bash, edit`, `compacting context`, `retrying`; nothing when idle. A tool name is the whole of what a reader is
-told about a running tool — visible work, no exposure of what the work touches.
+`compacting context`, `retrying`; nothing when idle. The line names the latest tool call of the turn and keeps any name
+that has not yet had a full `TOOL_LABEL_HOLD_MS` (1 s) on the line until it does, so a tool that returns in
+milliseconds is read once instead of flashing; `compacting context` and `retrying` outrank it, and it clears with the
+turn. A tool name is the whole of what a reader is told about a running tool — visible work, no exposure of what the
+work touches.
 
 ### 2.4 What is gone, and why
 

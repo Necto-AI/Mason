@@ -6,7 +6,7 @@
  * running turn, and a status. Reasoning, tool calls and tool output are not part of the contract, so this file cannot
  * show them even by accident.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentStatus, QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import { connectAgent, type AgentConnection } from "./client.ts";
@@ -17,7 +17,7 @@ import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
 import { probeSession, type SessionDevice, socketUrl } from "./lib/session.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
-import { workingLabel } from "./lib/working.ts";
+import { createWorkingMachine } from "./lib/working.ts";
 import "./styles/tokens.css";
 import "./styles/chat.css";
 
@@ -151,7 +151,20 @@ function App() {
 	);
 
 	const busy = status?.busy ?? false;
-	const working = workingLabel(status);
+	// One machine per mounted app: its memory of the last tool is the whole point, so a fresh one per render would
+	// reproduce the flicker. The machine answers from the status; this effect feeds it and wakes it when a held name
+	// has had its time.
+	const workingMachine = useMemo(() => createWorkingMachine(), []);
+	const [working, setWorking] = useState<string | undefined>(undefined);
+	// Before paint: a turn that just ended should not leave the previous line on screen for a frame.
+	useLayoutEffect(() => {
+		const apply = () => setWorking(workingMachine.label(status));
+		apply();
+		const remaining = workingMachine.holdRemainingMs();
+		if (remaining === undefined) return;
+		const timer = setTimeout(apply, remaining);
+		return () => clearTimeout(timer);
+	}, [workingMachine, status]);
 
 	return (
 		<div id="app">
