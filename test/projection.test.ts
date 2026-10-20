@@ -153,16 +153,52 @@ describe("the transcript the client is sent", () => {
 		assert.deepEqual(committed, [{ kind: "delivered", id: "m1", text: "Half a sentence." }]);
 	});
 
-	it("sends nothing at all for a turn that only worked", () => {
+	it("sends nothing for the round that only worked", () => {
+		// A tool round in flight: the reader keeps watching the working dots, and the round's calls are not a message.
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Do the thing." }]),
-				assistant(2, [{ type: "thinking", thinking: "planning" }, call("bash", { command: "ls" }, "c1")]),
+				assistant(2, [{ type: "thinking", thinking: "planning" }, call("bash", { command: "ls" }, "c1")], {
+					stopReason: "toolUse",
+				}),
 				result(3, "c1", "file.txt"),
-				assistant(4, [{ type: "text", text: "Done, nothing to report." }]),
 			]),
 		);
 		assert.deepEqual(transcript, [{ kind: "user", id: "1", text: "Do the thing." }]);
+	});
+
+	it("says the agent finished without a message, rather than leaving the turn blank", () => {
+		// The delivery gate already gave this turn a second chance. Saying so is the last thing between the reader and
+		// a chat that looks like it is still thinking.
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: "How many items are in notes.md?" }]),
+				assistant(2, [{ type: "thinking", thinking: "I read it earlier." }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "How many items are in notes.md?" },
+			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
+		]);
+		// The answer the model wrote is still working notes, not a message: the wire is unchanged.
+		assert.ok(!JSON.stringify(transcript).includes("I read it earlier"));
+	});
+
+	it("does not call an answer that carries its own delivery silent", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: "Anything new?" }]),
+				assistant(2, [{ type: "text", text: "Notes." }, call(MESSAGE_TOOL, { message: "Nothing new." }, "m1")], {
+					stopReason: "toolUse",
+				}),
+				result(3, "m1", "delivered"),
+				assistant(4, [{ type: "text", text: "Nothing else to report." }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Anything new?" },
+			{ kind: "delivered", id: "m1", text: "Nothing new." },
+		]);
 	});
 });
 

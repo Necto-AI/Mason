@@ -11,7 +11,17 @@ import { Type } from "typebox";
  * side of the wire only.
  */
 export const MESSAGE_TOOL = "send_to_user";
+export const WIDGET_TOOL = "generateSandboxedUi";
 export const HOOK_ENTRY_KIND = "app.hook";
+
+/**
+ * What the delivery gate says to the model when a turn ends with nothing sent.
+ *
+ * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry whose
+ * text is exactly this: the reader never sees the reminder, only the answer it produces.
+ */
+export const DELIVERY_REMINDER = `[delivery] That turn ended without a \`send_to_user\` call, so nothing reached the reader: not your answer, not
+your notes, nothing at all. Send the answer now with \`send_to_user\`, in the words the user should read.`;
 
 export const HookSummarySchema = Type.Object({
 	id: Type.String(),

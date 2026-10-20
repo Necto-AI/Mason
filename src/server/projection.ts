@@ -12,11 +12,8 @@
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { HOOK_ENTRY_KIND, MESSAGE_TOOL } from "../shared/contract.ts";
+import { DELIVERY_REMINDER, HOOK_ENTRY_KIND, MESSAGE_TOOL, WIDGET_TOOL } from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
-
-/** The tool whose calls are user-facing artifacts rather than working notes. */
-export const WIDGET_TOOL = "generateSandboxedUi";
 
 /**
  * Whether a message says nothing: empty, whitespace only, or invisible characters alone.
@@ -90,10 +87,20 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	}
 
 	const items: TranscriptItem[] = [];
+	// Whether the reader has been told anything in the turn being read: a turn that ends without it is a silence the
+	// person would otherwise have to interpret.
+	let spoke = true;
 	for (const entry of entries) {
-		if (entry.kind === "pi.user") {
+		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND) {
 			const text = textOfMessage(messageOf(entry)).trim();
-			if (text !== "") items.push({ kind: "user", id: String(entry.id), text });
+			// The delivery gate's reminder is a user entry the model reads, not one the reader sent.
+			const reminder = entry.kind === "pi.user" && text === DELIVERY_REMINDER.trim();
+			if (!reminder) spoke = false;
+			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
+			// is not part of the conversation.
+			if (entry.kind === "pi.user" && text !== "" && !reminder) {
+				items.push({ kind: "user", id: String(entry.id), text });
+			}
 			continue;
 		}
 		if (entry.kind === "pi.assistant") {
@@ -101,6 +108,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 			const failed = (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "error";
 			if (failed && items[items.length - 1]?.kind !== "notice") {
 				items.push({ kind: "notice", id: `failed:${entry.id}`, text: "Something went wrong, and the turn did not finish." });
+				spoke = true;
 			}
 			for (const call of callsOf(messageOf(entry))) {
 				if (typeof call.id !== "string") continue;
@@ -112,6 +120,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 					const text = typeof args.message === "string" ? args.message : "";
 					// A blank message is not a message: the renderer would pad it into an empty bubble.
 					if (isBlank(text)) continue;
+					spoke = true;
 					const failed = outcomeFailed(outcomes, call.id);
 					items.push({
 						kind: "delivered",
@@ -122,6 +131,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 					continue;
 				}
 				if (call.name === WIDGET_TOOL && !outcomeFailed(outcomes, call.id)) {
+					spoke = true;
 					items.push({
 						kind: "widget",
 						id: call.id,
@@ -129,6 +139,22 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 						content: contentFromToolCall(args as never, true) satisfies OpenGenUIContent,
 					});
 				}
+			}
+			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
+			// not speech either: only the calls this file forwards above count as having said something.
+			if (
+				!failed &&
+				!spoke &&
+				(messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop"
+			) {
+				// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
+				// person wondering whether the agent is working or gone.
+				items.push({
+					kind: "notice",
+					id: `silent:${entry.id}`,
+					text: "The agent finished without sending you a message.",
+				});
+				spoke = true;
 			}
 			continue;
 		}
