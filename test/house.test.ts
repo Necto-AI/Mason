@@ -45,6 +45,7 @@ test("housePaths() follows MASON_HOME and joins soul, profile, log and skills", 
 			profile: join(home, "profile.md"),
 			logDir: join(home, "log"),
 			skillsDir: join(home, "skills"),
+			workspaceDir: join(home, "workspace"),
 		});
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;
@@ -73,12 +74,13 @@ test("a leading ~ in MASON_HOME is a home directory, not a directory named ~", (
 	}
 });
 
-test("ensureHouse() creates log/ and skills/ and writes the default soul", async () => {
+test("ensureHouse() creates log/, skills/ and the workspace the agent works in", async () => {
 	const paths = housePaths(join(await tempDir("mason-house-ensure-"), "home"));
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
 
 	assert.ok((await stat(paths.logDir)).isDirectory(), "the log directory exists");
 	assert.ok((await stat(paths.skillsDir)).isDirectory(), "the skills directory exists");
+	assert.ok((await stat(paths.workspaceDir)).isDirectory(), "the agent has a workspace of its own");
 	assert.equal((await readFile(paths.soul, "utf8")).trim(), "SOUL FROM THE PRODUCT");
 });
 
