@@ -47,7 +47,6 @@ export const AgentStatusSchema = Type.Object({
 	activeRunTaskId: Type.Optional(Type.String()),
 	/** The tools of the running round, by name. No arguments, no output: what runs is not what the reader reads. */
 	runningTools: Type.Array(Type.String()),
-	sandboxedUiEnabled: Type.Boolean(),
 	model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
 	cwd: Type.Optional(Type.String()),
 	hooks: Type.Array(HookSummarySchema),
@@ -57,7 +56,6 @@ export type AgentStatus = {
 	busy: boolean;
 	activeRunTaskId?: string;
 	runningTools: string[];
-	sandboxedUiEnabled: boolean;
 	model?: { provider: string; modelId: string };
 	cwd?: string;
 	hooks: HookSummary[];
@@ -147,7 +145,6 @@ export const AgentService = remote("personal.agent", {
 					Type.Object({ submissionId: Type.Number() }),
 				),
 				toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
-				setSandboxedUiEnabled: method(Type.Object({ enabled: Type.Boolean() })),
 			},
 		},
 	},

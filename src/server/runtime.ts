@@ -26,17 +26,27 @@ import {
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
-import { AgentIdentity } from "./extensions/agent-identity.ts";
 import { Delivery } from "./extensions/delivery.ts";
+import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
+import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
+import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
- * agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is opt-in.
+ * agent reaches the reader, so no conversation may be without it.
  */
-export const BASE_EXTENSIONS: readonly Extension[] = [CodingTools, AgentIdentity, Delivery];
-export const SANDBOXED_UI_EXTENSION: Extension = GenerateSandboxedUiExtension;
+export const BASE_EXTENSIONS: readonly Extension[] = [
+	CodingTools,
+	// The one extension with sections: every section of the prompt is declared in `prompt.ts`, in order.
+	Prompt,
+	Memory,
+	Delivery,
+	// Always on: the client renders a widget whenever one arrives, so hiding the tool protected nothing and a tool list
+	// that changes between turns breaks the prompt cache.
+	GenerateSandboxedUiExtension,
+];
 
 export interface AgentModelRef {
 	provider: string;
@@ -53,8 +63,6 @@ export interface AgentRuntime {
 	/** `false` when the model access is the offline faux provider, so the UI can say so. */
 	readonly modelIsFaux: boolean;
 	conversation(): Promise<Conversation>;
-	sandboxedUiEnabled(): boolean;
-	setSandboxedUiEnabled(enabled: boolean): Promise<void>;
 	viewState(context: Context): Promise<AttachedReplicatedState<ConversationView>>;
 	close(): Promise<void>;
 }
@@ -65,6 +73,8 @@ export interface OpenAgentRuntimeOptions {
 	/** Model access built by the caller (tests script the faux provider); default `resolveModelAccess`. */
 	readonly modelAccess?: ResolvedModel;
 	readonly workspaceDir?: string;
+	/** Where `~/.mason` is; tests point it at a temporary directory. */
+	readonly houseHome?: string;
 	/** `memory` keeps everything in RAM: tests and throwaway runs. */
 	readonly storage?: "sqlite" | "memory";
 	readonly storageOverride?: Storage;
@@ -72,7 +82,6 @@ export interface OpenAgentRuntimeOptions {
 	readonly model?: AgentModelRef;
 	/** `true` (or `PI_FAUX_MODEL=1`) plays the model offline: deterministic tests and UI checks. */
 	readonly faux?: boolean;
-	readonly enableSandboxedUi?: boolean;
 	readonly env?: RuntimeEnvManager;
 	readonly onReport?: (error: unknown) => void;
 	/** Extra extensions installed in the registry before the conversation is created. */
@@ -130,7 +139,11 @@ export async function openAgentRuntime(
 ): Promise<AgentRuntime> {
 	const dataDir = options.dataDir ?? ".data";
 	const workspaceDir = options.workspaceDir ?? process.cwd();
-	const sandboxedUiEnabled = options.enableSandboxedUi ?? process.env.ENABLE_SANDBOXED_UI === "1";
+
+	// The agent's home: its soul, its profile, its log and its skills. Created once, and never overwritten.
+	const house = configureHouse(housePaths(options.houseHome));
+	await ensureHouse(house, DEFAULT_SOUL);
+	await ensureRepository(house.home);
 
 	const storage =
 		options.storageOverride ??
@@ -138,11 +151,7 @@ export async function openAgentRuntime(
 
 	const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options));
 
-	const extensionList: readonly Extension[] = [
-		...BASE_EXTENSIONS,
-		...(options.extensions ?? []),
-		SANDBOXED_UI_EXTENSION,
-	];
+	const extensionList: readonly Extension[] = [...BASE_EXTENSIONS, ...(options.extensions ?? [])];
 	const registry: Registry = createRegistry();
 	for (const extension of extensionList) registry.install(extension);
 
@@ -159,8 +168,10 @@ export async function openAgentRuntime(
 		// between them, because nothing here can rank a fired hook against a wish the reader typed.
 		followUpMode: options.settings?.followUpMode ?? "all",
 		steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
-		// The base selection leaves `sandboxed-ui` out until a conversation adds it.
-		extensions: selectionFor(extensionList, sandboxedUiEnabled),
+		// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
+		// every wake-up from re-paying for the whole prefix.
+		stream: { ...options.settings?.stream, cacheRetention: options.settings?.stream?.cacheRetention ?? "long" },
+		extensions: extensionList,
 	};
 
 	const harness = await Harness.open(
@@ -183,11 +194,7 @@ export async function openAgentRuntime(
 	for (const hook of builtinHooks()) hooks.define(hook);
 
 	const root = await harness.root(context, {
-		agent: {
-			model: ref,
-			cwd: workspaceDir,
-			extensions: selectionFor(extensionList, sandboxedUiEnabled),
-		},
+		agent: { model: ref, cwd: workspaceDir, extensions: extensionList },
 	});
 	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
 	// would leave the conversation without it. A failed repair is a failed guarantee, so the server does not start
@@ -203,7 +210,6 @@ export async function openAgentRuntime(
 	// Picks up a run the last process left unfinished.
 	harness.resume();
 
-	let enabled = sandboxedUiEnabled;
 	return {
 		harness,
 		rootId: root.id,
@@ -213,11 +219,6 @@ export async function openAgentRuntime(
 		model: ref,
 		modelIsFaux: faux,
 		conversation: () => Promise.resolve(root),
-		sandboxedUiEnabled: () => enabled,
-		async setSandboxedUiEnabled(next) {
-			enabled = next;
-			await root.configure({ extensions: selectionFor(extensionList, next) }, BACKGROUND_CONTEXT);
-		},
 		viewState: (viewContext) => root.viewState(viewContext),
 		async close() {
 			await hooks.close();
@@ -231,9 +232,8 @@ export async function openAgentRuntime(
  * Return the base extensions a stored explicit selection lacks, appended in `BASE_EXTENSIONS` order.
  *
  * Only `BASE_EXTENSIONS` are unconditional, and no conversation may be without `delivery`, so a `pi.agent` doc that
- * predates one of them — an array is used verbatim — gets it back on open. `sandboxed-ui` is not a base extension and
- * stays out; the stored order is kept and nothing is pruned. An unset or `{ add, remove }` selection already unions
- * with the settings, so it needs nothing.
+ * predates one of them — an array is used verbatim — gets it back on open. The stored order is kept and nothing is
+ * pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
  */
 async function appendMissingBaseExtensions(root: Conversation, context: Context): Promise<void> {
 	await root.commit(async (tx) => {
@@ -242,11 +242,6 @@ async function appendMissingBaseExtensions(root: Conversation, context: Context)
 		const missing = BASE_EXTENSIONS.filter((extension) => !stored.includes(extension.name));
 		if (missing.length > 0) stored.push(...missing.map((extension) => extension.name));
 	}, context);
-}
-
-/** The explicit extension selection: objects, so `configure` records their names and nothing stale survives. */
-function selectionFor(extensions: readonly Extension[], sandboxedUi: boolean): readonly Extension[] {
-	return extensions.filter((extension) => sandboxedUi || extension.name !== SANDBOXED_UI_EXTENSION.name);
 }
 
 async function openSqliteStorage(path: string): Promise<Storage> {

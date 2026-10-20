@@ -119,7 +119,7 @@ that a reader needs. `style.css` kept its chat sections minus the trace, tool-ro
 
 ## 4. Actions
 
-`AgentService` stays as-is — the same methods (`submit`, `withdrawSubmission`, `abort`, `reset`, `compact`, `fireHook`, `toggleHook`, `setSandboxedUiEnabled`) plus one added optional field, `fireHook.requestId?`: a caller that already holds an event identity passes it and that fire is deduplicated exactly, while a control pressed in the transcript passes none and is a gesture of its own.
+`AgentService` stays as-is — the same methods (`submit`, `withdrawSubmission`, `abort`, `reset`, `compact`, `fireHook`, `toggleHook`) plus one added optional field, `fireHook.requestId?`: a caller that already holds an event identity passes it and that fire is deduplicated exactly, while a control pressed in the transcript passes none and is a gesture of its own.
 
 - Composer: idle → one send button → `submit({ content })`. Busy → two send buttons, matching the backend's queue modes exactly (`applyBoundary` in durable: steers at the `postTools` boundary, follow-ups only at `final`):
   - **Steer** → `submit({ content, whenBusy: "steer" })` — placed when the current tool round ends (before the next model step); if the generation produces no tools, it lands at run end.
