@@ -3,7 +3,7 @@
  * agent speak first, and a run interrupted by a restart picks up where it stopped.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -47,6 +47,7 @@ function openFor(
 	return openAgentRuntime(BACKGROUND_CONTEXT, {
 		dataDir: join(directory, "data"),
 		workspaceDir: directory,
+		houseHome: join(directory, "house"),
 		storage: options.storage ?? "sqlite",
 		modelAccess: access,
 		extensions: options.extensions,
@@ -85,7 +86,9 @@ function sectionsOf(message: unknown): Record<string, string | null> {
 describe("durable harness + pi-env", () => {
 	it("runs write, edit, read, and bash through the pi-env daemon", async () => {
 		const directory = await tempDir("pda-env-");
-		await writeFile(join(directory, "SOUL.md"), "You are SOUL-MARKER, a test agent.\n");
+		// The soul is a file in the agent's home, not in the workspace.
+		await mkdir(join(directory, "house"), { recursive: true });
+		await writeFile(join(directory, "house", "soul.md"), "You are SOUL-MARKER, a test agent.\n");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
 			toolCall("write", { path: "note.txt", content: "hello world\n" }, "w"),
@@ -115,7 +118,7 @@ describe("durable harness + pi-env", () => {
 			assert.match(textOf(toolResults[2]?.model?.[0]), /hello durable/);
 			assert.equal(entries.filter((entry) => entry.kind === "pi.assistant").length, 5);
 
-			// `SOUL.md` from the workspace and the working directory reach the system prompt.
+			// The home's `soul.md` and the working directory reach the system prompt.
 			const system = entries
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))

@@ -6,6 +6,8 @@ A proactive, always-on personal agent built on `@earendil-works/pi-durable`, `@e
 
 Full architecture, contracts, and milestone specifications live in [`docs/SPEC.md`](docs/SPEC.md). Read `docs/SPEC.md` before writing code.
 
+The agent lives in `~/.mason/`: `soul.md` is the first section of its system prompt, `profile.md` is who it works for (agent-managed, always resident), `log/YYYY-MM-DD.md` holds dated facts one per line, and `skills/` holds its own instructions. In the repo, `skills/` is what mason ships — `skills/generative-ui/SKILL.md` is the widget manual the prompt only points at — and a personal skill of the same name in `~/.mason/skills/` shadows it; both roots are indexed in the prompt and read on demand. `src/server/house.ts` owns that layout; `MASON_HOME` relocates the home that every reader and writer resolves, and the runtime's `houseHome` option is where it is created — tests point both at a temporary directory, which is how they stay out of the real home.
+
 The browser client is the chat area of `sibling` re-implemented in React: [`docs/UI-PLAN.md`](docs/UI-PLAN.md) is the porting plan, the rendering model and the decisions log. **The client is sent the reader's transcript, never the conversation:** `src/server/projection.ts` derives `transcript` / `queued` / `agentStatus` from the durable view, and reasoning, tool calls, tool arguments and tool output do not cross the wire (`test/projection.test.ts` pins both halves). Add a new user-facing surface by naming it there first — a new tool or entry kind is invisible until the whitelist says otherwise. A root `npm install` prunes `vendor/pi`'s nested dependencies (`scripts/verify-vendor.mjs` repairs them on the next install).
 
 ## Non-Negotiable Rules

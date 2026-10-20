@@ -11,6 +11,9 @@
  * gate that keeps them quiet.
  */
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -57,6 +60,11 @@ function managerWithClock(clock: TestClock, onReport?: (error: unknown) => void)
 	});
 }
 
+/** A throwaway home: the suite must never create or read the developer's `~/.mason`. */
+function tempHouse(): Promise<string> {
+	return mkdtemp(join(tmpdir(), "pda-hooks-"));
+}
+
 /** What every identity test fires. No interval: nothing schedules it, so only the test's own calls submit. */
 const digest = {
 	id: "digest",
@@ -83,6 +91,7 @@ async function withFiringManager(
 	faux.setResponses(Array.from({ length: 8 }, (_, index) => fauxAssistantMessage(fauxText(`answer ${index}`))));
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
 		storage: "memory",
+		houseHome: await tempHouse(),
 		modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
 		onReport: () => {},
 	});
@@ -106,6 +115,7 @@ async function hookEntryCount(runtime: AgentRuntime): Promise<number> {
 async function withRuntime(run: (runtime: AgentRuntime) => Promise<void>): Promise<void> {
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
 		storage: "memory",
+		houseHome: await tempHouse(),
 		faux: true,
 		onReport: () => {},
 	});
