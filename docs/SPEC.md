@@ -124,7 +124,11 @@ you everything the agent is told. A test fails if another base extension grows a
 
 Section text is one of three kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
 `profile.md`), a **computation** over the filesystem (`skills`), or a **constant** in `prompt.ts` (the guidelines, the
-delivery invariant, the widget pointer). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
+delivery invariant, the widget pointer).
+
+There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
+tree so it can change its own extensions, themes and skills; mason's agent is not meant to have that. A test asserts
+the rendered prompt names no path into pi, no documentation tree, and no `docs` section key (§6). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
 what the runtime installs.
 
 2. **`GenerateSandboxedUiExtension` (`sandboxed-ui.ts`):**

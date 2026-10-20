@@ -315,3 +315,24 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"generative_ui",
 	]);
 });
+
+/**
+ * pi's own default prompt carries a `docs` section pointing at its README and `docs/` tree, so a coding agent can read
+ * how to change its own extensions and skills. mason's agent is not meant to have that: its prompt names the files it
+ * may read (its skills), and nothing about the machinery that runs it.
+ */
+test("the prompt never points the agent at pi's docs or at its own source", async () => {
+	const rendered = (
+		await Promise.all(
+			PROMPT_SECTIONS.map((promptSection) =>
+				renderSection(promptSection, { env: { cwd: "/home/denis/dev/mason" } }),
+			),
+		)
+	)
+		.filter((text) => text !== undefined)
+		.join("\n");
+	assert.ok(rendered.length > 0);
+	assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
+	assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
+	assert.ok(!promptSectionKeys().includes("docs"), "no docs section exists to be filled later");
+});
