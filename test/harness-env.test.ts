@@ -14,6 +14,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
+import { currentHouse } from "../src/server/house.ts";
 import { projectTranscript } from "../src/server/projection.ts";
 
 const directories = new Set<string>();
@@ -100,6 +101,10 @@ describe("durable harness + pi-env", () => {
 
 		const runtime = await openFor(directory, access);
 		try {
+			// The home the runtime opened is the one the prompt and the memory tools resolve through `currentHouse()`: a
+			// `remember` write must land here, not in the developer's real home.
+			assert.equal(currentHouse().home, join(directory, "house"));
+
 			const settled = await (
 				await (await runtime.conversation()).submit({ type: "input", content: "Leave a note." }, BACKGROUND_CONTEXT)
 			).wait(BACKGROUND_CONTEXT);
@@ -167,7 +172,7 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			assert.match(system, /Only messages sent via `send_to_user` are seen by the user/);
+			assert.match(system, /the chat renders only messages sent with `send_to_user`/);
 		} finally {
 			await runtime.close();
 		}

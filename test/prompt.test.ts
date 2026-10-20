@@ -309,10 +309,13 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"preamble",
 		"cwd",
 		"proactive_guidelines",
-		"delivery",
 		"skills",
 		"profile",
 		"generative_ui",
+		// Last because the rule that decides whether the reader hears anything should be closest to the turn. The
+		// eval suite measured the difference: a fact recalled in a later turn was delivered 0/2 times when this
+		// section sat fourth, and once it moved here.
+		"delivery",
 	]);
 });
 

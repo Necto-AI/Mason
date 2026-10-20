@@ -84,8 +84,20 @@ export interface OpenAgentRuntimeOptions {
 	readonly faux?: boolean;
 	readonly env?: RuntimeEnvManager;
 	readonly onReport?: (error: unknown) => void;
-	/** Extra extensions installed in the registry before the conversation is created. */
+	/** Installed in addition to the base extensions. */
 	readonly extensions?: readonly Extension[];
+	/**
+	 * What the root conversation selects, when something other than the whole installed set should run.
+	 *
+	 * Tests and evals install a tool and then want the conversation without `coding-tools`, so a stub can stand in for
+	 * `bash` without the real one being offered too.
+	 */
+	readonly selection?: readonly Extension[];
+	/**
+	 * Whether to append missing base extensions to a stored explicit selection. Default true, because `delivery` must
+	 * never be absent from a real conversation; tests and evals turn it off when a narrowed selection is the point.
+	 */
+	readonly repairBase?: boolean;
 	readonly settings?: HarnessSettings;
 }
 
@@ -171,7 +183,7 @@ export async function openAgentRuntime(
 		// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
 		// every wake-up from re-paying for the whole prefix.
 		stream: { ...options.settings?.stream, cacheRetention: options.settings?.stream?.cacheRetention ?? "long" },
-		extensions: extensionList,
+		extensions: options.selection ?? extensionList,
 	};
 
 	const harness = await Harness.open(
@@ -194,13 +206,13 @@ export async function openAgentRuntime(
 	for (const hook of builtinHooks()) hooks.define(hook);
 
 	const root = await harness.root(context, {
-		agent: { model: ref, cwd: workspaceDir, extensions: extensionList },
+		agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
 	});
 	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
 	// would leave the conversation without it. A failed repair is a failed guarantee, so the server does not start
 	// with it — but it also does not start with the hooks and the env manager left open.
 	try {
-		await appendMissingBaseExtensions(root, context);
+		if (options.repairBase !== false) await appendMissingBaseExtensions(root, context);
 	} catch (error) {
 		await hooks.close();
 		await envManager.close();
