@@ -16,6 +16,7 @@ import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { WebSocket } from "ws";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { promptSectionKeys } from "../src/server/prompt.ts";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
@@ -773,6 +774,11 @@ describe("chord client <-> server", () => {
 			// The resident section is a pointer to the skill, not the manual: the parameter order, the design system
 			// and the sandbox API live in `skills/generative-ui/SKILL.md` and cost nothing until they are read.
 			const prompt = renderedSections(state.serverView);
+			assert.deepEqual(
+				[...prompt.keys()],
+				promptSectionKeys(),
+				"the model reads exactly the sections prompt.ts declares, in that order",
+			);
 			const rendered = [...prompt.values()].join("\n");
 			assert.match(prompt.get("generative_ui") ?? "", /generative-ui/, "the resident section names the skill");
 			assert.match(rendered, /generative-ui/, "the widget contract is reachable from the prompt");
