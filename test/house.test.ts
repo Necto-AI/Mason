@@ -46,6 +46,8 @@ test("housePaths() follows MASON_HOME and joins soul, profile, log and skills", 
 			logDir: join(home, "log"),
 			skillsDir: join(home, "skills"),
 			workspaceDir: join(home, "workspace"),
+			// The state lives in the home too: a transcript is not a property of the directory the server started in.
+			dataDir: join(home, "data"),
 		});
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;

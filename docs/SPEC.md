@@ -208,7 +208,7 @@ export interface EventHookConfig {
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
-- Opens SQLite storage at `.data/agent.sqlite` via `openNodeSqliteStorage` from `@earendil-works/pi-durable/storage/sqlite/node` (or `MemoryStorage` in tests).
+- Opens SQLite storage at `~/.mason/data/agent.sqlite` via `openNodeSqliteStorage` from `@earendil-works/pi-durable/storage/sqlite/node` (or `MemoryStorage` in tests). The directory is `MASON_DATA` when set, else `<home>/data`, and the file is `0600` (§4.1c): the transcript is not a property of the directory the server happened to be started from.
 - Model configuration:
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
@@ -231,8 +231,12 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 ├── config.json             # Credentials that may talk to the server: one hashed token per device (§4.1b)
 ├── log/2026-10-20.md       # Dated facts, one per line, read on demand
 ├── skills/<name>/SKILL.md  # Denis's own skills; they shadow the shipped ones
-└── workspace/              # The directory the agent works in; not the repo that runs it
+├── workspace/              # The directory the agent works in; not the repo that runs it
+└── data/                   # agent.sqlite and hooks.json: the state, in the home it describes (§4.1c)
 ```
+
+The home is `0700` and so is every directory in it; `soul.md` and `agent.sqlite` are `0600`. It holds a transcript of
+everything Denis said — that is not a thing to leave readable by every other account on the machine.
 
 `src/server/house.ts` owns the layout and every read and write; nothing else builds a path by hand. Opening the runtime
 creates the home if it is missing — `log/`, `skills/`, and `soul.md` from `DEFAULT_SOUL`, written once and never
@@ -475,6 +479,49 @@ cross the network in clear text: an SSH tunnel, or a TLS proxy, is the honest an
 network, and the machine boundary (§`docs/EXECUTION-TARGETS.md`) is where a real one lands. It also does not make
 *text* trustworthy: `authenticate` answers *may this caller speak*, and the answer to *should the agent obey what it
 said* is the fence in §3.3 — a payload arrives labelled as data, and a request inside it is a report, not a command.
+
+### 4.1c What a caller may spend, and what a tool can see
+
+The door decides *who may speak*; these are the bounds that hold after it has. Each one answers a cost a caller
+controls, and each is in `src/server/limits.ts` or `src/server/env.ts` rather than scattered through the handler.
+
+**Bytes.** `POST /api/hooks/:id/fire` reads at most `HOOK_BODY_MAX_BYTES` (32 KiB). `content-length` is checked first so
+an oversized body is refused without being received, and the running total is checked too, because a sender that chunks
+the body declares nothing. Over the cap: `413` with `{ error, maxBytes }`. A webhook body is a summary, a URL or a status
+line; 32 KiB is already generous for that.
+
+**Turns.** Fires are counted per hook id in a sliding window: `HOOK_FIRE_LIMIT` (6) per `HOOK_FIRE_WINDOW_MS` (60 s), and
+the refusal is `429` with `retry-after`, because a correct sender should retry rather than treat a budget as a failure.
+The window slides rather than resets, so a sender cannot spend the whole budget at the end of one window and again at the
+start of the next. Honest senders here fire hourly or daily; a sender that needs more than six fires a minute has a queue
+of the wrong shape. In memory and per process is the right scope: what it protects is this process's spending, so a
+restart that forgets the window also forgets the queue it was protecting.
+
+The counter lives in the fires, not in the hook, so it applies before the hook is looked up and before a body is read:
+an invented hook id spends one of the sender's six, which is what makes the limit a budget rather than a suggestion.
+
+**What a tool can see.** A tool call is arbitrary code in the agent's own shell, so anything the server carries in its
+environment is one `echo $NAME` away from the transcript and the provider: an API key exported for one experiment, a
+`DATABASE_URL`, a `MASON_*` switch. The `pi-env` daemon is therefore started through `env -i` with an allowlist —
+`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR` — and defaults for `PATH`, `HOME` and
+`LANG` when the server has none (`daemonCommand`/`daemonEnv`). `Connection` spawns with the parent's environment and has
+no option to change that, and `vendor/pi` is read-only here, so `env -i` is the mechanism rather than a vendor patch.
+`PI_ENV_*` is deliberately not passed: the parent consumes it to decide *where* to run, and a tool has no business
+knowing the host or the identity file.
+
+**Where the state is.** `~/.mason/data/`, not `.data` next to the code. `.data` made the agent's state a property of the
+shell it was started from: two checkouts ran two agents, a script started in a copy read the copy's conversation, and a
+throwaway server opened the real transcript while probing. A server that finds a `.data/agent.sqlite` beside it now says
+so instead of starting a second, empty-looking agent:
+
+```text
+[data] /home/denis/.mason/data
+[data] ignoring ./.data (an older home): move it with `mv .data /home/denis/.mason/data`
+```
+
+**What this does not do.** It does not sandbox the process: a tool still runs as the server's user, with that user's
+files. That is what the machine boundary is for (§`docs/EXECUTION-TARGETS.md`), and it is why the microVM is the last
+slice rather than a nicety.
 
 ### 4.2 Bridging `Conversation.viewState()` to Chord State on the Server
 

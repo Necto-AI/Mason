@@ -2,6 +2,7 @@
  * HTTP + WebSocket server: a Chord host serving `AgentService` to browsers, the webhook trigger for
  * event hooks, and the built web client.
  */
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
@@ -30,6 +31,14 @@ import {
 } from "./auth.ts";
 import { currentHouse } from "./house.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
+import {
+	createFireLimiter,
+	type FireLimiter,
+	HOOK_BODY_MAX_BYTES,
+	HOOK_FIRE_LIMIT,
+	parseJsonObject,
+	readBodyCapped,
+} from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
@@ -185,9 +194,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const home = currentHouse().home;
 	const store = createTokenStore(home);
 	const { token: pairingToken } = await ensureToken(home);
+	// One limiter for the process: its budget is what this process may spend, so it is shared across requests.
+	const fires = createFireLimiter();
 
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir, store).catch((error: unknown) => {
+		handleRequest(request, response, runtime, webDir, store, fires).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
@@ -218,6 +229,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const address = server.address();
 	const boundPort = typeof address === "object" && address !== null ? address.port : port;
 	console.log(`mason listening on http://${hostname}:${boundPort}`);
+	console.log(`[data] ${runtime.dataDir}`);
+	// A state directory next to the code was the old default; saying so is worth more than silently starting a second
+	// agent that looks empty. Only for a server that took the default: a caller that passed `dataDir` (a test, a script)
+	// has already decided where its state is.
+	if (options.dataDir === undefined && resolve(runtime.dataDir) !== resolve(".data") && existsSync(join(".data", "agent.sqlite"))) {
+		console.warn(`[data] ignoring ./.data (an older home): move it with \`mv .data ${runtime.dataDir}\``);
+	}
 	if (pairingToken !== undefined) {
 		console.log(`[auth] minted a token for this home; open one of these once, per browser or device:`);
 		for (const url of pairingUrls(hostname, boundPort, pairingToken)) console.log(`[auth]   ${url}`);
@@ -258,6 +276,7 @@ async function handleRequest(
 	runtime: AgentRuntime,
 	webDir: string,
 	store: TokenStore,
+	fires: FireLimiter,
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 	// Every response carries these, refusals and static files alike: the shell has no inline script of its own, and a
@@ -311,10 +330,28 @@ async function handleRequest(
 
 	const fire = /^\/api\/hooks\/([^/]+)\/fire$/.exec(url.pathname);
 	if (fire !== null && request.method === "POST") {
-		const body = await readJson(request);
+		const hookId = decodeURIComponent(fire[1] as string);
+		// Before the body is read and before a turn is spent: one sender cannot fill the queue or the bill. The refusal
+		// names the wait, so a correct sender retries instead of treating it as a permanent failure.
+		const wait = fires.take(hookId);
+		if (wait !== undefined) {
+			console.warn(`[hooks] refused a fire of ${hookId}: ${HOOK_FIRE_LIMIT} fires a minute is the budget`);
+			response.writeHead(429, {
+				"content-type": "application/json; charset=utf-8",
+				"retry-after": String(wait),
+			});
+			response.end(JSON.stringify({ error: "too many fires", retryAfterSeconds: wait }));
+			return;
+		}
+		const text = await readBodyCapped(request);
+		if (text === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: HOOK_BODY_MAX_BYTES }));
+			return;
+		}
+		const body = parseJsonObject(text);
 		const payload =
 			typeof body.message === "string" ? body.message : typeof body.data === "string" ? body.data : undefined;
-		const hookId = decodeURIComponent(fire[1] as string);
 		// A webhook delivery has an identity. A sender that names it is exact and permanent; one that cannot is one
 		// event per body per window, so its queue's redelivery collapses while tomorrow's identical body still fires.
 		const senderId = senderRequestId(request, body);
@@ -446,17 +483,6 @@ function notFound(response: ServerResponse): void {
 	response.end("not found");
 }
 
-async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of request) chunks.push(chunk as Buffer);
-	if (chunks.length === 0) return {};
-	try {
-		const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-		return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
-	} catch {
-		return {};
-	}
-}
 
 /** The id a webhook sender gave its delivery: in the JSON body or the `x-request-id` header, else none. */
 function senderRequestId(request: IncomingMessage, body: Record<string, unknown>): string | undefined {

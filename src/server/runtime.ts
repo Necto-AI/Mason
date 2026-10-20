@@ -2,7 +2,7 @@
  * Durable harness bootstrap: SQLite storage, model access (real providers or the faux provider),
  * the extension registry, the `pi-env` execution split, and the root conversation.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AttachedReplicatedState, Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -56,6 +56,8 @@ export interface AgentModelRef {
 export interface AgentRuntime {
 	readonly harness: Harness;
 	readonly rootId: ConversationId;
+	/** Where this process's state lives; the agent's home by default, not the directory it was started from. */
+	readonly dataDir: string;
 	readonly hooks: HooksManager;
 	readonly env: RuntimeEnvManager;
 	readonly workspaceDir: string;
@@ -68,7 +70,13 @@ export interface AgentRuntime {
 }
 
 export interface OpenAgentRuntimeOptions {
-	/** Where `.data/agent.sqlite` and `hooks.json` live. */
+	/**
+	 * Where `agent.sqlite` and `hooks.json` live. Defaults to `MASON_DATA`, else `<home>/data`.
+	 *
+	 * It used to default to `.data` in the current directory, which meant the agent's state was a property of the shell
+	 * it was started from: two checkouts ran two agents, a script run from a copy read the conversation in the copy,
+	 * and a throwaway server could open the real transcript. The state belongs to the home, so it lives in the home.
+	 */
 	readonly dataDir?: string;
 	/** Model access built by the caller (tests script the faux provider); default `resolveModelAccess`. */
 	readonly modelAccess?: ResolvedModel;
@@ -149,15 +157,14 @@ export async function openAgentRuntime(
 	context: Context,
 	options: OpenAgentRuntimeOptions = {},
 ): Promise<AgentRuntime> {
-	const dataDir = options.dataDir ?? ".data";
-
-	// The agent's home: its soul, its profile, its log, its skills, and the directory it works in.
+	// The agent's home: its soul, its profile, its log, its skills, its state, and the directory it works in.
 	// Created once, and never overwritten. The workspace is its own directory, not the code's: an agent that can edit
 	// the program that runs it is a different product.
 	const house = configureHouse(housePaths(options.houseHome));
 	await ensureHouse(house, DEFAULT_SOUL);
 	await ensureRepository(house.home);
 	const workspaceDir = options.workspaceDir ?? house.workspaceDir;
+	const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
 	const storage =
 		options.storageOverride ??
@@ -227,6 +234,7 @@ export async function openAgentRuntime(
 	return {
 		harness,
 		rootId: root.id,
+		dataDir,
 		hooks,
 		env: envManager,
 		workspaceDir,
@@ -259,6 +267,13 @@ async function appendMissingBaseExtensions(root: Conversation, context: Context)
 }
 
 async function openSqliteStorage(path: string): Promise<Storage> {
-	mkdirSync(join(path, ".."), { recursive: true });
-	return openNodeSqliteStorage(path);
+	mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
+	const storage = await openNodeSqliteStorage(path);
+	// SQLite creates the file with the process umask; the transcript inside it deserves the same 0600 as the config.
+	try {
+		chmodSync(path, 0o600);
+	} catch {
+		// No modes on this filesystem; nothing to set.
+	}
+	return storage;
 }
