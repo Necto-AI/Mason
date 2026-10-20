@@ -10,14 +10,18 @@
  * ├── profile.md              # who Denis is, agent-managed, always in the prompt
  * ├── log/2026-10-20.md       # dated facts, one per line, read on demand
  * ├── skills/<name>/SKILL.md  # same format as ~/dev/pi-setup/skills
- * └── workspace/              # the directory the agent works in, separate from the code that runs it
+ * ├── workspace/              # the directory the agent works in, separate from the code that runs it
+ * └── data/                   # agent.sqlite and hooks.json: the state, in the same home it describes
  * ```
  *
  * Config, plugins and hooks join the same directory later; keeping one home is the point.
+ *
+ * The home is `0700`, files in it `0600`: it holds a transcript of everything Denis said, which is not a thing to leave
+ * readable by every other account on the machine.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -31,6 +35,8 @@ export interface HousePaths {
 	readonly logDir: string;
 	readonly skillsDir: string;
 	readonly workspaceDir: string;
+	/** Where `agent.sqlite` and `hooks.json` live: inside the home, so one directory is the whole agent. */
+	readonly dataDir: string;
 }
 
 /**
@@ -62,6 +68,7 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		logDir: join(home, "log"),
 		skillsDir: join(home, "skills"),
 		workspaceDir: join(home, "workspace"),
+		dataDir: join(home, "data"),
 	};
 }
 
@@ -87,10 +94,24 @@ function pad(value: number): string {
  * from a constant nobody can edit. An existing file is never touched: it is Denis's.
  */
 export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promise<void> {
-	await mkdir(paths.logDir, { recursive: true });
-	await mkdir(paths.skillsDir, { recursive: true });
-	await mkdir(paths.workspaceDir, { recursive: true });
-	if (!existsSync(paths.soul)) await writeFile(paths.soul, `${defaultSoul}\n`, "utf8");
+	// `mode` only applies to directories this call creates, so an existing home is tightened explicitly: a home from
+	// before this rule is `0755`, and it is the transcript inside that matters, not the age of the directory.
+	await mkdir(paths.home, { recursive: true, mode: 0o700 });
+	await tighten(paths.home);
+	for (const directory of [paths.logDir, paths.skillsDir, paths.workspaceDir, paths.dataDir]) {
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		await tighten(directory);
+	}
+	if (!existsSync(paths.soul)) await writeFile(paths.soul, `${defaultSoul}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+/** Best effort: a home on a filesystem without Unix modes is still a home. */
+async function tighten(path: string): Promise<void> {
+	try {
+		await chmod(path, 0o700);
+	} catch {
+		// Nothing to do: the platform does not have modes to set.
+	}
 }
 
 /** A file's text, trimmed, or `undefined` when it is absent or empty. */

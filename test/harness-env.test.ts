@@ -145,6 +145,36 @@ describe("durable harness + pi-env", () => {
 		}
 	});
 
+	it("gives its daemon the allowlist, so a tool cannot read what the server carries in its environment", async () => {
+		const directory = await tempDir("pda-env-isolation-");
+		const { access, faux } = fauxAccess();
+		faux.setResponses([
+			toolCall("bash", { command: 'echo "secret=${MASON_ENV_LEAK_TEST:-absent}"; echo "path=${PATH:+set}"' }, "probe"),
+			toolCall("send_to_user", { message: "Probed the environment." }, "probed"),
+			fauxAssistantMessage(fauxText("Nothing else to report.")),
+		]);
+		// A secret in the server's own environment: an exported key, a database URL, a switch of ours. The model can run
+		// arbitrary commands, so anything reachable as `$NAME` is in the transcript and on its way to the provider.
+		process.env.MASON_ENV_LEAK_TEST = "leaked";
+		const runtime = await openFor(directory, access, { storage: "memory" });
+		try {
+			const submission = await (await runtime.conversation()).submit(
+				{ type: "input", content: "Check the environment." },
+				BACKGROUND_CONTEXT,
+			);
+			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
+			const probe = (await readEntries(runtime))
+				.filter(ToolResultEntry.is)
+				.find((entry) => (entry.model?.[0] as { toolName?: string }).toolName === "bash");
+			const text = textOf(probe?.model?.[0]);
+			assert.match(text, /secret=absent/, "the daemon did not inherit the server's environment");
+			assert.match(text, /path=set/, "a shell still has a PATH, or nothing else would run");
+		} finally {
+			delete process.env.MASON_ENV_LEAK_TEST;
+			await runtime.close();
+		}
+	});
+
 	it("send_to_user is offered in every conversation, and its call is the message the client renders", async () => {
 		const directory = await tempDir("pda-deliver-");
 		const { access, faux } = fauxAccess();
