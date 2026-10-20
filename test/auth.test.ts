@@ -11,12 +11,18 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { WebSocket } from "ws";
 import {
+	authenticate,
+	createTokenStore,
+	cookieValue,
+	deviceFromCookie,
 	ensureToken,
 	listTokens,
 	mintToken,
+	openSession,
 	presentedToken,
 	readConfig,
 	revokeToken,
+	sealSession,
 	verifyToken,
 } from "../src/server/auth.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
@@ -110,6 +116,74 @@ describe("tokens", () => {
 	});
 });
 
+describe("the browser's session", () => {
+	it("signs a cookie that names a device and carries no secret", async () => {
+		const home = await temporaryHome();
+		const minted = await mintToken(home, "browser");
+		const key = (await readConfig(home)).sessionKey;
+		assert.equal(typeof key, "string");
+
+		const value = sealSession(key as string, minted.record.id);
+		assert.ok(value.startsWith("v1.tok_"));
+		assert.ok(!value.includes(minted.token), "the token itself is never in the cookie");
+		assert.equal(openSession(key as string, value), minted.record.id);
+
+		// A cookie signed by another home, or with an id the sender chose, is not a session.
+		assert.equal(openSession(sealSession("z".repeat(43), minted.record.id), value), undefined);
+		assert.equal(openSession(key as string, "v1.tok_other.signature"), undefined);
+		assert.equal(openSession(key as string, "nonsense"), undefined);
+		assert.equal(openSession(key as string, `v2.${minted.record.id}.x`), undefined);
+	});
+
+	it("reads one cookie out of a header that holds several", () => {
+		assert.equal(cookieValue("a=1; mason_session=v1.tok_1.sig; b=2"), "v1.tok_1.sig");
+		assert.equal(cookieValue("mason_session="), "");
+		assert.equal(cookieValue(undefined), undefined);
+		assert.equal(cookieValue("other=1"), undefined);
+	});
+
+	it("resolves a cookie to a device, and to nothing once that device is revoked", async () => {
+		const home = await temporaryHome();
+		const minted = await mintToken(home, "browser");
+		const value = sealSession((await readConfig(home)).sessionKey as string, minted.record.id);
+		const request = { headers: { cookie: `mason_session=${value}` } } as never;
+
+		assert.equal(deviceFromCookie(request, await readConfig(home))?.label, "browser");
+		await revokeToken(home, minted.record.id);
+		assert.equal(deviceFromCookie(request, await readConfig(home)), undefined, "revoking a token ends its sessions");
+	});
+
+	it("applies a revoke to the next request, without a restart", async () => {
+		const home = await temporaryHome();
+		const browser = await mintToken(home, "browser");
+		const phone = await mintToken(home, "phone");
+		const store = createTokenStore(home);
+		const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` }, url: "/api/status" }) as never;
+
+		assert.equal((await authenticate(bearer(browser.token), store)).ok, true);
+		assert.equal((await authenticate(bearer(phone.token), store)).ok, true);
+
+		assert.equal(await revokeToken(home, browser.record.id), true);
+		assert.equal((await authenticate(bearer(browser.token), store)).ok, false, "the store is not a cache");
+		assert.equal((await authenticate(bearer(phone.token), store)).ok, true, "the other device keeps working");
+	});
+
+	it("refuses a foreign origin before it reads any credential", async () => {
+		const home = await temporaryHome();
+		const minted = await mintToken(home, "browser");
+		const store = createTokenStore(home);
+		const foreign = {
+			headers: {
+				authorization: `Bearer ${minted.token}`,
+				origin: "https://evil.example",
+				host: "127.0.0.1:8787",
+			},
+			url: "/api/status",
+		} as never;
+		assert.deepEqual(await authenticate(foreign, store), { ok: false, reason: "origin" });
+	});
+});
+
 /**
  * A socket the server closes before it can be used.
  *
@@ -161,23 +235,25 @@ function opens(url: string, headers: Record<string, string> = {}): Promise<strin
 }
 
 describe("the server's door", () => {
-	async function openServer(): Promise<RunningServer> {
+	async function openServer(): Promise<{ server: RunningServer; home: string }> {
 		const directory = await mkdtemp(join(tmpdir(), "pda-auth-server-"));
 		directories.add(directory);
-		return startServer({
+		const home = join(directory, "house");
+		const server = await startServer({
 			port: 0,
 			hostname: "127.0.0.1",
 			storage: "memory",
 			dataDir: join(directory, "data"),
 			workspaceDir: directory,
-			houseHome: join(directory, "house"),
+			houseHome: home,
 			faux: true,
 			onReport: () => {},
 		});
+		return { server, home };
 	}
 
 	it("refuses /api without a token and serves it with one", async () => {
-		const server = await openServer();
+		const { server } = await openServer();
 		try {
 			const anonymous = await fetch(`http://127.0.0.1:${server.port}/api/status`);
 			assert.equal(anonymous.status, 401);
@@ -204,7 +280,7 @@ describe("the server's door", () => {
 	});
 
 	it("refuses /api from a foreign origin even with the right token", async () => {
-		const server = await openServer();
+		const { server } = await openServer();
 		try {
 			const foreign = await fetch(`http://127.0.0.1:${server.port}/api/status`, {
 				headers: { authorization: `Bearer ${server.pairingToken}`, origin: "https://evil.example" },
@@ -221,7 +297,7 @@ describe("the server's door", () => {
 	});
 
 	it("closes the socket unless the client is paired and same-origin", async () => {
-		const server = await openServer();
+		const { server } = await openServer();
 		const base = `ws://127.0.0.1:${server.port}/`;
 		try {
 			await refused(base);
@@ -235,6 +311,101 @@ describe("the server's door", () => {
 				await opens(`${base}?token=${server.pairingToken}`, { origin: `http://127.0.0.1:${server.port}` }),
 				/"hello"/,
 			);
+		} finally {
+			await server.close();
+		}
+	});
+
+	/** The cookie a pairing link hands out, as a browser would keep it. */
+	async function pair(port: number, token: string): Promise<string> {
+		const response = await fetch(`http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`, {
+			redirect: "manual",
+		});
+		assert.equal(response.status, 302, "a pairing link is spent, not rendered");
+		const setCookie = response.headers.getSetCookie().join("\n");
+		assert.match(setCookie, /^mason_session=v1\.tok_[0-9a-f]+\./m);
+		return setCookie;
+	}
+
+	it("spends a pairing link into a cookie and redirects the token out of the URL", async () => {
+		const { server, home } = await openServer();
+		const port = server.port as number;
+		try {
+			const setCookie = await pair(port, server.pairingToken as string);
+			assert.match(setCookie, /HttpOnly/, "a script on this origin must not be able to read it");
+			assert.match(setCookie, /SameSite=Strict/, "and a cross-site request must not carry it");
+			assert.match(setCookie, /Path=\//);
+			assert.match(setCookie, /Max-Age=\d+/);
+			assert.doesNotMatch(setCookie, new RegExp(server.pairingToken as string), "the token is not the cookie");
+
+			const redirect = await fetch(`http://127.0.0.1:${port}/?token=${server.pairingToken}`, { redirect: "manual" });
+			assert.equal(redirect.headers.get("location"), "/");
+
+			const cookie = (setCookie.split(";")[0] as string).trim();
+			const session = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie } });
+			assert.equal(session.status, 200);
+			const [record] = await listTokens(home);
+			assert.deepEqual(await session.json(), { device: { id: record?.id, label: record?.label } });
+
+			// A link that is not one of ours is not a session: the shell still loads, unpaired.
+			const wrong = await fetch(`http://127.0.0.1:${port}/?token=mason_wrong_token_here`, { redirect: "manual" });
+			assert.equal(wrong.status, 200);
+			assert.equal(wrong.headers.getSetCookie().length, 0);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("serves the shell and its headers to nobody in particular", async () => {
+		const { server } = await openServer();
+		try {
+			const shell = await fetch(`http://127.0.0.1:${server.port}/`);
+			assert.equal(shell.status, 200, "the shell is public: it is the page that says \"not paired\"");
+			assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
+			assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
+			assert.equal(shell.headers.get("x-frame-options"), "DENY");
+			const csp = shell.headers.get("content-security-policy") ?? "";
+			assert.match(csp, /frame-ancestors 'none'/);
+			assert.match(csp, /default-src 'self'/);
+			assert.match(csp, new RegExp(`connect-src 'self' ws://127\\.0\\.0\\.1:${server.port}`));
+
+			for (const path of ["/api/health", "/api/status"]) {
+				const response = await fetch(`http://127.0.0.1:${server.port}${path}`);
+				assert.equal(response.headers.get("x-frame-options"), "DENY", `${path} carries the headers too`);
+			}
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("authenticates a socket with the cookie a browser would send", async () => {
+		const { server } = await openServer();
+		const base = `ws://127.0.0.1:${server.port}/`;
+		try {
+			const cookie = ((await pair(server.port, server.pairingToken as string)).split(";")[0] as string).trim();
+			assert.match(await opens(base, { cookie }), /"hello"/);
+			assert.match(await opens(base, { cookie, origin: `http://127.0.0.1:${server.port}` }), /"hello"/);
+			await refused(base, { cookie, origin: "https://evil.example" });
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("ends a paired browser's session when its token is revoked, mid-run", async () => {
+		const { server, home } = await openServer();
+		try {
+			const cookie = ((await pair(server.port, server.pairingToken as string)).split(";")[0] as string).trim();
+			assert.equal((await fetch(`http://127.0.0.1:${server.port}/api/session`, { headers: { cookie } })).status, 200);
+
+			const [record] = await listTokens(home);
+			assert.equal(await revokeToken(home, (record as { id: string }).id), true);
+
+			const after = await fetch(`http://127.0.0.1:${server.port}/api/session`, { headers: { cookie } });
+			assert.equal(after.status, 401, "no restart, no grace period");
+			const bearer = await fetch(`http://127.0.0.1:${server.port}/api/status`, {
+				headers: { authorization: `Bearer ${server.pairingToken}` },
+			});
+			assert.equal(bearer.status, 401, "the token that was just revoked is dead too");
 		} finally {
 			await server.close();
 		}

@@ -19,7 +19,15 @@ import {
 	type AgentStatus,
 } from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
-import { authenticate, ensureToken, pairingUrls, type TokenRecord } from "./auth.ts";
+import {
+	authenticate,
+	createTokenStore,
+	ensureToken,
+	pairingFromRequest,
+	pairingUrls,
+	type TokenRecord,
+	type TokenStore,
+} from "./auth.ts";
 import { currentHouse } from "./house.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
@@ -172,22 +180,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		};
 	});
 
-	// One owner, a few credentials. Read once per process: a token minted while the server runs is picked up by the
-	// next start, which is what `npm run token -- revoke` says.
-	const { token: pairingToken, records: tokens } = await ensureToken(currentHouse().home);
+	// One owner, a few credentials, and a session key for the browser's cookie. The store is the config file, read per
+	// request: a revoke lands on the next request rather than on the next restart, which is the moment it matters.
+	const home = currentHouse().home;
+	const store = createTokenStore(home);
+	const { token: pairingToken } = await ensureToken(home);
 
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir, tokens).catch((error: unknown) => {
+		handleRequest(request, response, runtime, webDir, store).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
 		});
 	});
 	const sockets = new WebSocketServer({ server });
-	// A socket is the reader: no token, no owner. Chord closes the link itself when the principal is `undefined`.
+	// A socket is the reader: no credential, no owner. Chord closes the link itself when the principal is `undefined`.
 	acceptWebSockets(sockets, host, {
-		principal: (request) => {
-			const auth = authenticate(request, tokens);
+		principal: async (request) => {
+			const auth = await authenticate(request, store);
 			if (!auth.ok) {
 				console.warn(`[auth] refused a socket (${auth.reason}) from ${request.headers.origin ?? "a program"}`);
 				return undefined;
@@ -211,8 +221,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	if (pairingToken !== undefined) {
 		console.log(`[auth] minted a token for this home; open one of these once, per browser or device:`);
 		for (const url of pairingUrls(hostname, boundPort, pairingToken)) console.log(`[auth]   ${url}`);
+		console.log(`[auth] the link sets a cookie and redirects to the bare page; the token stays out of the address bar`);
 	} else {
-		console.log(`[auth] ${tokens.length} token(s); add one with: npm run token -- add --label phone`);
+		const known = (await store.records()).length;
+		console.log(`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live)`);
 	}
 	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
 		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);
@@ -245,14 +257,30 @@ async function handleRequest(
 	response: ServerResponse,
 	runtime: AgentRuntime,
 	webDir: string,
-	tokens: readonly TokenRecord[],
+	store: TokenStore,
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+	// Every response carries these, refusals and static files alike: the shell has no inline script of its own, and a
+	// paired browser is never framed by someone else's page.
+	applySecurityHeaders(response, request.headers.host);
+
+	// A pairing link is the one time a token travels in a URL. Spend it into a cookie and send the browser to the same
+	// page without it: the token leaves the address bar before a single element renders.
+	if ((request.method ?? "GET") === "GET" && isShellPath(url.pathname)) {
+		const pairing = await pairingFromRequest(request, url, store);
+		if (pairing !== undefined) {
+			console.log(`[auth] paired ${pairing.tokenId} in this browser`);
+			response.writeHead(302, { location: withoutToken(url), "set-cookie": pairing.cookie });
+			response.end();
+			return;
+		}
+	}
 
 	// Everything under `/api` is the owner's, except the liveness probe. The static shell is public on purpose: it is
 	// a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
+	let device: TokenRecord | undefined;
 	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
-		const auth = authenticate(request, tokens);
+		const auth = await authenticate(request, store);
 		if (!auth.ok) {
 			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
 			response.writeHead(401, {
@@ -262,6 +290,12 @@ async function handleRequest(
 			response.end(JSON.stringify({ error: "unauthorized" }));
 			return;
 		}
+		device = auth.token;
+	}
+
+	// Who this browser is, for the shell to tell "not paired" from "paired but quiet". Behind the gate above.
+	if (url.pathname === "/api/session") {
+		return json(response, 200, { device: { id: device?.id, label: device?.label } });
 	}
 
 	if (url.pathname === "/api/status") {
@@ -303,6 +337,68 @@ async function handleRequest(
 	if (url.pathname === "/api/health") return json(response, 200, { status: health, root: String(runtime.rootId) });
 
 	return serveStatic(response, webDir, url.pathname);
+}
+
+/**
+ * Headers every response carries. The shell has no inline script of its own, and a paired browser must not be framed
+ * by someone else's page: clickjacking a cookie-authenticated UI is the one attack the Origin gate cannot see, because
+ * the framed page really is ours.
+ */
+function applySecurityHeaders(response: ServerResponse, host: string | undefined): void {
+	response.setHeader("referrer-policy", "no-referrer");
+	response.setHeader("x-content-type-options", "nosniff");
+	response.setHeader("x-frame-options", "DENY");
+	response.setHeader("content-security-policy", contentSecurityPolicy(host));
+}
+
+/**
+ * The shell's policy, which the widget frames inherit: a `srcdoc` iframe gets the embedder's CSP, so this has to be a
+ * superset of what a widget needs (`src/web/lib/frame-content.ts` carries the same list as a `<meta>`).
+ *
+ * `'unsafe-inline'` is the cost of running a widget's own script at all; what remains enforced is what an injected
+ * script would otherwise be free to do — frame this origin, retarget every relative URL through `<base>`, post a form
+ * to another host, or open a socket anywhere but here and the CDN the widget imports from.
+ */
+function contentSecurityPolicy(host: string | undefined): string {
+	const cdn = "https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com";
+	return [
+		"default-src 'self'",
+		`script-src 'self' 'unsafe-inline' 'unsafe-eval' ${cdn}`,
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data: blob: https://basemap.nationalmap.gov https://upload.wikimedia.org https://thumb.wikimedia.org",
+		"font-src 'self' data:",
+		`connect-src 'self'${socketOrigins(host)} ${cdn}`,
+		"media-src 'self' data: blob:",
+		"frame-src 'self'",
+		"object-src 'none'",
+		"base-uri 'none'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	].join("; ");
+}
+
+/**
+ * The socket's own origin, for browsers that do not read `'self'` as covering `ws://`.
+ *
+ * The host comes from a request header, so it is checked rather than trusted: a value with a `;` in it would otherwise
+ * end our directive and start one of the sender's choosing.
+ */
+function socketOrigins(host: string | undefined): string {
+	if (host === undefined || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) return "";
+	return ` ws://${host} wss://${host}`;
+}
+
+/** The pages a pairing link may land on: the shell, and the shell's file name. */
+function isShellPath(pathname: string): boolean {
+	return pathname === "/" || pathname === "/index.html";
+}
+
+/** The page a pairing link redirects to: the same URL with the token spent and dropped. */
+function withoutToken(url: URL): string {
+	const params = new URLSearchParams(url.search);
+	params.delete("token");
+	const search = params.toString();
+	return `${url.pathname}${search === "" ? "" : `?${search}`}`;
 }
 
 async function serveStatic(response: ServerResponse, webDir: string, pathname: string): Promise<void> {
