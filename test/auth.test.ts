@@ -25,6 +25,7 @@ import {
 	sealSession,
 	verifyToken,
 } from "../src/server/auth.ts";
+import { HOOK_BODY_MAX_BYTES, HOOK_FIRE_LIMIT } from "../src/server/limits.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
 
 const directories = new Set<string>();
@@ -311,6 +312,37 @@ describe("the server's door", () => {
 				await opens(`${base}?token=${server.pairingToken}`, { origin: `http://127.0.0.1:${server.port}` }),
 				/"hello"/,
 			);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("bounds a sender's fires, per hook, and refuses a body bigger than the cap", async () => {
+		const { server } = await openServer();
+		const fire = (hookId: string, body: string): Promise<Response> =>
+			fetch(`http://127.0.0.1:${server.port}/api/hooks/${hookId}/fire`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${server.pairingToken}`, "content-type": "application/json" },
+				body,
+			});
+		try {
+			// An unknown hook is enough to count fires: the limit is about what a sender asks for, before anything
+			// spends a turn, and an invented name must not be a way around it.
+			for (let index = 0; index < HOOK_FIRE_LIMIT; index += 1) {
+				assert.equal((await fire("invented", "{}")).status, 404);
+			}
+			const refused = await fire("invented", "{}");
+			assert.equal(refused.status, 429);
+			assert.ok(Number(refused.headers.get("retry-after")) >= 1, "a correct sender is told when to come back");
+
+			// The budget is per hook: one noisy sender does not silence the morning brief.
+			assert.equal((await fire("another", "{}")).status, 404);
+
+			// A body over the cap is refused before it becomes a payload — and on a hook with budget left, so the
+			// answer is about the size and not about the rate.
+			const oversized = await fire("oversized", "x".repeat(HOOK_BODY_MAX_BYTES + 1));
+			assert.equal(oversized.status, 413);
+			assert.equal(((await oversized.json()) as { error?: string }).error, "payload too large");
 		} finally {
 			await server.close();
 		}

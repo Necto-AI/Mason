@@ -1,0 +1,100 @@
+/**
+ * What a caller may ask the server to spend.
+ *
+ * The door (§4.1b) answers *who may speak*. This answers *how much*, because the two costs a webhook sender controls
+ * are not the door's business: bytes on the socket, and model turns. A hook fire is a whole turn — provider tokens,
+ * a tool loop, a delivered message — so a sender that can fire without a bound is a sender that can spend Denis's
+ * budget and fill his transcript from a cron typo or a hostile body.
+ *
+ * Both limits are small on purpose. Honest senders here fire hourly or daily, and a sender that needs more than six
+ * fires a minute is a sender whose queue is the wrong shape.
+ */
+import type { IncomingMessage } from "node:http";
+
+/** A webhook body carries a summary, a URL or a status line; 32 KiB is already generous for that. */
+export const HOOK_BODY_MAX_BYTES = 32 * 1024;
+
+/** Fires one hook may start per window, counted per hook id. */
+export const HOOK_FIRE_LIMIT = 6;
+
+/** The window fires are counted in. */
+export const HOOK_FIRE_WINDOW_MS = 60_000;
+
+/**
+ * How many hook ids a limiter remembers. The ids come from the URL, so the map is bounded rather than trusted: a
+ * sender inventing hook names must not be able to grow it, and the oldest key is the one to forget first.
+ */
+const TRACKED_KEYS_MAX = 512;
+
+export interface FireLimiter {
+	/** Seconds to wait when this fire is refused; `undefined` when it is allowed — and counted. */
+	take(key: string): number | undefined;
+}
+
+/**
+ * A sliding window per key, in memory.
+ *
+ * In memory is right: what it protects is this process's spending, so a restart that forgets the window also forgets
+ * the queue it was protecting. A fixed window would let a sender spend the whole budget in the last second of one
+ * window and the first of the next; sliding cannot.
+ */
+export function createFireLimiter(
+	options: { limit?: number; windowMs?: number; now?: () => number } = {},
+): FireLimiter {
+	const limit = options.limit ?? HOOK_FIRE_LIMIT;
+	const windowMs = options.windowMs ?? HOOK_FIRE_WINDOW_MS;
+	const now = options.now ?? Date.now;
+	const fires = new Map<string, number[]>();
+
+	return {
+		take(key) {
+			const at = now();
+			const recent = (fires.get(key) ?? []).filter((time) => at - time < windowMs);
+			if (recent.length >= limit) {
+				const oldest = recent[0] ?? at;
+				fires.set(key, recent);
+				return Math.max(1, Math.ceil((oldest + windowMs - at) / 1000));
+			}
+			recent.push(at);
+			// A `Map` keeps insertion order, so the first key is the one that was created longest ago.
+			if (fires.size > TRACKED_KEYS_MAX && !fires.has(key)) fires.delete(fires.keys().next().value as string);
+			fires.set(key, recent);
+			return undefined;
+		},
+	};
+}
+
+/**
+ * A request body, or `undefined` when it is larger than the cap.
+ *
+ * `content-length` is checked first so an oversized body is refused without being received, and the running total is
+ * checked too: a sender that omits the header, or chunks the body, still cannot make the server buffer it.
+ */
+export async function readBodyCapped(
+	request: IncomingMessage,
+	maxBytes: number = HOOK_BODY_MAX_BYTES,
+): Promise<string | undefined> {
+	const declared = Number(request.headers["content-length"]);
+	if (Number.isFinite(declared) && declared > maxBytes) return undefined;
+	const chunks: Buffer[] = [];
+	let total = 0;
+	for await (const chunk of request) {
+		const buffer = chunk as Buffer;
+		total += buffer.length;
+		if (total > maxBytes) return undefined;
+		chunks.push(buffer);
+	}
+	return Buffer.concat(chunks).toString("utf8");
+}
+
+/** A body parsed as a JSON object; anything else — an empty body, a form post, a JSON array — is `{}`. */
+export function parseJsonObject(text: string): Record<string, unknown> {
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}

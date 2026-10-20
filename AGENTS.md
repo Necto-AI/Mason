@@ -28,6 +28,7 @@ The browser client is the chat area of `sibling` re-implemented in React: [`docs
 5. **Run TypeScript directly from source on Node 22:**
    - Use `node --conditions=source --experimental-strip-types ...` for all server entrypoints and tests.
 6. **Every way in goes through `src/server/auth.ts`.** The Chord socket, `/api/*` and the webhook are the owner's: a token (hashed in `~/.mason/config.json`), the `HttpOnly` session cookie it is spent into, plus an `Origin` that is ours or absent. A new entry point — another route, another socket, another tool that reaches the network — is unauthenticated until it calls `authenticate`, and the default answer is no. Responses carry the security headers from `main.ts` (CSP, `no-referrer`, `frame-ancestors 'none'`); a new route gets them for free and must not widen them.
+7. **Least privilege after the door.** The agent's state is `~/.mason/data` (home `0700`, files `0600`; `MASON_DATA` overrides) — never `.data` in the cwd. A webhook fire is capped at 32 KiB and 6 per minute per hook (`429` + `retry-after`). The `pi-env` daemon starts through `env -i` with an allowlist (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR`), so a tool cannot read the server's environment: new configuration belongs in a file, not in an exported variable (`src/server/limits.ts`, `src/server/env.ts`).
 
 ## Commands (inside `devenv shell` or via `devenv shell -- ...`)
 
