@@ -63,6 +63,7 @@ Each scenario file holds `about`, `checks` (every check, its pass/fail and a det
 | `toolCalls` | every call the model made, in order, from the committed entries |
 | `widgets`, `widgetArguments` | how many widgets reached the reader, and the first widget call's arguments |
 | `inputTokens`, `outputTokens` | summed over the run's model calls |
+| `reminders` | how often the delivery gate had to remind the model that nothing had been sent |
 | `turns` | per turn: how many messages the reader got, and how the turn settled |
 | `finished`, `error` | whether the run completed, and why not if it did not |
 
@@ -122,15 +123,18 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
   case-insensitive. `expect.log` is regexes today's log file must match.
 - `expect.widget` requires a widget to reach the reader, built with `css` before `html` in the call's arguments.
 - `expect.maxTools` bounds work calls: everything except `send_to_user`, which is the delivery channel rather than
-  effort. `expect.maxInputTokens` bounds the run's summed input tokens.
+  effort. `expect.maxInputTokens` bounds the run's summed input tokens. `expect.reminders` bounds how often the delivery
+  gate had to rescue a turn, which is how a model that stops answering in `send_to_user` shows up even though the
+  reader is now guaranteed an answer.
 
 Two checks are not optional and need no `expect` entry: every turn must deliver at least one message
 (`turn.N.delivered`) and the run must finish (`finished`), so a scenario cannot pass by staying silent.
 
 ## Baseline
 
-`opencode-go/deepseek-v4.1-flash`, 2026-10-20, three runs per scenario (18 runs, 102k input and 27k output tokens,
-about 3 cents): **15 passed**.
+`opencode-go/deepseek-v4.1-flash`, 2026-10-20, two runs per scenario after the delivery gate (12 runs, 55k input and
+15k output tokens, about 2 cents): **12 passed**. Before the gate, three runs per scenario (18 runs, about 3 cents)
+passed 15.
 
 | scenario | runs | subject |
 | --- | --- | --- |
@@ -141,10 +145,15 @@ about 3 cents): **15 passed**.
 | remember | **0/3** | a recalled preference is delivered on the next turn |
 | widget | 3/3 | a widget reaches the reader, `css` before `html` |
 
-`remember` fails on `turn.2.delivered`: the turn that answers the recall question ends without `send_to_user`, so the
-reader gets nothing. That is a real product bug, not a harness artefact, and it is tracked in
-[#21](https://github.com/DenisSud/mason/issues/21). The rest of that scenario is green: the fact is written to the log
-and read back through the same path.
+`remember` first failed on `turn.2.delivered`: the turn that answers the recall question ended without `send_to_user`,
+so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
+four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
+silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
+to the log and read back through the same path.
+
+The gate changes what green means. `calls.send_to_user` still measures the model's own discipline; `reminders` measures
+how often it needed help, and that is the number to watch — a model that stops delivering still turns the suite green,
+because the reader is guaranteed an answer either way.
 
 `hook-acts` had the widest message variance: different shapes of the same brief, and once a closing offer of extra work
 ("want me to block focus time?"). The check does not forbid that; it forbids asking whether to do the work the hook
