@@ -45,6 +45,8 @@ export const AgentStatusSchema = Type.Object({
 	runStatus: RunStatusSchema,
 	busy: Type.Boolean(),
 	activeRunTaskId: Type.Optional(Type.String()),
+	/** The tools of the running round, by name. No arguments, no output: what runs is not what the reader reads. */
+	runningTools: Type.Array(Type.String()),
 	sandboxedUiEnabled: Type.Boolean(),
 	model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
 	cwd: Type.Optional(Type.String()),
@@ -54,11 +56,65 @@ export type AgentStatus = {
 	runStatus: RunStatus;
 	busy: boolean;
 	activeRunTaskId?: string;
+	runningTools: string[];
 	sandboxedUiEnabled: boolean;
 	model?: { provider: string; modelId: string };
 	cwd?: string;
 	hooks: HookSummary[];
 };
+
+/**
+ * One row of the reader's transcript.
+ *
+ * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
+ * (`send_to_user`), the widgets it built for them, the trigger that woke it, and a coarse notice when a run failed.
+ * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
+ * a trace endpoint can expose them later, deliberately and separately.
+ */
+export const TranscriptItemSchema = Type.Union([
+	Type.Object({
+		kind: Type.Literal("user"),
+		id: Type.String(),
+		text: Type.String(),
+		at: Type.Optional(Type.Number()),
+	}),
+	Type.Object({
+		kind: Type.Literal("hook"),
+		id: Type.String(),
+		hookName: Type.String(),
+		firedAt: Type.String(),
+		payload: Type.Optional(Type.String()),
+	}),
+	Type.Object({
+		kind: Type.Literal("delivered"),
+		id: Type.String(),
+		text: Type.String(),
+		failed: Type.Optional(Type.Boolean()),
+		streaming: Type.Optional(Type.Boolean()),
+	}),
+	Type.Object({
+		kind: Type.Literal("widget"),
+		id: Type.String(),
+		streaming: Type.Boolean(),
+		content: Type.Unknown(),
+	}),
+	Type.Object({ kind: Type.Literal("notice"), id: Type.String(), text: Type.String() }),
+]);
+export type TranscriptItem =
+	| { kind: "user"; id: string; text: string; at?: number }
+	| { kind: "hook"; id: string; hookName: string; firedAt: string; payload?: string }
+	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
+	| { kind: "widget"; id: string; streaming: boolean; content: unknown }
+	| { kind: "notice"; id: string; text: string };
+
+/** A submission the reader queued and can still withdraw, labelled for them rather than for the machine. */
+export const QueuedItemSchema = Type.Object({
+	id: Type.Number(),
+	mode: Type.String(),
+	text: Type.String(),
+	withdrawable: Type.Boolean(),
+});
+export type QueuedItem = { id: number; mode: string; text: string; withdrawable: boolean };
 
 export const AgentService = remote("personal.agent", {
 	version: 1,
@@ -67,8 +123,10 @@ export const AgentService = remote("personal.agent", {
 	variants: {
 		owner: {
 			state: {
-				/** Raw `ConversationView` from pi-durable: entries + `pi.live` / `pi.inbox` / `pi.usage` / `pi.agent`. */
-				view: Type.Unknown(),
+				/** The reader's transcript: their words, what the agent sent, widgets, triggers, coarse notices. */
+				transcript: Type.Array(TranscriptItemSchema),
+				/** The queue behind the running turn, labelled for the reader. */
+				queued: Type.Array(QueuedItemSchema),
 				// `status` is reserved by Chord references, so the agent's own status cell is `agentStatus`.
 				agentStatus: AgentStatusSchema,
 			},

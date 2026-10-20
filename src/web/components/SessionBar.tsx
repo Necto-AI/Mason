@@ -12,11 +12,6 @@ import type { ConnectionState } from "../client.ts";
 
 export interface SessionBarProps {
 	readonly status: AgentStatus | undefined;
-	readonly toolsRunning: number;
-	readonly toolsTotal: number;
-	readonly inboxCount: number;
-	readonly debug: boolean;
-	readonly onToggleDebug: () => void;
 	readonly onCompact: () => void;
 	readonly onReset: () => void;
 }
@@ -29,16 +24,7 @@ const RUN_LABELS: Record<string, string> = {
 	idle: "idle",
 };
 
-export function SessionBar({
-	status,
-	toolsRunning,
-	toolsTotal,
-	inboxCount,
-	debug,
-	onToggleDebug,
-	onCompact,
-	onReset,
-}: SessionBarProps) {
+export function SessionBar({ status, onCompact, onReset }: SessionBarProps) {
 	const [open, setOpen] = useState(false);
 	const menuId = useId();
 	const wrap = useRef<HTMLDivElement | null>(null);
@@ -104,23 +90,12 @@ export function SessionBar({
 							<code data-testid="status-model">
 								{status?.model === undefined ? "model: —" : `model: ${status.model.provider}/${status.model.modelId}`}
 							</code>
-							<code data-testid="status-tools">{`tools: ${toolsRunning} running / ${toolsTotal}`}</code>
-							<code data-testid="status-inbox">{`queued: ${inboxCount}`}</code>
 						</div>
 						<button type="button" role="menuitem" data-testid="compact" onClick={run(onCompact)}>
 							Compact context
 						</button>
 						<button type="button" role="menuitem" data-testid="reset" onClick={run(onReset)}>
 							Reset session
-						</button>
-						<button
-							type="button"
-							role="menuitemcheckbox"
-							aria-checked={debug}
-							data-testid="toggle-debug"
-							onClick={run(onToggleDebug)}
-						>
-							{debug ? "Hide diagnostics" : "Show diagnostics"}
 						</button>
 					</div>
 				)}

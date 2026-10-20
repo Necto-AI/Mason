@@ -1,6 +1,11 @@
 // The widget content a `generateSandboxedUi` call carries, adapted from the CopilotKit
 // `OpenGenerativeUIContentSchema` (`vendor/open-intelligent-ui/.../open-generative-ui/schema.ts`).
-import type { JsonObject } from "@earendil-works/pi-ai";
+//
+// Server-side this maps a call's arguments to the artifact the reader sees; the client only receives the result, so a
+// widget payload crosses the wire as content, never as tool-call arguments. Shared, because both sides spell it.
+
+/** The `generateSandboxedUi` arguments this module reads. */
+type Args = { readonly [key: string]: unknown };
 
 export interface OpenGenUIContent {
 	initialHeight?: number;
@@ -35,7 +40,7 @@ function stringsOf(value: unknown): string[] | undefined {
  * function declaration would throw inside the iframe, and running the widget's scripts is not worth a broken
  * preview. The markup streams either way.
  */
-export function contentFromToolCall(args: JsonObject | undefined, settled: boolean): OpenGenUIContent {
+export function contentFromToolCall(args: Args | undefined, settled: boolean): OpenGenUIContent {
 	if (args === undefined) return { generating: !settled };
 	const css = stringOf(args.css);
 	const html = stringsOf(args.html);
