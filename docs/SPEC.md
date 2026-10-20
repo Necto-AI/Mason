@@ -408,14 +408,14 @@ separately, deliberately, and with its own access rules.
 ### 4.1b Who may talk to the server — the door
 
 There is one owner, so every entry point proves it: the Chord socket, `/api/*`, the webhook. `src/server/auth.ts` owns
-the rule; `src/server/main.ts` applies it in exactly two places, the socket's `principal(request)` and the top of
-`handleRequest`.
+the rule; `src/server/main.ts` applies it in exactly three places, the socket's `principal(request)`, the pairing
+exchange in `handleRequest`, and the gate at the top of `handleRequest` that `/api/*` passes through.
 
-**The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` — mode 0600, home 0700.
-Only the hash is stored: that file is exactly the kind of thing that gets pasted into a bug report or a backup, and a
-file that cannot leak a live token is worth a little inconvenience. `npm run token -- add --label phone` prints a new
-token once; `list` shows what exists, `revoke <id>` kills one device without touching the others. A fresh home mints a
-`browser` token on first start and logs the URLs to open, once:
+**The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
+mode 0600, home 0700. Only hashes are stored: that file is exactly the kind of thing that gets pasted into a bug report
+or a backup, and a file that cannot leak a live token is worth a little inconvenience. `npm run token -- add --label
+phone` prints a new token once; `list` shows what exists, `revoke <id>` kills one device without touching the others. A
+fresh home mints a `browser` token on first start and logs the URLs to open, once:
 
 ```text
 mason listening on http://0.0.0.0:8787
@@ -425,18 +425,35 @@ mason listening on http://0.0.0.0:8787
 [auth] 0.0.0.0 is not loopback: the token crosses the network in clear text until TLS lands
 ```
 
-The server reads its tokens at startup, so a mint or a revoke takes effect on the next start — which is the right
-moment to also throw away a lost phone's session.
+The store is the config file, read on every request rather than once per process: `revoke` lands on the next request.
+A lost phone is exactly the moment nobody wants to restart the server, and a cache is the only reason the door would
+stay open after the credential was taken away.
 
-**How a request presents it.** Two ways, because two kinds of client have different powers:
+**How a request presents it.** Three ways, because three kinds of client have different powers:
 
 | Client | Presents | Why |
 |---|---|---|
 | native app, curl, a webhook sender | `Authorization: Bearer <token>` | a header is the normal way, and the app keeps the token in the OS keystore |
-| the browser client | `?token=…` on the socket URL | a browser cannot set a header on a WebSocket, so the query string is the one place a credential has to travel |
+| a browser, first visit | `?token=…` in a pairing link | the only time a human is holding the credential |
+| a browser, after pairing | the `mason_session` cookie | `HttpOnly`, so no script on this origin can read it; the browser sends it on the socket handshake by itself |
 
-The page takes the token out of `?token=` on its first visit, keeps it in `localStorage`, and replaces the address bar
-with the bare path, so it stops travelling in URLs. A browser with no token is not paired and says so — an empty
+**A token is a bootstrap credential, not a session.** `GET /?token=…` verifies the token, sets
+`mason_session=v1.<token id>.<HMAC>` (`HttpOnly`, `SameSite=Strict`, `Path=/`, 30 days, `Secure` where the connection
+already is TLS), and answers `302` to the same path with the token removed. The address bar, the history and every
+`Referer` see a bare URL before the first element renders, and the client bundle never touches a token at all.
+
+The cookie names a token id and carries no secret, so it is worth exactly one device's access: revoking that token ends
+its sessions at the same moment. `SameSite=Strict` is the CSRF defence that does not depend on the Origin gate — a
+cross-site request never carries the cookie — and the Origin gate covers what `SameSite` cannot see, a page on the same
+site but a different port.
+
+**Headers, on every response.** `Content-Security-Policy`, `Referrer-Policy: no-referrer`,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. The CSP is the widget policy plus this origin: a `srcdoc`
+iframe inherits the embedder's policy, so `script-src` has to allow what a widget needs (`'unsafe-inline'`,
+`'unsafe-eval'`, the four CDNs the importmap names) — what it still enforces is what an injected script would otherwise
+do freely: frame this origin, retarget relative URLs through `<base>`, post a form elsewhere, or open a socket to a host
+that is not this one. `connect-src` names the socket's own origin, checked for `;` first because a `Host` header is
+sender-controlled. A browser with no cookie is not paired and says so (`/api/session` answers `401`): an empty
 transcript would look like a broken agent instead of a closed door.
 
 **The second gate: Origin.** A token says *which device*; `Origin` says *which page*.
@@ -444,9 +461,9 @@ transcript would look like a broken agent instead of a closed door.
 - `Origin` absent means a program — curl, the native app, a test — and the token alone decides.
 - `Origin` present must equal the request's `Host`; `Origin: null` (a sandboxed frame, a `file://` page) is refused.
 
-A page on `evil.example` cannot read this origin's `localStorage`, so it cannot learn a token; the Origin check is the
-belt to that pair of braces, and it also stops such a page from opening a socket at all. Both gates are checked on the
-socket and on `/api/*`. `GET /api/health` stays open, because a monitor that needs a credential is a monitor nobody
+A page on `evil.example` cannot obtain a credential in the first place — this origin stores no token, and the cookie is
+`HttpOnly` and `SameSite=Strict` — so the Origin check is the belt to that pair of braces, and it also stops such a page
+from opening a socket at all. Both gates are checked on the socket and on `/api/*`. `GET /api/health` stays open, because a monitor that needs a credential is a monitor nobody
 runs, and the static shell stays public: it is a bundle with no secrets in it, and it is where the reader is told their
 browser is not paired.
 

@@ -27,7 +27,7 @@ The browser client is the chat area of `apiary` re-implemented in React: [`docs/
    - Connect `RemoteExecutionEnv` (or `LocalExecutionEnv`) to a `Connection` running `localDaemon()` (`vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env`), or an SSH target when configured.
 5. **Run TypeScript directly from source on Node 22:**
    - Use `node --conditions=source --experimental-strip-types ...` for all server entrypoints and tests.
-6. **Every way in goes through `src/server/auth.ts`.** The Chord socket, `/api/*` and the webhook are the owner's: a token (hashed in `~/.mason/config.json`) plus an `Origin` that is ours or absent. A new entry point — another route, another socket, another tool that reaches the network — is unauthenticated until it calls `authenticate`, and the default answer is no.
+6. **Every way in goes through `src/server/auth.ts`.** The Chord socket, `/api/*` and the webhook are the owner's: a token (hashed in `~/.mason/config.json`), the `HttpOnly` session cookie it is spent into, plus an `Origin` that is ours or absent. A new entry point — another route, another socket, another tool that reaches the network — is unauthenticated until it calls `authenticate`, and the default answer is no. Responses carry the security headers from `main.ts` (CSP, `no-referrer`, `frame-ancestors 'none'`); a new route gets them for free and must not widen them.
 
 ## Commands (inside `devenv shell` or via `devenv shell -- ...`)
 
@@ -38,7 +38,7 @@ The browser client is the chat area of `apiary` re-implemented in React: [`docs/
 - `npm test` — runs the test suite (`node --conditions=source --experimental-strip-types --test test/*.test.ts`).
 - `npm run eval` — runs the six behaviour scenarios against one model (`evals/run.ts`, default `opencode-go/deepseek-v4.1-flash`), writing traces to `.data/evals/`; flags, cost and scenario shape in `evals/README.md`. It costs real tokens on a paid provider: run it only when asked.
 - `npm run eval:judge -- <results-dir>` — scores stored eval traces on message quality against `evals/rubric.md` (`evals/judge.ts`, default judge `llama-server/Qwen3.8-27B`).
-- `npm run token -- list | add --label <name> | revoke <id>` — the credentials that may talk to the server (`scripts/token.ts`). A fresh home mints a `browser` token on first start and logs the `?token=` link; the server reads tokens at startup, so restart it after a change.
+- `npm run token -- list | add --label <name> | revoke <id>` — the credentials that may talk to the server (`scripts/token.ts`). A fresh home mints a `browser` token on first start and logs the pairing link; `add` prints one for a new device. The server reads the config per request, so a revoke lands immediately, without a restart.
 
 ## Agent skills
 

@@ -15,14 +15,11 @@ import { JumpPill } from "./components/JumpPill.tsx";
 import { SessionBar } from "./components/SessionBar.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
-import { adoptToken, socketUrl } from "./lib/token.ts";
+import { probeSession, type SessionDevice, socketUrl } from "./lib/session.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
 import { workingLabel } from "./lib/working.ts";
 import "./styles/tokens.css";
 import "./styles/chat.css";
-
-/** This browser's credential: taken from `?token=` once, then kept. `undefined` means the browser is not paired. */
-const token = adoptToken(window);
 
 function useAgent(): {
 	connection: AgentConnection;
@@ -33,10 +30,7 @@ function useAgent(): {
 	error: string | undefined;
 	clearError: () => void;
 } {
-	const connection = useMemo(
-		() => connectAgent({ url: socketUrl(window.location, token) }),
-		[],
-	);
+	const connection = useMemo(() => connectAgent({ url: socketUrl(window.location) }), []);
 	const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("connecting");
 	const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
 	const [queued, setQueued] = useState<QueuedItem[]>([]);
@@ -79,26 +73,51 @@ function useAgent(): {
 }
 
 /**
- * What a browser without a token sees. The server printed a link when it minted one, and pasting that link is the whole
- * pairing step: an empty transcript would look like a broken agent instead of a browser that is not allowed in.
+ * What a browser without a cookie sees. The server printed a pairing link when it minted a token, and opening that
+ * link once is the whole step: it sets a cookie and redirects here. An empty transcript would look like a broken agent
+ * instead of a closed door.
  */
-function Unpaired() {
+function Unpaired({ reason }: { readonly reason: "unpaired" | "unreachable" }) {
 	return (
 		<div id="app">
 			<div id="main">
-				<div className="unpaired" data-testid="unpaired">
-					<h1>Not paired</h1>
-					<p>
-						This browser has no token. Open the link the server printed on its first start — it looks like{" "}
-						<code>http://127.0.0.1:8787/?token=…</code> — once, and this page will remember it.
-					</p>
-					<p>
-						Lost it? Mint another on the machine: <code>npm run token -- add --label browser</code>.
-					</p>
+				<div className="unpaired" data-testid={reason === "unpaired" ? "unpaired" : "unreachable"}>
+					<h1>{reason === "unpaired" ? "Not paired" : "Server not answering"}</h1>
+					{reason === "unpaired" ? (
+						<>
+							<p>
+								This browser has no session. Open the pairing link the server printed — it looks like{" "}
+								<code>http://127.0.0.1:8787/?token=…</code> — once, and this page will remember the browser.
+							</p>
+							<p>
+								No link? Mint one on the machine: <code>npm run token -- add --label browser</code>.
+							</p>
+						</>
+					) : (
+						<p>
+							The page loaded but <code>/api/session</code> did not answer. Is the server running, on this address?
+						</p>
+					)}
 				</div>
 			</div>
 		</div>
 	);
+}
+
+/**
+ * Whether this browser may see the agent, asked once at boot. The answer decides between two screens, and only one of
+ * them opens a socket.
+ */
+function Root() {
+	const [session, setSession] = useState<SessionDevice | "probing" | "unreachable" | undefined>("probing");
+	useEffect(() => {
+		probeSession()
+			.then(setSession)
+			.catch(() => setSession("unreachable"));
+	}, []);
+	if (session === "probing") return null;
+	if (session === "unreachable") return <Unpaired reason="unreachable" />;
+	return session === undefined ? <Unpaired reason="unpaired" /> : <App />;
 }
 
 function App() {
@@ -172,4 +191,4 @@ function App() {
 
 const container = document.getElementById("root");
 if (container === null) throw new Error("missing #root");
-createRoot(container).render(token === undefined ? <Unpaired /> : <App />);
+createRoot(container).render(<Root />);
