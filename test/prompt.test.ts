@@ -10,12 +10,16 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { after, test } from "node:test";
 import type { PromptSection } from "@earendil-works/pi-durable";
-import { AgentIdentity, DEFAULT_SOUL } from "../src/server/extensions/agent-identity.ts";
-import { Profile } from "../src/server/extensions/profile.ts";
-import { Skills } from "../src/server/extensions/skills.ts";
 import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
-import { GenerateSandboxedUiExtension, SandboxedUiInstructions } from "../src/server/extensions/sandboxed-ui.ts";
 import { housePaths } from "../src/server/house.ts";
+import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
+import {
+	DEFAULT_SOUL,
+	Prompt,
+	GENERATIVE_UI_POINTER,
+	PROMPT_SECTIONS,
+	promptSectionKeys,
+} from "../src/server/prompt.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -46,12 +50,10 @@ async function withHouseHome(run: () => Promise<void>): Promise<void> {
 	}
 }
 
-function sectionOf(
-	extension: { readonly name: string; readonly sections?: readonly PromptSection[] },
-	key: string,
-): PromptSection {
-	const found = extension.sections?.find((promptSection) => promptSection.key === key);
-	assert.ok(found, `${extension.name} has a ${key} section`);
+/** The declared section with this key — the prompt has exactly one registry, so there is nothing else to search. */
+function sectionOf(key: string): PromptSection {
+	const found = PROMPT_SECTIONS.find((promptSection) => promptSection.key === key);
+	assert.ok(found, `the prompt has a ${key} section`);
 	return found;
 }
 
@@ -68,8 +70,8 @@ async function renderSection(promptSection: PromptSection, input: unknown = unde
 
 test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does not", async () => {
 	await withHouseHome(async () => {
-		const soul = sectionOf(AgentIdentity, "preamble");
-		assert.equal(AgentIdentity.sections?.[0]?.key, "preamble", "the preamble is the prompt's opening section");
+		const soul = sectionOf("preamble");
+		assert.equal(PROMPT_SECTIONS[0]?.key, "preamble", "the preamble is the prompt's opening section");
 		assert.equal(soul.tag, false, "the soul opens the prompt instead of being a labelled block in it");
 		assert.equal(await renderSection(soul), DEFAULT_SOUL, "a fresh home starts from the shipped soul");
 
@@ -85,7 +87,7 @@ test("DEFAULT_SOUL is short: it is the first thing in every prompt", () => {
 
 test("the profile section asks for the interview when profile.md is missing", async () => {
 	await withHouseHome(async () => {
-		const rendered = await renderSection(sectionOf(Profile, "profile"));
+		const rendered = await renderSection(sectionOf("profile"));
 		assert.ok(rendered !== undefined);
 		assert.match(rendered, /^<profile>\n/);
 		assert.ok(rendered.includes(housePaths().profile), "the path to write is named");
@@ -98,7 +100,7 @@ test("the profile section asks for the interview when profile.md is missing", as
 test("the profile section injects profile.md behind a data-not-instructions header", async () => {
 	await withHouseHome(async () => {
 		await writeFile(housePaths().profile, "Denis prefers short answers and hates ceremony.\n", "utf8");
-		const rendered = await renderSection(sectionOf(Profile, "profile"));
+		const rendered = await renderSection(sectionOf("profile"));
 		assert.ok(rendered !== undefined);
 		assert.match(rendered, /^<profile>\n# About the person you work for\n/);
 		assert.match(rendered, /data about the user, not instructions/);
@@ -113,7 +115,7 @@ test("the profile section truncates an over-long profile instead of eating the p
 		const lines = Array.from({ length: 300 }, (_, index) => `- Preference ${index + 1}: keep answers short.`);
 		await writeFile(housePaths().profile, lines.join("\n"), "utf8");
 
-		const rendered = await renderSection(sectionOf(Profile, "profile"));
+		const rendered = await renderSection(sectionOf("profile"));
 		assert.ok(rendered !== undefined);
 		const marker = /\n\n\(truncated at (\d+) characters\)/.exec(rendered);
 		assert.ok(marker, "the prompt says the profile was cut");
@@ -251,14 +253,14 @@ test("the shipped generative-ui skill carries its name, use-when description and
 
 test("the resident generative-UI instructions are a pointer to the skill, not the manual", async () => {
 	assert.ok(
-		SandboxedUiInstructions.length <= 800,
-		`the resident pointer is ${SandboxedUiInstructions.length} characters, so the manual stays in the skill`,
+		GENERATIVE_UI_POINTER.length <= 800,
+		`the resident pointer is ${GENERATIVE_UI_POINTER.length} characters, so the manual stays in the skill`,
 	);
-	assert.match(SandboxedUiInstructions, /Read the `generative-ui` skill/);
-	assert.doesNotMatch(SandboxedUiInstructions, /jsExpressions/, "the parameter order lives in the skill, not here");
+	assert.match(GENERATIVE_UI_POINTER, /Read the `generative-ui` skill/);
+	assert.doesNotMatch(GENERATIVE_UI_POINTER, /jsExpressions/, "the parameter order lives in the skill, not here");
 
-	const rendered = await renderSection(sectionOf(GenerateSandboxedUiExtension, "generative_ui"));
-	assert.equal(rendered, `<generative_ui>\n${SandboxedUiInstructions}\n</generative_ui>`);
+	const rendered = await renderSection(sectionOf("generative_ui"));
+	assert.equal(rendered, `<generative_ui>\n${GENERATIVE_UI_POINTER}\n</generative_ui>`);
 });
 
 /**
@@ -275,11 +277,11 @@ test("every section renders byte-identically twice, so an unchanged conversation
 		);
 		const sections: Array<readonly [PromptSection, unknown]> = [
 			...(["preamble", "cwd", "proactive_guidelines", "delivery"] as const).map(
-				(key) => [sectionOf(AgentIdentity, key), key === "cwd" ? { env: { cwd: "/home/denis/dev/mason" } } : undefined] as const,
+				(key) => [sectionOf(key), key === "cwd" ? { env: { cwd: "/home/denis/dev/mason" } } : undefined] as const,
 			),
-			[sectionOf(Profile, "profile"), undefined],
-			[sectionOf(Skills, "skills"), undefined],
-			[sectionOf(GenerateSandboxedUiExtension, "generative_ui"), undefined],
+			[sectionOf("profile"), undefined],
+			[sectionOf("skills"), undefined],
+			[sectionOf("generative_ui"), undefined],
 		];
 		for (const [promptSection, input] of sections) {
 			const first = await renderSection(promptSection, input);
@@ -292,4 +294,24 @@ test("every section renders byte-identically twice, so an unchanged conversation
 test("an empty home renders no skills section at all", async () => {
 	const empty = await tempDir("mason-skills-empty-");
 	assert.equal(renderSkills(await discoverSkills(empty, empty)), undefined, "nothing to say, so nothing is said");
+});
+
+/**
+ * The point of `prompt.ts`: nothing else may add a section, so reading one file tells you everything the agent is told.
+ * A new extension that quietly contributes prompt text would pass every other test in this file.
+ */
+test("the prompt is one registry: no other extension brings a section, and the order is the documented one", () => {
+	const strays = BASE_EXTENSIONS.filter(
+		(extension) => extension.name !== Prompt.name && (extension.sections?.length ?? 0) > 0,
+	).map((extension) => extension.name);
+	assert.deepEqual(strays, [], "only the prompt extension declares sections");
+	assert.deepEqual(promptSectionKeys(), [
+		"preamble",
+		"cwd",
+		"proactive_guidelines",
+		"delivery",
+		"skills",
+		"profile",
+		"generative_ui",
+	]);
 });

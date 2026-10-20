@@ -26,12 +26,10 @@ import {
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
-import { AgentIdentity, DEFAULT_SOUL } from "./extensions/agent-identity.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { Memory } from "./extensions/memory.ts";
-import { Profile } from "./extensions/profile.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
-import { Skills } from "./extensions/skills.ts";
+import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
@@ -41,9 +39,8 @@ import { builtinHooks, HooksManager } from "./hooks.ts";
  */
 export const BASE_EXTENSIONS: readonly Extension[] = [
 	CodingTools,
-	AgentIdentity,
-	Profile,
-	Skills,
+	// The one extension with sections: every section of the prompt is declared in `prompt.ts`, in order.
+	Prompt,
 	Memory,
 	Delivery,
 	// Always on: the client renders a widget whenever one arrives, so hiding the tool protected nothing and a tool list

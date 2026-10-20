@@ -14,7 +14,6 @@
  */
 import { join } from "node:path";
 import { formatSkillsForPrompt, loadSkills, type Skill } from "@earendil-works/pi-coding-agent";
-import { defineExtension, section } from "@earendil-works/pi-durable";
 import { currentHouse } from "../house.ts";
 
 /** Where the skills mason ships live. Resolved from this module, not from the process cwd. */
@@ -41,8 +40,3 @@ export function renderSkills(skills: readonly Skill[]): string | undefined {
 	const text = formatSkillsForPrompt([...skills], "read").trim();
 	return text === "" ? undefined : text;
 }
-
-export const Skills = defineExtension({
-	name: "skills",
-	sections: [section("skills", () => renderSkills(discoverSkills()))],
-});

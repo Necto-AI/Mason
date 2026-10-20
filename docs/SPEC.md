@@ -34,11 +34,10 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
 │   │   ├── admission.ts               # Where a submission came from, and where it waits (hook vs. user)
 │   │   ├── house.ts                   # The agent's home: ~/.mason paths, soul/profile reads, log, git
+│   │   ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view, and the cache report
 │   │   ├── extensions/
-│   │   │   ├── agent-identity.ts      # soul.md / cwd / proactive_guidelines / delivery prompt sections
-│   │   │   ├── profile.ts             # profile.md: who the user is, resident and capped
-│   │   │   ├── skills.ts              # The skills index: shipped <repo>/skills + personal ~/.mason/skills
+│   │   │   ├── skills.ts              # The skills index (pi's loadSkills): shipped <repo>/skills + personal ~/.mason/skills
 │   │   │   ├── memory.ts              # The `remember` tool: one dated fact in ~/.mason/log/
 │   │   │   ├── delivery.ts            # The send_to_user tool: the one channel that reaches the user
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
@@ -107,14 +106,26 @@ export interface RuntimeEnvManager {
 - **SSH / Container mode (when `PI_ENV_SSH_HOST` is set):**
   - Uses `sshConnection(target)` and returns `new RemoteExecutionEnv({ connection: lazy.connection, id: `pi-env:${target.host}`, cwd })`.
 
-### 3.2 `src/server/extensions/agent-identity.ts` & `src/server/extensions/sandboxed-ui.ts`
+### 3.2 `src/server/prompt.ts` — The Whole System Prompt
 
-1. **`AgentIdentity` extension (`agent-identity.ts`):**
-   - Uses `defineExtension` and `section` from `@earendil-works/pi-durable`.
-   - Renders `soul` with `{ tag: false }`, the prompt's opening: the text of `~/.mason/soul.md`, or `DEFAULT_SOUL` when the file is absent. `soul.md` replaces the preamble a coding agent opens with, so it is written by the person the agent works for; a fresh install gets the short default `ensureHouse` writes once (§3.5).
-   - Renders `cwd` section (`(input) => input.env?.cwd`).
-   - Renders `proactive_guidelines` section explaining how to handle `[EVENT HOOK: ...]` inputs: when woken by an event hook, act autonomously using tools if needed and message the user clearly with what happened and why you are reaching out.
-   - Renders `delivery`, the one rule the client depends on: only what `send_to_user` returns is seen by the reader.
+`prompt.ts` is the single registry: every section the model receives is declared there, in order, by key and by source.
+No other extension contributes a section, and the root agent carries no `instructions`, so reading that one file tells
+you everything the agent is told. A test fails if another base extension grows a section (§6).
+
+| key | tag | source |
+|---|---|---|
+| `preamble` | none (the prompt's opening) | `~/.mason/soul.md`, else `DEFAULT_SOUL` |
+| `cwd` | `<cwd>` | `input.env?.cwd` |
+| `proactive_guidelines` | `<proactive_guidelines>` | plain text: how to handle `[EVENT HOOK: …]`, act and report once |
+| `delivery` | `<delivery>` | plain text: only `send_to_user` reaches the reader |
+| `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
+| `profile` | `<profile>` | `~/.mason/profile.md` capped, or the first-run interview instruction |
+| `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
+
+Section text is one of three kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
+`profile.md`), a **computation** over the filesystem (`skills`), or a **constant** in `prompt.ts` (the guidelines, the
+delivery invariant, the widget pointer). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
+what the runtime installs.
 
 2. **`GenerateSandboxedUiExtension` (`sandboxed-ui.ts`):**
    - Defines the `generateSandboxedUi` tool using `defineTool` from `@earendil-works/pi-durable` and `Type` from `typebox`:
@@ -129,7 +140,7 @@ export interface RuntimeEnvManager {
      });
      ```
    - `execute: async (args) => ({ output: [{ type: "text", text: "UI generated" }], details: args })`.
-   - The resident `generative_ui` section is a **pointer**, not the manual: it says the model can answer with a live widget and names the `generative-ui` skill. The parameter order (`initialHeight` → `placeholderMessages` → `css` → `html` → `jsFunctions` → `jsExpressions`), the design-system tokens and the `Websandbox.connection.remote.sendPrompt({ text })` bridge live in `skills/generative-ui/SKILL.md`, which the agent reads when it decides to build something.
+   - The prompt's `generative_ui` section (§3.2) is a **pointer**, not the manual: it says the model can answer with a live widget and names the `generative-ui` skill. The parameter order (`initialHeight` → `placeholderMessages` → `css` → `html` → `jsFunctions` → `jsExpressions`), the design-system tokens and the `Websandbox.connection.remote.sendPrompt({ text })` bridge live in `skills/generative-ui/SKILL.md`, which the agent reads when it decides to build something.
    - **Always registered.** `GenerateSandboxedUiExtension` is a base extension (§3.4), so it is in the tool list of the first turn and of every turn after it. There is no per-conversation toggle and no `ENABLE_SANDBOXED_UI`: the client renders a widget whenever one arrives, and a tool list that changes mid-conversation would invalidate the provider's prompt cache (§3.5).
 
 ### 3.3 `src/server/hooks.ts` — Proactive Event Hooks Engine
@@ -193,7 +204,7 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `agent-identity`, `profile`, `skills`, `memory`, `delivery`, `sandboxed-ui` — is what every conversation gets. `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5).
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui` — is what every conversation gets. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5).
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends the missing base names to a stored list, in base order, in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: only the user's own steer cuts in, and a trigger source that asks to steer is downgraded to a follow-up. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).

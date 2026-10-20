@@ -5,11 +5,11 @@
  * Always installed — the client renders a widget whenever one arrives, so there is no toggle to hide it behind, and a
  * tool list that changes between turns is exactly the cache break this slice exists to remove.
  *
- * The resident section is a pointer, not the manual: the design system, the parameter ordering and the sandbox limits
- * live in `skills/generative-ui/SKILL.md`, which the agent reads when it decides to build something. That is ~450
- * tokens off every request in exchange for one `read` when a widget is actually wanted.
+ * The prompt says one paragraph about this tool (see `GENERATIVE_UI_POINTER` in `../prompt.ts`); the design system, the
+ * parameter ordering and the sandbox limits live in `skills/generative-ui/SKILL.md`, which the agent reads when it
+ * decides to build something.
  */
-import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 
 export const GenerateSandboxedUiParams = Type.Object({
@@ -25,10 +25,6 @@ export const GenerateSandboxedUiParams = Type.Object({
 	),
 });
 
-export const SandboxedUiInstructions = `You can answer with a live widget instead of prose: a chart, a dashboard, a calculator, a diagram.
-Read the \`generative-ui\` skill before your first widget — it carries the parameter order the renderer depends on, the
-design system, and the sandbox limits. Keep it out of context until you actually need it.`;
-
 export const generateSandboxedUiTool = defineTool({
 	name: "generateSandboxedUi",
 	description:
@@ -42,5 +38,4 @@ export const generateSandboxedUiTool = defineTool({
 export const GenerateSandboxedUiExtension = defineExtension({
 	name: "sandboxed-ui",
 	tools: [generateSandboxedUiTool],
-	sections: [section("generative_ui", () => SandboxedUiInstructions)],
 });
