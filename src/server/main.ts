@@ -23,7 +23,7 @@ import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
-import { deriveAgentStatus } from "./status.ts";
+import { createCacheReporter, deriveAgentStatus } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -59,6 +59,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, options);
 	const webDir = options.webDir ?? resolve(repositoryRoot, "dist/web");
 
+	// The prompt-cache report, one line per finished run. The watch is the server's own, not a browser's — a run
+	// finishes whether or not anyone is looking at it.
+	const conversation = await runtime.conversation();
+	const runWatch = await conversation.watch(BACKGROUND_CONTEXT);
+	const reportRun = createCacheReporter((line) => console.log(line));
+	// A run the last process left unfinished is counted from the moment this process attached, so its first line
+	// under-reports the tokens it spent before the restart.
+	reportRun(runWatch.value);
+	runWatch.start(async (view) => reportRun(view));
+
 	const host = createHost<Principal>({
 		name: "server",
 		self: { kind: "server" },
@@ -69,7 +79,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		const statusFor = (view: ConversationView | undefined): AgentStatus =>
 			deriveAgentStatus(view, {
 				hooks: runtime.hooks.list(),
-				sandboxedUiEnabled: runtime.sandboxedUiEnabled(),
 				model: runtime.model,
 				cwd: runtime.workspaceDir,
 			});
@@ -153,10 +162,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				runtime.hooks.setEnabled(hookId, enabled);
 				refreshStatus(ctx);
 			},
-			setSandboxedUiEnabled: async ({ enabled }, ctx) => {
-				await runtime.setSandboxedUiEnabled(enabled);
-				refreshStatus(ctx);
-			},
 		};
 	});
 
@@ -188,6 +193,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		runtime,
 		host,
 		async close() {
+			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
+			await runWatch.stop();
 			// `WebSocketServer.close()` only calls back once every client has gone, and a browser holds its socket
 			// open: terminate the clients first, or shutdown waits forever.
 			for (const client of sockets.clients) client.terminate();
@@ -214,7 +221,6 @@ async function handleRequest(
 		const view = await runtime.viewState(BACKGROUND_CONTEXT);
 		const status = deriveAgentStatus(view.value, {
 			hooks: runtime.hooks.list(),
-			sandboxedUiEnabled: runtime.sandboxedUiEnabled(),
 			model: runtime.model,
 			cwd: runtime.workspaceDir,
 		});

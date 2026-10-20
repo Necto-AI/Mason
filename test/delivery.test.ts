@@ -11,8 +11,8 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { AgentIdentity } from "../src/server/extensions/agent-identity.ts";
 import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
+import { DEFAULT_SOUL, Prompt } from "../src/server/prompt.ts";
 import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
 
 test("send_to_user is replay-unsafe, so a restart never delivers the same message twice", () => {
@@ -38,8 +38,9 @@ function openRuntime(directory: string): Promise<AgentRuntime> {
 	return openAgentRuntime(BACKGROUND_CONTEXT, {
 		dataDir: join(directory, "data"),
 		workspaceDir: directory,
+		// A temporary home: the runtime creates `soul.md`, `log/` and `skills/` there, never in the real `~/.mason`.
+		houseHome: join(directory, "house"),
 		faux: true,
-		enableSandboxedUi: false,
 		onReport: () => {},
 	});
 }
@@ -69,7 +70,7 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 			// A `pi.agent` doc from before slice 1: an explicit array of names, without `delivery`. A stored array is
 			// used verbatim, so nothing else brings delivery back.
 			const root = await before.conversation();
-			await root.configure({ extensions: [CodingTools, AgentIdentity] }, BACKGROUND_CONTEXT);
+			await root.configure({ extensions: [CodingTools, Prompt] }, BACKGROUND_CONTEXT);
 		} finally {
 			await before.close();
 		}
@@ -77,9 +78,10 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 		const after = await openRuntime(directory);
 		try {
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
+			const stored = [CodingTools.name, Prompt.name];
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "agent-identity", "delivery"],
+				[...stored, ...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => !stored.includes(name))],
 				"the missing base names are appended in base order, and the stored order survives",
 			);
 			assert.ok(
@@ -99,8 +101,8 @@ test("a selection missing several base names gets them back in base order", asyn
 	try {
 		const before = await openRuntime(directory);
 		try {
-			// Only `coding-tools` is stored: both `agent-identity` and `delivery` are missing, so the order they are put
-			// back in is the difference between the two.
+			// Only `coding-tools` is stored: every other base name is missing, so the order they are put back in is the
+			// whole assertion.
 			const root = await before.conversation();
 			await root.configure({ extensions: [CodingTools] }, BACKGROUND_CONTEXT);
 		} finally {
@@ -112,7 +114,10 @@ test("a selection missing several base names gets them back in base order", asyn
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "agent-identity", "delivery"],
+				[
+					CodingTools.name,
+					...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== CodingTools.name),
+				],
 				"the missing base names are appended in base order",
 			);
 		} finally {
@@ -129,9 +134,9 @@ test("a selection stored as an edit is left as it is", async () => {
 		const before = await openRuntime(directory);
 		try {
 			// An edit, not a list: `{ remove }` already unions with the base selection, so it needs nothing and must
-			// keep its shape. Turning it into a list would add `agent-identity` back and undo the edit.
+			// keep its shape. Turning it into a list would add `prompt` back and undo the edit.
 			const root = await before.conversation();
-			await root.configure({ extensions: { remove: [AgentIdentity] } }, BACKGROUND_CONTEXT);
+			await root.configure({ extensions: { remove: [Prompt] } }, BACKGROUND_CONTEXT);
 		} finally {
 			await before.close();
 		}
@@ -141,13 +146,13 @@ test("a selection stored as an edit is left as it is", async () => {
 			const stored = await storedSelection(after);
 			assert.deepEqual(
 				stored,
-				{ remove: ["agent-identity"] },
+				{ remove: ["prompt"] },
 				"the stored edit keeps its shape",
 			);
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "delivery"],
+				BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== Prompt.name),
 				"the edit still removes what it removed, and the base selection still speaks",
 			);
 		} finally {

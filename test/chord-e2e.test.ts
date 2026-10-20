@@ -1,7 +1,7 @@
 /**
  * Milestone 2 + 3 (wire level): a real Chord client in browser mode over a WebSocket sees the durable
  * conversation live — hydration, streaming status, tool transitions, the inbox queue, abort, proactive
- * hooks, and the `generateSandboxedUi` tool behind its toggle.
+ * hooks, and the `generateSandboxedUi` tool that is registered for every conversation.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -12,9 +12,11 @@ import { createHost, type Host, webSocketLink, type WebSocketLike } from "@earen
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { WebSocket } from "ws";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { promptSectionKeys } from "../src/server/prompt.ts";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
@@ -77,7 +79,6 @@ type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["get"]> 
 	abort(): Promise<void>;
 	fireHook(args: { hookId: string; payload?: string; requestId?: string }): Promise<{ submissionId: number }>;
 	toggleHook(args: { hookId: string; enabled: boolean }): Promise<void>;
-	setSandboxedUiEnabled(args: { enabled: boolean }): Promise<void>;
 };
 
 async function openClient(
@@ -86,6 +87,11 @@ async function openClient(
 	const directory = await mkdtemp(join(tmpdir(), "pda-chord-"));
 	directories.add(directory);
 	const { access, faux } = fauxAccess(extra.contextWindow);
+	// The agent's home is a temporary directory, never the real `~/.mason`: the runtime creates it through
+	// `houseHome`, and the prompt sections (soul, profile, skills) resolve the same one through `MASON_HOME`.
+	const houseHome = join(directory, "house");
+	const previousHouseHome = process.env.MASON_HOME;
+	process.env.MASON_HOME = houseHome;
 	const server = await startServer({
 		port: 0,
 		hostname: "127.0.0.1",
@@ -93,8 +99,7 @@ async function openClient(
 		dataDir: join(directory, "data"),
 		workspaceDir: directory,
 		modelAccess: access,
-		// Explicit, so an `ENABLE_SANDBOXED_UI=1` in the ambient environment cannot flip the default under test.
-		enableSandboxedUi: false,
+		houseHome,
 		...(extra.settings === undefined ? {} : { settings: extra.settings }),
 		onReport: () => {},
 	});
@@ -135,6 +140,8 @@ async function openClient(
 			raw.dispose();
 			await browser.close();
 			await server.close();
+			if (previousHouseHome === undefined) delete process.env.MASON_HOME;
+			else process.env.MASON_HOME = previousHouseHome;
 		},
 	};
 }
@@ -184,10 +191,29 @@ function messageText(entry: { model?: readonly unknown[] } | undefined): string 
 	return textOf(entry?.model?.[0] as { content?: unknown } | undefined);
 }
 
-function sections(view: ConversationView | undefined): Record<string, string | null>[] {
-	return entries(view)
-		.filter((entry) => entry.kind === "pi.system")
-		.map((entry) => (entry.model?.[0] as { sections?: Record<string, string | null> } | undefined)?.sections ?? {});
+/** Sections in effect after replaying the `pi.system` entries: the prompt the next request is given. */
+function renderedSections(view: ConversationView | undefined): Map<string, string> {
+	const shown = new Map<string, string>();
+	for (const entry of entries(view)) {
+		for (const message of entry.model ?? []) {
+			if (message.role !== "system" || message.sections === undefined) continue;
+			for (const [key, value] of Object.entries(message.sections)) {
+				if (value === null) shown.delete(key);
+				else shown.set(key, value);
+			}
+		}
+	}
+	return shown;
+}
+
+/** The tools in effect after replaying the `pi.system` entries: the loadout the next request is offered. */
+function offeredTools(view: ConversationView | undefined): string[] {
+	return getCurrentTools(entries(view).flatMap((entry) => entry.model ?? [])).map((tool) => tool.name);
+}
+
+/** The loadout as the provider sees it: a changed description or schema breaks the cache even when the name is the same. */
+function offeredDeclarations(view: ConversationView | undefined): string[] {
+	return getCurrentTools(entries(view).flatMap((entry) => entry.model ?? [])).map((tool) => JSON.stringify(tool));
 }
 
 describe("chord client <-> server", () => {
@@ -203,7 +229,6 @@ describe("chord client <-> server", () => {
 			const status = await waitFor("the initial status", () => state.agentStatus);
 			assert.equal(status.runStatus, "idle");
 			assert.equal(status.busy, false);
-			assert.equal(status.sandboxedUiEnabled, false);
 			assert.deepEqual(
 				status.hooks.map((hook) => hook.id),
 				["morning-brief", "retry-failed-run", "workspace-check"],
@@ -667,21 +692,25 @@ describe("chord client <-> server", () => {
 		}
 	});
 
-	it("enables the sandboxed-UI tool and settles a generateSandboxedUi call", async () => {
+	it("offers the widget tool on every turn and settles a generateSandboxedUi call", async () => {
 		const client = await openClient();
 		const { agent, state } = client;
 		try {
 			await agent.ready;
 			await waitFor("the initial view", () => state.serverView);
-			assert.equal(state.agentStatus?.sandboxedUiEnabled, false);
-			assert.equal(
-				sections(state.serverView).some((section) => "generative_ui" in section),
-				false,
-				"the widget prompt is off until the toggle",
-			);
 
-			await agent.setSandboxedUiEnabled({ enabled: true });
-			await waitFor("the toggle", () => (state.agentStatus?.sandboxedUiEnabled ? true : undefined));
+			// There is no toggle to open: a plain first turn is offered the widget tool already.
+			client.faux.setResponses([fauxAssistantMessage(fauxText("Ready when you are."))]);
+			await agent.submit({ content: "Hello" });
+			await waitFor("the first answer", () =>
+				entries(state.serverView).some((entry) => messageText(entry) === "Ready when you are.") ? true : undefined,
+			);
+			const firstTurnTools = offeredTools(state.serverView);
+			const firstTurnDeclarations = offeredDeclarations(state.serverView);
+			assert.ok(
+				firstTurnTools.includes("generateSandboxedUi"),
+				`the widget tool is in the first turn's loadout: ${firstTurnTools.join(", ")}`,
+			);
 
 			client.faux.setResponses([
 				fauxAssistantMessage(
@@ -718,6 +747,19 @@ describe("chord client <-> server", () => {
 			await waitFor("the answer", () =>
 				entries(state.serverView).some((entry) => messageText(entry) === "Here is the widget.") ? true : undefined,
 			);
+			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
+			// The reader is sent the widget itself — nothing gated it, and the call that built it stays on the server.
+			const widgets = state.transcript?.filter((item) => item.kind === "widget") ?? [];
+			assert.equal(widgets.length, 1, "the settled widget is one row of the reader's transcript");
+			assert.deepEqual((widgets[0] as { content?: { html?: string[] } }).content?.html, ["<div id='w'>widget</div>"]);
+			// The loadout the second turn was offered is the first one, in the same order: no tool appears or
+			// disappears mid-conversation, so the prefix the provider caches stays valid.
+			assert.deepEqual(offeredTools(state.serverView), firstTurnTools, "a second turn offers the same tools in order");
+			assert.deepEqual(
+				offeredDeclarations(state.serverView),
+				firstTurnDeclarations,
+				"and the same declarations, so the cached prefix stays valid",
+			);
 
 			// What the renderer reads: the settled arguments of the tool call in the assistant entry.
 			const call = entries(state.serverView)
@@ -729,8 +771,25 @@ describe("chord client <-> server", () => {
 			assert.deepEqual(call?.arguments.html, ["<div id='w'>widget</div>"]);
 			assert.deepEqual(call?.arguments.jsExpressions, ["boot()"]);
 
-			// The prompt section is in effect for the next request of this conversation.
-			assert.ok(sections(state.serverView).some((section) => "generative_ui" in section));
+			// The resident section is a pointer to the skill, not the manual: the parameter order, the design system
+			// and the sandbox API live in `skills/generative-ui/SKILL.md` and cost nothing until they are read.
+			const prompt = renderedSections(state.serverView);
+			assert.deepEqual(
+				[...prompt.keys()],
+				promptSectionKeys(),
+				"the model reads exactly the sections prompt.ts declares, in that order",
+			);
+			const rendered = [...prompt.values()].join("\n");
+			assert.match(prompt.get("generative_ui") ?? "", /generative-ui/, "the resident section names the skill");
+			assert.match(rendered, /generative-ui/, "the widget contract is reachable from the prompt");
+			assert.ok(
+				!rendered.includes("initialHeight — estimated finished height in pixels"),
+				"the parameter order lives in the skill, not in the prompt",
+			);
+			assert.ok(
+				!rendered.includes("Websandbox.connection.remote.sendPrompt"),
+				"the sandbox API manual lives in the skill, not in the prompt",
+			);
 		} finally {
 			await client.close();
 		}
