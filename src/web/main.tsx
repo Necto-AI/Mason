@@ -15,15 +15,14 @@ import { JumpPill } from "./components/JumpPill.tsx";
 import { SessionBar } from "./components/SessionBar.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
+import { adoptToken, socketUrl } from "./lib/token.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
 import { workingLabel } from "./lib/working.ts";
 import "./styles/tokens.css";
 import "./styles/chat.css";
 
-function webSocketUrl(): string {
-	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	return `${protocol}//${window.location.host}/`;
-}
+/** This browser's credential: taken from `?token=` once, then kept. `undefined` means the browser is not paired. */
+const token = adoptToken(window);
 
 function useAgent(): {
 	connection: AgentConnection;
@@ -34,7 +33,10 @@ function useAgent(): {
 	error: string | undefined;
 	clearError: () => void;
 } {
-	const connection = useMemo(() => connectAgent({ url: webSocketUrl() }), []);
+	const connection = useMemo(
+		() => connectAgent({ url: socketUrl(window.location, token) }),
+		[],
+	);
 	const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("connecting");
 	const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
 	const [queued, setQueued] = useState<QueuedItem[]>([]);
@@ -74,6 +76,29 @@ function useAgent(): {
 		error,
 		clearError: () => setError(undefined),
 	};
+}
+
+/**
+ * What a browser without a token sees. The server printed a link when it minted one, and pasting that link is the whole
+ * pairing step: an empty transcript would look like a broken agent instead of a browser that is not allowed in.
+ */
+function Unpaired() {
+	return (
+		<div id="app">
+			<div id="main">
+				<div className="unpaired" data-testid="unpaired">
+					<h1>Not paired</h1>
+					<p>
+						This browser has no token. Open the link the server printed on its first start — it looks like{" "}
+						<code>http://127.0.0.1:8787/?token=…</code> — once, and this page will remember it.
+					</p>
+					<p>
+						Lost it? Mint another on the machine: <code>npm run token -- add --label browser</code>.
+					</p>
+				</div>
+			</div>
+		</div>
+	);
 }
 
 function App() {
@@ -147,4 +172,4 @@ function App() {
 
 const container = document.getElementById("root");
 if (container === null) throw new Error("missing #root");
-createRoot(container).render(<App />);
+createRoot(container).render(token === undefined ? <Unpaired /> : <App />);

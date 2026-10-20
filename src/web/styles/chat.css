@@ -139,6 +139,30 @@
 	cursor: pointer;
 }
 
+/* A paired browser never sees this: the shell is public, the transcript behind it is not. */
+.unpaired {
+	max-width: 52ch;
+	margin: auto;
+	padding: 32px 24px;
+	color: var(--text);
+}
+.unpaired h1 {
+	margin: 0 0 12px;
+	font: 600 17px var(--sans);
+}
+.unpaired p {
+	margin: 0 0 10px;
+	font: 400 13.5px/1.55 var(--sans);
+	color: var(--faint);
+}
+.unpaired code {
+	font: 12px var(--mono);
+	color: var(--text);
+	background: var(--surface-2);
+	border-radius: var(--r-chip);
+	padding: 1px 5px;
+}
+
 /* ===== transcript ===== */
 #transcript {
 	flex: 1;
