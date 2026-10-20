@@ -17,6 +17,10 @@ Run: 11 parallel research subagents, model `opencode-go/deepseek-v4.1-flash`, th
 | [09-recursive-self-improvement.md](09-recursive-self-improvement.md) | Self-edit ladder with evidence gates; evals from failures; monthly ablation | `01a14f9b-86e5-74f4-a7c9-a0a6949bfcb3` |
 | [10-always-on-durability-triggers.md](10-always-on-durability-triggers.md) | Trigger→turn mapping, durable schedules, batching, channel layer | `01a14f9b-adf0-776c-aa84-f024ee9d5347` |
 | [11-tool-design-and-ui-pairing.md](11-tool-design-and-ui-pairing.md) | Stable tool list, small schemas, actionable errors, approval cards | `01a14f9b-d507-7737-904e-92f0176629e0` |
+| [12-whats-new-2026-10-18.md](12-whats-new-2026-10-18.md) | A week of shipped grokbot product, not a design lecture: typed cards, attention, channel queues | — (raw transcript supplied by Denis) |
+| [13-is-the-agent-harness-dead.md](13-is-the-agent-harness-dead.md) | "Is the agent harness dead?" — the runtime / context split, the flywheel, what mason already stands on | — (raw transcript supplied by Denis) |
+
+`12` and `13` are companions, not thirteenth and fourteenth lecture notes: they distill *other* sources — xAI's shipped changelog (a video transcript) and a talk on harness engineering itself — so they say what shipped and what the discipline now argues, rather than what the guest lecture argued. `12` reads as the gap list against what shipped; `13` is reference only and proposes no change.
 
 ## Cross-cutting conclusions (from all 11 files)
 
