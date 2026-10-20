@@ -38,8 +38,9 @@ function openRuntime(directory: string): Promise<AgentRuntime> {
 	return openAgentRuntime(BACKGROUND_CONTEXT, {
 		dataDir: join(directory, "data"),
 		workspaceDir: directory,
+		// A temporary home: the runtime creates `soul.md`, `log/` and `skills/` there, never in the real `~/.mason`.
+		houseHome: join(directory, "house"),
 		faux: true,
-		enableSandboxedUi: false,
 		onReport: () => {},
 	});
 }
@@ -77,9 +78,10 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 		const after = await openRuntime(directory);
 		try {
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
+			const stored = [CodingTools.name, AgentIdentity.name];
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "agent-identity", "delivery"],
+				[...stored, ...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => !stored.includes(name))],
 				"the missing base names are appended in base order, and the stored order survives",
 			);
 			assert.ok(
@@ -99,8 +101,8 @@ test("a selection missing several base names gets them back in base order", asyn
 	try {
 		const before = await openRuntime(directory);
 		try {
-			// Only `coding-tools` is stored: both `agent-identity` and `delivery` are missing, so the order they are put
-			// back in is the difference between the two.
+			// Only `coding-tools` is stored: every other base name is missing, so the order they are put back in is the
+			// whole assertion.
 			const root = await before.conversation();
 			await root.configure({ extensions: [CodingTools] }, BACKGROUND_CONTEXT);
 		} finally {
@@ -112,7 +114,10 @@ test("a selection missing several base names gets them back in base order", asyn
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "agent-identity", "delivery"],
+				[
+					CodingTools.name,
+					...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== CodingTools.name),
+				],
 				"the missing base names are appended in base order",
 			);
 		} finally {
@@ -147,7 +152,7 @@ test("a selection stored as an edit is left as it is", async () => {
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				["coding-tools", "delivery"],
+				BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== AgentIdentity.name),
 				"the edit still removes what it removed, and the base selection still speaks",
 			);
 		} finally {

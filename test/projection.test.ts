@@ -197,7 +197,7 @@ describe("the queue the client is sent", () => {
 
 describe("the working line", () => {
 	const status = (patch: Record<string, unknown>) =>
-		({ runStatus: "idle", busy: false, runningTools: [], sandboxedUiEnabled: false, hooks: [], ...patch }) as never;
+		({ runStatus: "idle", busy: false, runningTools: [], hooks: [], ...patch }) as never;
 
 	it("names the tools of the running round and nothing else about them", () => {
 		assert.equal(workingLabel(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");

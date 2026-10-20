@@ -1,16 +1,23 @@
 /**
- * Who the agent is: workspace `SOUL.md` (or the built-in preamble), the working directory, how to behave when an
- * event hook wakes it, and the one channel its words reach the reader through.
+ * Who the agent is: `~/.mason/soul.md` as the first section of the prompt, the working directory, how to behave when
+ * an event hook wakes it, and the one channel its words reach the reader through.
+ *
+ * `soul.md` replaces the default preamble a coding agent opens with ("you are a personal coding agent…"). It is the
+ * agent's own voice, so it is written by the person the agent works for, it stays short, and it is fixed for the
+ * conversation: the prompt prefix must not change under a running turn.
  */
-import type { Context } from "@earendil-works/chord";
 import { defineExtension, section } from "@earendil-works/pi-durable";
-import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
+import { currentHouse, readHouseFile } from "../house.ts";
 
-export const DEFAULT_PREAMBLE = `You are a proactive personal assistant with durable memory of this conversation.
-You are woken by event hooks, not only by the user: when something needs attention you reach out first, in your own words.
-You work in a real workspace through your tools (\`read\`, \`write\`, \`edit\`, \`bash\`), so verify before you claim.
-Be concise. Say what you did, what you found, and what you need; skip ceremony.`;
+/** What a fresh install starts from, and what `~/.mason/soul.md` is created with. Short on purpose. */
+export const DEFAULT_SOUL = `You are mason, Denis's personal assistant: always on, and able to reach him first.
+You keep his work moving while he is elsewhere. Be concise, concrete and calm; say what you did, what you found and what
+you need, and skip ceremony.
+Prefer what you already know; then the workspace and your tools; then an API; then search; then a browser; then a
+desktop. Ask Denis last: interrupting him costs more than doing the work.
+Verify before you claim. If you did not check it, say so.`;
 
+/** The cost ladder is behaviour the product leans on, so it is in the default even when a soul is supplied. */
 export const PROACTIVE_GUIDELINES = `Some user turns are event hook triggers: they start with "[EVENT HOOK: <name>]".
 When you receive one, you were woken by a schedule or an external trigger, not by the user:
 - Act, do not ask permission for work the hook's name and description already authorize.
@@ -20,28 +27,15 @@ When you receive one, you were woken by a schedule or an external trigger, not b
 
 /**
  * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
- * writes is working notes nobody reads. Slice 2 owns prompt hygiene; this is the one rule the client depends on.
+ * writes is working notes nobody reads.
  */
 const DELIVERY_INVARIANT = `Only messages sent via \`send_to_user\` are seen by the user. All other text is working notes.`;
-
-/** Where the agent's identity text lives, relative to the workspace the tools see. */
-const SOUL_FILES = ["SOUL.md", "AGENT_SOUL.md"] as const;
-
-async function readSoul(env: ExecutionEnv | undefined, context: Context): Promise<string | undefined> {
-	if (env === undefined) return undefined;
-	for (const name of SOUL_FILES) {
-		const result = await env.readTextFile(name, context);
-		if (result.ok && result.value.trim() !== "") return result.value.trim();
-	}
-	return undefined;
-}
 
 export const AgentIdentity = defineExtension({
 	name: "agent-identity",
 	sections: [
-		section("preamble", async (input, context) => (await readSoul(input.env, context)) ?? DEFAULT_PREAMBLE, {
-			tag: false,
-		}),
+		// Tag-less: this is the system prompt's opening, not a labelled block inside it.
+		section("soul", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
 		section("cwd", (input) => input.env?.cwd),
 		section("proactive_guidelines", () => PROACTIVE_GUIDELINES),
 		section("delivery", () => DELIVERY_INVARIANT),
