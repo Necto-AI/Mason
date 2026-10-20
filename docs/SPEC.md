@@ -575,9 +575,11 @@ it arrives. A delivered message keeps its text when the call that sent it failed
 
 **The working line is the whole of the machine.** While a turn runs, one line under the transcript says what it is
 doing — `working`, `working: bash`, `compacting context`, `retrying` (`data-testid="working"`, from
-`src/web/lib/working.ts`). A tool name is all the reader is told: it makes work visible without exposing what the work
-touches. The session bar carries the run status in words inside its menu, plus `connecting` and `disconnected` when the
-socket is not live.
+`src/web/lib/working.ts`). The line names the last tool call and gives any name that appeared for a moment a full
+second on the line (`TOOL_LABEL_HOLD_MS`), so a fast tool is read rather than flashed; compacting and retrying outrank
+it, and the line leaves with the turn. A tool name is all the reader is told: it makes work visible without exposing
+what the work touches. The session bar carries the run status in words inside its menu, plus `connecting` and
+`disconnected` when the socket is not live.
 
 Queued submissions render as faded user bubbles at the very end of the chat, each carrying its boundary
 (`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`). The queue
