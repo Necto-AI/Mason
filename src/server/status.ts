@@ -4,7 +4,7 @@
  * the module is the operator's view instead of the reader's: the prompt-cache report of a finished run.
  */
 import type { ConversationView } from "@earendil-works/pi-durable";
-import type { InboxState, LiveState } from "@earendil-works/pi-durable";
+import type { InboxState, LiveState, UsageState } from "@earendil-works/pi-durable";
 import type { AgentStatus, HookSummary, RunStatus } from "../shared/contract.ts";
 
 export function liveOf(view: ConversationView | undefined): LiveState | undefined {
@@ -89,7 +89,7 @@ export interface CacheUsage {
  * for the conversation's lifetime, so a run's own numbers are the difference between two readings (`usageSince`).
  */
 export function usageOf(view: ConversationView | undefined): CacheUsage {
-	const state = view?.docs["pi.usage"] as { models?: unknown; tools?: unknown } | undefined;
+	const state = view?.docs["pi.usage"] as UsageState | undefined;
 	const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
 	for (const bucket of [state?.models, state?.tools]) {
 		if (typeof bucket !== "object" || bucket === null) continue;
@@ -128,6 +128,10 @@ export function cacheLine(usage: CacheUsage | undefined, runId: string): string 
 
 /**
  * The per-run reporter: feed it the conversation's views as they arrive and it logs one line when a run finishes.
+ *
+ * Not reusable from pi: `coding-agent/src/core/cache-stats.ts` has the same idea (`detectCacheMiss`, `computeCacheWaste`)
+ * but works per assistant message over `SessionEntry`, needs timestamps `pi.usage` does not keep, and is not exported
+ * from the package root. A durable port would be a copy, not a reuse.
  *
  * `pi.usage` is cumulative, so a run's spend is the difference from the reading held when the run started. Kept out of
  * `main.ts` so it can be driven by synthetic views instead of only by a live provider: an untested producer is how a

@@ -68,8 +68,8 @@ async function renderSection(promptSection: PromptSection, input: unknown = unde
 
 test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does not", async () => {
 	await withHouseHome(async () => {
-		const soul = sectionOf(AgentIdentity, "soul");
-		assert.equal(AgentIdentity.sections?.[0]?.key, "soul", "the soul is the prompt's opening section");
+		const soul = sectionOf(AgentIdentity, "preamble");
+		assert.equal(AgentIdentity.sections?.[0]?.key, "preamble", "the preamble is the prompt's opening section");
 		assert.equal(soul.tag, false, "the soul opens the prompt instead of being a labelled block in it");
 		assert.equal(await renderSection(soul), DEFAULT_SOUL, "a fresh home starts from the shipped soul");
 
@@ -139,13 +139,12 @@ test("discoverSkills() finds nested SKILL.md files and reads their frontmatter",
 	);
 
 	const skills = await discoverSkills(shipped, personal);
-	const expected = {
-		name: "pr",
-		description: "Review a pull request.",
-		location: join(shipped, "engineering/pr/SKILL.md"),
-	};
-	assert.deepEqual(skills, [expected]);
-	assert.ok(isAbsolute(expected.location), "the location is absolute, so the model can read it from any cwd");
+	const [skill] = skills;
+	assert.ok(skill, "the nested skill is found");
+	assert.equal(skill.name, "pr");
+	assert.equal(skill.description, "Review a pull request.");
+	assert.equal(skill.filePath, join(shipped, "engineering/pr/SKILL.md"));
+	assert.ok(isAbsolute(skill.filePath), "the location is absolute, so the model can read it from any cwd");
 });
 
 test("a personal skill shadows a shipped skill with the same name", async () => {
@@ -179,7 +178,7 @@ test("a personal skill shadows a shipped skill with the same name", async () => 
 	const [shadowing] = skills;
 	assert.ok(shadowing);
 	assert.equal(shadowing.description, "Denis's PR review.");
-	assert.equal(shadowing.location, join(personal, "pr/SKILL.md"));
+	assert.equal(shadowing.filePath, join(personal, "pr/SKILL.md"));
 });
 
 test("a skill without a frontmatter name is named after its directory", async () => {
@@ -193,10 +192,11 @@ test("a skill without a frontmatter name is named after its directory", async ()
 	);
 
 	const skills = await discoverSkills(shipped, personal);
-	// The folder is already the label a person reads, so it is the name when the frontmatter has none.
-	assert.deepEqual(skills, [
-		{ name: "misc", description: "Unnamed helper.", location: join(shipped, "misc/SKILL.md") },
-	]);
+	// pi's loader falls back to the folder name, which is already the label a person reads.
+	assert.deepEqual(
+		skills.map((skill) => ({ name: skill.name, description: skill.description, path: skill.filePath })),
+		[{ name: "misc", description: "Unnamed helper.", path: join(shipped, "misc/SKILL.md") }],
+	);
 });
 
 test("renderSkills() lists each skill's name, description and absolute path, and says to read it", async () => {
@@ -216,13 +216,15 @@ test("renderSkills() lists each skill's name, description and absolute path, and
 	);
 
 	const skills = await discoverSkills(shipped, personal);
-	const text = renderSkills(skills);
-	assert.match(text, /`read`/, "the index says how a body is loaded");
+	const text = renderSkills(skills) ?? "";
+	assert.ok(text.length > 0, "two skills render a block");
+	assert.match(text, /Use the read tool to load a skill's file/, "the index says how a body is loaded");
+	assert.match(text, /<available_skills>/, "the block is the shape the model was trained to read");
 	for (const skill of skills) {
 		assert.ok(text.includes(skill.name), `the index names ${skill.name}`);
 		assert.ok(text.includes(skill.description), `the index says when to use ${skill.name}`);
-		assert.ok(isAbsolute(skill.location), `${skill.name} has an absolute location`);
-		assert.ok(text.includes(skill.location), `the index can be read from ${skill.location}`);
+		assert.ok(isAbsolute(skill.filePath), `${skill.name} has an absolute location`);
+		assert.ok(text.includes(skill.filePath), `the index can be read from ${skill.filePath}`);
 	}
 });
 
@@ -244,7 +246,7 @@ test("the shipped generative-ui skill carries its name, use-when description and
 	);
 	assert.ok(generative, "the shipped root is where generative-ui comes from");
 	assert.match(generative.description, /^Use when /);
-	assert.equal(generative.location, path);
+	assert.equal(generative.filePath, path);
 });
 
 test("the resident generative-UI instructions are a pointer to the skill, not the manual", async () => {
@@ -272,7 +274,7 @@ test("every section renders byte-identically twice, so an unchanged conversation
 			"utf8",
 		);
 		const sections: Array<readonly [PromptSection, unknown]> = [
-			...(["soul", "cwd", "proactive_guidelines", "delivery"] as const).map(
+			...(["preamble", "cwd", "proactive_guidelines", "delivery"] as const).map(
 				(key) => [sectionOf(AgentIdentity, key), key === "cwd" ? { env: { cwd: "/home/user/dev/mason" } } : undefined] as const,
 			),
 			[sectionOf(Profile, "profile"), undefined],
@@ -285,4 +287,9 @@ test("every section renders byte-identically twice, so an unchanged conversation
 			assert.equal(second, first, `${promptSection.key} is stable across renders`);
 		}
 	});
+});
+
+test("an empty home renders no skills section at all", async () => {
+	const empty = await tempDir("mason-skills-empty-");
+	assert.equal(renderSkills(await discoverSkills(empty, empty)), undefined, "nothing to say, so nothing is said");
 });

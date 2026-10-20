@@ -34,8 +34,8 @@ const DELIVERY_INVARIANT = `Only messages sent via \`send_to_user\` are seen by 
 export const AgentIdentity = defineExtension({
 	name: "agent-identity",
 	sections: [
-		// Tag-less: this is the system prompt's opening, not a labelled block inside it.
-		section("soul", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
+		// pi's name for the untagged opening of the system prompt; the text itself is Denis's `soul.md`.
+		section("preamble", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
 		section("cwd", (input) => input.env?.cwd),
 		section("proactive_guidelines", () => PROACTIVE_GUIDELINES),
 		section("delivery", () => DELIVERY_INVARIANT),
