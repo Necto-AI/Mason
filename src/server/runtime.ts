@@ -150,12 +150,14 @@ export async function openAgentRuntime(
 	options: OpenAgentRuntimeOptions = {},
 ): Promise<AgentRuntime> {
 	const dataDir = options.dataDir ?? ".data";
-	const workspaceDir = options.workspaceDir ?? process.cwd();
 
-	// The agent's home: its soul, its profile, its log and its skills. Created once, and never overwritten.
+	// The agent's home: its soul, its profile, its log, its skills, and the directory it works in.
+	// Created once, and never overwritten. The workspace is its own directory, not the code's: an agent that can edit
+	// the program that runs it is a different product.
 	const house = configureHouse(housePaths(options.houseHome));
 	await ensureHouse(house, DEFAULT_SOUL);
 	await ensureRepository(house.home);
+	const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 
 	const storage =
 		options.storageOverride ??

@@ -9,7 +9,8 @@
  * ├── soul.md                 # the first section of the system prompt
  * ├── profile.md              # who Denis is, agent-managed, always in the prompt
  * ├── log/2026-10-20.md       # dated facts, one per line, read on demand
- * └── skills/<name>/SKILL.md  # same format as ~/dev/pi-setup/skills
+ * ├── skills/<name>/SKILL.md  # same format as ~/dev/pi-setup/skills
+ * └── workspace/              # the directory the agent works in, separate from the code that runs it
  * ```
  *
  * Config, plugins and hooks join the same directory later; keeping one home is the point.
@@ -29,6 +30,7 @@ export interface HousePaths {
 	readonly profile: string;
 	readonly logDir: string;
 	readonly skillsDir: string;
+	readonly workspaceDir: string;
 }
 
 /**
@@ -59,6 +61,7 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		profile: join(home, "profile.md"),
 		logDir: join(home, "log"),
 		skillsDir: join(home, "skills"),
+		workspaceDir: join(home, "workspace"),
 	};
 }
 
@@ -86,6 +89,7 @@ function pad(value: number): string {
 export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promise<void> {
 	await mkdir(paths.logDir, { recursive: true });
 	await mkdir(paths.skillsDir, { recursive: true });
+	await mkdir(paths.workspaceDir, { recursive: true });
 	if (!existsSync(paths.soul)) await writeFile(paths.soul, `${defaultSoul}\n`, "utf8");
 }
 
