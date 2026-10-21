@@ -86,9 +86,19 @@ export function buildPreviewBodyMorph(body: string): string {
 /**
  * Fullscreen layout for a widget: it owns the viewport, so it fills the height and scrolls itself instead of
  * collapsing to its content height (which `MEASUREMENT_JS` pins down for the embedded case).
+ *
+ * A pass that was leaving fullscreen is cancelled here: entering again begins a new geometry, and the document must
+ * not be released back to the height of the episode before this one.
  */
 export const FULLSCREEN_FRAME_JS = `
 (function() {
+  var pending = window.__oguiRestorePass;
+  if (typeof pending === 'number') {
+    cancelAnimationFrame(pending);
+    window.__oguiRestorePass = null;
+  }
+  var held = document.getElementById('__oguiRestoreStyle');
+  if (held !== null) held.remove();
   var id = '__oguiFullscreenStyle';
   if (document.getElementById(id)) return;
   var style = document.createElement('style');
@@ -98,13 +108,51 @@ export const FULLSCREEN_FRAME_JS = `
   window.dispatchEvent(new Event('resize'));
 })();`;
 
-/** Back to the embedded layout: content height, no scrollbars of its own. */
-export const EMBEDDED_FRAME_JS = `
+/**
+ * Back to the embedded layout: content height, no scrollbars of its own.
+ *
+ * `restore` is the height the card is returning to, and only a card leaving fullscreen has one. The overlay let the
+ * document lay itself out at the viewport's height; a widget that stamps a child (an SVG, a canvas) at its measured
+ * size then props up the very box that measured it, and the document goes on reporting the fullscreen height forever
+ * because nothing in it can shrink. Pinning `html, body` to a definite height for one layout pass breaks that cycle
+ * generically: `height: 100%` and flex children re-derive from the card's height, the widget's own observer re-stamps
+ * at that size, and the constraint is then dropped so the ordinary auto-height measurement takes over — free to grow
+ * past the card's old height if the widget needs it, because the pin never outlives the pass. Without a believable
+ * height the document gets exactly the embedded layout it always got.
+ *
+ * The release waits for the frame after the pinned layout, not for a clock: the widget re-stamps from inside a
+ * ResizeObserver, which is delivered after that layout, and releasing earlier would hand it back the stretched
+ * document it is replacing. A document that stops painting keeps the pin (it is showing nothing to clip) and
+ * releases on the first frame it paints again; entering fullscreen again cancels it outright.
+ */
+export function embeddedFrameJs(restore: number | null = null): string {
+	const pass =
+		restore === null
+			? ""
+			: `
+  var held = document.getElementById('__oguiRestoreStyle');
+  if (held !== null) held.remove();
+  if (typeof window.__oguiRestorePass === 'number') cancelAnimationFrame(window.__oguiRestorePass);
+  var pin = document.createElement('style');
+  pin.id = '__oguiRestoreStyle';
+  pin.textContent = 'html, body { height: ${restore}px !important; }';
+  document.head.appendChild(pin);
+  window.dispatchEvent(new Event('resize'));
+  window.__oguiRestorePass = requestAnimationFrame(function() {
+    window.__oguiRestorePass = requestAnimationFrame(function() {
+      window.__oguiRestorePass = null;
+      var pinned = document.getElementById('__oguiRestoreStyle');
+      if (pinned !== null) pinned.remove();
+      window.dispatchEvent(new Event('resize'));
+    });
+  });`;
+	return `
 (function() {
   var style = document.getElementById('__oguiFullscreenStyle');
-  if (style !== null) style.remove();
+  if (style !== null) style.remove();${pass}
   window.dispatchEvent(new Event('resize'));
 })();`;
+}
 
 /** Continuous autosize: report the content height to the parent on every change. */
 export function measurementJs(role: "preview" | "final"): string {
