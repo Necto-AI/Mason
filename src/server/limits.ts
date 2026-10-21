@@ -14,6 +14,14 @@ import type { IncomingMessage } from "node:http";
 /** A webhook body carries a summary, a URL or a status line; 32 KiB is already generous for that. */
 export const HOOK_BODY_MAX_BYTES = 32 * 1024;
 
+/**
+ * A GitHub delivery is not a summary: it is the event object, with the issue or pull request body and its labels
+ * inside it, and a long PR routinely passes 20 KiB. GitHub's own ceiling is 25 MB, so this is a bound on what an
+ * attacker (or a misconfigured fork relay) can make the server buffer, not a format rule — a delivery over it is
+ * dropped with `413` rather than truncated, because a signature over a truncated body is a signature of nothing.
+ */
+export const GITHUB_BODY_MAX_BYTES = 256 * 1024;
+
 /** Fires one hook may start per window, counted per hook id. */
 export const HOOK_FIRE_LIMIT = 6;
 
@@ -85,6 +93,28 @@ export async function readBodyCapped(
 		chunks.push(buffer);
 	}
 	return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The same body, as bytes. A signature is computed over exactly what arrived, so it is the one reader that must not go
+ * through a string: a decode/re-encode round trip is only byte-identical while the bytes are valid UTF-8, and a
+ * verifier that is right "usually" is a verifier whose failures look like a sender's bug.
+ */
+export async function readRawBodyCapped(
+	request: IncomingMessage,
+	maxBytes: number = HOOK_BODY_MAX_BYTES,
+): Promise<Buffer | undefined> {
+	const declared = Number(request.headers["content-length"]);
+	if (Number.isFinite(declared) && declared > maxBytes) return undefined;
+	const chunks: Buffer[] = [];
+	let total = 0;
+	for await (const chunk of request) {
+		const buffer = chunk as Buffer;
+		total += buffer.length;
+		if (total > maxBytes) return undefined;
+		chunks.push(buffer);
+	}
+	return Buffer.concat(chunks);
 }
 
 /** A body parsed as a JSON object; anything else — an empty body, a form post, a JSON array — is `{}`. */

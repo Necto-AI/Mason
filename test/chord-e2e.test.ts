@@ -281,7 +281,7 @@ describe("chord client <-> server", () => {
 			assert.equal(status.busy, false);
 			assert.deepEqual(
 				status.hooks.map((hook) => hook.id),
-				["morning-brief", "retry-failed-run", "workspace-check"],
+				["morning-brief", "retry-failed-run", "github-activity", "workspace-check"],
 			);
 			assert.deepEqual(status.model, { provider: "faux", modelId: "faux-1" });
 
