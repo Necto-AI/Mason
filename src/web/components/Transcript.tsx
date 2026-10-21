@@ -16,12 +16,14 @@ export interface TranscriptProps {
 	readonly queued: readonly QueuedItem[];
 	/** The line for a running turn; `undefined` when nothing runs, so it leaves no trace behind. */
 	readonly working: string | undefined;
+	/** The name this browser claimed, `undefined` on an unnamed device: it decides which author chips stay quiet. */
+	readonly person: string | undefined;
 	readonly onWithdraw: (submissionId: number) => void;
 	readonly bridgeFor: (callId: string) => WidgetBridge;
 	readonly connection: string;
 }
 
-export function Transcript({ transcript, queued, working, onWithdraw, bridgeFor, connection }: TranscriptProps) {
+export function Transcript({ transcript, queued, working, person, onWithdraw, bridgeFor, connection }: TranscriptProps) {
 	const empty = transcript.length === 0 && queued.length === 0;
 	return (
 		<div id="transcript" className={empty ? "empty" : ""} data-testid="transcript" data-connection={connection}>
@@ -33,7 +35,7 @@ export function Transcript({ transcript, queued, working, onWithdraw, bridgeFor,
 			{transcript.map((item) => {
 				switch (item.kind) {
 					case "user":
-						return <UserRow key={item.id} text={item.text} />;
+						return <UserRow key={item.id} text={item.text} author={item.author} person={person} />;
 					case "delivered":
 						return <DeliveredRow key={item.id} text={item.text} failed={item.failed === true} streaming={item.streaming === true} />;
 					case "widget":
@@ -43,7 +45,7 @@ export function Transcript({ transcript, queued, working, onWithdraw, bridgeFor,
 				}
 			})}
 			{working === undefined ? null : <WorkingRow label={working} />}
-			<QueuedRows items={queued} onWithdraw={onWithdraw} />
+			<QueuedRows items={queued} person={person} onWithdraw={onWithdraw} />
 		</div>
 	);
 }
