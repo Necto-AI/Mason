@@ -139,28 +139,77 @@
 	cursor: pointer;
 }
 
-/* A paired browser never sees this: the shell is public, the transcript behind it is not. */
-.unpaired {
+/* A paired browser never sees this: the shell is public, the transcript behind it is not. The picker is the same page
+   one question further in, so it shares the door's column and type. */
+.unpaired,
+.join {
 	max-width: 52ch;
 	margin: auto;
 	padding: 32px 24px;
 	color: var(--text);
 }
-.unpaired h1 {
+.unpaired h1,
+.join h1 {
 	margin: 0 0 12px;
 	font: 600 17px var(--sans);
 }
-.unpaired p {
+.unpaired p,
+.join p {
 	margin: 0 0 10px;
 	font: 400 13.5px/1.55 var(--sans);
 	color: var(--faint);
 }
-.unpaired code {
+.unpaired code,
+.join code {
 	font: 12px var(--mono);
 	color: var(--text);
 	background: var(--surface-2);
 	border-radius: var(--r-chip);
 	padding: 1px 5px;
+}
+
+/* The roster, as the names it is: one tap picks, there is nothing to fill in and nothing to confirm. */
+.join-people {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-width: 320px;
+	margin: 16px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.join-people button {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 10px;
+	width: 100%;
+	padding: 9px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-panel);
+	background: var(--elevated);
+	color: var(--text);
+	font: 500 13.5px var(--sans);
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--dur-out) var(--ease), border-color var(--dur-out) var(--ease);
+}
+.join-people button:hover:not(:disabled) {
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.join-people button:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+/* the claim in flight: the name being taken is the only one that still moves */
+.join-people button[aria-busy="true"] {
+	opacity: 1;
+	animation: breathe 2s var(--ease) infinite;
+}
+/* a failed claim stays on the page beside the list: never a dead end, never a silent reload */
+.join .join-failed {
+	color: var(--error);
 }
 
 /* ===== transcript ===== */
@@ -285,6 +334,20 @@
 .message.user.queued .withdraw:hover {
 	background: var(--elevated);
 	color: var(--text);
+}
+
+/* Who wrote a bubble, on the rows that name someone. In a shared transcript this is the only mark that separates two
+   voices, so a teammate's name is a real label — while the reader's own, which they already know, is a faint stamp
+   above their words rather than a second visual voice. */
+.message .author {
+	display: block;
+	margin-bottom: 3px;
+	font: 600 11.5px/1.3 var(--sans);
+	color: var(--accent);
+}
+.message .author.mine {
+	font-weight: 400;
+	color: var(--faint);
 }
 
 /* A delivered message runs the column when a widget follows it, and hugs its own bubble otherwise. */
