@@ -1,0 +1,55 @@
+# mason-env — the machine the agent's tools actually run on.
+#
+# ubuntu 24.04, openssh-server, and nothing else. There is no `pi-env` daemon in this image and none is installed at
+# boot: `sshConnection()` in the mason container uploads the binary over this connection, verifies its SHA-256 on this
+# side, renames it into place and starts it per connection (vendor/pi/packages/env/src/ssh.ts, `deployDaemon`). An image
+# with a daemon baked in would pin a protocol version that the mason image has already outgrown, silently.
+#
+# The image is the machine, not the agent: no secrets, no home, no provider key. What a tool can reach is what is
+# mounted here — the shared workspace, and nothing else.
+FROM ubuntu:24.04
+
+ARG MASON_UID=1000
+ARG MASON_GID=1000
+
+# openssh-server is the only addition, and the tools already on the image are enough for the upload: sh, coreutils
+# (sha256sum, mktemp, mkdir, chmod, mv) and a shell for the login session.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server \
+ && rm -rf /var/lib/apt/lists/*
+
+# The package generates host keys in its postinst. Left in place they would be baked into the image and shared by every
+# deployment of it — the same key everywhere, forever. They are generated per container boot instead
+# (deploy/env-entrypoint.sh).
+RUN rm -f /etc/ssh/ssh_host_*
+
+# One login account, named and numbered the same as the account in the mason image: the two containers share the
+# `mason-workspace` and `env-keys` volumes, and a volume owned by uid 1000 is not writable by uid 1001. The base image
+# may already use that uid/gid (it has shipped an `ubuntu` account), so whatever holds the number is removed first —
+# `useradd` fails on a uid that is taken, and that failure would surface as a build error with no clue in it.
+RUN set -eux; \
+    for name in $(getent passwd "${MASON_UID}" | cut -d: -f1); do userdel "$name" || true; done; \
+    for name in $(getent group "${MASON_GID}" | cut -d: -f1); do groupdel "$name" || true; done; \
+    groupadd --gid "${MASON_GID}" mason; \
+    useradd --uid "${MASON_UID}" --gid "${MASON_GID}" --create-home --home-dir /home/mason --shell /bin/bash mason; \
+    chmod 0700 /home/mason
+
+# The two volumes, with the ownership they need on a first `up`. Whichever container starts first initialises an empty
+# named volume from the directory in its own image, so both images carry the same answer: `env-keys` writable by the
+# mason uid (it is the file mason writes), `workspace` owned by the same uid in both.
+RUN install -d -o mason -g mason -m 0755 /run/env-keys \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/workspace
+
+COPY env-entrypoint.sh /usr/local/bin/env-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/env-entrypoint.sh
+
+# Root, because sshd needs it: privilege separation, the login user, and reading host keys. The account that ever logs
+# in is `mason`, and it cannot become root (`PermitRootLogin no`, and no sudo in this image).
+USER root
+EXPOSE 22
+
+STOPSIGNAL SIGTERM
+# Foreground sshd with `-e` (logs to stderr, which is the only place a container's logs go) and `-D` (no fork), so this
+# is PID 1 and a stop signal ends the daemon rather than a shell that left it orphaned.
+ENTRYPOINT ["/usr/local/bin/env-entrypoint.sh"]
