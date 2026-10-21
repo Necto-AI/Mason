@@ -6,6 +6,7 @@
   "scripts": {
     "postinstall": "node scripts/link-vendor.mjs && node scripts/verify-vendor.mjs",
     "dev": "node --conditions=source --experimental-strip-types src/server/main.ts",
+    "dev:stack": "node --conditions=source --experimental-strip-types scripts/dev-stack.ts",
     "build:web": "node scripts/build-web.mjs",
     "test": "node --conditions=source --experimental-strip-types --test test/*.test.ts",
     "eval": "node --conditions=source --experimental-strip-types evals/run.ts",
