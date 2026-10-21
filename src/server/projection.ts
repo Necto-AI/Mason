@@ -12,7 +12,7 @@
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { DELIVERY_REMINDER, HOOK_ENTRY_KIND, MESSAGE_TOOL, WIDGET_TOOL } from "../shared/contract.ts";
+import { DELIVERY_REMINDER, HOOK_ENTRY_KIND, MESSAGE_TOOL, WIDGET_TOOL, splitAuthor } from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
 
 /**
@@ -92,14 +92,15 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	let spoke = true;
 	for (const entry of entries) {
 		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND) {
-			const text = textOfMessage(messageOf(entry)).trim();
+			const spoken = textOfMessage(messageOf(entry)).trim();
 			// The delivery gate's reminder is a user entry the model reads, not one the reader sent.
-			const reminder = entry.kind === "pi.user" && text === DELIVERY_REMINDER.trim();
+			const reminder = entry.kind === "pi.user" && spoken === DELIVERY_REMINDER.trim();
 			if (!reminder) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
 			// is not part of the conversation.
-			if (entry.kind === "pi.user" && text !== "" && !reminder) {
-				items.push({ kind: "user", id: String(entry.id), text });
+			if (entry.kind === "pi.user" && spoken !== "" && !reminder) {
+				const { text, author } = splitAuthor(spoken);
+				items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
 			}
 			continue;
 		}
@@ -208,11 +209,12 @@ export function projectQueued(view: ConversationView | undefined): QueuedItem[] 
 	for (const raw of items) {
 		const item = raw as { id?: unknown; mode?: unknown; content?: unknown; entry?: { kind?: string; data?: unknown } };
 		if (typeof item.id !== "number") continue;
-		const text = queuedText(item);
+		const { text, author } = splitAuthor(queuedText(item));
 		queued.push({
 			id: item.id,
 			mode: typeof item.mode === "string" ? item.mode : "followUp",
 			text,
+			...(author === undefined ? {} : { author }),
 			withdrawable: item.entry === undefined,
 		});
 	}

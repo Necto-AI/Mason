@@ -17,6 +17,7 @@ import {
 	AgentStatusSchema,
 	QueuedItemSchema,
 	TranscriptItemSchema,
+	withAuthor,
 	type AgentStatus,
 } from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
@@ -24,12 +25,13 @@ import {
 	authenticate,
 	createTokenStore,
 	ensureToken,
+	joinCookie,
 	pairingFromRequest,
 	pairingUrls,
 	type TokenRecord,
 	type TokenStore,
 } from "./auth.ts";
-import { currentHouse } from "./house.ts";
+import { currentHouse, type HousePaths } from "./house.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
 	createFireLimiter,
@@ -40,14 +42,22 @@ import {
 	readBodyCapped,
 } from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
+import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
 import { createCacheReporter, deriveAgentStatus } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-/** Two principals by kind: the server's own code, and a connected browser the app calls the owner. */
-type Principal = { kind: "owner" } | { kind: "server" };
+/**
+ * Two principals: the server's own code, and a connected browser — carrying the person that browser says it is, taken
+ * from the cookie at handshake.
+ *
+ * The person rides here rather than in the method arguments because the server, not the caller, has to be the one who
+ * writes the author into the transcript. It is part of the principal's key (see `principalKey`), because the object's
+ * key is the only place caller identity survives a call: a method's `ctx` acts as the host.
+ */
+type Principal = { kind: "owner"; person?: string } | { kind: "server" };
 
 const CONTENT_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -96,10 +106,27 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const host = createHost<Principal>({
 		name: "server",
 		self: { kind: "server" },
+		// The factory is handed the principal of the connection that created the object, but every method runs in a
+		// context acting as the *host* principal (`CtxImpl.child`), so one *shared* object could not tell later callers
+		// apart: caller identity exists only in the object's key. Keying on the person is therefore what makes the author
+		// readable in `submit` at all. Every unnamed browser still shares one object — the conversation is shared, and so
+		// is what mirrors it — and a named person mirrors it once for themselves.
+		principalKey: (principal) => (principal.kind === "owner" ? `owner:${principal.person ?? ""}` : principal.kind),
 		onError: (error) => console.error("[chord]", error),
 	});
 
-	host.serve(AgentService, (_input, _principal, self) => {
+	// The supervisor re-arms a run that a provider outage killed; it reads the committed view only. One for the server,
+	// not one per object: it is a policy over the one shared conversation, and a copy per person would each fire its own
+	// retry for the same failure.
+	const supervisor = new RunRetrySupervisor(async (error) => {
+		// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
+		await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
+	}, retryOptionsFromEnv());
+
+	host.serve(AgentService, (_input, principal, self) => {
+		// The person this object was created for: fixed at handshake, and the only identity a method can see.
+		const author = principal.kind === "owner" ? principal.person : undefined;
+
 		const statusFor = (view: ConversationView | undefined): AgentStatus =>
 			deriveAgentStatus(view, {
 				hooks: runtime.hooks.list(),
@@ -124,12 +151,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		});
 		const agentStatus = self.state("agentStatus", AgentStatusSchema, { init: () => statusFor(viewResource.value.value) });
 
-		// The supervisor re-arms a run that a provider outage killed; it reads the committed view only.
-		const supervisor = new RunRetrySupervisor(async (error) => {
-			// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
-			await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
-		}, retryOptionsFromEnv());
-
 		self.on("viewSync", viewResource, (next, ctx) => {
 			transcript.replace(ctx, projectTranscript(next));
 			queued.replace(ctx, projectQueued(next));
@@ -151,8 +172,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				supervisor.acted();
 				const conversation = await runtime.conversation();
 				const placement = whenBusyFor("user", whenBusy);
+				// The author is written here, not sent by the client: the name on a message is the server's claim, and it is
+				// the same string the model reads and the reader sees as a chip.
 				const submission = await conversation.submit(
-					{ type: "input", content, ...(placement === undefined ? {} : { whenBusy: placement }) },
+					{
+						type: "input",
+						content: withAuthor(content, author),
+						...(placement === undefined ? {} : { whenBusy: placement }),
+					},
 					BACKGROUND_CONTEXT,
 				);
 				return { submissionId: submission.id };
@@ -191,14 +218,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
 	// One owner, a few credentials, and a session key for the browser's cookie. The store is the config file, read per
 	// request: a revoke lands on the next request rather than on the next restart, which is the moment it matters.
-	const home = currentHouse().home;
-	const store = createTokenStore(home);
-	const { token: pairingToken } = await ensureToken(home);
+	const house = currentHouse();
+	const store = createTokenStore(house.home);
+	const { token: pairingToken } = await ensureToken(house.home);
 	// One limiter for the process: its budget is what this process may spend, so it is shared across requests.
 	const fires = createFireLimiter();
 
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir, store, fires).catch((error: unknown) => {
+		handleRequest(request, response, runtime, webDir, store, fires, house).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
@@ -207,13 +234,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const sockets = new WebSocketServer({ server });
 	// A socket is the reader: no credential, no owner. Chord closes the link itself when the principal is `undefined`.
 	acceptWebSockets(sockets, host, {
-		principal: async (request) => {
+		principal: async (request): Promise<Principal | undefined> => {
 			const auth = await authenticate(request, store);
 			if (!auth.ok) {
 				console.warn(`[auth] refused a socket (${auth.reason}) from ${request.headers.origin ?? "a program"}`);
 				return undefined;
 			}
-			return { kind: "owner" } as Principal;
+			// A removed person keeps their cookie but loses the socket: the roster is re-read here, so a removal lands on
+			// the next connection rather than on the next restart. A session that outlives its roster entry would let a
+			// removed person keep speaking under their old name.
+			const person = await claimedPerson(house, auth.person);
+			if (auth.person !== undefined && person === undefined) {
+				console.warn(`[auth] refused a socket for ${auth.person}: not on the roster`);
+				return undefined;
+			}
+			return person === undefined ? { kind: "owner" } : { kind: "owner", person: person.name };
 		},
 	});
 
@@ -243,6 +278,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	} else {
 		const known = (await store.records()).length;
 		console.log(`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live)`);
+	}
+	// A roster nobody filled in is the team feature nobody can use: the shell sends a paired browser to a picker with no
+	// names on it, and this line is what tells the deployer why, and what to type.
+	if ((await readRoster(house)).people.length === 0) {
+		console.warn(`[team] the roster is empty: add the first person with: npm run team -- add "Ilya" (a removal is live)`);
 	}
 	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
 		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);
@@ -277,6 +317,7 @@ async function handleRequest(
 	webDir: string,
 	store: TokenStore,
 	fires: FireLimiter,
+	house: HousePaths,
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 	// Every response carries these, refusals and static files alike: the shell has no inline script of its own, and a
@@ -298,6 +339,7 @@ async function handleRequest(
 	// Everything under `/api` is the owner's, except the liveness probe. The static shell is public on purpose: it is
 	// a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
 	let device: TokenRecord | undefined;
+	let claimed: string | undefined;
 	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
 		const auth = await authenticate(request, store);
 		if (!auth.ok) {
@@ -310,11 +352,56 @@ async function handleRequest(
 			return;
 		}
 		device = auth.token;
+		claimed = auth.person;
+	}
+
+	// A name is a place in the room, not a permanent badge: removing a person from the roster ends their access on the
+	// next request, while their cookie — signed, and still valid — waits for them to be added back.
+	const person = await claimedPerson(house, claimed);
+	if (claimed !== undefined && person === undefined) {
+		console.warn(`[auth] refused ${url.pathname} for ${claimed}: not on the roster`);
+		response.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+		response.end(JSON.stringify({ error: "not on the roster" }));
+		return;
 	}
 
 	// Who this browser is, for the shell to tell "not paired" from "paired but quiet". Behind the gate above.
+	// The roster rides along only for a browser that has not claimed a name: it is the list the picker shows, and a
+	// browser that already speaks for someone has no use for it.
 	if (url.pathname === "/api/session") {
-		return json(response, 200, { device: { id: device?.id, label: device?.label } });
+		const roster = claimed === undefined ? peopleOnWire(await readRoster(house)) : undefined;
+		return json(response, 200, {
+			device: { id: device?.id, label: device?.label },
+			...(person === undefined ? {} : { person: { name: person.name } }),
+			...(roster === undefined ? {} : { roster }),
+		});
+	}
+
+	// The join screen's only write: claim a name off the roster. A claim, not an authentication — anyone holding a token
+	// can pick any name on the list — so the route is the roster that makes it meaningful, and removing a person is
+	// what ends it.
+	if (url.pathname === "/api/join") {
+		if ((request.method ?? "GET") === "GET") {
+			return json(response, 200, {
+				people: peopleOnWire(await readRoster(house)),
+				...(person === undefined ? {} : { person: { name: person.name } }),
+			});
+		}
+		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
+		const text = await readBodyCapped(request);
+		if (text === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: HOOK_BODY_MAX_BYTES }));
+			return;
+		}
+		const body = parseJsonObject(text);
+		const wanted = typeof body.name === "string" ? body.name : "";
+		const chosen = findPerson(await readRoster(house), wanted);
+		if (chosen === undefined || device === undefined) return json(response, 404, { error: "not on the roster" });
+		const cookie = joinCookie(request, await store.config(), device.id, chosen.name);
+		if (cookie === undefined) return json(response, 500, { error: "this home has no session key" });
+		response.setHeader("set-cookie", cookie);
+		return json(response, 200, { person: { name: chosen.name } });
 	}
 
 	if (url.pathname === "/api/status") {
@@ -427,7 +514,7 @@ function socketOrigins(host: string | undefined): string {
 
 /** The pages a pairing link may land on: the shell, and the shell's file name. */
 function isShellPath(pathname: string): boolean {
-	return pathname === "/" || pathname === "/index.html";
+	return pathname === "/" || pathname === "/index.html" || pathname === "/join";
 }
 
 /** The page a pairing link redirects to: the same URL with the token spent and dropped. */
@@ -439,6 +526,9 @@ function withoutToken(url: URL): string {
 }
 
 async function serveStatic(response: ServerResponse, webDir: string, pathname: string): Promise<void> {
+	// `/join` is a door into the same shell, not a second page: the bundle decides what to draw from the session it
+	// finds, and a pairing link may land on this path as easily as on the root.
+	if (pathname === "/join") pathname = "/";
 	const relativePath = normalize(pathname === "/" ? "index.html" : pathname.replace(/^\/+/, ""));
 	if (relativePath.startsWith("..")) return notFound(response);
 	const path = resolve(webDir, relativePath);

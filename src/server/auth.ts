@@ -16,6 +16,11 @@
  *   in a URL and exchanged for a signed cookie, so the long-lived thing a page's scripts can reach holds no secret.
  *   The cookie names a token id, so revoking the token kills its sessions in the same breath.
  *
+ * A cookie may also name a **person** from the roster (`roster.ts`). That is a claim, not an authentication: the join
+ * screen lets anyone holding a token pick any name on the list, which is the trade a five-person team makes knowingly.
+ * What the cookie buys is that the claim is the server's — signed, stable across reloads, and carried into every turn
+ * as the author of what was said — rather than a string a client sends with each message.
+ *
  * Tokens are read from the config on every request rather than cached at startup: `revoke` has to take effect while
  * the server is running, because a lost phone is exactly when nobody wants to restart. The file is a kilobyte.
  *
@@ -57,6 +62,8 @@ const TOKEN_PREFIX = "mason_";
 /** The browser's cookie. `HttpOnly`, so a script on this origin cannot read it — which is the whole point of it. */
 export const SESSION_COOKIE = "mason_session";
 const SESSION_VERSION = "v1";
+/** A session that also names a person from the roster. `v1` cookies keep working: they are a device, just unnamed. */
+const SESSION_VERSION_PERSON = "v2";
 /** 30 days: a phone that re-pairs every morning is a phone nobody uses. Revoking the token ends it immediately. */
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -213,32 +220,61 @@ export function originAllowed(request: IncomingMessage): boolean {
 	}
 }
 
-/**
- * The session a pairing link is exchanged for: `<version>.<token id>.<HMAC>`.
- *
- * It carries no secret — the id names a record in the config, and the HMAC keeps the id from being invented — so a
- * stolen cookie is worth exactly one device's access, and it dies when that device's token is revoked.
- */
-export function sealSession(sessionKey: string, tokenId: string): string {
-	const material = `${SESSION_VERSION}:${tokenId}`;
-	const signature = createHmac("sha256", sessionKey).update(material, "utf8").digest("base64url");
-	return `${SESSION_VERSION}.${tokenId}.${signature}`;
+/** What a session cookie names once it is opened: the device it was paired for, and the person it claims to be. */
+export interface SessionSubject {
+	readonly tokenId: string;
+	readonly person?: string;
 }
 
-/** The token id a session cookie names, or `undefined` for anything that is not one this home signed. */
-export function openSession(sessionKey: string, value: string): string | undefined {
+/**
+ * The session a pairing link is exchanged for: `<version>.<token id>.<person>.<HMAC>`.
+ *
+ * It carries no secret — the id names a record in the config, the person a name in the roster, and the HMAC keeps
+ * either from being invented — so a stolen cookie is worth exactly one device's access, and it dies when that device's
+ * token is revoked or that person is removed from the roster.
+ *
+ * The person is base64url so a name with a dot in it cannot be read as the signature.
+ */
+export function sealSession(sessionKey: string, tokenId: string, person?: string): string {
+	if (person === undefined) {
+		const material = `${SESSION_VERSION}:${tokenId}`;
+		const signature = createHmac("sha256", sessionKey).update(material, "utf8").digest("base64url");
+		return `${SESSION_VERSION}.${tokenId}.${signature}`;
+	}
+	const encoded = Buffer.from(person, "utf8").toString("base64url");
+	const material = `${SESSION_VERSION_PERSON}:${tokenId}:${person}`;
+	const signature = createHmac("sha256", sessionKey).update(material, "utf8").digest("base64url");
+	return `${SESSION_VERSION_PERSON}.${tokenId}.${encoded}.${signature}`;
+}
+
+/** What a session cookie names, or `undefined` for anything that is not one this home signed. */
+export function openSession(sessionKey: string, value: string): SessionSubject | undefined {
 	const parts = value.split(".");
-	if (parts.length !== 3 || parts[0] !== SESSION_VERSION) return undefined;
-	const [, tokenId, signature] = parts as [string, string, string];
-	const expected = createHmac("sha256", sessionKey).update(`${SESSION_VERSION}:${tokenId}`, "utf8").digest();
+	if (parts[0] === SESSION_VERSION && parts.length === 3) {
+		const [, tokenId, signature] = parts as [string, string, string];
+		if (!signatureMatches(sessionKey, `${SESSION_VERSION}:${tokenId}`, signature)) return undefined;
+		return { tokenId };
+	}
+	if (parts[0] === SESSION_VERSION_PERSON && parts.length === 4) {
+		const [, tokenId, encoded, signature] = parts as [string, string, string, string];
+		const person = Buffer.from(encoded, "base64url").toString("utf8");
+		// The name is inside the signed material, so a cookie cannot be decoded into a different person.
+		if (!signatureMatches(sessionKey, `${SESSION_VERSION_PERSON}:${tokenId}:${person}`, signature)) return undefined;
+		return { tokenId, person };
+	}
+	return undefined;
+}
+
+/** Constant-time, and length-checked first: a malformed signature must cost the same as a wrong one. */
+function signatureMatches(sessionKey: string, material: string, signature: string): boolean {
+	const expected = createHmac("sha256", sessionKey).update(material, "utf8").digest();
 	let presented: Buffer;
 	try {
 		presented = Buffer.from(signature, "base64url");
 	} catch {
-		return undefined;
+		return false;
 	}
-	if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) return undefined;
-	return tokenId;
+	return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
 /** One cookie out of a `Cookie` header. First match wins; this header is a list, not a map. */
@@ -254,10 +290,12 @@ export function cookieValue(header: string | undefined, name = SESSION_COOKIE): 
 }
 
 /** `Set-Cookie` for a paired browser. `Secure` only where the connection already is TLS, or the cookie is dropped. */
-export function sessionCookieValue(sessionKey: string, tokenId: string, secure: boolean): string {
+export function sessionCookieValue(sessionKey: string, tokenId: string, secure: boolean, person?: string): string {
 	const attributes = [
-		`${SESSION_COOKIE}=${sealSession(sessionKey, tokenId)}`,
+		`${SESSION_COOKIE}=${sealSession(sessionKey, tokenId, person)}`,
 		"Path=/",
+		// Opaque to scripts on purpose. The shell never reads it: it asks `/api/session`, and the server answers from the
+		// cookie it already parsed — so the join screen learns the name without the page holding a handle on it.
 		"HttpOnly",
 		// Strict is the CSRF defence that does not depend on the Origin gate: a cross-site request never carries it.
 		"SameSite=Strict",
@@ -275,21 +313,26 @@ function requestIsSecure(request: IncomingMessage): boolean {
 }
 
 /** The device a request's session cookie names, if that cookie was signed here and its token still exists. */
-export function deviceFromCookie(request: IncomingMessage, config: MasonConfig): TokenRecord | undefined {
+export function deviceFromCookie(
+	request: IncomingMessage,
+	config: MasonConfig,
+): { readonly token: TokenRecord; readonly person?: string } | undefined {
 	const sessionKey = config.sessionKey;
 	if (sessionKey === undefined) return undefined;
 	const value = cookieValue(request.headers.cookie);
 	if (value === undefined) return undefined;
-	const tokenId = openSession(sessionKey, value);
-	if (tokenId === undefined) return undefined;
-	return readTokens(config).find((record) => record.id === tokenId);
+	const subject = openSession(sessionKey, value);
+	if (subject === undefined) return undefined;
+	const token = readTokens(config).find((record) => record.id === subject.tokenId);
+	if (token === undefined) return undefined;
+	return subject.person === undefined ? { token } : { token, person: subject.person };
 }
 
 export type AuthFailure = "origin" | "token";
 
-export type AuthResult =
-	| { readonly ok: true; readonly token: TokenRecord }
-	| { readonly ok: false; readonly reason: AuthFailure };
+type AuthSuccess = { readonly ok: true; readonly token: TokenRecord; readonly person?: string };
+
+export type AuthResult = AuthSuccess | { readonly ok: false; readonly reason: AuthFailure };
 
 /**
  * The credentials a running server consults. It is the config file, read per request: a mint or a revoke while the
@@ -318,7 +361,10 @@ export async function authenticate(request: IncomingMessage, store: TokenStore):
 	const direct = verifyToken(readTokens(config), presentedToken(request));
 	if (direct !== undefined) return { ok: true, token: direct };
 	const paired = deviceFromCookie(request, config);
-	return paired === undefined ? { ok: false, reason: "token" } : { ok: true, token: paired };
+	if (paired === undefined) return { ok: false, reason: "token" };
+	return paired.person === undefined
+		? { ok: true, token: paired.token }
+		: { ok: true, token: paired.token, person: paired.person };
 }
 
 /**
@@ -363,4 +409,21 @@ function lanAddresses(): readonly string[] {
 		}
 	}
 	return addresses;
+}
+
+/**
+ * The cookie a join screen sets: the device it was already paired as, plus the person picked from the roster.
+ *
+ * The device stays in the cookie on purpose. A name is a claim about *who is sitting at this browser*, and the token
+ * is a claim about *which browser* — keeping both means removing a person ends their join, and revoking a laptop ends
+ * its session, without either one hiding the other.
+ */
+export function joinCookie(
+	request: IncomingMessage,
+	config: MasonConfig,
+	tokenId: string,
+	person: string,
+): string | undefined {
+	if (config.sessionKey === undefined) return undefined;
+	return sessionCookieValue(config.sessionKey, tokenId, requestIsSecure(request), person);
 }
