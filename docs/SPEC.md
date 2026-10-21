@@ -204,7 +204,14 @@ export interface EventHookConfig {
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
+  - `github-activity` (an issue or pull request event from a connector; enabled, because a delivery is its only caller and a hook with no hook to fire would drop one)
   - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
+- **Connectors: another system's events, one verb each** (`src/server/connectors.ts`, GitHub first). A connector is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It delivers an event, and the event becomes a hook fire — a prompt with the event fenced as untrusted data, exactly like a webhook's payload.
+  - **Route and credential.** `POST /api/connectors/github` is the one path in `/api` that answers a signature instead of a token (§4.1b): GitHub sends `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw body bytes** with the connector's secret, compared in constant time. No secret, no `sha256=` prefix, a wrong length or a tampered byte is `401` before a single field is parsed. The secret lives in `<data>/connectors.json` (`0600`), not `config.json`, because the two answer different questions — who may speak as the owner, and which sender may wake the agent about an event — and a leak of one is not a leak of the other. `npm run connector -- set github` mints one and prints it once; `remove` deletes it; the server reads the file per delivery, so a rotation lands without a restart.
+  - **Trigger-first filter.** A repository emits an event for every label, comment, edit and assignment, and each one forwarded is a model turn. The allowlist is an allowed `(event, action)` set — `issues` `opened|reopened|closed`, `pull_request` `opened|reopened|closed|ready_for_review|review_requested`, `pull_request_review` `submitted` — and everything else is acknowledged with `202 { ignored: true }` rather than refused, because a sender that gets an error for a comment event retries forever. A payload the reader cannot make sense of (no repository, no number) is dropped the same way: half an event is worse than none.
+  - **Identity and limits.** A delivery carries `X-GitHub-Delivery`, a unique id per attempt, which becomes the fire's `requestId` through `explicitRequestId()` — GitHub's own redelivery collapses, permanently. A delivery without one falls back to `bodyRequestId()`. The shared fire limiter applies per connector (`6` a minute), and the body is capped at **256 KiB** (`GITHUB_BODY_MAX_BYTES`): a PR event is tens of kilobytes, and the cap bounds what can be buffered rather than describing a format. Over the cap is `413`, never a truncated signature.
+  - **What the model sees.** The event compacted to what a reader needs to judge it — source, event, action, repo, number, kind, title, url, actor, state, draft, merged, labels, and up to 2,000 characters of body (or a review's state and body). The raw delivery is not forwarded: the prompt receives JSON, and the fence plus `proactive_guidelines` say what a payload means.
+  - **Trying it without GitHub.** `npm run connector -- sample github issues.opened` signs a realistic payload with the stored secret and posts it to a running server, so the filter, the signature, the hook and the turn can all be exercised on a laptop. Replaying a real delivery is the same `curl` with the same two headers.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -422,6 +429,12 @@ the rule; `src/server/main.ts` applies it in exactly five places — the socket'
 exchange in `handleRequest`, the gate at the top of `handleRequest` that `/api/*` passes through, the roster refusal
 that gate applies to a claimed name, and the same refusal at the socket handshake, which a removed person's live socket
 survives only until it reconnects.
+
+Two paths in `/api` are deliberately outside that gate, and both are narrower than a token. `/api/health` is a liveness
+probe that answers one word and needs no credential at all. `POST /api/connectors/github` (§3.3) is authenticated by
+the sender's HMAC against `connectors.json`, and can do exactly one thing: fire the one hook that connector names. A
+connector's secret is not a token — it cannot read, claim, or call — so the door it opens is a door into `hooks.fire`
+and nothing else.
 
 **The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
 mode 0600, home 0700. Only hashes are stored: that file is exactly the kind of thing that gets pasted into a bug report

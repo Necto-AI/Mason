@@ -32,6 +32,14 @@ import {
 	type TokenStore,
 } from "./auth.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
+import {
+	connectorsPath,
+	GITHUB_DELIVERY_PATH,
+	githubPayload,
+	readGithubConnector,
+	readGithubEvent,
+	verifyGithubSignature,
+} from "./connectors.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
 	createFireLimiter,
@@ -40,6 +48,8 @@ import {
 	HOOK_FIRE_LIMIT,
 	parseJsonObject,
 	readBodyCapped,
+	readRawBodyCapped,
+	GITHUB_BODY_MAX_BYTES,
 } from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
@@ -336,11 +346,14 @@ async function handleRequest(
 		}
 	}
 
-	// Everything under `/api` is the owner's, except the liveness probe. The static shell is public on purpose: it is
-	// a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
+	// Everything under `/api` is the owner's, except two doors that cannot present a token: the liveness probe, and a
+	// connector's deliveries, which are authenticated by the sender's own HMAC below (src/server/connectors.ts) and can
+	// do exactly one thing. The static shell is public on purpose: it is a bundle with no secrets in it, and the page
+	// is where a reader is told that this browser is not paired.
 	let device: TokenRecord | undefined;
 	let claimed: string | undefined;
-	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
+	const connectorDelivery = url.pathname === GITHUB_DELIVERY_PATH;
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health" && !connectorDelivery) {
 		const auth = await authenticate(request, store);
 		if (!auth.ok) {
 			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
@@ -363,6 +376,59 @@ async function handleRequest(
 		response.writeHead(401, { "content-type": "application/json; charset=utf-8" });
 		response.end(JSON.stringify({ error: "not on the roster" }));
 		return;
+	}
+
+	if (connectorDelivery) {
+		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
+		// Read per request, like the token store: `npm run connector -- set` takes effect on the next delivery.
+		const connector = readGithubConnector(house);
+		if (connector === undefined) {
+			console.warn(`[connector] refused a GitHub delivery: no connector at ${connectorsPath(house)}`);
+			return json(response, 404, { error: "no github connector" });
+		}
+		// Before the body is read: a delivery is a whole turn, and a loop of them is a bill.
+		const wait = fires.take("connector:github");
+		if (wait !== undefined) {
+			console.warn(`[connector] refused a GitHub delivery: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
+			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
+			return;
+		}
+		const raw = await readRawBodyCapped(request, GITHUB_BODY_MAX_BYTES);
+		if (raw === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: GITHUB_BODY_MAX_BYTES }));
+			return;
+		}
+		// The signature is the door here. A delivery that cannot prove it came from the repository's webhook is refused
+		// before a single field of it is parsed.
+		if (!verifyGithubSignature(connector.secret, raw, headerValue(request, "x-hub-signature-256"))) {
+			console.warn("[connector] refused a GitHub delivery: bad or missing signature");
+			return json(response, 401, { error: "unauthorized" });
+		}
+		const delivery = headerValue(request, "x-github-delivery");
+		const parsed = parseJsonObject(raw.toString("utf8"));
+		const event = readGithubEvent(headerValue(request, "x-github-event"), parsed);
+		if (event === undefined) {
+			// Acknowledged and dropped: this connector is for issues and pull requests, and a sender that gets an error
+			// for a comment event would retry it forever.
+			return json(response, 202, { ignored: true });
+		}
+		try {
+			const submission = await runtime.hooks.fire(connector.hookId, {
+				payload: githubPayload(event),
+				requestId:
+					delivery === undefined
+						? bodyRequestId(connector.hookId, parsed, Date.now())
+						: explicitRequestId(connector.hookId, delivery),
+			});
+			return json(response, 202, { submissionId: submission.id });
+		} catch (error) {
+			if (error instanceof UnknownHookError) {
+				return json(response, 500, { error: `the connector fires ${connector.hookId}, which is not a hook` });
+			}
+			throw error;
+		}
 	}
 
 	// Who this browser is, for the shell to tell "not paired" from "paired but quiet". Behind the gate above.
@@ -575,6 +641,12 @@ function notFound(response: ServerResponse): void {
 
 
 /** The id a webhook sender gave its delivery: in the JSON body or the `x-request-id` header, else none. */
+/** One request header as a string; repeated headers are not a thing a delivery sends, so the first is the value. */
+function headerValue(request: IncomingMessage, name: string): string | undefined {
+	const value = request.headers[name];
+	return Array.isArray(value) ? value[0] : value;
+}
+
 function senderRequestId(request: IncomingMessage, body: Record<string, unknown>): string | undefined {
 	if (typeof body.requestId === "string" && body.requestId !== "") return body.requestId;
 	const header = request.headers["x-request-id"];
