@@ -51,3 +51,47 @@ export function mergeMeasuredHeight(
 export function streamingCeiling(viewportHeight: number): number {
 	return Math.max(PLACEHOLDER_MIN, Math.round(viewportHeight * STREAMING_VIEWPORT_SHARE));
 }
+
+/**
+ * Whether a report is the fullscreen layout still measuring itself.
+ *
+ * The fullscreen style gives the document the frame's height and a minimum of it, so a document laid out that way
+ * reports at least that much. Leave fullscreen and the iframe's viewport takes a transition to shrink back, and a
+ * widget whose own layout was stretched by the viewport goes on filling it: either way the number that comes back
+ * describes the overlay, not the height the card has in the transcript, and it must never become that height.
+ */
+export function isFullscreenEcho(reported: unknown, fullscreenHeight: number | null): boolean {
+	if (fullscreenHeight === null) return false;
+	if (typeof reported !== "number" || !Number.isFinite(reported)) return false;
+	return Math.ceil(reported) >= fullscreenHeight - HEIGHT_STEP;
+}
+
+/**
+ * The height to hold the document at for the layout pass that leaves fullscreen, or `null` for no pass at all.
+ *
+ * On the way out the card restores the height it had before the overlay, and that number is the only believable
+ * constraint to hand the document. A card that never went fullscreen has no such number, and nothing a widget says
+ * is one: unknown, non-numeric, empty or beyond `CONTENT_MAX` is junk, and the answer is to leave the embedded
+ * document measuring itself exactly as it always does.
+ */
+export function restoreHeight(cardHeight: unknown): number | null {
+	if (typeof cardHeight !== "number" || !Number.isFinite(cardHeight)) return null;
+	const height = Math.ceil(cardHeight);
+	if (height < 1 || height > CONTENT_MAX) return null;
+	return height;
+}
+
+/**
+ * Whether a report is taller than the card the pass out of fullscreen is restoring, so it cannot be that card's height.
+ *
+ * The pass pins the document to the restored height, but the widget's own layout only follows a moment later: a child
+ * stamped at the viewport size still overflows the freshly pinned box, and the document measures that overflow before
+ * anything in it has re-stamped. Nothing above the restored height is accepted while the pass is in flight. It is a
+ * one-pass rule on purpose — a document that really is taller than the card's old height reports again once the pass
+ * is over, and the card grows to it.
+ */
+export function isRestoreEcho(reported: unknown, restoring: number | null): boolean {
+	if (restoring === null) return false;
+	if (typeof reported !== "number" || !Number.isFinite(reported)) return false;
+	return Math.ceil(reported) > restoring + HEIGHT_STEP;
+}

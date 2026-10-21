@@ -22,7 +22,7 @@ import {
 	buildFinalFrameContent,
 	buildPreviewBodyMorph,
 	buildPreviewHeadContent,
-	EMBEDDED_FRAME_JS,
+	embeddedFrameJs,
 	FULLSCREEN_FRAME_JS,
 	MEASUREMENT_JS,
 	PREVIEW_FRAME_CONTENT,
@@ -32,8 +32,11 @@ import {
 import {
 	CONTENT_MAX,
 	clampHeight,
+	isFullscreenEcho,
+	isRestoreEcho,
 	mergeMeasuredHeight,
 	placeholderHeight,
+	restoreHeight,
 	streamingCeiling,
 } from "../lib/frame-height.ts";
 import type { OpenGenUIContent } from "../../shared/genui-content.ts";
@@ -186,7 +189,27 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 	const remembered = settledHeight !== null;
 	const [sandboxState, setSandboxState] = useState<SandboxState>("idle");
 	const [phraseIndex, setPhraseIndex] = useState(0);
+	/** The height the document measured while the card filled the screen: after that, its reports echo it. */
+	const fullscreenHeight = useRef<number | null>(null);
+	/**
+	 * The height the card goes back to when the overlay closes: the document is pinned to it for one layout pass,
+	 * because the fullscreen layout props up the box that would otherwise measure the embedded one.
+	 */
+	const restoreTo = useRef<number | null>(null);
+	/** The height the document is pinned to right now, while that pass is in flight: taller reports are still stretched. */
+	const restoring = useRef<number | null>(null);
 	const fullscreenRef = useRef(fullscreen === true);
+	// Height: the settled document wins, then the streaming preview, then the estimate.
+	const height = settledHeight ?? previewHeight ?? estimate;
+	if (fullscreen === true && !fullscreenRef.current) {
+		// Entering fullscreen begins a new geometry, so neither the last episode's number nor a pending pass carries in.
+		fullscreenHeight.current = null;
+		restoreTo.current = null;
+		restoring.current = null;
+	} else if (fullscreen !== true && fullscreenRef.current) {
+		// Leaving it: this is the height the card is about to have again, and the one the document has to re-derive at.
+		restoreTo.current = height;
+	}
 	fullscreenRef.current = fullscreen === true;
 
 	const localApi = useMemo(() => {
@@ -210,6 +233,8 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 	const containerRef = useRef<HTMLDivElement>(null);
 	const finalSandbox = useRef<SandboxInstance | null>(null);
 	const previewSandbox = useRef<SandboxInstance | null>(null);
+	/** The document the overlay was handed to: the only one whose layout the viewport stretched. */
+	const fullscreenSandbox = useRef<SandboxInstance | null>(null);
 	const previewReady = useRef(false);
 	const finalReady = useRef(false);
 	const executedExpressions = useRef(0);
@@ -222,11 +247,23 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 		const onMessage = (event: MessageEvent) => {
 			const data = event.data as { type?: string; role?: string; height?: unknown } | null;
 			if (data?.type !== RESIZE_MESSAGE_TYPE) return;
-			// Fullscreen ignores the content height: the frame is the viewport.
-			if (fullscreenRef.current) return;
 			const fromPreview = previewSandbox.current?.iframe.contentWindow === event.source;
 			const fromFinal = finalSandbox.current?.iframe.contentWindow === event.source;
 			if (!fromPreview && !fromFinal) return;
+			// Fullscreen ignores the content height: the frame is the viewport. The number is worth remembering
+			// instead, because the document goes on measuring that geometry once the overlay is gone.
+			if (fullscreenRef.current) {
+				const viewport = clampReportedHeight(data.height);
+				if (viewport !== null) fullscreenHeight.current = Math.max(viewport, fullscreenHeight.current ?? 0);
+				return;
+			}
+			if (isFullscreenEcho(data.height, fullscreenHeight.current)) return;
+			// The pass is pinning the document to the card's height; until the widget has re-laid itself out there, its
+			// overflowing child is still measured against the overlay, and that report is not a card height.
+			if (isRestoreEcho(data.height, restoring.current)) return;
+			// The document has reported a height this card could have, so the overlay's geometry is behind it.
+			fullscreenHeight.current = null;
+			restoring.current = null;
 			if (fromPreview) {
 				setPreviewHeight((current) =>
 					// The first report starts from the estimate: a preview whose body has barely begun is not
@@ -387,11 +424,40 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 		if (phase === "placeholder") return;
 		const sandbox = finalSandbox.current ?? previewSandbox.current;
 		if (sandbox === null) return;
-		void sandbox.run(fullscreen === true ? FULLSCREEN_FRAME_JS : EMBEDDED_FRAME_JS).catch((error: unknown) => {
+		// The measurement is deliberately not cleared on the way in: it is the height the reader returns to on the
+		// way out, and the frame has to be that size again before the document measures it.
+		if (fullscreen === true) {
+			// The document holding the overlay is the only one with a viewport layout to undo later.
+			fullscreenSandbox.current = sandbox;
+			void sandbox.run(FULLSCREEN_FRAME_JS).catch((error: unknown) => {
+				console.error("[gen-ui] layout switch failed:", error);
+			});
+			return;
+		}
+		// A document that never filled the screen has nothing to re-derive, so it takes the plain embedded path; the
+		// one that did is handed the card's restored height for exactly one layout pass.
+		const restore = fullscreenSandbox.current === sandbox ? restoreHeight(restoreTo.current) : null;
+		restoreTo.current = null;
+		fullscreenSandbox.current = null;
+		// Until the pinned document has reported at that size, a taller report is the stretched layout still being
+		// measured; the pass is one layout pass long, so the refusal ends with it and the card may grow again after.
+		restoring.current = restore;
+		let gate: number | null = null;
+		if (restore !== null) {
+			gate = requestAnimationFrame(() => {
+				gate = requestAnimationFrame(() => {
+					gate = null;
+					restoring.current = null;
+				});
+			});
+		}
+		void sandbox.run(embeddedFrameJs(restore)).catch((error: unknown) => {
 			console.error("[gen-ui] layout switch failed:", error);
 		});
-		// Entering fullscreen makes the last embedded measurement stale; the widget reports a fresh one on exit.
-		if (fullscreen === true) setSettledHeight(null);
+		return () => {
+			if (gate !== null) cancelAnimationFrame(gate);
+			restoring.current = null;
+		};
 	}, [fullscreen, phase]);
 
 	// The progress phrases the model wrote; cycling them is the only sign of life until markup arrives.
@@ -408,8 +474,7 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 		return () => clearInterval(timer);
 	}, [showPlaceholder, phrases.length]);
 
-	// Height: the settled document wins, then the streaming preview, then the estimate.
-	const height = settledHeight ?? previewHeight ?? estimate;
+	// The frame is the widget's own height, except while it owns the viewport.
 	const frameHeight = fullscreen === true ? "100%" : `${height}px`;
 
 	return (

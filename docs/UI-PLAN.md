@@ -237,6 +237,15 @@ What it does now, and why:
   call id) and never shows the skeleton — the reader sees the same card repaint its content, not resize or blank.
 - **The fullscreen control left the widget's corner**: it sits in a reserved strip above the card, so it can no longer
   cover whatever the widget put in its own top-right corner (a dashboard header, a legend, a close button).
+- **Leaving fullscreen restores the card *and* its document.** The overlay gave the document the viewport's height, so a
+  widget that stamps a child at its measured size (an SVG chart, a canvas) props up the very flex box that measures it
+  and can never shrink itself: after Exit the card came back at its old height around a document still laid out at
+  1050px, clipped. A measurement taken while leaving is refused (`isFullscreenEcho`), because it describes the overlay;
+  the height the card is returning to is handed to `embeddedFrameJs(restore)`, which pins `html, body` to it for one
+  layout pass so `height: 100%` and flex children re-derive, and releases on the second animation frame — after the
+  widget's own ResizeObserver re-stamps at the card's size. Taller reports are refused only for the length of that pass
+  (`isRestoreEcho`), so a widget that genuinely needs more room grows a frame later, and a widget that never entered
+  fullscreen runs exactly the embedded path it always ran. No remount, so state inside the widget survives.
 
 Known and accepted: the model's `initialHeight` is still only an estimate, and the second mount still costs one
 sandbox boot (~200ms of the widget's own background). Both are noted in SPEC §5.2.
