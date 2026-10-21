@@ -11,6 +11,7 @@
     "eval": "node --conditions=source --experimental-strip-types evals/run.ts",
     "eval:judge": "node --conditions=source --experimental-strip-types evals/judge.ts",
     "token": "node --conditions=source --experimental-strip-types scripts/token.ts",
+    "team": "node --conditions=source --experimental-strip-types scripts/team.ts",
     "test:asr": "asr/run.sh asr/.venv/bin/python -m unittest discover -s asr/tests -v"
   },
   "dependencies": {
