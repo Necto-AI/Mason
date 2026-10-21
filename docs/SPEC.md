@@ -229,20 +229,25 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 ├── soul.md                 # The first section of the system prompt: the agent's own voice
 ├── profile.md              # Who Denis is: agent-managed, resident, capped
 ├── config.json             # Credentials that may talk to the server: one hashed token per device (§4.1b)
+├── roster.json             # Who is in the room: the names a browser may claim, read per request (§4.1b)
 ├── log/2026-10-20.md       # Dated facts, one per line, read on demand
 ├── skills/<name>/SKILL.md  # Denis's own skills; they shadow the shipped ones
 ├── workspace/              # The directory the agent works in; not the repo that runs it
 └── data/                   # agent.sqlite and hooks.json: the state, in the home it describes (§4.1c)
 ```
 
-The home is `0700` and so is every directory in it; `soul.md` and `agent.sqlite` are `0600`. It holds a transcript of
-everything Denis said — that is not a thing to leave readable by every other account on the machine.
+The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json` and `agent.sqlite` are
+`0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither is a thing to
+leave readable by every other account on the machine.
 
-`src/server/house.ts` owns the layout and every read and write; nothing else builds a path by hand. Opening the runtime
-creates the home if it is missing — `log/`, `skills/`, and `soul.md` from `DEFAULT_SOUL`, written once and never
-overwritten — and initialises it as a git repository, so a memory write is a commit Denis can revert. A runtime takes
-`houseHome`, else `MASON_HOME`, else `~/.mason`, and configures that home for every section that reads it; tests pass
-`houseHome` (or set `MASON_HOME` for sections rendered outside a runtime) and no test touches the real one.
+`src/server/house.ts` owns the layout and every read and write; nothing else builds a path by hand, with one
+acknowledged exception — `configPath` in `auth.ts`, which predates the rule and keeps `readConfig`/`writeConfig` taking
+a home rather than a path.
+Opening the runtime creates the home if it is missing — `log/`, `skills/`, and `soul.md` from `DEFAULT_SOUL`, written
+once and never overwritten — and initialises it as a git repository, so a memory write is a commit Denis can revert. A
+runtime takes `houseHome`, else `MASON_HOME`, else `~/.mason`, and configures that home for every section that reads
+it; tests pass `houseHome` (or set `MASON_HOME` for sections rendered outside a runtime) and no test touches the real
+one.
 
 **The resident prompt.** Every turn renders these sections, in this order. The prefix is byte-stable: an unchanged turn
 and the one after it render the same text, in the same order, with the same tool list. A file edit is a prompt edit —
@@ -254,10 +259,11 @@ than appended to per turn.
 | `soul` (tag-less: the prompt's opening) | `~/.mason/soul.md`, or `DEFAULT_SOUL` on a fresh install | none enforced — it is Denis's own voice, ~480 characters by default |
 | `cwd` | the workspace the tools run in | one path |
 | `proactive_guidelines` | how to answer an `[EVENT HOOK: ...]` input, and what an untrusted payload fence means | a fixed ~1,000-character constant |
-| `delivery` | only `send_to_user` reaches the reader | one line |
-| `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
+| `team` | the transcript is shared; a person's message starts `[from <name>] `, and no prefix means no author | a fixed ~300-character constant |
 | `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
+| `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
 | `generative_ui` | the pointer: widgets exist, read the skill | ~300 characters |
+| `delivery` | only `send_to_user` reaches the reader | one line |
 
 **The tool list does not change.** `generateSandboxedUi` is in `BASE_EXTENSIONS` (§3.4), so it is offered on the first
 turn and on every turn after it. The per-conversation toggle, the `setSandboxedUiEnabled` method and
@@ -412,8 +418,10 @@ separately, deliberately, and with its own access rules.
 ### 4.1b Who may talk to the server — the door
 
 There is one owner, so every entry point proves it: the Chord socket, `/api/*`, the webhook. `src/server/auth.ts` owns
-the rule; `src/server/main.ts` applies it in exactly three places, the socket's `principal(request)`, the pairing
-exchange in `handleRequest`, and the gate at the top of `handleRequest` that `/api/*` passes through.
+the rule; `src/server/main.ts` applies it in exactly five places — the socket's `principal(request)`, the pairing
+exchange in `handleRequest`, the gate at the top of `handleRequest` that `/api/*` passes through, the roster refusal
+that gate applies to a claimed name, and the same refusal at the socket handshake, which a removed person's live socket
+survives only until it reconnects.
 
 **The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
 mode 0600, home 0700. Only hashes are stored: that file is exactly the kind of thing that gets pasted into a bug report
@@ -441,10 +449,17 @@ stay open after the credential was taken away.
 | a browser, first visit | `?token=…` in a pairing link | the only time a human is holding the credential |
 | a browser, after pairing | the `mason_session` cookie | `HttpOnly`, so no script on this origin can read it; the browser sends it on the socket handshake by itself |
 
-**A token is a bootstrap credential, not a session.** `GET /?token=…` verifies the token, sets
-`mason_session=v1.<token id>.<HMAC>` (`HttpOnly`, `SameSite=Strict`, `Path=/`, 30 days, `Secure` where the connection
-already is TLS), and answers `302` to the same path with the token removed. The address bar, the history and every
-`Referer` see a bare URL before the first element renders, and the client bundle never touches a token at all.
+**A token is a bootstrap credential, not a session.** `GET /?token=…` verifies the token, sets a `mason_session`
+cookie (`HttpOnly`, `SameSite=Strict`, `Path=/`, 30 days, `Secure` where the connection already is TLS), and answers
+`302` to the same path with the token removed. The address bar, the history and every `Referer` see a bare URL before
+the first element renders, and the client bundle never touches a token at all.
+
+The cookie is `v1.<token id>.<HMAC>` for a device that has claimed nobody, and `v2.<token id>.<person>.<HMAC>` once a
+browser has named itself: the person is base64url inside the signed material, so a cookie cannot be decoded into someone
+else, and `v1` is still read — as an unnamed device — so paired browsers keep working through the change. The join route
+is what writes a `v2`: `POST /api/join` reads a name off the roster, refuses one that is not on the list, and answers
+with the cookie, keeping the device the browser was already paired as. `GET /join` serves the same bundle, so the picker
+is a third path into one build rather than a second entry point.
 
 The cookie names a token id and carries no secret, so it is worth exactly one device's access: revoking that token ends
 its sessions at the same moment. `SameSite=Strict` is the CSRF defence that does not depend on the Origin gate — a

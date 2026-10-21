@@ -52,13 +52,13 @@ Also: entries are a **tree on the server** (`fork()`, `head` markers) but the vi
 
 | item | from | renders as |
 |---|---|---|
-| `user` | `pi.user` | the reader's bubble, right-aligned |
+| `user` | `pi.user`, with the `[from <name>] ` prefix the server wrote split off it | the reader's bubble, right-aligned; `author` names who wrote it, and is absent for an unnamed device and for every message written before the roster |
 | `delivered` | a `send_to_user` call | a message bubble of its own; `streaming` while the call streams, `failed` when its result failed or was interrupted |
 | `widget` | a `generateSandboxedUi` call | the sandbox card, bare, at its position; `content` is the mapped `OpenGenUIContent`, never the call |
 | `notice` | a run that died | one coarse line: something went wrong, the turn did not finish |
 
-Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, with `withdrawable`), and `AgentStatus`
-(run status, busy, the **names** of running tools, model, hooks, cwd).
+Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, with `withdrawable`, and `author` for
+whoever queued it), and `AgentStatus` (run status, busy, the **names** of running tools, model, hooks, cwd).
 
 ### 2.2 What cannot arrive
 
@@ -264,3 +264,19 @@ everything, which is what it exists for.
 
 Related and unchanged: a settled turn keeps no trace at all unless diagnostics is on, and the live trace folds away
 as soon as its bubble produces text or a widget.
+
+## 12. Beyond the port: a name on every message
+
+The transcript was built for one person: every bubble was "the reader", and who said what was context the model had to
+guess at. A team shares the one conversation (`docs/TEAM-IDENTITY.md`), so the reader's own messages carry the name the
+server wrote into them, and the reader sees whose words a bubble holds before reading it:
+
+- **The picker is a name claimed off a roster, not an account.** `/join` asks a paired browser which of the roster's
+  names is its own, and `POST /api/join` seals the answer into the session cookie server-side: the page never sends the
+  name with a message and cannot set the cookie, so the author on a row is a claim the server made. An empty roster says
+  so and names the command that fills it, and a browser whose cookie was lost claims again from the same screen — the
+  pairing is not what is being asked about.
+- **The author chip says whose bubble it is.** A user row and a queued row carry `author` when the server found one, and
+  `AuthorChip` renders it above the text: the reader's own name stays quiet, because it is a stamp on their own sentence
+  rather than information, and everyone else's is the one mark that separates two speakers in a shared column. A row with
+  no author — an unnamed device, or anything written before the roster — simply has none.
