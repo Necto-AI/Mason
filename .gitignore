@@ -26,3 +26,6 @@ asr/models/
 __pycache__/
 *.pyc
 
+
+# Local dev stack state (scripts/dev-stack.ts)
+.dev/
