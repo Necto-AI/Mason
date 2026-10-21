@@ -149,8 +149,14 @@ function App({ person }: { readonly person: string | undefined }) {
 
 	const bridgeFor = useCallback(
 		(callId: string): WidgetBridge => ({
-			sendPrompt: (args) =>
-				run(() => connection.agent.submit({ content: `[WIDGET ${callId}] ${args.text}`, whenBusy: "followUp" })),
+			sendPrompt: (args) => {
+				// A message sent from inside a widget is still the reader sending: it lands below the fold of what they
+				// were looking at, so the view goes to it.
+				follower.glide();
+				return run(() =>
+					connection.agent.submit({ content: `[WIDGET ${callId}] ${args.text}`, whenBusy: "followUp" }),
+				);
+			},
 			openLink: async (args) => {
 				const url = args.url;
 				if (typeof url === "string" && /^https?:\/\//.test(url)) window.open(url, "_blank", "noopener");
@@ -203,8 +209,16 @@ function App({ person }: { readonly person: string | undefined }) {
 					enabled={connectionState === "connected" && status !== undefined}
 					pending={pending}
 					connection={connectionState}
-					onSubmit={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }))}
-					onSteer={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "steer" }))}
+					onSubmit={(text) => {
+						// Before the submit, not after: the row arrives a round trip later, and the glide is already under
+						// way by then rather than starting from a still view.
+						follower.glide();
+						return run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }));
+					}}
+					onSteer={(text) => {
+						follower.glide();
+						return run(() => connection.agent.submit({ content: text, whenBusy: "steer" }));
+					}}
 					onStop={() => run(() => connection.agent.abort())}
 				/>
 				<JumpPill show={!pinned} running={busy} onClick={() => follower.jump(true)} />

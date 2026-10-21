@@ -103,7 +103,7 @@ content, and both sides spell the shape.
 | `src/server/projection.ts` | the wire boundary: conversation → `transcript`, `queued` |
 | `src/web/lib/working.ts` | `AgentStatus` → the one working line |
 | `src/web/lib/markdown.ts`, `stream-text.tsx` | ported from sibling, unchanged: a delivered message renders and streams as markdown |
-| `src/web/lib/follower.ts` | sibling's scroll pinning, unchanged |
+| `src/web/lib/follower.ts` | sibling's scroll pinning, plus a glide on the reader's own send |
 | `src/web/components/Transcript.tsx` | maps items to rows, then the queue |
 | `src/web/components/MessageRow.tsx` | `UserRow`, `HookRow`, `DeliveredRow`, `NoticeRow` |
 | `src/web/components/QueuedRows.tsx` | faded queued bubbles, mode tag, withdraw |
@@ -169,6 +169,10 @@ Resolved (2026-10-20) — the wire boundary:
     a button over a message the reader can no longer diagnose.
 14. **No debug mode.** `?debug=1`, the diagnostics sheet and the usage panel inspected state the client no longer
     receives; keeping the flag would have meant keeping the raw view on the wire for the sake of a toggle.
+15. **The reader's own send glides; nothing else does.** Following a stream writes `scrollTop` instantly, because
+    animating toward a target that keeps moving lags and wobbles. A send is the opposite case: the target is a row
+    that has not arrived yet and the reader is entitled to watch it land, so `glide()` re-pins, animates, and keeps
+    animating for the few hundred milliseconds the row and its echo take — then the next stream is instant again.
 
 Resolved (2026-10-14):
 
