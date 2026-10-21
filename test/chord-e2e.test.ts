@@ -16,7 +16,9 @@ import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { WebSocket } from "ws";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { housePaths } from "../src/server/house.ts";
 import { promptSectionKeys } from "../src/server/prompt.ts";
+import { addPerson } from "../src/server/roster.ts";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
@@ -81,8 +83,34 @@ type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["get"]> 
 	toggleHook(args: { hookId: string; enabled: boolean }): Promise<void>;
 };
 
+/**
+ * The HTTP half of the join screen: pair a browser, claim a name off the roster, and keep the cookie it then sends.
+ *
+ * A person is fixed at handshake, so a socket has to carry the cookie the claim produced — which is what makes the
+ * submit path reachable here: the server reads the person off the principal, not off the method's arguments.
+ */
+async function joinAs(server: RunningServer, home: string, name: string): Promise<string> {
+	assert.equal((await addPerson(housePaths(home), name)).ok, true, `${name} is on the roster before the browser claims it`);
+	const paired = await fetch(`http://127.0.0.1:${server.port}/?token=${encodeURIComponent(server.pairingToken ?? "")}`, {
+		redirect: "manual",
+	});
+	const device = (paired.headers.getSetCookie().join("\n").split(";")[0] as string).trim();
+	const claimed = await fetch(`http://127.0.0.1:${server.port}/api/join`, {
+		method: "POST",
+		headers: { cookie: device, "content-type": "application/json" },
+		body: JSON.stringify({ name }),
+	});
+	assert.equal(claimed.status, 200);
+	return (claimed.headers.getSetCookie().join("\n").split(";")[0] as string).trim();
+}
+
 async function openClient(
-	extra: { settings?: NonNullable<Parameters<typeof startServer>[0]>["settings"]; contextWindow?: number } = {},
+	extra: {
+		settings?: NonNullable<Parameters<typeof startServer>[0]>["settings"];
+		contextWindow?: number;
+		/** A name on the roster this browser claims before it opens the socket. */
+		person?: string;
+	} = {},
 ): Promise<Client> {
 	const directory = await mkdtemp(join(tmpdir(), "pda-chord-"));
 	directories.add(directory);
@@ -103,14 +131,18 @@ async function openClient(
 		...(extra.settings === undefined ? {} : { settings: extra.settings }),
 		onReport: () => {},
 	});
+	// A fresh home mints a token on first start; a real browser takes the same one from `?token=` once, and a browser
+	// that has claimed a name sends the cookie that claim set instead.
+	const cookie = extra.person === undefined ? undefined : await joinAs(server, houseHome, extra.person);
 	const browser = createHost<{ kind: "server" }>({
 		self: { kind: "server" },
 		name: "browser",
 		kind: "client",
 		upstream: {
-			// A fresh home mints a token on first start; a real browser takes the same one from `?token=` once.
 			link: webSocketLink(
-				new WebSocket(`ws://127.0.0.1:${server.port}/?token=${server.pairingToken ?? ""}`) as unknown as WebSocketLike,
+				(cookie === undefined
+					? new WebSocket(`ws://127.0.0.1:${server.port}/?token=${server.pairingToken ?? ""}`)
+					: new WebSocket(`ws://127.0.0.1:${server.port}/`, { headers: { cookie } })) as unknown as WebSocketLike,
 			),
 			principal: { kind: "server" },
 		},
@@ -832,6 +864,40 @@ describe("chord client <-> server", () => {
 				!rendered.includes("Websandbox.connection.remote.sendPrompt"),
 				"the sandbox API manual lives in the skill, not in the prompt",
 			);
+		} finally {
+			await client.close();
+		}
+	});
+
+	it("writes the name of the person who spoke into the message the model reads", async () => {
+		// Everything above happens with an unnamed device. This is the same wire with a browser that claimed a name: the
+		// author is written by `submit` into the durable entry, so it is a claim the server made and the model can follow.
+		const client = await openClient({ person: "Ilya" });
+		const { agent, state } = client;
+		try {
+			await agent.ready;
+			client.faux.setResponses([
+				fauxAssistantMessage(
+					[fauxText("On it."), fauxToolCall(MESSAGE_TOOL, { message: "On it." }, { id: "on-it" })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage(fauxText("Nothing else to report.")),
+			]);
+
+			await agent.submit({ content: "Ship the deploy." });
+
+			// The durable entry is the whole record: a plain `pi.user` message whose text names its author.
+			const spoken = await waitFor("the message in the conversation", () =>
+				entries(state.serverView).find((entry) => entry.kind === "pi.user"),
+			);
+			assert.equal(messageText(spoken), "[from Ilya] Ship the deploy.");
+
+			// The reader gets the same fact as a chip: what they typed, and who the server says said it.
+			const row = await waitFor("the transcript row", () =>
+				state.transcript?.find((item) => item.kind === "user"),
+			);
+			assert.deepEqual(row, { kind: "user", id: String(spoken.id), text: "Ship the deploy.", author: "Ilya" });
+			await waitFor("idle again", () => (state.agentStatus?.busy === false ? true : undefined));
 		} finally {
 			await client.close();
 		}
