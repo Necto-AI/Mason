@@ -281,7 +281,7 @@ as soon as its bubble produces text or a widget.
 ## 12. Beyond the port: a name on every message
 
 The transcript was built for one person: every bubble was "the reader", and who said what was context the model had to
-guess at. A team shares the one conversation (`docs/TEAM-IDENTITY.md`), so the reader's own messages carry the name the
+guess at. A room shares the one conversation (`docs/ROOM-IDENTITY.md`), so the reader's own messages carry the name the
 server wrote into them, and the reader sees whose words a bubble holds before reading it:
 
 - **The picker is a name claimed off a roster, not an account.** `/join` asks a paired browser which of the roster's
