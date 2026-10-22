@@ -36,6 +36,12 @@ When you receive one, you were woken by a schedule or an external trigger, not b
 - If nothing needs attention, say so in one line; do not pad a check-in into a report.
 ${UNTRUSTED_RULE}`;
 
+/** Who is speaking, when the transcript has more than one voice in it. Short: it is paid for in every turn. */
+export const TEAM_GUIDELINES = `The transcript is shared: more than one person writes to it.
+A message from a person starts with "[from <name>] ", naming who wrote it.
+A message with no such prefix has no author: a scheduled trigger, or a device nobody has named.
+Attribute a decision to the person who wrote it, and do not assume the newest message came from Denis.`;
+
 /**
  * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
  * writes is working notes nobody reads.
@@ -83,6 +89,8 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	section("preamble", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
 	section("cwd", (input) => input.env?.cwd),
 	section("proactive_guidelines", () => PROACTIVE_GUIDELINES),
+	// Beside the hook section: both say how to read the shape of a turn before the agent acts on it.
+	section("team", () => TEAM_GUIDELINES),
 	section("skills", () => renderSkills(discoverSkills())),
 	section("profile", () => renderProfile()),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),

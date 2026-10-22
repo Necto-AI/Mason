@@ -23,10 +23,13 @@ import {
 	readConfig,
 	revokeToken,
 	sealSession,
+	sessionCookieValue,
 	verifyToken,
 } from "../src/server/auth.ts";
+import { housePaths } from "../src/server/house.ts";
 import { HOOK_BODY_MAX_BYTES, HOOK_FIRE_LIMIT } from "../src/server/limits.ts";
 import { startServer, type RunningServer } from "../src/server/main.ts";
+import { addPerson, removePerson } from "../src/server/roster.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -127,13 +130,40 @@ describe("the browser's session", () => {
 		const value = sealSession(key as string, minted.record.id);
 		assert.ok(value.startsWith("v1.tok_"));
 		assert.ok(!value.includes(minted.token), "the token itself is never in the cookie");
-		assert.equal(openSession(key as string, value), minted.record.id);
+		assert.equal(openSession(key as string, value)?.tokenId, minted.record.id);
 
 		// A cookie signed by another home, or with an id the sender chose, is not a session.
 		assert.equal(openSession(sealSession("z".repeat(43), minted.record.id), value), undefined);
 		assert.equal(openSession(key as string, "v1.tok_other.signature"), undefined);
 		assert.equal(openSession(key as string, "nonsense"), undefined);
 		assert.equal(openSession(key as string, `v2.${minted.record.id}.x`), undefined);
+	});
+
+	it("seals the person a browser claimed into the cookie, where a client cannot rewrite it", async () => {
+		const home = await temporaryHome();
+		const minted = await mintToken(home, "browser");
+		const key = (await readConfig(home)).sessionKey as string;
+
+		const named = sealSession(key, minted.record.id, "Ilya");
+		assert.deepEqual(openSession(key, named), { tokenId: minted.record.id, person: "Ilya" });
+		// A paired device that has not claimed a name is still a session, just an unnamed one — that is what a `v1`
+		// cookie from before the roster opens as.
+		assert.deepEqual(openSession(key, sealSession(key, minted.record.id)), { tokenId: minted.record.id });
+
+		// The name is inside the signed material, so swapping it out is a forgery rather than a rename.
+		const [version, tokenId, , signature] = named.split(".");
+		const forged = [version, tokenId, Buffer.from("Denis", "utf8").toString("base64url"), signature].join(".");
+		assert.equal(openSession(key, forged), undefined, "a cookie cannot be decoded into a different person");
+
+		// A cookie another home signed is not a session here, whatever it claims.
+		assert.equal(openSession(key, sealSession("z".repeat(43), minted.record.id, "Ilya")), undefined);
+		assert.equal(openSession("z".repeat(43), named), undefined);
+
+		// The cookie keeps the attributes that make it unreadable to a page and unusable from another site.
+		const cookie = sessionCookieValue(key, minted.record.id, false, "Ilya");
+		assert.match(cookie, /HttpOnly/);
+		assert.match(cookie, /SameSite=Strict/);
+		assert.ok(!cookie.includes(minted.token), "the id names a record; the token is never in the cookie");
 	});
 
 	it("reads one cookie out of a header that holds several", () => {
@@ -149,7 +179,7 @@ describe("the browser's session", () => {
 		const value = sealSession((await readConfig(home)).sessionKey as string, minted.record.id);
 		const request = { headers: { cookie: `mason_session=${value}` } } as never;
 
-		assert.equal(deviceFromCookie(request, await readConfig(home))?.label, "browser");
+		assert.equal(deviceFromCookie(request, await readConfig(home))?.token.label, "browser");
 		await revokeToken(home, minted.record.id);
 		assert.equal(deviceFromCookie(request, await readConfig(home)), undefined, "revoking a token ends its sessions");
 	});
@@ -377,12 +407,100 @@ describe("the server's door", () => {
 			const session = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie } });
 			assert.equal(session.status, 200);
 			const [record] = await listTokens(home);
-			assert.deepEqual(await session.json(), { device: { id: record?.id, label: record?.label } });
+			assert.deepEqual(await session.json(), { device: { id: record?.id, label: record?.label }, roster: [] });
 
 			// A link that is not one of ours is not a session: the shell still loads, unpaired.
 			const wrong = await fetch(`http://127.0.0.1:${port}/?token=mason_wrong_token_here`, { redirect: "manual" });
 			assert.equal(wrong.status, 200);
 			assert.equal(wrong.headers.getSetCookie().length, 0);
+		} finally {
+			await server.close();
+		}
+	});
+
+	/** The one cookie a `Set-Cookie` answer carries, the way a browser would send it back. */
+	function cookieOf(setCookie: string): string {
+		return (setCookie.split(";")[0] as string).trim();
+	}
+
+	/** Claim a name off the roster the way the join screen does, keeping the cookie the answer sets. */
+	async function claim(
+		port: number,
+		cookie: string,
+		name: string,
+	): Promise<{ readonly status: number; readonly cookie?: string; readonly body: unknown }> {
+		const response = await fetch(`http://127.0.0.1:${port}/api/join`, {
+			method: "POST",
+			headers: { cookie, "content-type": "application/json" },
+			body: JSON.stringify({ name }),
+		});
+		const setCookie = response.headers.getSetCookie().join("\n");
+		return {
+			status: response.status,
+			...(setCookie === "" ? {} : { cookie: cookieOf(setCookie) }),
+			body: (await response.json()) as unknown,
+		};
+	}
+
+	/** What `/api/session` says this browser is. */
+	async function session(
+		port: number,
+		cookie: string,
+	): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+		const response = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie } });
+		return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+	}
+
+	it("joins a paired browser to a name on the roster, then stops handing it the list", async () => {
+		const { server, home } = await openServer();
+		const port = server.port as number;
+		try {
+			const device = cookieOf(await pair(port, server.pairingToken as string));
+			assert.equal((await addPerson(housePaths(home), "Ilya")).ok, true);
+
+			// Before anyone claims a name, the list is what the shell needs: everyone on the roster, spelled the roster's way.
+			const offered = await fetch(`http://127.0.0.1:${port}/api/join`, { headers: { cookie: device } });
+			assert.deepEqual(await offered.json(), { people: [{ name: "Ilya" }] });
+			assert.deepEqual((await session(port, device)).body.roster, [{ name: "Ilya" }]);
+
+			// A new entry point is not the open one, and a claim is checked against the roster rather than trusted.
+			assert.equal((await fetch(`http://127.0.0.1:${port}/api/join`)).status, 401);
+			assert.equal((await claim(port, device, "Nobody")).status, 404);
+
+			const joined = await claim(port, device, "Ilya");
+			assert.equal(joined.status, 200);
+			assert.deepEqual(joined.body, { person: { name: "Ilya" } });
+
+			const named = await session(port, joined.cookie as string);
+			assert.equal(named.status, 200);
+			assert.deepEqual(named.body.person, { name: "Ilya" });
+			assert.equal(named.body.roster, undefined, "a browser that speaks for someone has no use for the list");
+			const [record] = await listTokens(home);
+			assert.deepEqual(
+				named.body.device,
+				{ id: record?.id, label: record?.label },
+				"joining keeps the device the browser was paired as: a name is a place, not a new credential",
+			);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("refuses a person who has been removed, on the next request and the next handshake", async () => {
+		const { server, home } = await openServer();
+		const port = server.port as number;
+		try {
+			const device = cookieOf(await pair(port, server.pairingToken as string));
+			await addPerson(housePaths(home), "Ilya");
+			const named = (await claim(port, device, "Ilya")).cookie as string;
+			assert.equal((await session(port, named)).status, 200);
+
+			assert.equal(await removePerson(housePaths(home), "Ilya"), true);
+			const after = await session(port, named);
+			assert.equal(after.status, 401, "a name off the roster is not a place in the room, cookie or no cookie");
+			assert.deepEqual(after.body, { error: "not on the roster" });
+			// The person is fixed at handshake, so a socket that already speaks carries on: the next connection is refused.
+			await refused(`ws://127.0.0.1:${port}/`, { cookie: named });
 		} finally {
 			await server.close();
 		}

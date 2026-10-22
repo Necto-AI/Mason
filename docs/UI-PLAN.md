@@ -52,13 +52,13 @@ Also: entries are a **tree on the server** (`fork()`, `head` markers) but the vi
 
 | item | from | renders as |
 |---|---|---|
-| `user` | `pi.user` | the reader's bubble, right-aligned |
+| `user` | `pi.user`, with the `[from <name>] ` prefix the server wrote split off it | the reader's bubble, right-aligned; `author` names who wrote it, and is absent for an unnamed device and for every message written before the roster |
 | `delivered` | a `send_to_user` call | a message bubble of its own; `streaming` while the call streams, `failed` when its result failed or was interrupted |
 | `widget` | a `generateSandboxedUi` call | the sandbox card, bare, at its position; `content` is the mapped `OpenGenUIContent`, never the call |
 | `notice` | a run that died | one coarse line: something went wrong, the turn did not finish |
 
-Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, with `withdrawable`), and `AgentStatus`
-(run status, busy, the **names** of running tools, model, hooks, cwd).
+Plus `QueuedItem[]` (the inbox, labelled: the reader's text or `hook: <name>`, with `withdrawable`, and `author` for
+whoever queued it), and `AgentStatus` (run status, busy, the **names** of running tools, model, hooks, cwd).
 
 ### 2.2 What cannot arrive
 
@@ -103,7 +103,7 @@ content, and both sides spell the shape.
 | `src/server/projection.ts` | the wire boundary: conversation → `transcript`, `queued` |
 | `src/web/lib/working.ts` | `AgentStatus` → the one working line |
 | `src/web/lib/markdown.ts`, `stream-text.tsx` | ported from apiary, unchanged: a delivered message renders and streams as markdown |
-| `src/web/lib/follower.ts` | apiary's scroll pinning, unchanged |
+| `src/web/lib/follower.ts` | apiary's scroll pinning, plus a glide on the reader's own send |
 | `src/web/components/Transcript.tsx` | maps items to rows, then the queue |
 | `src/web/components/MessageRow.tsx` | `UserRow`, `HookRow`, `DeliveredRow`, `NoticeRow` |
 | `src/web/components/QueuedRows.tsx` | faded queued bubbles, mode tag, withdraw |
@@ -169,6 +169,10 @@ Resolved (2026-10-20) — the wire boundary:
     a button over a message the reader can no longer diagnose.
 14. **No debug mode.** `?debug=1`, the diagnostics sheet and the usage panel inspected state the client no longer
     receives; keeping the flag would have meant keeping the raw view on the wire for the sake of a toggle.
+15. **The reader's own send glides; nothing else does.** Following a stream writes `scrollTop` instantly, because
+    animating toward a target that keeps moving lags and wobbles. A send is the opposite case: the target is a row
+    that has not arrived yet and the reader is entitled to watch it land, so `glide()` re-pins, animates, and keeps
+    animating for the few hundred milliseconds the row and its echo take — then the next stream is instant again.
 
 Resolved (2026-10-14):
 
@@ -233,6 +237,15 @@ What it does now, and why:
   call id) and never shows the skeleton — the reader sees the same card repaint its content, not resize or blank.
 - **The fullscreen control left the widget's corner**: it sits in a reserved strip above the card, so it can no longer
   cover whatever the widget put in its own top-right corner (a dashboard header, a legend, a close button).
+- **Leaving fullscreen restores the card *and* its document.** The overlay gave the document the viewport's height, so a
+  widget that stamps a child at its measured size (an SVG chart, a canvas) props up the very flex box that measures it
+  and can never shrink itself: after Exit the card came back at its old height around a document still laid out at
+  1050px, clipped. A measurement taken while leaving is refused (`isFullscreenEcho`), because it describes the overlay;
+  the height the card is returning to is handed to `embeddedFrameJs(restore)`, which pins `html, body` to it for one
+  layout pass so `height: 100%` and flex children re-derive, and releases on the second animation frame — after the
+  widget's own ResizeObserver re-stamps at the card's size. Taller reports are refused only for the length of that pass
+  (`isRestoreEcho`), so a widget that genuinely needs more room grows a frame later, and a widget that never entered
+  fullscreen runs exactly the embedded path it always ran. No remount, so state inside the widget survives.
 
 Known and accepted: the model's `initialHeight` is still only an estimate, and the second mount still costs one
 sandbox boot (~200ms of the widget's own background). Both are noted in SPEC §5.2.
@@ -264,3 +277,19 @@ everything, which is what it exists for.
 
 Related and unchanged: a settled turn keeps no trace at all unless diagnostics is on, and the live trace folds away
 as soon as its bubble produces text or a widget.
+
+## 12. Beyond the port: a name on every message
+
+The transcript was built for one person: every bubble was "the reader", and who said what was context the model had to
+guess at. A team shares the one conversation (`docs/TEAM-IDENTITY.md`), so the reader's own messages carry the name the
+server wrote into them, and the reader sees whose words a bubble holds before reading it:
+
+- **The picker is a name claimed off a roster, not an account.** `/join` asks a paired browser which of the roster's
+  names is its own, and `POST /api/join` seals the answer into the session cookie server-side: the page never sends the
+  name with a message and cannot set the cookie, so the author on a row is a claim the server made. An empty roster says
+  so and names the command that fills it, and a browser whose cookie was lost claims again from the same screen — the
+  pairing is not what is being asked about.
+- **The author chip says whose bubble it is.** A user row and a queued row carry `author` when the server found one, and
+  `AuthorChip` renders it above the text: the reader's own name stays quiet, because it is a stamp on their own sentence
+  rather than information, and everyone else's is the one mark that separates two speakers in a shared column. A row with
+  no author — an unnamed device, or anything written before the roster — simply has none.

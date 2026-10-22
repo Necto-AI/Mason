@@ -6,7 +6,9 @@
  * upward move the browser did not make by shrinking content is the reader's doing (wheel, touch, keys, scrollbar
  * drag, selection drag); landing back at the end re-pins. Content changes are watched with ResizeObserver instead
  * of being hooked to messages, and following writes scrollTop instantly — gliding toward a target that keeps
- * moving lags, wobbles and reports its own scroll events back to us.
+ * moving lags, wobbles and reports its own scroll events back to us. The one exception is the reader's own send:
+ * `glide` animates, because there the target is a message that has not arrived yet rather than a stream arriving
+ * under a still view.
  */
 import { useEffect, useRef, type RefObject } from "react";
 
@@ -33,6 +35,8 @@ export function pinnedAfterScroll(
 export interface Follower {
 	/** Re-pin and go to the end; smooth only for an explicit jump. */
 	jump(smooth?: boolean): void;
+	/** Re-pin and glide to the end, and keep gliding while the content that follows the reader's own message lands. */
+	glide(): void;
 	/** Re-check the end (content may have shrunk under an unpinned reader). */
 	refresh(): void;
 	/** Record a `<details>` the view opened itself, so its toggle is not read as reader intent. */
@@ -40,6 +44,12 @@ export interface Follower {
 }
 
 const AT_END_SLACK = 2;
+/**
+ * How long a glide's follow-scrolls stay smooth. Sending a message puts a row in the transcript a moment later, and
+ * an instant write at that first growth stops the animation a few pixels in — the reader sees a jump, not a glide.
+ * Short enough that the next turn's streaming, which must not animate, is back to instant writes.
+ */
+const GLIDE_MS = 600;
 
 /** Mount the follower on a scrollable list; `onChange` reports the pin state for the jump pill. */
 export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinned: boolean) => void): Follower {
@@ -48,6 +58,8 @@ export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinn
 	const lastHeight = useRef(0);
 	// True while a touch or the momentum it started is still moving the list.
 	const touchOwned = useRef(false);
+	/** Wall clock until which follow-scrolls are animated; see `GLIDE_MS`. */
+	const glideUntil = useRef(0);
 	const touchTimer = useRef<number | undefined>(undefined);
 	const openedByUs = useRef(new WeakSet<Element>());
 	// The mount effect reads the latest callback without depending on its identity.
@@ -64,6 +76,10 @@ export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinn
 		const stickToEnd = (): void => {
 			// A finger (or the momentum it started) owns the list: writing scrollTop mid-fling fights the momentum.
 			if (touchOwned.current) return;
+			if (Date.now() < glideUntil.current) {
+				element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+				return;
+			}
 			element.scrollTop = element.scrollHeight;
 		};
 
@@ -189,6 +205,14 @@ export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinn
 			notify.current(true);
 			if (smooth) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
 			else element.scrollTop = element.scrollHeight;
+		},
+		glide(): void {
+			const element = list.current;
+			if (element === null) return;
+			pinned.current = true;
+			notify.current(true);
+			glideUntil.current = Date.now() + GLIDE_MS;
+			element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
 		},
 		refresh(): void {
 			const element = list.current;

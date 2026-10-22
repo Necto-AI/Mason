@@ -15,10 +15,29 @@ function MarkdownText({ text }: { text: string }) {
 	return <div className="text markdown" data-testid="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function UserRow({ text }: { text: string }) {
+/**
+ * Who wrote a bubble, for the ones that name someone.
+ *
+ * A shared transcript has more than one voice in it, and this is the only mark that separates them — but the reader's
+ * own name is a stamp on their own words, not information, so it stays quiet above the text instead of becoming a
+ * second visual voice. A message with no author (an unnamed device, or anything written before the roster existed)
+ * simply has none.
+ */
+export function AuthorChip({ author, mine }: { author: string; mine: boolean }) {
+	return (
+		<span className={`author${mine ? " mine" : ""}`} data-testid="msg-author">
+			{author}
+		</span>
+	);
+}
+
+export function UserRow({ text, author, person }: { text: string; author?: string; person?: string }) {
 	return (
 		<article className="message user" data-testid="msg-user">
-			<div className="bubble">{text}</div>
+			<div className="bubble">
+				{author === undefined ? null : <AuthorChip author={author} mine={author === person} />}
+				{text}
+			</div>
 		</article>
 	);
 }

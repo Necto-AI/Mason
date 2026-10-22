@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { MESSAGE_TOOL, type AgentStatus } from "../src/shared/contract.ts";
+import { MESSAGE_TOOL, withAuthor, type AgentStatus } from "../src/shared/contract.ts";
 import { projectQueued, projectTranscript } from "../src/server/projection.ts";
 import { createWorkingMachine, TOOL_LABEL_HOLD_MS } from "../src/web/lib/working.ts";
 
@@ -198,6 +198,88 @@ describe("the transcript the client is sent", () => {
 		assert.deepEqual(transcript, [
 			{ kind: "user", id: "1", text: "Anything new?" },
 			{ kind: "delivered", id: "m1", text: "Nothing new." },
+		]);
+	});
+});
+
+describe("who said it", () => {
+	it("reads the author off the message the server wrote, and shows the words without it", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: "[from Ilya] Ship the deploy." }]),
+				entry(2, "pi.user", [{ role: "user", content: "Check the deploy." }]),
+				entry(3, "pi.user", [{ role: "user", content: "[from Denis] Then the alert thresholds." }]),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			// The prefix is the model's attribution, not the reader's text: it never reaches the bubble.
+			{ kind: "user", id: "1", text: "Ship the deploy.", author: "Ilya" },
+			// A message written before the roster existed has no author, and is not given one.
+			{ kind: "user", id: "2", text: "Check the deploy." },
+			// One conversation, two speakers: a shared transcript reads as a conversation, not as one voice.
+			{ kind: "user", id: "3", text: "Then the alert thresholds.", author: "Denis" },
+		]);
+	});
+
+	it("does not give an author to text the server did not prefix", () => {
+		// An unnamed device — or any token client — can type a prefix itself. `submit` drops it, so what is stored can
+		// only name an author the server wrote: the transcript cannot be made to say someone spoke who did not.
+		assert.equal(withAuthor("[from Ilya] ship it", undefined), "ship it", "the typed prefix never reaches the entry");
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: withAuthor("[from Ilya] ship it", undefined) }]),
+				// Anything that is not the prefix byte for byte is left alone: the text is what somebody typed.
+				entry(2, "pi.user", [{ role: "user", content: withAuthor("[from Ilya]is not the prefix", undefined) }]),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "ship it" },
+			{ kind: "user", id: "2", text: "[from Ilya]is not the prefix" },
+		]);
+	});
+
+	it("drops a typed prefix where the message starts, and keeps every other character", () => {
+		// A leading space is enough to defeat a byte-exact match, and a raw client can send one.
+		assert.equal(withAuthor(" [from Ilya] ship it", undefined), "ship it");
+		assert.equal(withAuthor("\n\t[from Ilya] ship it", undefined), "ship it");
+		// A message that was only a claim is left with nothing: the projection skips a blank row, which is the honest
+		// rendering of a line that said nothing once its title was taken away.
+		assert.equal(withAuthor("[from Ilya] ", undefined), "");
+		// Without a prefix nothing is trimmed, because the indentation is somebody's text.
+		assert.equal(withAuthor("   ship it", undefined), "   ship it");
+	});
+
+	it("does not turn a bracket into an author", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: "Look at [from Ilya] this." }]),
+				entry(2, "pi.user", [{ role: "user", content: "[draft] the release notes" }]),
+				entry(3, "pi.user", [{ role: "user", content: "[from Ilya]is not the prefix" }]),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Look at [from Ilya] this." },
+			{ kind: "user", id: "2", text: "[draft] the release notes" },
+			// The trailing space is part of the prefix: without it the text was never rewritten by the server.
+			{ kind: "user", id: "3", text: "[from Ilya]is not the prefix" },
+		]);
+	});
+
+	it("keeps the author of a submission still in the queue", () => {
+		const queued = projectQueued(
+			viewOf([], {
+				"pi.inbox": {
+					items: [
+						{ id: 7, mode: "followUp", content: "[from Ilya] Then check the logs." },
+						{ id: 8, mode: "steer", content: [{ type: "text", text: "Also stderr." }] },
+					],
+				},
+			}),
+		);
+		assert.deepEqual(queued, [
+			{ id: 7, mode: "followUp", text: "Then check the logs.", author: "Ilya", withdrawable: true },
+			// An unnamed device queues under no name, and the hook it becomes never had one.
+			{ id: 8, mode: "steer", text: "Also stderr.", withdrawable: true },
 		]);
 	});
 });

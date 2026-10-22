@@ -72,6 +72,53 @@ export type AgentStatus = {
 };
 
 /**
+ * How long a name may be, as a speaker label and as something the transcript can carry. Long enough for "Александра
+ * Петрова", short enough to read as `[from <name>]` in a prompt.
+ *
+ * It lives here because the prefix's own pattern is what enforces it as well: a name the roster accepts and a name the
+ * parser reads back have to be the same length, so the two cannot drift into disagreeing about what a prefix is.
+ */
+export const NAME_MAX = 40;
+
+/**
+ * How a message says who wrote it, in the text the model reads.
+ *
+ * The durable entry is a `pi.user` message and nothing else, so the author has to live in the text or not exist. It
+ * lives there as a prefix — `[from Ilya] …` — which is also what the model sees: a shared transcript where the model
+ * has to know who decided what cannot afford an author it only sometimes notices. The server writes the prefix and
+ * `projection.ts` parses it back out, so the wire keeps one source of truth and an old transcript written before the
+ * roster existed still reads correctly. A prefix a client typed is not read back as an author: `withAuthor` drops it
+ * for anyone without a name, so only a name the server wrote can reach a bubble.
+ */
+export const AUTHOR_PREFIX = new RegExp(`^\\[from ([^[\\]\\n]{1,${NAME_MAX}})\\] `);
+
+/**
+ * The text the server stores for a submission: the prefix and the words when it knows who spoke, the words alone when
+ * it does not.
+ *
+ * An unnamed device — or any token client — can type a prefix itself. Dropping it here is what keeps the name on a
+ * message the server's claim: nothing stored can name an author the server did not write. It is deliberately not done
+ * in `projection.ts`, which also reads history written before this rule, and rewriting that would change what somebody
+ * actually typed.
+ */
+export function withAuthor(text: string, author: string | undefined): string {
+	if (author !== undefined) return `[from ${author}] ${text}`;
+	// A leading space or newline is enough to stop the byte-exact pattern matching, and a raw client can send one. The
+	// prefix is dropped wherever the message *starts* with it, indentation included; text without one keeps every
+	// character it came with, which is the case that matters for what a person actually typed.
+	const lead = /^\s*/.exec(text)?.[0] ?? "";
+	const match = AUTHOR_PREFIX.exec(text.slice(lead.length));
+	return match === null ? text : text.slice(lead.length + match[0].length);
+}
+
+/** The author a stored message names, and the text without the prefix. A message with no prefix has no author. */
+export function splitAuthor(text: string): { readonly text: string; readonly author?: string } {
+	const match = AUTHOR_PREFIX.exec(text);
+	if (match === null) return { text };
+	return { text: text.slice(match[0].length), author: match[1] as string };
+}
+
+/**
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
@@ -85,6 +132,8 @@ export const TranscriptItemSchema = Type.Union([
 		kind: Type.Literal("user"),
 		id: Type.String(),
 		text: Type.String(),
+		/** Who on the roster said it. Absent for an unnamed device, and for every message written before today. */
+		author: Type.Optional(Type.String()),
 		at: Type.Optional(Type.Number()),
 	}),
 	Type.Object({
@@ -103,7 +152,7 @@ export const TranscriptItemSchema = Type.Union([
 	Type.Object({ kind: Type.Literal("notice"), id: Type.String(), text: Type.String() }),
 ]);
 export type TranscriptItem =
-	| { kind: "user"; id: string; text: string; at?: number }
+	| { kind: "user"; id: string; text: string; author?: string; at?: number }
 	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
 	| { kind: "widget"; id: string; streaming: boolean; content: unknown }
 	| { kind: "notice"; id: string; text: string };
@@ -113,9 +162,11 @@ export const QueuedItemSchema = Type.Object({
 	id: Type.Number(),
 	mode: Type.String(),
 	text: Type.String(),
+	/** Whoever queued it: on a shared transcript the queue belongs to a person, not to the server. */
+	author: Type.Optional(Type.String()),
 	withdrawable: Type.Boolean(),
 });
-export type QueuedItem = { id: number; mode: string; text: string; withdrawable: boolean };
+export type QueuedItem = { id: number; mode: string; text: string; author?: string; withdrawable: boolean };
 
 export const AgentService = remote("personal.agent", {
 	version: 1,
