@@ -5,17 +5,20 @@
 # side, renames it into place and starts it per connection (vendor/pi/packages/env/src/ssh.ts, `deployDaemon`). An image
 # with a daemon baked in would pin a protocol version that the mason image has already outgrown, silently.
 #
-# The image is the machine, not the agent: no secrets, no home, no provider key. What a tool can reach is what is
-# mounted here — the shared workspace, and nothing else.
+# The image is the machine, not the agent: no secrets, no provider key. What a tool can reach is what is mounted here —
+# the agent's half of the home, and nothing else. The server's half does not exist in this container, so `bash` cannot
+# read the token hashes, the connector secret, the database, the SSH key or the provider credential even if it tries.
 FROM ubuntu:24.04
 
 ARG MASON_UID=1000
 ARG MASON_GID=1000
 
-# openssh-server is the only addition, and the tools already on the image are enough for the upload: sh, coreutils
-# (sha256sum, mktemp, mkdir, chmod, mv) and a shell for the login session.
+# openssh-server and git. The tools already on the image are enough for the upload: sh, coreutils (sha256sum, mktemp,
+# mkdir, chmod, mv) and a shell for the login session. `git` is not for the upload: `remember` appends a fact and
+# commits it on this machine, in the repository that lives in the agent's half of the home, because the log and its
+# history have to share a filesystem (src/server/house.ts, `appendFact`).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server \
+ && apt-get install -y --no-install-recommends openssh-server git \
  && rm -rf /var/lib/apt/lists/*
 
 # The package generates host keys in its postinst. Left in place they would be baked into the image and shared by every
@@ -34,12 +37,14 @@ RUN set -eux; \
     useradd --uid "${MASON_UID}" --gid "${MASON_GID}" --create-home --home-dir /home/mason --shell /bin/bash mason; \
     chmod 0700 /home/mason
 
-# The two volumes, with the ownership they need on a first `up`. Whichever container starts first initialises an empty
+# The volumes, with the ownership they need on a first `up`. Whichever container starts first initialises an empty
 # named volume from the directory in its own image, so both images carry the same answer: `env-keys` writable by the
-# mason uid (it is the file mason writes), `workspace` owned by the same uid in both.
+# mason uid (it is the file mason writes), and the agent's half owned by the same uid in both containers. Only
+# `agent/` is prepared here; `service/` has no directory in this image at all, which is the point of it.
 RUN install -d -o mason -g mason -m 0755 /run/env-keys \
  && install -d -o mason -g mason -m 0700 /home/mason/.mason \
- && install -d -o mason -g mason -m 0700 /home/mason/.mason/workspace
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent/workspace
 
 COPY env-entrypoint.sh /usr/local/bin/env-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/env-entrypoint.sh

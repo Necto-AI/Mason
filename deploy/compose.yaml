@@ -19,8 +19,8 @@ services:
     build:
       context: .
       dockerfile: env.Dockerfile
-      # The same numbers as the mason image: the two containers share the `mason-workspace` and `env-keys` volumes, and
-      # a volume owned by uid 1000 is not writable by uid 1001.
+      # The same numbers as the mason image: the two containers share the `mason-agent` and `env-keys` volumes, and a
+      # volume owned by uid 1000 is not writable by uid 1001.
       args:
         MASON_UID: ${MASON_UID:-1000}
         MASON_GID: ${MASON_GID:-1000}
@@ -36,10 +36,13 @@ services:
     volumes:
       # Read-only here: mason writes the public half of the key it generated, sshd reads it at login.
       - env-keys:/run/env-keys:ro
-      # The path agreement. This is the same string as in the mason service below, and it has to be: the agent's
-      # workspace is `/home/mason/.mason/workspace` on both sides, because that exact path is what the server sends as
-      # the cwd for a tool call. Two different paths is a workspace no tool can open (deploy/README.md).
-      - mason-workspace:/home/mason/.mason/workspace
+      # The agent's half of the home, at the SAME absolute path as in the mason service below: the agent's profile, log,
+      # skills, worker definitions and workspace, and the repository its memory is committed to. One path on two
+      # machines is what makes a tool's cwd, a `read` and a `git commit` mean the same thing on both.
+      #
+      # `service/` is deliberately absent: no soul, no roster, no token hashes, no connector secret, no database, no SSH
+      # key, no provider credential. That absence is the boundary — a mount, not a mode bit that `chmod` can undo.
+      - mason-agent:/home/mason/.mason/agent
     # No daemon in the image and none started here: mason uploads `pi-env` over the connection and verifies its SHA-256
     # on the far side before it runs (vendor/pi/packages/env/src/ssh.ts, deployDaemon).
 
@@ -67,8 +70,8 @@ services:
       # reachable from any other machine. The container port stays 8787; MASON_PORT moves the host side.
       - "127.0.0.1:${MASON_PORT:-8787}:8787"
     environment:
-      # The agent's home: soul, profile, log, roster, config, data and the workspace. One directory, one volume, and a
-      # fixed path rather than a variable — a fresh named volume takes the ownership of the directory it is mounted
+      # The home, in its two halves: `agent/` (mounted into mason-env at this same path) and `service/` (only here).
+      # A fixed path rather than a variable — a fresh named volume takes the ownership of the directory it is mounted
       # over, and only this path is owned by the agent's uid in the images. Moving it is a rebuild, not an .env change.
       MASON_HOME: /home/mason/.mason
       # 127.0.0.1 inside a container is the container, so the published port would answer nothing. The server binds its
@@ -86,7 +89,7 @@ services:
       MASON_ENV_HOST: ${MASON_ENV_HOST:-mason-env}
       MASON_ENV_USER: ${MASON_ENV_USER:-mason}
       MASON_ENV_PORT: ${MASON_ENV_PORT:-22}
-      # The name the host key is pinned under in $MASON_HOME/ssh/known_hosts; independent of the host and port, which is
+      # The name the host key is pinned under in $MASON_HOME/service/ssh/known_hosts; independent of the host and port, which is
       # what makes a re-created env container a re-scan rather than a "host key changed" refusal.
       MASON_ENV_ALIAS: ${MASON_ENV_ALIAS:-pi-env-mason-env}
       # How long the entrypoint waits for the env host before giving up: attempts × (5 s keyscan + 2 s sleep).
@@ -94,11 +97,15 @@ services:
       # Who is in the room, comma-separated, used only when the home has no roster yet: seeding runs the repo's own
       # `npm run team -- add`, so the CLI is the only thing that ever writes a name.
       TEAM: ${TEAM:-}
-      # The dated memory log is `log/YYYY-MM-DD.md` in the server's local time, so the container's zone is the reader's.
+      # The dated memory log is `agent/log/YYYY-MM-DD.md` in the server's local time, so the container's zone is the reader's.
       TZ: ${TZ:-UTC}
     volumes:
-      - mason-home:/home/mason/.mason
-      - mason-workspace:/home/mason/.mason/workspace
+      # The server's own state: soul, roster, config, connectors, the database, the SSH key, the copied credential.
+      - mason-service:/home/mason/.mason/service
+      # The agent's half, shared with mason-env at the same path. Writable here because the server reads it through the
+      # execution environment and writes the profile's first-run defaults — but the boundary that matters is that
+      # mason-env cannot see `service/`, not that the server cannot see `agent/`.
+      - mason-agent:/home/mason/.mason/agent
       # Writable here only: this is where the public half of the env key is written.
       - env-keys:/run/env-keys
       - type: bind
@@ -120,14 +127,15 @@ services:
       retries: 3
 
 volumes:
-  # The transcript and the memory: soul.md, profile.md, log/, skills/, workspace/, data/agent.sqlite, roster.json,
-  # config.json (the token hashes), ssh/ (the env key) and pi/ (the copied provider credential). Back this up.
-  mason-home:
-    name: mason-home
-  # Shared with mason-env, at the same absolute path in both (see the services above). Not a backup target of its own:
-  # it is inside mason-home too.
-  mason-workspace:
-    name: mason-workspace
+  # The agent: profile.md, log/, journal/, skills/, agents/, workspace/ and the repository that holds its memory.
+  # Mounted into both containers at /home/mason/.mason/agent. Back this up.
+  mason-agent:
+    name: mason-agent
+  # The service: soul.md, roster.json, config.json (the token hashes), connectors.json, data/agent.sqlite, ssh/ (the env
+  # key) and pi/ (the copied provider credential). Mounted only into the mason container. Back this up too, encrypted:
+  # it holds the provider key.
+  mason-service:
+    name: mason-service
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
   env-keys:
     name: env-keys
