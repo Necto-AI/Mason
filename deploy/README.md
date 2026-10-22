@@ -19,7 +19,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 | Half | What is in it | Where it is mounted |
 |---|---|---|
 | `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
-| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `connectors.json`, `data/` (the transcript), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
@@ -172,8 +172,9 @@ ever baked into an image — the key never exists in a layer, only in a volume y
 shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
 history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
 home root, which is not a volume. `mason-service` is the server: `soul.md`,
-`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `connectors.json`, `data/agent.sqlite`
-(the transcript and the hooks), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
+`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `data/agent.sqlite`
+(the transcript and the hooks), `data/connectors.json`, `data/seeded-skills.json` (which shipped skills this home was
+seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.
 

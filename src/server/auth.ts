@@ -44,7 +44,7 @@ export interface TokenRecord {
 	readonly createdAt: string;
 }
 
-/** `~/.mason/config.json`. Unknown keys are preserved: this file grows with the agent. */
+/** `~/.mason/service/config.json`. Unknown keys are preserved: this file grows with the agent. */
 export interface MasonConfig {
 	readonly tokens?: readonly TokenRecord[];
 	/** HMAC key that signs browser session cookies. Generated alongside the first token, and never shown. */

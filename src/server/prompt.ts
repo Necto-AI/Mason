@@ -23,7 +23,7 @@ import { readResidentFile, type ResidentInput } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
 
 /**
- * What a fresh install starts from, and what `~/.mason/soul.md` is created with. Short on purpose.
+ * What a fresh install starts from, and what `~/.mason/service/soul.md` is created with. Short on purpose.
  *
  * This replaces the default preamble a coding agent opens with ("you are a personal coding agent…"): it is the agent's
  * own voice, written by the person the agent works for, and fixed for the conversation so the cached prefix holds.
