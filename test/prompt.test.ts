@@ -18,6 +18,7 @@ import {
 	Prompt,
 	GENERATIVE_UI_POINTER,
 	PROMPT_SECTIONS,
+	TEAM_GUIDELINES,
 	promptSectionKeys,
 } from "../src/server/prompt.ts";
 
@@ -83,6 +84,15 @@ test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does 
 test("DEFAULT_SOUL is short: it is the first thing in every prompt", () => {
 	assert.ok(DEFAULT_SOUL.length > 0);
 	assert.ok(DEFAULT_SOUL.length < 700, `DEFAULT_SOUL is ${DEFAULT_SOUL.length} characters`);
+});
+
+test("the team section says how a message names its author, and what no prefix means", async () => {
+	const rendered = await renderSection(sectionOf("team"));
+	assert.equal(rendered, `<team>\n${TEAM_GUIDELINES}\n</team>`, "the section is the constant, tagged like its neighbours");
+	assert.match(TEAM_GUIDELINES, /starts with "\[from <name>\] "/, "the convention is the prefix itself, and no example");
+	assert.match(TEAM_GUIDELINES, /no such prefix has no author/, "an unnamed device and a trigger are not attributed");
+	// It is paid for in every turn: four lines of prose, no list, no example beyond the prefix.
+	assert.ok(TEAM_GUIDELINES.length < 400, `the team section is ${TEAM_GUIDELINES.length} characters`);
 });
 
 test("the profile section asks for the interview when profile.md is missing", async () => {
@@ -321,6 +331,8 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"preamble",
 		"cwd",
 		"proactive_guidelines",
+		// Beside the hook section: both say how to read the shape of a turn before acting on it.
+		"team",
 		"skills",
 		"profile",
 		"generative_ui",

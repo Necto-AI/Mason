@@ -34,7 +34,7 @@ async function tempDir(prefix: string): Promise<string> {
 	return directory;
 }
 
-test("housePaths() follows MASON_HOME and joins soul, profile, log and skills", async () => {
+test("housePaths() follows MASON_HOME and joins soul, profile, log, skills and the roster", async () => {
 	const home = await tempDir("mason-house-paths-");
 	const previous = process.env.MASON_HOME;
 	process.env.MASON_HOME = home;
@@ -48,6 +48,8 @@ test("housePaths() follows MASON_HOME and joins soul, profile, log and skills", 
 			workspaceDir: join(home, "workspace"),
 			// The state lives in the home too: a transcript is not a property of the directory the server started in.
 			dataDir: join(home, "data"),
+			// And so does the roster: the names the agent can be told about are the home's, not a module's own path.
+			roster: join(home, "roster.json"),
 		});
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;

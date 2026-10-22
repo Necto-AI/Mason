@@ -7,9 +7,12 @@
  * entry there is nothing left to take back, and the server says so.
  */
 import type { QueuedItem } from "../../shared/contract.ts";
+import { AuthorChip } from "./MessageRow.tsx";
 
 export interface QueuedRowsProps {
 	readonly items: readonly QueuedItem[];
+	/** Who this browser speaks for, so the reader's own queued rows keep the quiet chip. */
+	readonly person?: string;
 	readonly onWithdraw: (submissionId: number) => void;
 }
 
@@ -19,13 +22,14 @@ function tagOf(mode: string): string {
 	return "write";
 }
 
-export function QueuedRows({ items, onWithdraw }: QueuedRowsProps) {
+export function QueuedRows({ items, person, onWithdraw }: QueuedRowsProps) {
 	if (items.length === 0) return null;
 	return (
 		<>
 			{items.map((item) => (
 				<article className="message user queued" key={item.id} data-testid="inbox-item">
 					<div className="bubble">
+						{item.author === undefined ? null : <AuthorChip author={item.author} mine={item.author === person} />}
 						{item.text}
 						<span className="tag" data-testid={`inbox-mode-${item.id}`}>
 							{tagOf(item.mode)}

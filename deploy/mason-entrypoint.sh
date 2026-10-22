@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# mason's boot: the four things the server cannot do for itself, then the server.
+#
+# Runs as the unprivileged `mason` user, from the repo root (the image's WORKDIR, /app), on first boot and on every boot
+# after it. Each step is idempotent and prints one `[deploy]` line saying what it did, in the shape the server's own
+# `[auth]` / `[data]` boot lines already use.
+#
+# Order, and why:
+#   1. the provider credential — a deployment with no model must say so before it spends minutes waiting for a machine
+#      it cannot use;
+#   2. the env keypair — the key is what makes the rest of the boot possible;
+#   3. the env host key — pinned into the file the server reads at import time (PI_ENV_SSH_KNOWN_HOSTS);
+#   4. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
+set -euo pipefail
+
+: "${MASON_HOME:?mason-entrypoint: MASON_HOME is not set (deploy/compose.yaml sets it)}"
+: "${MASON_PI_AGENT_SRC:?mason-entrypoint: MASON_PI_AGENT_SRC is not set (deploy/compose.yaml sets it)}"
+: "${MASON_ENV_HOST:?mason-entrypoint: MASON_ENV_HOST is not set (deploy/compose.yaml sets it)}"
+: "${MASON_ENV_USER:?mason-entrypoint: MASON_ENV_USER is not set (deploy/compose.yaml sets it)}"
+: "${MASON_ENV_PORT:?mason-entrypoint: MASON_ENV_PORT is not set (deploy/compose.yaml sets it)}"
+: "${MASON_ENV_ALIAS:?mason-entrypoint: MASON_ENV_ALIAS is not set (deploy/compose.yaml sets it)}"
+
+if [ ! -f package.json ]; then
+  echo "[deploy] package.json is not in $(pwd): this script expects the repo root (the image's WORKDIR)" >&2
+  exit 1
+fi
+
+model_required="${MASON_MODEL_REQUIRED:-1}"
+wait_attempts="${MASON_ENV_WAIT_ATTEMPTS:-30}"
+ssh_dir="$MASON_HOME/ssh"
+pi_dir="$MASON_HOME/pi"
+
+install -d -m 0700 "$MASON_HOME"
+
+# 1. The provider credential, copied out of the read-only mount.
+#
+# pi reads `settings.json` (which model) and `auth.json` (which key) from `$PI_CODING_AGENT_DIR`, and it takes a lock
+# file beside `auth.json` even to read it — `FileAuthStorageBackend.withLock` → `proper-lockfile.lockSync`. On a
+# read-only directory that lock cannot be created, the error is swallowed one level up, and the store comes up empty:
+# the server starts, resolves the model, and answers every turn with no credential. So the mount stays read-only (it is
+# the operator's file, not ours) and the copy on the home volume is what the server reads. It is redone on every boot,
+# so a rotated key lands on a restart; identical content is left alone.
+copy_pi_file() {
+  local name="$1"
+  local source="$MASON_PI_AGENT_SRC/$name"
+  local target="$pi_dir/$name"
+  if [ -f "$source" ]; then
+    if [ -f "$target" ] && [ "$(sha256sum "$source" | cut -d' ' -f1)" = "$(sha256sum "$target" | cut -d' ' -f1)" ]; then
+      chmod 0600 "$target"
+      echo "[deploy] $name unchanged"
+      return 0
+    fi
+    install -m 0600 "$source" "$target"
+    echo "[deploy] copied $name from $MASON_PI_AGENT_SRC"
+    return 0
+  fi
+  if [ -f "$target" ]; then
+    rm -f "$target"
+    echo "[deploy] removed $name: $MASON_PI_AGENT_SRC has no $name"
+    return 0
+  fi
+  echo "[deploy] no $name in $MASON_PI_AGENT_SRC"
+  return 0
+}
+
+install -d -m 0700 "$pi_dir"
+copy_pi_file settings.json
+copy_pi_file auth.json
+
+if [ "$model_required" = "1" ] && [ ! -f "$pi_dir/auth.json" ]; then
+  echo "[deploy] no provider credential: $MASON_PI_AGENT_SRC/auth.json is missing." >&2
+  echo "[deploy] put pi's settings.json and auth.json in the directory MASON_PI_AGENT_DIR names (deploy/README.md)," >&2
+  echo "[deploy] or set MASON_MODEL_REQUIRED=0 to start a stack that deliberately has no model." >&2
+  exit 1
+fi
+export PI_CODING_AGENT_DIR="$pi_dir"
+
+# 2. The key mason logs in with. Generated once, into the home, never in an image; the public half goes to the shared
+# volume, which is how it reaches mason-env without a copy step or a secret in either image.
+install -d -m 0700 "$ssh_dir"
+if [ ! -f "$ssh_dir/id_ed25519" ]; then
+  ssh-keygen -q -t ed25519 -N '' -C mason-env -f "$ssh_dir/id_ed25519"
+  echo "[deploy] generated the env keypair in $ssh_dir"
+fi
+chmod 0600 "$ssh_dir/id_ed25519"
+if ! install -m 0600 "$ssh_dir/id_ed25519.pub" /run/env-keys/authorized_keys 2>/dev/null; then
+  echo "[deploy] cannot write /run/env-keys/authorized_keys as uid $(id -u): the env-keys volume is not writable." >&2
+  echo "[deploy] the volume was created before the image owned that directory; recreate it with:" >&2
+  echo "[deploy]   docker compose down && docker volume rm env-keys" >&2
+  exit 1
+fi
+echo "[deploy] published $ssh_dir/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys"
+
+# 3. Wait for mason-env, then pin its host key.
+#
+# The keys are generated per container boot (deploy/env-entrypoint.sh), so the file is rewritten rather than treated as
+# trust-on-first-use state: what is pinned is what answered now, under a fixed alias, which is why a re-created env
+# container is a re-scan instead of a "host key changed" refusal. `ssh-keyscan` is the wait and the pin at once.
+echo "[deploy] waiting for $MASON_ENV_USER@$MASON_ENV_HOST:$MASON_ENV_PORT"
+known_hosts="$ssh_dir/known_hosts"
+# `ssh-keyscan` writes the keys to stdout and also a per-host banner comment there (`# <host> SSH-2.0-…`), so the lines
+# are filtered by key type before they reach the file: `alias <type> <key>` is what ssh accepts and what `HostKeyAlias`
+# looks up. A run that yields no key line is a failed attempt, not a pin.
+KEY_TYPE='^(ssh-[a-z0-9-]+|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)$'
+pinned=""
+attempt=1
+while [ "$attempt" -le "$wait_attempts" ]; do
+  if scan="$(ssh-keyscan -T 5 -p "$MASON_ENV_PORT" "$MASON_ENV_HOST" 2>/dev/null)"; then
+    pinned="$(printf '%s\n' "$scan" | awk -v alias="$MASON_ENV_ALIAS" -v type="$KEY_TYPE" '$2 ~ type { print alias, $2, $3 }' | sort -u)"
+    if [ -n "$pinned" ]; then
+      break
+    fi
+  fi
+  sleep 2
+  attempt=$((attempt + 1))
+done
+if [ -z "$pinned" ]; then
+  echo "[deploy] mason-env never answered on $MASON_ENV_HOST:$MASON_ENV_PORT after $wait_attempts attempts." >&2
+  echo "[deploy] look at the other container: docker compose logs mason-env (it should stay up and log from sshd)." >&2
+  echo "[deploy] mason is not starting: an agent with nowhere to run a tool is worse than no agent." >&2
+  exit 1
+fi
+printf '%s\n' "$pinned" > "$known_hosts.tmp"
+mv "$known_hosts.tmp" "$known_hosts"
+chmod 0600 "$known_hosts"
+echo "[deploy] pinned $(wc -l < "$known_hosts") host key(s) for $MASON_ENV_ALIAS from $MASON_ENV_HOST:$MASON_ENV_PORT"
+
+# 4. The roster, from TEAM, only on a home that has none.
+#
+# Names are written by `npm run team -- add`, not by this script: the CLI owns validation and the file's mode, and a
+# second writer would be a second spelling of the rule.
+roster="$MASON_HOME/roster.json"
+if [ -f "$roster" ]; then
+  echo "[deploy] roster present: not seeding from TEAM"
+else
+  names="${TEAM:-}"
+  if [ -z "$names" ]; then
+    echo "[deploy] TEAM is empty and there is no roster yet: nobody can claim a name. Add one with:"
+    echo "[deploy]   docker compose exec mason npm run team -- add \"Ilya\""
+  else
+    seeded=0
+    IFS=','
+    for name in $names; do
+      # Trim the spaces around a name: "Ilya, Denis" is how a person writes a list.
+      name="${name#"${name%%[![:space:]]*}"}"
+      name="${name%"${name##*[![:space:]]}"}"
+      [ -n "$name" ] || continue
+      # The CLI's own two lines of advice are for the person running it; the boot says what it did in one line.
+      if ! npm run --silent team -- add "$name" > /dev/null; then
+        echo "[deploy] TEAM lists a name the roster refused: \"$name\"" >&2
+        exit 1
+      fi
+      echo "[deploy] added \"$name\" to the roster"
+      seeded=$((seeded + 1))
+    done
+    unset IFS
+    echo "[deploy] seeded $seeded name(s) from TEAM into $roster"
+  fi
+fi
+
+# 5. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
+export PI_ENV_SSH_HOST="$MASON_ENV_HOST"
+export PI_ENV_SSH_USER="$MASON_ENV_USER"
+export PI_ENV_SSH_PORT="$MASON_ENV_PORT"
+export PI_ENV_SSH_IDENTITY="$ssh_dir/id_ed25519"
+export PI_ENV_SSH_KNOWN_HOSTS="$known_hosts"
+export PI_ENV_SSH_ALIAS="$MASON_ENV_ALIAS"
+echo "[deploy] tools run on $MASON_ENV_USER@$MASON_ENV_HOST:$MASON_ENV_PORT, in $MASON_HOME/workspace"
+# `npm run dev` is this same command; exec'ing node directly keeps one process as PID 1, so SIGTERM reaches the server
+# that installs the handler rather than an npm wrapper that may not pass it on.
+exec node --conditions=source --experimental-strip-types src/server/main.ts

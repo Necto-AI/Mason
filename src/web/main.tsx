@@ -12,10 +12,11 @@ import type { AgentStatus, QueuedItem, TranscriptItem } from "../shared/contract
 import { connectAgent, type AgentConnection } from "./client.ts";
 import { Composer } from "./components/Composer.tsx";
 import { JumpPill } from "./components/JumpPill.tsx";
+import { Picker } from "./components/Picker.tsx";
 import { SessionBar } from "./components/SessionBar.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
-import { probeSession, type SessionDevice, socketUrl } from "./lib/session.ts";
+import { probeSession, screenFor, type BrowserSession, socketUrl } from "./lib/session.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
 import { createWorkingMachine } from "./lib/working.ts";
 import "./styles/tokens.css";
@@ -105,22 +106,30 @@ function Unpaired({ reason }: { readonly reason: "unpaired" | "unreachable" }) {
 }
 
 /**
- * Whether this browser may see the agent, asked once at boot. The answer decides between two screens, and only one of
- * them opens a socket.
+ * Whether this browser may see the agent, asked once at boot. The answer decides between three screens, and only the
+ * conversation opens a socket: the door, the picker a paired browser with no name is sent to, and the conversation.
  */
+type Boot =
+	| { readonly state: "probing" }
+	| { readonly state: "unreachable" }
+	| { readonly state: "answered"; readonly session: BrowserSession | undefined };
+
 function Root() {
-	const [session, setSession] = useState<SessionDevice | "probing" | "unreachable" | undefined>("probing");
+	const [boot, setBoot] = useState<Boot>({ state: "probing" });
 	useEffect(() => {
 		probeSession()
-			.then(setSession)
-			.catch(() => setSession("unreachable"));
+			.then((session) => setBoot({ state: "answered", session }))
+			.catch(() => setBoot({ state: "unreachable" }));
 	}, []);
-	if (session === "probing") return null;
-	if (session === "unreachable") return <Unpaired reason="unreachable" />;
-	return session === undefined ? <Unpaired reason="unpaired" /> : <App />;
+	if (boot.state === "probing") return null;
+	if (boot.state === "unreachable") return <Unpaired reason="unreachable" />;
+	const screen = screenFor(boot.session);
+	if (screen.kind === "unpaired") return <Unpaired reason="unpaired" />;
+	if (screen.kind === "join") return <Picker roster={screen.roster} />;
+	return <App person={screen.person} />;
 }
 
-function App() {
+function App({ person }: { readonly person: string | undefined }) {
 	const { connection, connectionState, transcript, queued, status, error, clearError } = useAgent();
 	const [pending, setPending] = useState(false);
 	const listRef = useRef<HTMLDivElement | null>(null);
@@ -140,8 +149,14 @@ function App() {
 
 	const bridgeFor = useCallback(
 		(callId: string): WidgetBridge => ({
-			sendPrompt: (args) =>
-				run(() => connection.agent.submit({ content: `[WIDGET ${callId}] ${args.text}`, whenBusy: "followUp" })),
+			sendPrompt: (args) => {
+				// A message sent from inside a widget is still the reader sending: it lands below the fold of what they
+				// were looking at, so the view goes to it.
+				follower.glide();
+				return run(() =>
+					connection.agent.submit({ content: `[WIDGET ${callId}] ${args.text}`, whenBusy: "followUp" }),
+				);
+			},
 			openLink: async (args) => {
 				const url = args.url;
 				if (typeof url === "string" && /^https?:\/\//.test(url)) window.open(url, "_blank", "noopener");
@@ -171,6 +186,7 @@ function App() {
 			<div id="main">
 				<SessionBar
 					status={status}
+					person={person}
 					onCompact={() => run(() => connection.agent.compact({}))}
 					onReset={() => run(() => connection.agent.reset({}))}
 				/>
@@ -183,6 +199,7 @@ function App() {
 					transcript={transcript}
 					queued={queued}
 					working={working}
+					person={person}
 					bridgeFor={bridgeFor}
 					connection={connectionState}
 					onWithdraw={(submissionId) => run(() => connection.agent.withdrawSubmission({ submissionId }))}
@@ -192,8 +209,16 @@ function App() {
 					enabled={connectionState === "connected" && status !== undefined}
 					pending={pending}
 					connection={connectionState}
-					onSubmit={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }))}
-					onSteer={(text) => run(() => connection.agent.submit({ content: text, whenBusy: "steer" }))}
+					onSubmit={(text) => {
+						// Before the submit, not after: the row arrives a round trip later, and the glide is already under
+						// way by then rather than starting from a still view.
+						follower.glide();
+						return run(() => connection.agent.submit({ content: text, whenBusy: "followUp" }));
+					}}
+					onSteer={(text) => {
+						follower.glide();
+						return run(() => connection.agent.submit({ content: text, whenBusy: "steer" }));
+					}}
 					onStop={() => run(() => connection.agent.abort())}
 				/>
 				<JumpPill show={!pinned} running={busy} onClick={() => follower.jump(true)} />

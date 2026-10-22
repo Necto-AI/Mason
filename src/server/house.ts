@@ -14,6 +14,11 @@
  * └── data/                   # agent.sqlite and hooks.json: the state, in the same home it describes
  * ```
  *
+ * `roster.json` (who is in the room, `roster.ts`) and `config.json` (the credentials, `auth.ts`) sit beside them;
+ * `housePaths` builds both, so a module that needs one of them is handed a path rather than a home to join itself. The
+ * one exception left is `configPath` in `auth.ts`: it predates the rule, and `readConfig`/`writeConfig` still take a
+ * home. Leaving a second home-joining helper beside it would be worse than naming this one.
+ *
  * Config, plugins and hooks join the same directory later; keeping one home is the point.
  *
  * The home is `0700`, files in it `0600`: it holds a transcript of everything Denis said, which is not a thing to leave
@@ -37,6 +42,8 @@ export interface HousePaths {
 	readonly workspaceDir: string;
 	/** Where `agent.sqlite` and `hooks.json` live: inside the home, so one directory is the whole agent. */
 	readonly dataDir: string;
+	/** The names a browser may claim as its author: the roster, read per request (`roster.ts`). */
+	readonly roster: string;
 }
 
 /**
@@ -69,6 +76,7 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		skillsDir: join(home, "skills"),
 		workspaceDir: join(home, "workspace"),
 		dataDir: join(home, "data"),
+		roster: join(home, "roster.json"),
 	};
 }
 

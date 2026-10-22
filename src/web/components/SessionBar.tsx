@@ -12,6 +12,8 @@ import type { ConnectionState } from "../client.ts";
 
 export interface SessionBarProps {
 	readonly status: AgentStatus | undefined;
+	/** The name this browser claimed; `undefined` on an unnamed device, which is worth saying plainly. */
+	readonly person: string | undefined;
 	readonly onCompact: () => void;
 	readonly onReset: () => void;
 }
@@ -24,7 +26,7 @@ const RUN_LABELS: Record<string, string> = {
 	idle: "idle",
 };
 
-export function SessionBar({ status, onCompact, onReset }: SessionBarProps) {
+export function SessionBar({ status, person, onCompact, onReset }: SessionBarProps) {
 	const [open, setOpen] = useState(false);
 	const menuId = useId();
 	const wrap = useRef<HTMLDivElement | null>(null);
@@ -90,6 +92,9 @@ export function SessionBar({ status, onCompact, onReset }: SessionBarProps) {
 							<code data-testid="status-model">
 								{status?.model === undefined ? "model: —" : `model: ${status.model.provider}/${status.model.modelId}`}
 							</code>
+							{/* Who the agent will say you are: one line, in the menu, because knowing your name is a fact about
+							    the session and not news the transcript has to announce. */}
+							<code data-testid="status-person">{`person: ${person ?? "unnamed"}`}</code>
 						</div>
 						<button type="button" role="menuitem" data-testid="compact" onClick={run(onCompact)}>
 							Compact context
