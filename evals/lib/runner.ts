@@ -125,8 +125,11 @@ async function submit(conversation: Conversation, turn: Turn, timeoutMs: number)
 }
 
 async function seed(home: string, scenario: Scenario): Promise<void> {
+	// The agent's half, not the home root: `profile.md` and `skills/` are read there, and the root has not held them
+	// since the split.
+	const agentDir = housePaths(home).agentDir;
 	for (const [path, content] of Object.entries(scenario.home ?? {})) {
-		const target = join(home, path);
+		const target = join(agentDir, path);
 		await mkdir(dirname(target), { recursive: true });
 		await writeFile(target, content, "utf8");
 	}
