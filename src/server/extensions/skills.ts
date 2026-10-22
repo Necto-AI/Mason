@@ -10,8 +10,8 @@
  * reason the reads do.
  *
  * The root is `agent/skills/`, on the volume the tool machine mounts, and it is the same root in the dev stack and in
- * the deployment because `ensureHouse` seeds the shipped skills into it (`house.ts`, `seedShippedSkills`). A personal
- * skill of the same name is the one that stays: seeding never overwrites.
+ * the deployment because `ensureHouse` seeds the shipped skills into it (`house.ts`, `seedShippedSkills`). A copy that
+ * was seeded and then edited is the one that stays; seeding replaces only what it seeded and nobody touched.
  *
  * The walk happens on every render and the result is reused until an entry it found changes: writing a skill, or editing
  * the description of one that already exists, is meant to be enough to use it, including in the turn it was written in.

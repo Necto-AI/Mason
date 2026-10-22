@@ -22,9 +22,11 @@ function usage(): never {
   agent half:   ${house.agentDir}   (mounted into the tool machine)
   service half: ${house.serviceDir}   (never a path inside the tool machine)
 
-  migrate moves an existing home into those two halves, once. The repository at the home root stays where it is and
-  is frozen; the agent's history starts fresh in agent/.git. It is safe to run twice, and it refuses when the same
-  entry is in the root and in a half that already holds something.`);
+  migrate moves an existing home into those two halves, once. It is safe to run twice, and a second run finishes what an
+  interrupted one left (the agent's first commit, the freeze of the repository at the root) when it is missing. The
+  repository at the home root stays where it is and is frozen; the agent's history starts fresh in agent/.git. It refuses
+  when the same entry is in the root and in a half that already holds something, and when agent/.git already holds paths
+  from service/ — a history from before this fix, which it names the repair for instead of touching.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -36,14 +38,18 @@ if (outcome.status === "refused") {
 	process.exit(1);
 }
 if (outcome.status === "unchanged") {
-	console.log(`[doctor] nothing to move: ${house.home} is already split into agent/ and service/`);
+	console.log(
+		outcome.finished.length === 0
+			? `[doctor] nothing to move: ${house.home} is already split into agent/ and service/`
+			: `[doctor] nothing to move; finished what an interrupted run left: ${outcome.finished.join("; ")}`,
+	);
 	process.exit(0);
 }
 for (const move of outcome.moves) console.log(`[doctor] ${move.from} -> ${move.to}`);
 console.log(
 	outcome.committed
 		? `[doctor] moved ${outcome.moves.length} entr${outcome.moves.length === 1 ? "y" : "ies"} and froze the repository at ${house.home}`
-		: `[doctor] moved ${outcome.moves.length} entr${outcome.moves.length === 1 ? "y" : "ies"}; ${house.home} is not a git repository, so nothing was frozen`,
+		: `[doctor] moved ${outcome.moves.length} entr${outcome.moves.length === 1 ? "y" : "ies"}, but nothing was committed in ${house.home}: it is not a repository, or git refused the commit`,
 );
 console.log(`[doctor] the agent's history starts in ${house.agentDir}/.git; ${house.serviceDir}/ is unversioned`);
 console.log(
