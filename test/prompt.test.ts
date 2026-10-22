@@ -9,9 +9,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { after, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import type { PromptSection } from "@earendil-works/pi-durable";
+import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
-import { housePaths } from "../src/server/house.ts";
+import { ensureHouse, housePaths } from "../src/server/house.ts";
 import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
 import {
 	DEFAULT_SOUL,
@@ -23,9 +26,35 @@ import {
 } from "../src/server/prompt.ts";
 
 const directories = new Set<string>();
+
+/**
+ * The tool machine: a real `pi-env` environment over a real daemon, which is what the agent's own files are read
+ * through. Absolute paths, so its cwd is only a starting point.
+ */
+const connection = new Connection({ command: daemonCommand(localDaemon()) });
+const toolMachine = new LocalExecutionEnv({ connection, cwd: tmpdir() });
+
 after(async () => {
+	connection.close();
 	for (const directory of directories) await rm(directory, { recursive: true, force: true });
 });
+
+/** The turn a render happens in. The resident memo is keyed on it, so a test that edits a file advances it. */
+let turn = 0;
+
+function nextTurn(): void {
+	turn += 1;
+}
+
+/** What a section is handed: the environment of the turn, and the live document it reads the turn's identity from. */
+function promptInput(overrides: Record<string, unknown> = {}): unknown {
+	return {
+		conversationId: 1,
+		env: toolMachine,
+		read: { snapshot: async () => ({ run: { taskId: turn, inputs: [] } }) },
+		...overrides,
+	};
+}
 
 async function tempDir(prefix: string): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -44,6 +73,8 @@ async function withHouseHome(run: () => Promise<void>): Promise<void> {
 	const previous = process.env.MASON_HOME;
 	process.env.MASON_HOME = home;
 	try {
+		// Both halves, with the modes a fresh install creates: a section reads a file in a home that exists.
+		await ensureHouse(housePaths(), DEFAULT_SOUL);
 		await run();
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;
@@ -61,10 +92,22 @@ function sectionOf(key: string): PromptSection {
 /**
  * A section as it reaches the system prompt, mirroring `renderSections` in
  * `vendor/pi/packages/durable/src/harness/prompt.ts`: a tagged section is wrapped in its key, a tag-less one is passed
- * through bare. The render arguments are unused by these sections, which read the filesystem.
+ * through bare, and a renderer that throws keeps the text that was already shown.
  */
-async function renderSection(promptSection: PromptSection, input: unknown = undefined): Promise<string | undefined> {
-	const text = await promptSection.render(input as never, undefined as never);
+async function renderSection(
+	promptSection: PromptSection,
+	input: unknown = promptInput(),
+	shown?: string,
+): Promise<string | undefined> {
+	let text: string | undefined;
+	try {
+		text = await promptSection.render(input as never, BACKGROUND_CONTEXT as never);
+	} catch (error) {
+		// The engine's rule, which is the reason a resident read is allowed to throw: the prompt keeps what it had and
+		// the request still goes out.
+		if (shown !== undefined) return shown;
+		throw error;
+	}
 	if (text === undefined) return undefined;
 	return promptSection.tag === false ? text : `<${promptSection.key}>\n${text}\n</${promptSection.key}>`;
 }
@@ -140,6 +183,88 @@ test("the profile section truncates an over-long profile instead of eating the p
 	});
 });
 
+/**
+ * The two rules of `resident.ts`, at the seam a reader can see: what the prompt says, and when it changes.
+ *
+ * An edit during a turn is not a mid-turn change of mind — the turn keeps the context it started with, and the next turn
+ * reads the file again.
+ */
+test("the profile section follows the file, one turn behind", async () => {
+	await withHouseHome(async () => {
+		nextTurn();
+		await writeFile(housePaths().profile, "Denis prefers short answers.\n", "utf8");
+		const first = await renderSection(sectionOf("profile"));
+		assert.match(first ?? "", /Denis prefers short answers\./);
+
+		// The same turn: the prompt is the one the turn started with, however many model requests it takes.
+		await writeFile(housePaths().profile, "Denis prefers long answers.\n", "utf8");
+		assert.equal(await renderSection(sectionOf("profile")), first, "a mid-turn edit does not disturb the turn");
+
+		nextTurn();
+		const second = await renderSection(sectionOf("profile"));
+		assert.match(second ?? "", /Denis prefers long answers\./, "the next turn reads the file the agent wrote");
+		assert.doesNotMatch(second ?? "", /short answers/);
+	});
+});
+
+/**
+ * The failure rule: a tool machine that cannot answer leaves the prompt as it was. Returning `undefined` instead would
+ * remove the section, and the agent would lose its memory to a sleeping machine.
+ */
+test("an unreachable tool machine throws, and the shown profile stays in the prompt", async () => {
+	await withHouseHome(async () => {
+		nextTurn();
+		await writeFile(housePaths().profile, "Denis prefers short answers.\n", "utf8");
+		const shown = await renderSection(sectionOf("profile"));
+		assert.ok(shown !== undefined);
+
+		// A new turn, and an environment that cannot answer: the connection is gone, which is what a sleeping tool
+		// machine looks like.
+		nextTurn();
+		const unreachable = {
+			conversationId: 1,
+			env: {
+				id: "pi-env:gone",
+				cwd: "/",
+				readTextFile: async () => ({ ok: false, error: { code: "unknown", message: "connection lost" } }),
+			},
+			read: { snapshot: async () => ({ run: { taskId: turn, inputs: [] } }) },
+		};
+		await assert.rejects(
+			() => renderSection(sectionOf("profile"), unreachable),
+			/connection lost/,
+			"the renderer throws instead of claiming there is no profile",
+		);
+		assert.equal(
+			await renderSection(sectionOf("profile"), unreachable, shown),
+			shown,
+			"and the engine keeps the text it had, so the prompt is unchanged",
+		);
+	});
+});
+
+/**
+ * A skill written a minute ago is in the index of the next request: the scan is cached by the roots' modification times
+ * and re-probed on every render, so writing a skill is enough to use it.
+ */
+test("the skills section picks up a skill written after the first render", async () => {
+	await withHouseHome(async () => {
+		const paths = housePaths();
+		await mkdir(paths.skillsDir, { recursive: true });
+		await mkdir(join(paths.skillsDir, "first"), { recursive: true });
+		await writeFile(join(paths.skillsDir, "first", "SKILL.md"), "---\nname: first\ndescription: The first one.\n---\n");
+		const before = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(before, /first/, "the skill that was there is indexed");
+
+		await mkdir(join(paths.skillsDir, "second"), { recursive: true });
+		await writeFile(join(paths.skillsDir, "second", "SKILL.md"), "---\nname: second\ndescription: The second one.\n---\n");
+		// A directory's mtime moves when an entry is added; the probe sees it on the next render, in the same turn.
+		const after = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(after, /second/, "the skill written a moment ago is indexed");
+		assert.match(after, /first/, "and the one beside it is still there");
+	});
+});
+
 test("discoverSkills() finds nested SKILL.md files and reads their frontmatter", async () => {
 	const shipped = await tempDir("mason-skills-shipped-");
 	const personal = await tempDir("mason-skills-personal-");
@@ -150,7 +275,7 @@ test("discoverSkills() finds nested SKILL.md files and reads their frontmatter",
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	const [skill] = skills;
 	assert.ok(skill, "the nested skill is found");
 	assert.equal(skill.name, "pr");
@@ -181,7 +306,7 @@ test("a personal skill shadows a shipped skill with the same name", async () => 
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	assert.deepEqual(
 		skills.map((skill) => skill.name),
 		["pr", "weekly"],
@@ -203,7 +328,7 @@ test("a skill without a frontmatter name is named after its directory", async ()
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	// pi's loader falls back to the folder name, which is already the label a person reads.
 	assert.deepEqual(
 		skills.map((skill) => ({ name: skill.name, description: skill.description, path: skill.filePath })),
@@ -227,7 +352,7 @@ test("renderSkills() lists each skill's name, description and absolute path, and
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	const text = renderSkills(skills) ?? "";
 	assert.ok(text.length > 0, "two skills render a block");
 	assert.match(text, /Use the read tool to load a skill's file/, "the index says how a body is loaded");
@@ -253,7 +378,7 @@ test("the shipped generative-ui skill carries its name, use-when description and
 
 	// Discovery reaches the same file through the shipped root and parses the fields the index renders.
 	const personal = await tempDir("mason-skills-personal-");
-	const generative = (await discoverSkills(SHIPPED_SKILLS_DIR, personal)).find(
+	const generative = (await discoverSkills(toolMachine, [personal, SHIPPED_SKILLS_DIR], BACKGROUND_CONTEXT)).find(
 		(skill) => skill.name === "generative-ui",
 	);
 	assert.ok(generative, "the shipped root is where generative-ui comes from");
@@ -297,14 +422,10 @@ test("every section renders byte-identically twice, so an unchanged conversation
 			"# Denis\nPrefers short answers and numbers to adjectives.\n",
 			"utf8",
 		);
-		const sections: Array<readonly [PromptSection, unknown]> = [
-			...(["preamble", "cwd", "proactive_guidelines", "delivery"] as const).map(
-				(key) => [sectionOf(key), key === "cwd" ? { env: { cwd: "/home/user/dev/mason" } } : undefined] as const,
-			),
-			[sectionOf("profile"), undefined],
-			[sectionOf("skills"), undefined],
-			[sectionOf("generative_ui"), undefined],
-		];
+		// Every section, including the resident ones: the profile and the skills index are the bytes that could drift.
+		const sections: Array<readonly [PromptSection, unknown]> = PROMPT_SECTIONS.map(
+			(promptSection) => [promptSection, promptInput()] as const,
+		);
 		for (const [promptSection, input] of sections) {
 			const first = await renderSection(promptSection, input);
 			const second = await renderSection(promptSection, input);
@@ -315,7 +436,7 @@ test("every section renders byte-identically twice, so an unchanged conversation
 
 test("an empty home renders no skills section at all", async () => {
 	const empty = await tempDir("mason-skills-empty-");
-	assert.equal(renderSkills(await discoverSkills(empty, empty)), undefined, "nothing to say, so nothing is said");
+	assert.equal(renderSkills(await discoverSkills(toolMachine, [empty, empty], BACKGROUND_CONTEXT)), undefined, "nothing to say, so nothing is said");
 });
 
 /**
@@ -351,9 +472,7 @@ test("the prompt is one registry: no other extension brings a section, and the o
 test("the prompt never points the agent at pi's docs or at its own source", async () => {
 	const rendered = (
 		await Promise.all(
-			PROMPT_SECTIONS.map((promptSection) =>
-				renderSection(promptSection, { env: { cwd: "/home/user/dev/mason" } }),
-			),
+			PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection)),
 		)
 	)
 		.filter((text) => text !== undefined)
