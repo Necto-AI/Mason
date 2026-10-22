@@ -80,16 +80,20 @@ question from forking and can be added or dropped without changing this.
 This falls out of the current code and is worth making explicit, because it removes the hardest question ("does
 `~/.mason` live in the VM?"):
 
-- `soul.md`, `profile.md`, `log/` and `skills/` are read and written by **host** code: the sections render in the server
-  process, and `remember` appends with `node:fs`. The model never touches those files with a tool.
-- Therefore memory **never needs to enter the guest**. Prompt text is assembled on the host from host files; only
-  tool-visible files live in the VM.
-- The exception is the **skills index**: it hands the model absolute paths to `SKILL.md` files, and the model reads them
-  with its own `read` tool — inside the guest. Today those paths are host paths
-  (`/home/denis/dev/mason/skills/generative-ui/SKILL.md`); in a VM they do not exist. Two options:
+- `service/soul.md` is read by **host** code with `node:fs`: it is the server's half, and no tool has a path to it. The
+  model never touches it.
+- `agent/profile.md`, `agent/log/` and `agent/skills/` are **agent** files: the server renders the sections from them
+  through the execution environment (`src/server/resident.ts`), which is the same read the model's `read` tool does, and
+  the model may edit the profile and its skills with `write`. They are already on the volume the tool machine mounts,
+  so they need no second route into the guest.
+- Therefore nothing about memory needs a copy inside a VM: only tool-visible files live there, and they already do.
+- The **skills index** is the one place where this shows: it hands the model absolute paths to `SKILL.md` files, and the
+  model reads them with its own `read` tool — inside the guest. Today those paths are home paths
+  (`~/.mason/agent/skills/generative-ui/SKILL.md`, seeded from the repository's `skills/` on first boot); in a VM they
+  are whatever the guest resolves them to. Two options:
   - **sync the skill roots into the guest** at a fixed path (`/opt/mason/skills`, `~/skills`) and render locations from
     the target; simplest, keeps `read` as the only skill-reading tool;
-  - or keep skills host-side and serve them through a tool — more machinery, no benefit.
+  - or serve them through a tool — more machinery, no benefit.
 
   Take the first. The rule behind it: **any path a section prints must be valid where the tool runs**, which means path
   rendering belongs to the target, not to the process that happens to be running.
@@ -112,8 +116,9 @@ implementation of `ExecutionEnv`; `send_to_user` still runs on the host and stil
 
 ## Migration path
 
-1. **Workspace default** `~/.mason/workspace`, created by `ensureHouse`, `workspaceDir` no longer defaults to
-   `process.cwd()`. *(Done.)* The agent stops being able to edit the program that runs it.
+1. **Workspace default** `~/.mason/agent/workspace` (the agent's half; the home root holds neither half's contents),
+   created by `ensureHouse`, `workspaceDir` no longer defaults to `process.cwd()`. *(Done.)* The agent stops being able
+   to edit the program that runs it.
 2. **`app.target` doc and an `ExecutionTarget` seam**: `env()` reads it, local-only target, no behaviour change. This is
    the point where "where do tools run" becomes an explicit value instead of a constant.
 3. **Target-rendered paths**: the skills index (and any future section) prints locations from the target.
