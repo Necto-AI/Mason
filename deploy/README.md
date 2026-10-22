@@ -115,7 +115,7 @@ docker compose exec mason npm run token -- revoke <id>
 
 Both files are read per request, so an add or a remove lands on the next request without a restart. The roster is an
 access list, not an authentication: any paired browser may claim any name on it. That is the deliberate trade for a room
-of five people (docs/TEAM-IDENTITY.md); it stops being acceptable when a stranger can hold the invite link.
+of five people (docs/ROOM-IDENTITY.md); it stops being acceptable when a stranger can hold the invite link.
 
 `TEAM` in `.env` only seeds a home that has no roster yet. Once `roster.json` exists, the CLI is the way in — editing
 `.env` and restarting changes nothing, on purpose.

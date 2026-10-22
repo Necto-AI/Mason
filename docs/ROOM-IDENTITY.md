@@ -1,6 +1,11 @@
-# Team identity
+# Room identity
 
 Spec for `feat/team-identity`. Published as an issue; this file is the copy the repo keeps.
+
+**On the word "team".** This spec was written when the vocabulary said *team* for what it describes. The glossary
+settled it differently: a **room** is the people present in one bot's conversation, and a **team** is bots organised to
+work together, each with a profession (`docs/adr/0001-mason-defines-one-bot.md`). The file and its title follow the
+glossary; the branch name and the prose below keep the older word, because it is the record of what was decided then.
 
 ## Problem Statement
 
