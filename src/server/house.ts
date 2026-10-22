@@ -42,7 +42,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
@@ -407,8 +407,17 @@ async function commitMemory(
  * A repository created here is committed in the same breath. The files a home starts with — the profile, the skills
  * seeded from the repository — are the agent's first memory, not untracked dirt in a repository nothing was ever
  * committed to. `workspace/` is left out: it is scratch, and a tool's half-finished file is not a memory.
+ *
+ * Both answers to "is this half safe to commit into" are refusals, thrown before `git init` and before anything is
+ * staged: a `service/` directory here is the key, the token hashes and the transcript readable on the volume the tool
+ * machine mounts, and a repository copy other than `agent/.git` is a history that may hold them. Ignoring either would
+ * leave the key in that volume while the server called the home fine, so boot stops instead.
  */
 export async function ensureRepository(agentDir: string): Promise<void> {
+	const home = dirname(agentDir);
+	if (existsSync(join(agentDir, "service"))) throw new Error(serviceInAgentHalf(home));
+	const stray = await strayRepositories(agentDir);
+	if (stray.length > 0) throw new Error(strayRepository(home, stray[0] as string));
 	if (existsSync(join(agentDir, ".git"))) return;
 	try {
 		await run("git", ["init", "--quiet"], { cwd: agentDir });
@@ -417,6 +426,78 @@ export async function ensureRepository(agentDir: string): Promise<void> {
 		return;
 	}
 	await commitAgentTree(agentDir, "The agent's memory starts here");
+}
+
+/**
+ * Where a tainted history goes: outside the home, and named after it.
+ *
+ * `agent/` is the volume the tool machine mounts, so a repository moved *within* it — `agent/.git.old` is what the first
+ * version of this repair told an operator to do — is the key still in the volume, one `git cat-file` away. The one
+ * destination this module names is a sibling of the home, which no mount reaches.
+ */
+function historyAsidePath(home: string): string {
+	return join(dirname(home), `${basename(home)}-agent-history.bak`);
+}
+
+/** Why a history that holds the service half cannot stay where it is, and the one move that repairs it. */
+function taintedHistory(paths: HousePaths, leaked: readonly string[]): string {
+	const gitDir = join(paths.agentDir, ".git");
+	return (
+		`${gitDir} predates this fix: its history holds ${leaked.slice(0, 3).join(", ")}${
+			leaked.length > 3 ? ` and ${leaked.length - 3} more` : ""
+		}, paths from the half no tool may see. ${paths.agentDir} is the volume the tool machine mounts, so a copy of that ` +
+		`repository left anywhere inside it is the key readable again. Move the repository out of the home — ` +
+		`\`mv ${gitDir} ${historyAsidePath(paths.home)}\` — and run this again: the agent's files are what matter, not that history.`
+	);
+}
+
+/**
+ * Every repository copy inside the agent's half other than `agent/.git` itself.
+ *
+ * A `.git` below the top level is a checked-out repository, and a name of the form `.git.old` or `.git.bak` is a
+ * history somebody moved aside — which is exactly what the first version of this repair told them to create. Both are
+ * `agent/`, both are the volume the tool machine mounts, and either can hold the service half; only the agent's own
+ * repository belongs here. A plain file such as `.gitignore` is not a copy of anything and is not one of these.
+ */
+async function strayRepositories(agentDir: string): Promise<string[]> {
+	const own = join(agentDir, ".git");
+	const found: string[] = [];
+	const pending = [agentDir];
+	while (pending.length > 0) {
+		const directory = pending.pop() as string;
+		const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+		for (const entry of entries) {
+			const path = join(directory, entry.name);
+			// The one repository the layout allows, and nothing inside it is a second one.
+			if (path === own) continue;
+			if (entry.name === ".git" || entry.name.startsWith(".git.")) {
+				found.push(path);
+				continue;
+			}
+			// Symlinks are not followed: a link is not the repository, and a loop is not worth walking into.
+			if (entry.isDirectory()) pending.push(path);
+		}
+	}
+	return found;
+}
+
+/** Why a second repository in the agent's half is refused rather than ignored, and where it goes instead. */
+function strayRepository(home: string, path: string): string {
+	return (
+		`${path} is repository-like and inside ${join(home, "agent")}, the volume the tool machine mounts: whatever history ` +
+		`it holds is readable from a tool, and a history carried over from before the split holds the service half. ` +
+		`Move it out of the home — \`mv ${path} ${historyAsidePath(home)}\` — and start again.`
+	);
+}
+
+/** Why a `service/` directory in the agent's half is a leak, and the two repairs: it belongs in `service/`, or nowhere. */
+function serviceInAgentHalf(home: string): string {
+	return (
+		`${join(home, "agent", "service")} is inside the agent's half, the volume the tool machine mounts: the key, the ` +
+		`token hashes and the transcript are readable from a tool while they sit here, and this repository would commit ` +
+		`them. Move what is in it into ${join(home, "service")} — the server's half is where a service-owned file ` +
+		`belongs — or delete it, then run this again.`
+	);
 }
 
 /** One file or directory the migration carried from the old layout to its half. */
@@ -451,22 +532,22 @@ export type MigrationOutcome =
  *   in it forever.
  * - **A history that already holds the service half is refused.** A home moved by the abandoned first version has
  *   `service/config.json` and the key in `agent/.git`, and says `unchanged` like a finished one; history is not something
- *   this command can rewrite for a person, so it says what to do instead.
+ *   this command can rewrite for a person, so it says what to do instead: move the repository out of the home.
+ * - **Nothing else repository-like stays in the agent's half.** A second `.git`, or a `.git.old` an operator moved the
+ *   tainted history to, is a history on the volume the tool machine mounts; both this command and boot refuse it, naming
+ *   the path and the same destination outside the home.
+ * - **`service/` inside `agent/` is a leak, not a layout.** The files that belong to the server's half are refused before
+ *   anything is committed, by the same check boot runs, so no history is ever written with the key in it.
  */
 export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome> {
 	const leaked = await servicePathsIn(paths.agentDir);
-	if (leaked.length > 0) {
-		return {
-			status: "refused",
-			reason:
-				`${join(paths.agentDir, ".git")} predates this fix: its history holds ${leaked.slice(0, 3).join(", ")}${
-					leaked.length > 3 ? ` and ${leaked.length - 3} more` : ""
-				}, paths from the half no tool may see. Move the repository aside \`mv ${join(
-					paths.agentDir,
-					".git",
-				)} ${join(paths.agentDir, ".git")}.old\` and run this again — the agent's files are what matter, not that history.`,
-		};
+	if (leaked.length > 0) return { status: "refused", reason: taintedHistory(paths, leaked) };
+	// The same two checks boot runs, in the same order: a file in the open, then a history beside the agent's own.
+	if (existsSync(join(paths.agentDir, "service"))) {
+		return { status: "refused", reason: serviceInAgentHalf(paths.home) };
 	}
+	const stray = await strayRepositories(paths.agentDir);
+	if (stray.length > 0) return { status: "refused", reason: strayRepository(paths.home, stray[0] as string) };
 
 	const conflicts: string[] = [];
 	for (const entry of HOUSE_ENTRIES) {
@@ -506,8 +587,8 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 	for (const directory of layoutDirectories(paths)) await mkdir(directory, { recursive: true, mode: 0o700 });
 
 	const committed = repositoryAtRoot && (await freezeRootRepository(paths, pending));
-	await startAgentRepository(paths);
-	return { status: "moved", moves, committed };
+	const refusal = await startAgentRepository(paths);
+	return refusal === undefined ? { status: "moved", moves, committed } : { status: "refused", reason: refusal };
 }
 
 /**
@@ -522,14 +603,18 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 async function finishHouse(paths: HousePaths): Promise<MigrationOutcome> {
 	const finished: string[] = [];
 	if ((await revisionAt(paths.agentDir)) === undefined) {
-		await startAgentRepository(paths);
-		finished.push(`the agent's first commit in ${join(paths.agentDir, ".git")}`);
+		const refusal = await startAgentRepository(paths);
+		if (refusal !== undefined) return { status: "refused", reason: refusal };
+		// Only a history that is there now is news: a host without git, or a half that is not a directory, leaves none.
+		if ((await revisionAt(paths.agentDir)) !== undefined) {
+			finished.push(`the agent's first commit in ${join(paths.agentDir, ".git")}`);
+		}
 	}
 	if (existsSync(join(paths.home, ".git")) && !(await ignoresHalves(paths.home))) {
 		// Everything that is now in a half has to leave the index, whether this run moved it there or an earlier one did.
 		const settled = HOUSE_ENTRIES.filter((entry) => existsSync(join(halfDir(paths, entry.half), entry.name)));
-		await freezeRootRepository(paths, settled);
-		finished.push(`the freeze of the repository at ${paths.home}`);
+		// Only a commit that happened is news: a freeze git refused already left the repository at the root as it was.
+		if (await freezeRootRepository(paths, settled)) finished.push(`the freeze of the repository at ${paths.home}`);
 	}
 	return { status: "unchanged", finished };
 }
@@ -635,23 +720,38 @@ async function addIgnoreLines(path: string, wanted: readonly string[]): Promise<
 /**
  * The agent's own repository, with the files it holds as its first commit: created at the migration, so its history
  * begins there rather than in a moved index, or finished there when boot had already `git init`ed it.
+ *
+ * Returns the reason when the half is not safe to commit into — a `service/` path, or a stray repository — because the
+ * migration is one command an operator reads, not a stack trace; boot runs the same check and lets it throw.
  */
-async function startAgentRepository(paths: HousePaths): Promise<void> {
-	await ensureRepository(paths.agentDir);
+async function startAgentRepository(paths: HousePaths): Promise<string | undefined> {
+	try {
+		await ensureRepository(paths.agentDir);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
 	// `ensureRepository` returns early on a repository that already exists, so a half boot prepared has no commit yet.
 	await commitAgentTree(paths.agentDir, "The agent's memory starts here");
+	return undefined;
 }
 
-/** Stage the agent's half and commit it, with `workspace/` excluded: scratch is not memory. */
+/** Stage the agent's half and commit it, with `workspace/` and `service/` excluded: scratch and the server's half are not memory. */
 async function commitAgentTree(agentDir: string, subject: string): Promise<void> {
-	await addIgnoreLines(join(agentDir, ".gitignore"), ["workspace/"]);
 	try {
+		// Inside the `try`: a caller may race a directory that is not there, and the ignore file is written only to stage.
+		await addIgnoreLines(join(agentDir, ".gitignore"), AGENT_IGNORE);
 		await run("git", ["add", "-A"], { cwd: agentDir });
 	} catch {
 		return;
 	}
 	await commitAt(agentDir, subject);
 }
+
+/**
+ * What the agent's history never holds: `workspace/` is a tool's half-finished file, and a `service/` path here is the
+ * leak the split exists to prevent. The latter is refused before staging as well; this is the last line, not the rule.
+ */
+const AGENT_IGNORE = ["workspace/", "service/"];
 
 /** The directory a half's entries live in. */
 function halfDir(paths: HousePaths, half: "agent" | "service"): string {
