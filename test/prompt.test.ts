@@ -528,12 +528,14 @@ test("every section renders byte-identically in the next turn, so an unchanged c
 			"the index is ordered by skill name, whatever order the walk found them in",
 		);
 		// Every section, including the resident ones: the profile and the skills index are the bytes that could drift.
-		const back = await renderSection(sectionOf("skills"));
+		// The second render is asked for in the next turn, so it re-reads the files instead of being handed this turn's
+		// memo: identical bytes across the boundary is what keeps the provider's cached prefix valid, and a section that
+		// only looked stable because the memo answered for it would not keep it.
 		for (const promptSection of PROMPT_SECTIONS) {
 			const first = await renderSection(promptSection, promptInput());
-			const second = await renderSection(promptSection, promptInput({}, turn + 1));
+			nextTurn();
+			const second = await renderSection(promptSection, promptInput());
 			assert.equal(second, first, `${promptSection.key} is stable across a turn boundary`);
-			if (promptSection.key === "skills") assert.equal(first, back, "and the index did not move either");
 		}
 	});
 });
