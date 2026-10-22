@@ -30,8 +30,14 @@ it was hired to do, which is what lets sibling hand several bots different souls
 `agent/log/YYYY-MM-DD.md` and commits it *on the tool machine*, in that repository, in one call — the log and its
 history share a filesystem, so a memory is never written without its commit because a second process in another
 container was down. `service/` is deliberately **unversioned** from the split onwards: the soul, the roster, the
-credentials and the database are not in the history. A home migrated from before the split keeps its old history in
-that same moved repository (`npm run doctor -- migrate` explains itself in two commits).
+credentials and the database are not in the history.
+
+A home migrated from before the split (`npm run doctor -- migrate`) is the one place to be careful about `git`. The
+migration does not move the old repository into `agent/`: it stays at the home root, on the server, with the history it
+had, and both halves leave its index and enter its `.gitignore` so the agent's writes are not dirt in it forever.
+`agent/.git` is then created fresh, and the agent's history begins at the migration. Only `agent/` is a volume, so the
+frozen repository at the home root lives in the mason container's filesystem: run `doctor` before the first `up` on the
+host if you want to keep that history, because recreating the container takes it with it.
 
 In the **dev stack** (`npm run dev:stack`) there are no containers: `agent/` and `service/` are ordinary sibling
 directories on one filesystem, reached by the loopback SSH daemon. That is a layout, not a boundary — a tool can see
@@ -162,8 +168,10 @@ ever baked into an image — the key never exists in a layer, only in a volume y
 
 ## What to back up
 
-**Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/`,
-`agents/`, `workspace/` and the git repository its memory is committed to. `mason-service` is the server: `soul.md`,
+**Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
+shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
+history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
+home root, which is not a volume. `mason-service` is the server: `soul.md`,
 `roster.json`, `config.json` (the token hashes — no plaintext token lives here), `connectors.json`, `data/agent.sqlite`
 (the transcript and the hooks), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
