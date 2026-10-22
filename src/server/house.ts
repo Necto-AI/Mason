@@ -19,7 +19,7 @@
  *     ├── roster.json         # who is in the room (`roster.ts`)
  *     ├── ssh/                # the key mason logs into the env machine with
  *     ├── pi/                 # the copy of the provider credential
- *     └── data/               # agent.sqlite, hooks.json, connectors.json
+ *     └── data/               # agent.sqlite, hooks.json, connectors.json, seeded-skills.json
  * ```
  *
  * The split is a mount boundary, not a permission mode: `bash` can talk its way around a mode. `agent/` is one volume
@@ -38,6 +38,7 @@
  * readable by every other account on the machine.
  */
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -64,7 +65,10 @@ export interface HousePaths {
 	/** Where worker definitions live, beside skills: a file the agent may edit with `write`. */
 	readonly agentsDir: string;
 	readonly workspaceDir: string;
-	/** `agent.sqlite`, `hooks.json` and `connectors.json`: state the server keeps, in the half the agent cannot see. */
+	/**
+	 * `agent.sqlite`, `hooks.json`, `connectors.json` and the record of seeded skills: state the server keeps, in the
+	 * half the agent cannot see.
+	 */
 	readonly dataDir: string;
 	/** The token hashes and the session key (`auth.ts`). */
 	readonly config: string;
@@ -218,21 +222,79 @@ export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promi
 }
 
 /**
- * Copy the skills mason ships into the agent's half, once each.
+ * Copy the skills mason ships into the agent's half, and keep them current.
  *
  * `SHIPPED_SKILLS_DIR` is a path inside the repository, and the tool machine has the home, not the repository: scanned
  * from there, `generative-ui` would be indexed in the dev stack and absent in the deployment while the prompt went on
- * telling the model to read it. Seeding puts one root on both machines. A name that already exists is left alone, so a
- * personal skill of the same name wins without a second root and an edited copy is not clobbered by a restart.
+ * telling the model to read it. Seeding puts one root on both machines.
+ *
+ * A copy that is never updated is worse than no copy at all: the prompt tells the model the shipped skill carries the
+ * parameter order the renderer depends on, so an old manual answers for the renderer. What was seeded is therefore
+ * recorded, in the half the agent cannot see (`service/data/seeded-skills.json`, name to the sha256 of the copied
+ * `SKILL.md`), and a copy whose hash still matches the record is one nobody touched: the shipped copy replaces it. A
+ * copy that differs from the record was edited — by the agent, by Denis, or by a person who brought their own skill of
+ * that name before there was a record — and is left alone, with the seeded hash still beside it so no later boot takes
+ * it for one of ours.
+ *
+ * `shippedDir` is the repository's `skills/` unless a caller names another: the upgrade rule needs a "before" and an
+ * "after" of the same skill, and a test should not have to edit the checkout to get one.
  */
-async function seedShippedSkills(paths: HousePaths): Promise<void> {
-	const shipped = await readdir(SHIPPED_SKILLS_DIR).catch(() => [] as string[]);
-	for (const name of shipped) {
-		const to = join(paths.skillsDir, name);
-		if (existsSync(to)) continue;
-		// `force: false` keeps this a seed: nothing under an existing name is ever replaced.
-		await cp(join(SHIPPED_SKILLS_DIR, name), to, { recursive: true, force: false }).catch(() => undefined);
+export async function seedShippedSkills(paths: HousePaths, shippedDir = SHIPPED_SKILLS_DIR): Promise<void> {
+	const recordPath = join(paths.dataDir, SEEDED_SKILLS);
+	const seeded = await readSeededSkills(recordPath);
+	const record: Record<string, string> = {};
+	for (const name of await readdir(shippedDir).catch(() => [] as string[])) {
+		const source = join(shippedDir, name);
+		const target = join(paths.skillsDir, name);
+		const shipped = await hashOf(join(source, "SKILL.md"));
+		if (shipped === undefined) continue;
+		const copy = await hashOf(join(target, "SKILL.md"));
+		if (copy === undefined) {
+			await cp(source, target, { recursive: true, force: false }).catch(() => undefined);
+			record[name] = shipped;
+			continue;
+		}
+		if (seeded[name] === copy) {
+			// Ours, and nobody edited it: the shipped bytes win, which is how an upgrade reaches a home that booted before it.
+			if (copy !== shipped) await cp(source, target, { recursive: true, force: true }).catch(() => undefined);
+			record[name] = shipped;
+			continue;
+		}
+		// Edited, or never seeded by this code: not ours to overwrite.
+		if (seeded[name] !== undefined) record[name] = seeded[name];
 	}
+	await writeFileIfChanged(recordPath, `${JSON.stringify(record, null, "\t")}\n`);
+}
+
+/** The file that remembers what was seeded, in the half no tool can read. */
+const SEEDED_SKILLS = "seeded-skills.json";
+
+/** What a previous boot seeded: skill name to the sha256 of the `SKILL.md` it copied. */
+async function readSeededSkills(path: string): Promise<Record<string, string>> {
+	const text = await readFile(path, "utf8").catch(() => undefined);
+	if (text === undefined) return {};
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (typeof parsed !== "object" || parsed === null) return {};
+		return Object.fromEntries(
+			Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+		);
+	} catch {
+		// A record nobody can read is a record of nothing: absent means "do not replace what is there", which is safe.
+		return {};
+	}
+}
+
+/** The sha256 of a file's bytes, or `undefined` when there is no such file. */
+async function hashOf(path: string): Promise<string | undefined> {
+	const bytes = await readFile(path).catch(() => undefined);
+	return bytes === undefined ? undefined : createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Write `text` to `path` unless it already says exactly that, so a boot that changes nothing touches nothing. */
+async function writeFileIfChanged(path: string, text: string): Promise<void> {
+	if ((await readFile(path, "utf8").catch(() => undefined)) === text) return;
+	await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
 }
 
 /** Best effort: a home on a filesystem without Unix modes is still a home. */
@@ -341,6 +403,10 @@ async function commitMemory(
  *
  * The repository lives inside `agent/` because that is the half the tool machine mounts: `git` runs there, on the
  * agent's own files, and the same history is readable from the server. `service/` is deliberately unversioned.
+ *
+ * A repository created here is committed in the same breath. The files a home starts with — the profile, the skills
+ * seeded from the repository — are the agent's first memory, not untracked dirt in a repository nothing was ever
+ * committed to. `workspace/` is left out: it is scratch, and a tool's half-finished file is not a memory.
  */
 export async function ensureRepository(agentDir: string): Promise<void> {
 	if (existsSync(join(agentDir, ".git"))) return;
@@ -348,7 +414,9 @@ export async function ensureRepository(agentDir: string): Promise<void> {
 		await run("git", ["init", "--quiet"], { cwd: agentDir });
 	} catch {
 		// No git on the host: the files are still there, which is the part that matters.
+		return;
 	}
+	await commitAgentTree(agentDir, "The agent's memory starts here");
 }
 
 /** One file or directory the migration carried from the old layout to its half. */
@@ -358,8 +426,10 @@ export interface HouseMove {
 }
 
 export type MigrationOutcome =
+	/** `moves` were carried across. `committed` says the repository at the root really was frozen, not that it was tried. */
 	| { readonly status: "moved"; readonly moves: readonly HouseMove[]; readonly committed: boolean }
-	| { readonly status: "unchanged" }
+	/** Nothing was left at the root. `finished` names what an interrupted earlier run had left undone and this one did. */
+	| { readonly status: "unchanged"; readonly finished: readonly string[] }
 	| { readonly status: "refused"; readonly reason: string };
 
 /**
@@ -369,17 +439,35 @@ export type MigrationOutcome =
  * - **Ambiguous is refused, not guessed.** The same entry at the root and in its half is two candidates for one file; a
  *   human did something and only a human knows which one is real. An *empty* destination is not ambiguity: a half
  *   created by a boot that then found the old files is a layout this finishes.
- * - **A second run is a no-op.** Everything already in its half means there is nothing to move.
+ * - **A second run is a no-op.** Everything already in its half means there is nothing to move — but not that the
+ *   home is finished, so that path verifies the migration's tail and completes it (`finishHouse`).
  * - **Unknown files stay put.** Only `HOUSE_ENTRIES` move; a file mason has never heard of is not an upgrade's business.
- * - **`agent/` is the only half a repository is allowed to see.** The move is staged as a rename for agent-half entries,
- *   because those files are the agent's memory and are the ones a history should follow. A service-half entry is a plain
- *   filesystem rename that never enters an index: `ssh/`, `config.json` and `data/` hold the key, the token hashes and
- *   the transcript, and `agent/` is mounted into the tool machine.
+ * - **`agent/` is the only half a repository is allowed to see.** Every entry moves with a plain filesystem rename: no
+ *   index is staged, so no path from `ssh/`, `config.json` or `data/` can be carried into a history on the way. The
+ *   agent's own repository is then created fresh in `agent/`, and its history begins at the migration, with the files
+ *   as they landed.
  * - **The old repository is frozen where it stands, not moved.** It stays at the home root, on the server, holding what
  *   it held before the split; both halves leave its index and enter its `.gitignore`, so the agent's writes are not dirt
- *   in it forever. The agent's own repository is created fresh in `agent/`, and its history begins at the migration.
+ *   in it forever.
+ * - **A history that already holds the service half is refused.** A home moved by the abandoned first version has
+ *   `service/config.json` and the key in `agent/.git`, and says `unchanged` like a finished one; history is not something
+ *   this command can rewrite for a person, so it says what to do instead.
  */
 export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome> {
+	const leaked = await servicePathsIn(paths.agentDir);
+	if (leaked.length > 0) {
+		return {
+			status: "refused",
+			reason:
+				`${join(paths.agentDir, ".git")} predates this fix: its history holds ${leaked.slice(0, 3).join(", ")}${
+					leaked.length > 3 ? ` and ${leaked.length - 3} more` : ""
+				}, paths from the half no tool may see. Move the repository aside \`mv ${join(
+					paths.agentDir,
+					".git",
+				)} ${join(paths.agentDir, ".git")}.old\` and run this again — the agent's files are what matter, not that history.`,
+		};
+	}
+
 	const conflicts: string[] = [];
 	for (const entry of HOUSE_ENTRIES) {
 		if (!existsSync(join(paths.home, entry.name))) continue;
@@ -395,11 +483,11 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 	}
 
 	const pending = HOUSE_ENTRIES.filter((entry) => existsSync(join(paths.home, entry.name)));
-	if (pending.length === 0) return { status: "unchanged" };
+	if (pending.length === 0) return finishHouse(paths);
 
 	const repositoryAtRoot = existsSync(join(paths.home, ".git"));
 	// Only the two halves are created here: a moved directory lands where its name says, and pre-creating `agent/log`
-	// would make `git mv log agent/log` move the log into itself.
+	// would make the rename of `log` land inside the directory it was meant to become.
 	await mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
 	await mkdir(paths.serviceDir, { recursive: true, mode: 0o700 });
 
@@ -407,22 +495,9 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 	for (const entry of pending) {
 		const from = join(paths.home, entry.name);
 		const to = join(halfDir(paths, entry.half), entry.name);
-		// An empty destination is not a second candidate, but it is in the way: `git mv log agent/log` would move the log
-		// *into* the directory it was meant to become. It is what a boot before the check above left behind.
+		// An empty destination is not a second candidate, but it is in the way: a rename onto the directory it was meant
+		// to become would nest the entry inside itself. It is what a boot before the check above left behind.
 		await rmdir(to).catch(() => undefined);
-		if (repositoryAtRoot && entry.half === "agent") {
-			// `git mv` when the home is a repository, so the move is a rename in the history rather than a delete and an
-			// add; a plain rename otherwise, because the files are what matter.
-			try {
-				await run("git", ["mv", "--", from, to], { cwd: paths.home });
-				moves.push({ from, to });
-				continue;
-			} catch {
-				// Not tracked, or no git: fall through to the plain move.
-			}
-		}
-		// The service half moves here, and only here: no index, no staging, nothing that could carry the key or the
-		// token hashes into a history.
 		await rename(from, to);
 		moves.push({ from, to });
 	}
@@ -433,6 +508,62 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 	const committed = repositoryAtRoot && (await freezeRootRepository(paths, pending));
 	await startAgentRepository(paths);
 	return { status: "moved", moves, committed };
+}
+
+/**
+ * The halves are populated and nothing is left at the root — which is not the same as *finished*.
+ *
+ * A process that died after the move loop, or between the freeze and the agent's first commit, leaves a home that every
+ * rerun reported as `unchanged`: a `workspace/` that is not ignored, a repository boot `git init`ed and never committed
+ * to, the agent's files untracked, and a repository at the root still holding both halves. That is exactly the state an
+ * operator reads as a green light, so this verifies the tail and finishes what is missing, and says what it finished.
+ * Both steps are idempotent: on a home that is genuinely done, nothing here writes anything.
+ */
+async function finishHouse(paths: HousePaths): Promise<MigrationOutcome> {
+	const finished: string[] = [];
+	if ((await revisionAt(paths.agentDir)) === undefined) {
+		await startAgentRepository(paths);
+		finished.push(`the agent's first commit in ${join(paths.agentDir, ".git")}`);
+	}
+	if (existsSync(join(paths.home, ".git")) && !(await ignoresHalves(paths.home))) {
+		// Everything that is now in a half has to leave the index, whether this run moved it there or an earlier one did.
+		const settled = HOUSE_ENTRIES.filter((entry) => existsSync(join(halfDir(paths, entry.half), entry.name)));
+		await freezeRootRepository(paths, settled);
+		finished.push(`the freeze of the repository at ${paths.home}`);
+	}
+	return { status: "unchanged", finished };
+}
+
+/**
+ * The service-half paths a repository's history holds, if it has one.
+ *
+ * The abandoned first version of this migration moved the service entries into `agent/` and committed them there, so
+ * `agent/.git` — the one history the tool machine mounts — holds `service/config.json` and `service/ssh/`, the token
+ * hashes and the key. No command can rewrite someone else's history safely, and the files are what matter, so the
+ * migration refuses and names the repair instead of reporting the home as already split.
+ */
+async function servicePathsIn(dir: string): Promise<string[]> {
+	if ((await revisionAt(dir)) === undefined) return [];
+	const log = await run("git", ["log", "--all", "--name-only", "--pretty=format:"], { cwd: dir }).catch(
+		() => undefined,
+	);
+	if (log === undefined) return [];
+	return log.stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line === "service" || line.startsWith("service/"));
+}
+
+/**
+ * The revision the repository at `dir` names, or `undefined` when it has no `.git` of its own or has committed nothing.
+ *
+ * The `existsSync` is load-bearing: `git` walks up from its cwd, so asking inside a home whose root is a repository would
+ * answer with the root's HEAD and the migration would take a half with no repository for one with a history.
+ */
+async function revisionAt(dir: string): Promise<string | undefined> {
+	if (!existsSync(join(dir, ".git"))) return undefined;
+	const head = await run("git", ["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: dir }).catch(() => undefined);
+	return head?.stdout.trim() || undefined;
 }
 
 /** Whether a destination already holds something: a directory with no entries in it is not a second candidate. */
@@ -447,7 +578,8 @@ async function populated(path: string): Promise<boolean> {
  *
  * The index loses both halves, `.gitignore` names them so nothing the agent writes into `agent/` is ever pending here,
  * and one commit records the fact. What the old history held it still holds: this repository is the server's, it stays
- * on the server, and no path inside the tool machine is ever this one.
+ * on the server, and no path inside the tool machine is ever this one. `false` means no commit happened — no identity,
+ * or git refused — because an operator who is told the repository was frozen will not look again.
  */
 async function freezeRootRepository(paths: HousePaths, pending: readonly HouseEntry[]): Promise<boolean> {
 	try {
@@ -457,46 +589,68 @@ async function freezeRootRepository(paths: HousePaths, pending: readonly HouseEn
 		await run("git", ["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", "agent", "service"], {
 			cwd: paths.home,
 		});
-		await run(
-			"git",
-			["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ...pending.map((entry) => entry.name)],
-			{ cwd: paths.home },
-		);
-		await ignoreHalves(paths.home);
+		if (pending.length > 0) {
+			await run(
+				"git",
+				["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ...pending.map((entry) => entry.name)],
+				{ cwd: paths.home },
+			);
+		}
+		await addIgnoreLines(join(paths.home, ".gitignore"), HALVES_IGNORE);
 		await run("git", ["add", "--", ".gitignore"], { cwd: paths.home });
-		await commitAt(paths.home, "The halves are separate from this repository");
-		return true;
+		return await commitAt(paths.home, "The halves are separate from this repository");
 	} catch {
 		// No git identity, or git refused: the files moved either way, and this repository is not the memory.
 		return false;
 	}
 }
 
-/** Add `agent/` and `service/` to the home root's `.gitignore`, keeping whatever a person already put in it. */
-async function ignoreHalves(home: string): Promise<void> {
-	const path = join(home, ".gitignore");
+/** The lines that blind the home root's repository to both halves. */
+const HALVES_IGNORE = ["agent/", "service/"];
+
+/** Whether the home root's `.gitignore` already names both halves. */
+async function ignoresHalves(home: string): Promise<boolean> {
+	const lines = await ignoreLines(join(home, ".gitignore"));
+	return HALVES_IGNORE.every((line) => lines.has(line));
+}
+
+/** A `.gitignore`'s lines. An absent file is an empty one: a person who wrote none ignores nothing. */
+async function ignoreLines(path: string): Promise<Set<string>> {
 	const existing = (await readFile(path, "utf8").catch(() => "")).trim();
-	const lines = new Set(existing.split("\n").map((line) => line.trim()));
-	const missing = ["agent/", "service/"].filter((line) => !lines.has(line));
+	return new Set(existing.split("\n").map((line) => line.trim()));
+}
+
+/** Add the lines a `.gitignore` is missing, keeping whatever a person already put in it. */
+async function addIgnoreLines(path: string, wanted: readonly string[]): Promise<void> {
+	const lines = await ignoreLines(path);
+	const missing = wanted.filter((line) => !lines.has(line));
 	if (missing.length === 0) return;
+	const existing = (await readFile(path, "utf8").catch(() => "")).trim();
 	await writeFile(path, existing === "" ? `${missing.join("\n")}\n` : `${existing}\n${missing.join("\n")}\n`, {
 		encoding: "utf8",
 		mode: 0o600,
 	});
 }
 
-/** The agent's own repository: created at the migration, so its history begins there rather than in a moved index. */
+/**
+ * The agent's own repository, with the files it holds as its first commit: created at the migration, so its history
+ * begins there rather than in a moved index, or finished there when boot had already `git init`ed it.
+ */
 async function startAgentRepository(paths: HousePaths): Promise<void> {
-	// `workspace/` is scratch, not memory: committing whatever a tool left there would put the agent's working files in
-	// the history it reads.
-	await writeFile(join(paths.agentDir, ".gitignore"), "workspace/\n", { encoding: "utf8", mode: 0o600 });
 	await ensureRepository(paths.agentDir);
+	// `ensureRepository` returns early on a repository that already exists, so a half boot prepared has no commit yet.
+	await commitAgentTree(paths.agentDir, "The agent's memory starts here");
+}
+
+/** Stage the agent's half and commit it, with `workspace/` excluded: scratch is not memory. */
+async function commitAgentTree(agentDir: string, subject: string): Promise<void> {
+	await addIgnoreLines(join(agentDir, ".gitignore"), ["workspace/"]);
 	try {
-		await run("git", ["add", "-A"], { cwd: paths.agentDir });
+		await run("git", ["add", "-A"], { cwd: agentDir });
 	} catch {
 		return;
 	}
-	await commitAt(paths.agentDir, "The agent's memory starts here");
+	await commitAt(agentDir, subject);
 }
 
 /** The directory a half's entries live in. */
@@ -504,7 +658,7 @@ function halfDir(paths: HousePaths, half: "agent" | "service"): string {
 	return half === "agent" ? paths.agentDir : paths.serviceDir;
 }
 
-async function commitAt(cwd: string, subject: string, body?: string): Promise<void> {
+async function commitAt(cwd: string, subject: string, body?: string): Promise<boolean> {
 	try {
 		await run(
 			"git",
@@ -521,7 +675,9 @@ async function commitAt(cwd: string, subject: string, body?: string): Promise<vo
 			],
 			{ cwd },
 		);
+		return true;
 	} catch {
-		// Nothing to commit, or no git identity: the files moved either way.
+		// Nothing to commit, or no git identity: the files moved either way, and the caller says what it got.
+		return false;
 	}
 }

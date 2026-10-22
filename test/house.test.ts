@@ -6,10 +6,11 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -17,6 +18,7 @@ import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-e
 import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills } from "../src/server/extensions/skills.ts";
 import {
+	HOUSE_ENTRIES,
 	appendFact,
 	capText,
 	ensureHouse,
@@ -25,6 +27,7 @@ import {
 	logPathFor,
 	migrateHouse,
 	readHouseFile,
+	seedShippedSkills,
 } from "../src/server/house.ts";
 
 const run = promisify(execFile);
@@ -206,9 +209,10 @@ test("a remembered fact is committed, and only the log file is staged", async (t
 	await writeFile(join(paths.agentDir, "profile.md"), "Denis's draft profile.\n", "utf8");
 
 	const path = await appendFact(env, paths, "Budgets are reviewed on Fridays.", BACKGROUND_CONTEXT, new Date(2026, 0, 5, 9, 7));
+	// The repository arrives with one commit in it (the home's first files); the fact is the one after that.
 	const log = await run("git", ["log", "--oneline"], { cwd: paths.agentDir });
-	assert.equal(log.stdout.trim().split("\n").length, 1, "one commit per fact");
-	assert.match(log.stdout, /memory: Budgets are reviewed on Fridays/);
+	assert.equal(log.stdout.trim().split("\n").length, 2, "one commit per fact");
+	assert.match(log.stdout.split("\n")[0] ?? "", /memory: Budgets are reviewed on Fridays/);
 	const stat = await run("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: paths.agentDir });
 	assert.equal(stat.stdout.trim(), path.slice(paths.agentDir.length + 1), "only the day's log is in the commit");
 	const status = await run("git", ["status", "--porcelain"], { cwd: paths.agentDir });
@@ -230,7 +234,7 @@ test("two facts remembered at once both land", async () => {
 	assert.equal((text.match(/^# /gm) ?? []).length, 1, "one heading, even when both create the file");
 });
 
-test("ensureRepository() initialises the agent's half as a git repository", async (t) => {
+test("ensureRepository() initialises the agent's half as a git repository, with the first commit made", async (t) => {
 	if (!(await gitAvailable())) {
 		t.skip("git is not installed");
 		return;
@@ -240,10 +244,19 @@ test("ensureRepository() initialises the agent's half as a git repository", asyn
 	await ensureRepository(paths.agentDir);
 	assert.ok(existsSync(join(paths.agentDir, ".git")), "a memory write is something Denis can revert");
 	assert.ok(!existsSync(join(paths.home, ".git")), "and the history is on the half the tool machine mounts");
+	// A new home's files — the profile, the seeded skills — are its first memory, not untracked dirt forever.
+	const history = await run("git", ["log", "--format=%s"], { cwd: paths.agentDir });
+	assert.deepEqual(history.stdout.trim().split("\n"), ["The agent's memory starts here"]);
+	const tracked = await run("git", ["ls-files"], { cwd: paths.agentDir });
+	assert.match(tracked.stdout, /^\.gitignore$/m);
+	assert.match(tracked.stdout, /^skills\/generative-ui\/SKILL\.md$/m, "the skills seeded at this boot are committed");
+	assert.match(await readFile(join(paths.agentDir, ".gitignore"), "utf8"), /^workspace\/$/m);
+	assert.equal((await run("git", ["status", "--porcelain"], { cwd: paths.agentDir })).stdout.trim(), "");
 
 	// Running it on every start must be harmless.
 	await ensureRepository(paths.agentDir);
 	assert.ok(existsSync(join(paths.agentDir, ".git")));
+	assert.equal((await run("git", ["log", "--format=%s"], { cwd: paths.agentDir })).stdout.trim().split("\n").length, 1);
 });
 
 /**
@@ -371,10 +384,137 @@ test("migrateHouse() is a no-op the second time", async (t) => {
 
 	const again = await migrateHouse(paths);
 	assert.equal(again.status, "unchanged", "a half-finished move is not a state to reason about");
+	assert.deepEqual(
+		again.status === "unchanged" ? again.finished : ["not unchanged"],
+		[],
+		"a finished home has nothing left to finish, so nothing is written",
+	);
 	const history = await run("git", ["log", "--format=%s"], { cwd: paths.agentDir });
 	assert.equal(history.stdout.trim().split("\n").length, 1, "and it committed nothing the second time");
 	const root = await run("git", ["log", "--format=%s"], { cwd: home });
 	assert.equal(root.stdout.trim().split("\n").length, 2, "nor did the frozen repository at the root");
+});
+
+/**
+ * The state a migration that died after its move loop leaves: both halves populated, nothing at the root — and none of
+ * the tail, so `workspace/` is not ignored, `agent/.git` has no HEAD and the repository at the root still holds both
+ * halves. Every rerun used to answer `unchanged` over it.
+ */
+async function interruptedMigration(t: { skip(reason: string): void }): Promise<string> {
+	const home = await oldLayoutHome(t);
+	if (home === "") return "";
+	for (const entry of HOUSE_ENTRIES) {
+		const from = join(home, entry.name);
+		if (!existsSync(from)) continue;
+		const half = join(home, entry.half);
+		await mkdir(half, { recursive: true });
+		await rename(from, join(half, entry.name));
+	}
+	return home;
+}
+
+test("migrateHouse() finishes the tail an interrupted migration left", async (t) => {
+	const home = await interruptedMigration(t);
+	if (home === "") return;
+	const paths = housePaths(home);
+	// The boot after the interruption: `git init` in `agent/` and nothing else, so the repository has no HEAD.
+	await run("git", ["init", "--quiet"], { cwd: paths.agentDir });
+
+	const outcome = await migrateHouse(paths);
+	assert.equal(outcome.status, "unchanged", "there is nothing left to move");
+	assert.deepEqual(outcome.status === "unchanged" ? outcome.finished.length : 0, 2, "and it says what it finished");
+
+	// The agent's half: a HEAD, the files committed, the workspace out of it.
+	const agentLog = await run("git", ["log", "--format=%s"], { cwd: paths.agentDir });
+	assert.deepEqual(agentLog.stdout.trim().split("\n"), ["The agent's memory starts here"]);
+	assert.match(await readFile(join(paths.agentDir, ".gitignore"), "utf8"), /^workspace\/$/m);
+	assert.equal((await run("git", ["status", "--porcelain"], { cwd: paths.agentDir })).stdout.trim(), "");
+	const tracked = await run("git", ["ls-files"], { cwd: paths.agentDir });
+	assert.match(tracked.stdout, /^profile\.md$/m, "the agent's existing files are in its history");
+	assert.doesNotMatch(tracked.stdout, /^service\//m);
+
+	// The repository at the root: frozen, rather than still holding both halves.
+	assert.match(await readFile(join(home, ".gitignore"), "utf8"), /^agent\/$/m);
+	assert.match(await readFile(join(home, ".gitignore"), "utf8"), /^service\/$/m);
+	const rootLog = await run("git", ["log", "--format=%s"], { cwd: home });
+	assert.deepEqual(rootLog.stdout.trim().split("\n"), [
+		"The halves are separate from this repository",
+		"the home",
+	]);
+	assert.equal((await run("git", ["status", "--porcelain"], { cwd: home })).stdout.trim(), "");
+
+	// And now it is genuinely finished, so a third run writes nothing at all.
+	const again = await migrateHouse(paths);
+	assert.deepEqual(again.status === "unchanged" ? again.finished : ["not unchanged"], []);
+});
+
+test("migrateHouse() starts the agent's repository when an interruption left none", async (t) => {
+	const home = await interruptedMigration(t);
+	if (home === "") return;
+	const paths = housePaths(home);
+	// Died between the move loop and the tail, before any boot: `agent/` holds the files and no repository. The home
+	// root is a repository, and `git` walks up, so this is the case where the agent's half could be mistaken for one.
+	assert.ok(!existsSync(join(paths.agentDir, ".git")));
+
+	const outcome = await migrateHouse(paths);
+	assert.equal(outcome.status, "unchanged");
+	assert.deepEqual(outcome.status === "unchanged" ? outcome.finished.length : 0, 2);
+
+	const agentLog = await run("git", ["log", "--format=%s"], { cwd: paths.agentDir });
+	assert.deepEqual(agentLog.stdout.trim().split("\n"), ["The agent's memory starts here"], "a history of its own");
+	const tracked = await run("git", ["ls-files"], { cwd: paths.agentDir });
+	assert.doesNotMatch(tracked.stdout, /^service\//m, "and not the root repository's history under another name");
+	assert.equal((await run("git", ["status", "--porcelain"], { cwd: home })).stdout.trim(), "", "the root is frozen");
+});
+
+test("migrateHouse() refuses a history that already holds the service half", async (t) => {
+	const home = await oldLayoutHome(t);
+	if (home === "") return;
+	const paths = housePaths(home);
+	await migrateHouse(paths);
+	// The abandoned first version of the migration: the service entries moved *into* `agent/` and were committed there,
+	// so the one history the tool machine mounts holds the token hashes and the key.
+	await rm(join(paths.agentDir, ".git"), { recursive: true, force: true });
+	await mkdir(join(paths.agentDir, "service", "ssh"), { recursive: true });
+	await writeFile(
+		join(paths.agentDir, "service", "config.json"),
+		JSON.stringify({ tokens: [{ sha256: SECRETS.tokens }] }),
+		"utf8",
+	);
+	await writeFile(join(paths.agentDir, "service", "ssh", "id_ed25519"), `${SECRETS.key}\n`, "utf8");
+	await run("git", ["init", "--quiet"], { cwd: paths.agentDir });
+	await run("git", ["add", "-A"], { cwd: paths.agentDir });
+	await run("git", ["-c", "user.name=denis", "-c", "user.email=d@example.com", "commit", "--quiet", "-m", "v1"], {
+		cwd: paths.agentDir,
+	});
+
+	const outcome = await migrateHouse(paths);
+	assert.equal(outcome.status, "refused", "a green light here is the exact state this change exists to prevent");
+	const reason = outcome.status === "refused" ? outcome.reason : "";
+	assert.match(reason, /predates this fix/, "it says why the home cannot be trusted as it stands");
+	assert.match(reason, /service\/config\.json/, "and names what it found in the history");
+	assert.match(reason, /mv .*agent\/\.git.*\.old/, "and the repair: move the repository aside");
+	assert.match(reason, /run this again/, "then run the command again");
+	// The files are what matter, and nothing here touches them.
+	assert.ok(existsSync(join(paths.agentDir, "service", "config.json")));
+	assert.equal(await readFile(join(paths.agentDir, "profile.md"), "utf8"), "Denis prefers short answers.\n");
+});
+
+test("migrateHouse() does not claim it froze a repository it could not commit to", async (t) => {
+	const home = await oldLayoutHome(t);
+	if (home === "") return;
+	const paths = housePaths(home);
+	// A locked index is git refusing for a reason no identity argument can fix: `commitAt` swallows it, and the outcome
+	// used to say `committed: true` anyway.
+	await writeFile(join(home, ".git", "index.lock"), "", "utf8");
+
+	const outcome = await migrateHouse(paths);
+	assert.equal(outcome.status, "moved");
+	assert.ok(outcome.status === "moved" && !outcome.committed, "the outcome reports the truth: nothing was committed");
+	assert.equal(await readFile(join(paths.agentDir, "profile.md"), "utf8"), "Denis prefers short answers.\n");
+	// The agent's own history is a different repository, and it is started either way.
+	const agentLog = await run("git", ["log", "--format=%s"], { cwd: paths.agentDir });
+	assert.deepEqual(agentLog.stdout.trim().split("\n"), ["The agent's memory starts here"]);
 });
 
 test("migrateHouse() refuses a home that has the same entry in both halves", async (t) => {
@@ -472,7 +612,7 @@ test("the same home boots once it has been migrated", async (t) => {
 	assert.equal(await readFile(join(paths.agentDir, "profile.md"), "utf8"), "Denis prefers short answers.\n");
 });
 
-test("ensureHouse() seeds the skills mason ships into the agent's half, and never overwrites one", async () => {
+test("ensureHouse() seeds the skills mason ships into the agent's half, and records what it seeded", async () => {
 	const paths = housePaths(join(await tempDir("mason-house-seed-"), "home"));
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
 	const seeded = join(paths.skillsDir, "generative-ui", "SKILL.md");
@@ -483,10 +623,59 @@ test("ensureHouse() seeds the skills mason ships into the agent's half, and neve
 		"and the index lists it, so the prompt's pointer is not pointing at nothing",
 	);
 
-	// Denis's own copy of the same skill wins: seeding fills a gap, it does not restore a default over him.
-	await writeFile(seeded, "---\nname: generative-ui\ndescription: Denis's own widget notes.\n---\n", "utf8");
+	// The record of what was copied lives in the server's half, where neither a tool nor the skills scan can reach it.
+	const record = join(paths.dataDir, "seeded-skills.json");
+	assert.ok(record.startsWith(paths.serviceDir), "the record is in the half the agent cannot see");
+	assert.ok(!record.startsWith(paths.agentDir), "and never in the half the tool machine mounts");
+	const recorded = JSON.parse(await readFile(record, "utf8")) as Record<string, string>;
+	assert.deepEqual(Object.keys(recorded), ["generative-ui"], "one entry per shipped skill");
+	assert.equal(
+		recorded["generative-ui"],
+		createHash("sha256").update(await readFile(seeded)).digest("hex"),
+		"the hash of the file that was copied, which is how an upgrade knows the copy is still ours",
+	);
+	assert.ok(!index.some((skill) => skill.filePath.endsWith("seeded-skills.json")), "it is not a skill the scan finds");
+	assert.ok(!(await readdir(paths.skillsDir)).includes("seeded-skills.json"));
+});
+
+/**
+ * A shipped skill is a manual the renderer depends on, so an upgrade has to reach a home that already has a copy —
+ * while a copy somebody edited has to survive the same boot. `shippedDir` stands in for the repository's `skills/` so
+ * one home can see two editions of the same skill.
+ */
+test("a shipped skill follows the shipped copy, and an edited copy is never touched", async () => {
+	const paths = housePaths(join(await tempDir("mason-house-seed-upgrade-"), "home"));
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
-	assert.match(await readFile(seeded, "utf8"), /Denis's own widget notes/, "a second boot leaves the file alone");
+	const copy = join(paths.skillsDir, "generative-ui", "SKILL.md");
+
+	const shipped = await tempDir("mason-house-shipped-");
+	await mkdir(join(shipped, "generative-ui"), { recursive: true });
+	await writeFile(
+		join(shipped, "generative-ui", "SKILL.md"),
+		"---\nname: generative-ui\ndescription: The widget manual, first edition.\n---\n",
+		"utf8",
+	);
+	await seedShippedSkills(paths, shipped);
+	assert.match(await readFile(copy, "utf8"), /first edition/, "an unedited copy is replaced by the shipped one");
+
+	// The next release of the same skill: nobody edited the home's copy, so it follows.
+	await writeFile(
+		join(shipped, "generative-ui", "SKILL.md"),
+		"---\nname: generative-ui\ndescription: The widget manual, second edition.\n---\n",
+		"utf8",
+	);
+	await seedShippedSkills(paths, shipped);
+	assert.match(await readFile(copy, "utf8"), /second edition/, "an upgrade reaches a home that already booted");
+
+	// Denis's own copy of the same skill: the hash no longer matches the record, so seeding leaves it alone.
+	await writeFile(copy, "---\nname: generative-ui\ndescription: Denis's own widget notes.\n---\n", "utf8");
+	await writeFile(
+		join(shipped, "generative-ui", "SKILL.md"),
+		"---\nname: generative-ui\ndescription: The widget manual, third edition.\n---\n",
+		"utf8",
+	);
+	await seedShippedSkills(paths, shipped);
+	assert.match(await readFile(copy, "utf8"), /Denis's own widget notes/, "an edited copy is theirs, upgrade or not");
 });
 
 async function gitAvailable(): Promise<boolean> {
