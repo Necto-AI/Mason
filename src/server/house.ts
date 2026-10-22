@@ -30,12 +30,16 @@
  * `agent/` is also the home's git repository (`agent/.git`): its files are the ones the history is about, and the agent
  * commits to it from the tool machine with ordinary `git`. `service/` is deliberately unversioned.
  *
+ * A home that predates the split is *not* opened by the server: its entries sit at the root, and booting it would write
+ * the new layout on top of them and lose the soul and the profile to the defaults. `npm run doctor -- migrate` is the
+ * one command that moves it, and `migrateHouse` refuses to do anything else.
+ *
  * The home is `0700`, files in it `0600`: it holds a transcript of everything Denis said, which is not a thing to leave
  * readable by every other account on the machine.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -146,6 +150,51 @@ function layoutDirectories(paths: HousePaths): string[] {
 	];
 }
 
+/** One entry the split moves: the name it has at the home root, and the half it belongs to. */
+export interface HouseEntry {
+	readonly name: string;
+	readonly half: "agent" | "service";
+}
+
+/** The entries the split moves. A migration walks exactly this list, and a legacy home is recognised by the same one. */
+export const HOUSE_ENTRIES: readonly HouseEntry[] = [
+	{ name: "profile.md", half: "agent" },
+	{ name: "log", half: "agent" },
+	{ name: "journal", half: "agent" },
+	{ name: "skills", half: "agent" },
+	{ name: "agents", half: "agent" },
+	{ name: "workspace", half: "agent" },
+	{ name: "soul.md", half: "service" },
+	{ name: "config.json", half: "service" },
+	{ name: "roster.json", half: "service" },
+	{ name: "ssh", half: "service" },
+	{ name: "pi", half: "service" },
+	{ name: "data", half: "service" },
+];
+
+/** The entries a home from before the split still has at its root, in the order a person reads them. */
+function legacyEntries(paths: HousePaths): string[] {
+	return HOUSE_ENTRIES.filter((entry) => existsSync(join(paths.home, entry.name))).map((entry) => entry.name);
+}
+
+/**
+ * A home from before the split cannot be opened. Said once, where boot prepares the home, before it writes anything.
+ *
+ * Booting one would create `agent/` and `service/` beside the old files and write `service/soul.md` from
+ * `DEFAULT_SOUL` while Denis's own soul sat unread at the root — which both loses his soul and makes the migration
+ * refuse, because every entry would then be at the root *and* in its new half. So the check runs first and creates
+ * nothing: the layout is a decision for a person, and `npm run doctor -- migrate` is the command that makes it.
+ */
+export function refuseLegacyHome(paths: HousePaths): void {
+	const legacy = legacyEntries(paths);
+	if (legacy.length === 0) return;
+	throw new Error(
+		`${paths.home} predates the split: ${legacy.join(", ")} ${legacy.length === 1 ? "is" : "are"} still at the ` +
+			"root. This home needs to be moved into agent/ and service/ first — run `npm run doctor -- migrate`, then " +
+			"start the server again. Nothing was created.",
+	);
+}
+
 /**
  * Create the home if it is missing and put the default soul in place, once.
  *
@@ -153,9 +202,10 @@ function layoutDirectories(paths: HousePaths): string[] {
  * from a constant nobody can edit. An existing file is never touched: it is Denis's.
  *
  * Both halves are created together: a home without `service/` is a server with nowhere to put its credentials, and a
- * home without `agent/` is an agent with no memory.
+ * home without `agent/` is an agent with no memory. A home that predates the split is refused before either is created.
  */
 export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promise<void> {
+	refuseLegacyHome(paths);
 	for (const directory of layoutDirectories(paths)) {
 		// `mode` only applies to directories this call creates, so an existing directory is tightened explicitly: a home
 		// from before this rule is `0755`, and it is the transcript inside that matters, not the age of the directory.
@@ -281,22 +331,6 @@ export async function ensureRepository(agentDir: string): Promise<void> {
 	}
 }
 
-/** The entries the split moves, and which half each belongs to. A migration walks exactly this list. */
-export const HOUSE_ENTRIES: readonly { readonly name: string; readonly half: "agent" | "service" }[] = [
-	{ name: "profile.md", half: "agent" },
-	{ name: "log", half: "agent" },
-	{ name: "journal", half: "agent" },
-	{ name: "skills", half: "agent" },
-	{ name: "agents", half: "agent" },
-	{ name: "workspace", half: "agent" },
-	{ name: "soul.md", half: "service" },
-	{ name: "config.json", half: "service" },
-	{ name: "roster.json", half: "service" },
-	{ name: "ssh", half: "service" },
-	{ name: "pi", half: "service" },
-	{ name: "data", half: "service" },
-];
-
 /** One file or directory the migration carried from the old layout to its half. */
 export interface HouseMove {
 	readonly from: string;
@@ -309,23 +343,28 @@ export type MigrationOutcome =
 	| { readonly status: "refused"; readonly reason: string };
 
 /**
- * Move a home laid out before the split into the two halves, once, and record it as a commit in the home's own
- * history.
+ * Move a home laid out before the split into the two halves, once, and leave each with the history it should have.
  *
  * The rules, in the order they matter:
- * - **Ambiguous is refused, not guessed.** The same entry in both places is two candidates for one file; a human did
- *   something and only a human knows which one is real. A half-finished run is not ambiguous — it is finished here.
+ * - **Ambiguous is refused, not guessed.** The same entry at the root and in its half is two candidates for one file; a
+ *   human did something and only a human knows which one is real. An *empty* destination is not ambiguity: a half
+ *   created by a boot that then found the old files is a layout this finishes.
  * - **A second run is a no-op.** Everything already in its half means there is nothing to move.
  * - **Unknown files stay put.** Only `HOUSE_ENTRIES` move; a file mason has never heard of is not an upgrade's business.
- * - **Two commits, each saying something true.** First the move, in the repository at the root, where every path is a
- *   rename and `git log --follow` survives. Then the repository itself relocates into `agent/` and the service half
- *   leaves it: `service/` is unversioned from then on.
+ * - **`agent/` is the only half a repository is allowed to see.** The move is staged as a rename for agent-half entries,
+ *   because those files are the agent's memory and are the ones a history should follow. A service-half entry is a plain
+ *   filesystem rename that never enters an index: `ssh/`, `config.json` and `data/` hold the key, the token hashes and
+ *   the transcript, and `agent/` is mounted into the tool machine.
+ * - **The old repository is frozen where it stands, not moved.** It stays at the home root, on the server, holding what
+ *   it held before the split; both halves leave its index and enter its `.gitignore`, so the agent's writes are not dirt
+ *   in it forever. The agent's own repository is created fresh in `agent/`, and its history begins at the migration.
  */
 export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome> {
-	const conflicts = HOUSE_ENTRIES.filter(
-		(entry) => existsSync(join(paths.home, entry.name)) && existsSync(join(halfDir(paths, entry.half), entry.name)),
-	).map((entry) => entry.name);
-	if (existsSync(join(paths.home, ".git")) && existsSync(join(paths.agentDir, ".git"))) conflicts.push(".git");
+	const conflicts: string[] = [];
+	for (const entry of HOUSE_ENTRIES) {
+		if (!existsSync(join(paths.home, entry.name))) continue;
+		if (await populated(join(halfDir(paths, entry.half), entry.name))) conflicts.push(entry.name);
+	}
 	if (conflicts.length > 0) {
 		return {
 			status: "refused",
@@ -348,7 +387,10 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 	for (const entry of pending) {
 		const from = join(paths.home, entry.name);
 		const to = join(halfDir(paths, entry.half), entry.name);
-		if (repositoryAtRoot) {
+		// An empty destination is not a second candidate, but it is in the way: `git mv log agent/log` would move the log
+		// *into* the directory it was meant to become. It is what a boot before the check above left behind.
+		await rmdir(to).catch(() => undefined);
+		if (repositoryAtRoot && entry.half === "agent") {
 			// `git mv` when the home is a repository, so the move is a rename in the history rather than a delete and an
 			// add; a plain rename otherwise, because the files are what matter.
 			try {
@@ -359,49 +401,87 @@ export async function migrateHouse(paths: HousePaths): Promise<MigrationOutcome>
 				// Not tracked, or no git: fall through to the plain move.
 			}
 		}
+		// The service half moves here, and only here: no index, no staging, nothing that could carry the key or the
+		// token hashes into a history.
 		await rename(from, to);
 		moves.push({ from, to });
-	}
-
-	if (repositoryAtRoot) {
-		// `git mv` stages its own rename; a plain move has to be staged, and only the destination: a `git add -A` would
-		// sweep a file mason has never heard of into a commit about the layout.
-		for (const move of moves) await run("git", ["add", "--", move.to], { cwd: paths.home }).catch(() => undefined);
 	}
 
 	// Whatever the old home did not have — a journal, worker definitions, a workspace — exists from here on.
 	for (const directory of layoutDirectories(paths)) await mkdir(directory, { recursive: true, mode: 0o700 });
 
-	if (!repositoryAtRoot) return { status: "moved", moves, committed: false };
+	const committed = repositoryAtRoot && (await freezeRootRepository(paths, pending));
+	await startAgentRepository(paths);
+	return { status: "moved", moves, committed };
+}
 
-	await commitAt(paths.home, "Split the home into agent-owned and service-owned files");
-	await relocateRepository(paths);
-	return { status: "moved", moves, committed: true };
+/** Whether a destination already holds something: a directory with no entries in it is not a second candidate. */
+async function populated(path: string): Promise<boolean> {
+	const entries = await readdir(path).catch(() => undefined);
+	// `undefined` is either "not there" (no conflict) or "there and not a directory" — a file, which is a conflict.
+	return entries === undefined ? existsSync(path) : entries.length > 0;
+}
+
+/**
+ * Leave the pre-split repository at the home root, holding what it held, and blind to both halves from now on.
+ *
+ * The index loses both halves, `.gitignore` names them so nothing the agent writes into `agent/` is ever pending here,
+ * and one commit records the fact. What the old history held it still holds: this repository is the server's, it stays
+ * on the server, and no path inside the tool machine is ever this one.
+ */
+async function freezeRootRepository(paths: HousePaths, pending: readonly HouseEntry[]): Promise<boolean> {
+	try {
+		// `agent/` because the agent's own repository owns those paths now, `service/` because those files were never
+		// the agent's memory, and the moved root paths because they are gone from under their old names. `--cached`
+		// removes index entries only; `--ignore-unmatch` accepts an entry that was never tracked.
+		await run("git", ["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", "agent", "service"], {
+			cwd: paths.home,
+		});
+		await run(
+			"git",
+			["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ...pending.map((entry) => entry.name)],
+			{ cwd: paths.home },
+		);
+		await ignoreHalves(paths.home);
+		await run("git", ["add", "--", ".gitignore"], { cwd: paths.home });
+		await commitAt(paths.home, "The halves are separate from this repository");
+		return true;
+	} catch {
+		// No git identity, or git refused: the files moved either way, and this repository is not the memory.
+		return false;
+	}
+}
+
+/** Add `agent/` and `service/` to the home root's `.gitignore`, keeping whatever a person already put in it. */
+async function ignoreHalves(home: string): Promise<void> {
+	const path = join(home, ".gitignore");
+	const existing = (await readFile(path, "utf8").catch(() => "")).trim();
+	const lines = new Set(existing.split("\n").map((line) => line.trim()));
+	const missing = ["agent/", "service/"].filter((line) => !lines.has(line));
+	if (missing.length === 0) return;
+	await writeFile(path, existing === "" ? `${missing.join("\n")}\n` : `${existing}\n${missing.join("\n")}\n`, {
+		encoding: "utf8",
+		mode: 0o600,
+	});
+}
+
+/** The agent's own repository: created at the migration, so its history begins there rather than in a moved index. */
+async function startAgentRepository(paths: HousePaths): Promise<void> {
+	// `workspace/` is scratch, not memory: committing whatever a tool left there would put the agent's working files in
+	// the history it reads.
+	await writeFile(join(paths.agentDir, ".gitignore"), "workspace/\n", { encoding: "utf8", mode: 0o600 });
+	await ensureRepository(paths.agentDir);
+	try {
+		await run("git", ["add", "-A"], { cwd: paths.agentDir });
+	} catch {
+		return;
+	}
+	await commitAt(paths.agentDir, "The agent's memory starts here");
 }
 
 /** The directory a half's entries live in. */
 function halfDir(paths: HousePaths, half: "agent" | "service"): string {
 	return half === "agent" ? paths.agentDir : paths.serviceDir;
-}
-
-/**
- * Move the repository into `agent/` and commit the service half's departure.
- *
- * After the first commit the repository still tracks both halves. Relocated to `agent/`, the service half is outside its
- * worktree, which is exactly the fact the second commit records: those files are not the agent's history any more.
- */
-async function relocateRepository(paths: HousePaths): Promise<void> {
-	await rename(join(paths.home, ".git"), join(paths.agentDir, ".git"));
-	// The index still names paths relative to the old root, so every file re-roots here and the service half becomes a
-	// deletion. `workspace/` is excluded: the directory the agent works in is not its memory, and committing whatever a
-	// tool left there would put the agent's scratch files in its history.
-	await run("git", ["add", "-A", "--", ".", ":(exclude)workspace"], { cwd: paths.agentDir });
-	await commitAt(
-		paths.agentDir,
-		"The service-owned files leave this repository",
-		"The repository now sits in agent/, so the paths that stayed re-root here too. soul.md, roster.json,\n" +
-			"config.json, ssh/, pi/ and data/ are outside it from now on: the server's half is not versioned.",
-	);
 }
 
 async function commitAt(cwd: string, subject: string, body?: string): Promise<void> {
