@@ -7,10 +7,11 @@
  *
  * Two rules, and both are load-bearing:
  *
- * - **A turn reads each file once.** The memo is keyed on the running turn's identity, which a section reads from the
- *   live document: the first render of a turn populates it, every later model request in that turn reuses it, and the
- *   next turn reads fresh. A profile edited mid-turn therefore lands in the *next* turn, which is what keeps a turn's
- *   context stable while the agent is working.
+ * - **A turn reads each file once.** The memo is keyed on the conversation and the running turn's identity, which a
+ *   section reads from the live document: the first render of a turn populates it, every later model request in that
+ *   turn reuses it, and the next turn reads fresh. A profile edited mid-turn therefore lands in the *next* turn, which
+ *   is what keeps a turn's context stable while the agent is working. Two conversations busy at once hold a memo each,
+ *   so neither pays for the other's reads or evicts the other's text.
  * - **A failed read throws.** The engine keeps a section's previously shown text when its renderer throws and sends the
  *   request anyway (`renderSections`), so the prompt is stable without a fallback here. Returning `undefined` means
  *   something else — "this section does not exist" — and would remove the section instead. The memo records the
@@ -29,7 +30,8 @@ interface TurnMemo {
 	readonly files: Map<string, Promise<string | undefined>>;
 }
 
-let memo: TurnMemo | undefined;
+/** The memo of the turn each conversation is in, replaced when that conversation turns over. */
+const memos = new Map<string, TurnMemo>();
 
 /**
  * A file in the agent's half, trimmed, or `undefined` when it is absent or empty.
@@ -47,7 +49,12 @@ export async function readResidentFile(
 	if (env === undefined) throw new Error(`no execution environment: cannot read ${path}`);
 	const turn = await turnIdentity(input, context);
 	if (turn === undefined) return readNow(env, path, context);
-	if (memo?.turn !== turn) memo = { turn, files: new Map() };
+	const conversation = String(input.conversationId);
+	let memo = memos.get(conversation);
+	if (memo?.turn !== turn) {
+		memo = { turn, files: new Map() };
+		memos.set(conversation, memo);
+	}
 	const files = memo.files;
 	let pending = files.get(path);
 	if (pending === undefined) {

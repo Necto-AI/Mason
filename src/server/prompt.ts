@@ -18,7 +18,7 @@ import type { Context } from "@earendil-works/chord";
 import { defineExtension, section, type PromptSection } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
-import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
+import { discoverSkills, renderSkills } from "./extensions/skills.ts";
 import { readResidentFile, type ResidentInput } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
 
@@ -105,8 +105,9 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	// Beside the hook section: both say how to read the shape of a turn before the agent acts on it.
 	section("team", () => TEAM_GUIDELINES),
 	// Scanned on the tool machine, and re-probed on every render: a skill written a minute ago is in the next request.
+	// One root, seeded from the repository at boot (`house.ts`), so the deployment's tool machine has the same skills.
 	section("skills", async (input, context) =>
-		renderSkills(await discoverSkills(environmentOf(input), [currentHouse().skillsDir, SHIPPED_SKILLS_DIR], context)),
+		renderSkills(await discoverSkills(environmentOf(input), [currentHouse().skillsDir], context)),
 	),
 	section("profile", (input, context) => renderProfile(input, context)),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),
