@@ -27,7 +27,7 @@ RUN apt-get update \
 RUN rm -f /etc/ssh/ssh_host_*
 
 # One login account, named and numbered the same as the account in the mason image: the two containers share the
-# `mason-workspace` and `env-keys` volumes, and a volume owned by uid 1000 is not writable by uid 1001. The base image
+# `mason-agent` and `env-keys` volumes, and a volume owned by uid 1000 is not writable by uid 1001. The base image
 # may already use that uid/gid (it has shipped an `ubuntu` account), so whatever holds the number is removed first —
 # `useradd` fails on a uid that is taken, and that failure would surface as a build error with no clue in it.
 RUN set -eux; \
