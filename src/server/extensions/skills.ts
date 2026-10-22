@@ -9,12 +9,15 @@
  * find nothing in the deployment. The root probe and the listing go through the execution environment for the same
  * reason the reads do.
  *
- * Two roots: the agent's own skills under `agent/skills/`, then the skills mason ships under `<repo>/skills/`. Own
- * first is what makes a personal skill shadow a shipped one without forking it.
+ * The root is `agent/skills/`, on the volume the tool machine mounts, and it is the same root in the dev stack and in
+ * the deployment because `ensureHouse` seeds the shipped skills into it (`house.ts`, `seedShippedSkills`). A personal
+ * skill of the same name is the one that stays: seeding never overwrites.
  *
- * The scan is reused until a root's modification time moves, and the probe happens on every render: writing a skill is
- * meant to be enough to use it, including in the turn it was written in. The fingerprint includes the environment's
- * `id`, so one process serving two filesystems cannot answer with the other one's skills.
+ * The walk happens on every render and the result is reused until an entry it found changes: writing a skill, or editing
+ * the description of one that already exists, is meant to be enough to use it, including in the turn it was written in.
+ * So the fingerprint is the walked `SKILL.md` paths and their modification times, not a root's — a root's mtime moves
+ * when an entry appears beside it and says nothing about a file edited in place. The fingerprint includes the
+ * environment's `id`, so one process serving two filesystems cannot answer with the other one's skills.
  *
  * Rendering is sorted by name and carries no timestamps or listing order: two renders of an unchanged home must be
  * byte-identical, or every turn appends a prompt delta and throws away the provider's prompt cache.
@@ -38,10 +41,16 @@ const SKILL_FILE = "SKILL.md";
 /** How many directory levels below a root are scanned: skills nest by category, not by depth. */
 const MAX_DEPTH = 6;
 
+/** One skill file the walk found, with the modification time that decides whether the index is still current. */
+interface WalkedSkill {
+	readonly path: string;
+	readonly mtimeMs: number;
+}
+
 let cache: { readonly fingerprint: string; readonly skills: readonly Skill[] } | undefined;
 
 /**
- * The skills under these roots, in root order and then by name, with a duplicate name resolved to the first root.
+ * The skills under these roots, in root order and then by name, with a duplicate name resolved to the first one found.
  *
  * A root that is not there contributes nothing: a fresh home has no `skills/` yet, and that is not a failure. Any other
  * failure throws, so the section keeps its previously shown text instead of claiming the agent has no skills.
@@ -51,39 +60,31 @@ export async function discoverSkills(
 	roots: readonly string[],
 	context: Context,
 ): Promise<readonly Skill[]> {
-	const fingerprint = await rootsFingerprint(env, roots, context);
+	const walked = await walk(env, roots, context);
+	const fingerprint = [env.id, ...walked.map((entry) => `${entry.path}:${entry.mtimeMs}`)].join("\u0000");
 	if (cache !== undefined && cache.fingerprint === fingerprint) return cache.skills;
 
 	const byName = new Map<string, Skill>();
-	for (const root of roots) await scan(env, root, root, 0, context, byName);
+	for (const entry of walked) {
+		const skill = await readSkill(env, entry.path, context);
+		if (skill !== undefined && !byName.has(skill.name)) byName.set(skill.name, skill);
+	}
 	const skills = [...byName.values()].sort((left, right) =>
-		left.name === right.name
-			? left.filePath.localeCompare(right.filePath)
-			: left.name.localeCompare(right.name),
+		left.name === right.name ? left.filePath.localeCompare(right.filePath) : left.name.localeCompare(right.name),
 	);
 	cache = { fingerprint, skills };
 	return skills;
 }
 
-/** A value that changes when the roots change: each root's modification time, or the fact that it is absent. */
-async function rootsFingerprint(
+/** Every `SKILL.md` candidate under the roots, in root order then walk order, with the mtimes the cache is keyed on. */
+async function walk(
 	env: ExecutionEnv,
 	roots: readonly string[],
 	context: Context,
-): Promise<string> {
-	const probed: string[] = [env.id];
-	for (const root of roots) {
-		const info = await env.fileInfo(root, context);
-		if (!info.ok) {
-			if (info.error.code === "not_found") {
-				probed.push(`${root}:absent`);
-				continue;
-			}
-			throw new Error(`cannot scan ${root} on the machine the tools run on: ${info.error.message}`);
-		}
-		probed.push(`${root}:${info.value.mtimeMs}`);
-	}
-	return probed.join("\u0000");
+): Promise<readonly WalkedSkill[]> {
+	const found: WalkedSkill[] = [];
+	for (const root of roots) await scan(env, root, root, 0, context, found);
+	return found;
 }
 
 /**
@@ -92,6 +93,9 @@ async function rootsFingerprint(
  * Skips what is not a skill anywhere: dot directories, `node_modules`, and symbolic links (which are also how a scan
  * would walk in circles). A `.md` file directly below a root is a skill too, which is how a single-file skill is
  * written; below that, only `SKILL.md` counts.
+ *
+ * The listing is sorted by entry name, so the walk — and the tie between two files that declare the same skill name —
+ * is the same order on every machine, whatever order `readdir` happened to return.
  */
 async function scan(
 	env: ExecutionEnv,
@@ -99,7 +103,7 @@ async function scan(
 	root: string,
 	depth: number,
 	context: Context,
-	byName: Map<string, Skill>,
+	found: WalkedSkill[],
 ): Promise<void> {
 	const listing = await env.listDir(dir, context);
 	if (!listing.ok) {
@@ -107,9 +111,9 @@ async function scan(
 		throw new Error(`cannot scan ${dir} on the machine the tools run on: ${listing.error.message}`);
 	}
 	const entries = [...listing.value].sort((left, right) => left.name.localeCompare(right.name));
-	if (entries.some((entry) => entry.name === SKILL_FILE && entry.kind === "file")) {
-		const skill = await readSkill(env, join(dir, SKILL_FILE), context);
-		if (skill !== undefined && !byName.has(skill.name)) byName.set(skill.name, skill);
+	const skillFile = entries.find((entry) => entry.name === SKILL_FILE && entry.kind === "file");
+	if (skillFile !== undefined) {
+		await collect(env, join(dir, SKILL_FILE), context, found);
 		return;
 	}
 	if (depth >= MAX_DEPTH) return;
@@ -117,14 +121,23 @@ async function scan(
 		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
 		const path = join(dir, entry.name);
 		if (entry.kind === "directory") {
-			await scan(env, path, root, depth + 1, context, byName);
+			await scan(env, path, root, depth + 1, context, found);
 			continue;
 		}
 		if (entry.kind === "file" && dir === root && entry.name.endsWith(".md")) {
-			const skill = await readSkill(env, path, context);
-			if (skill !== undefined && !byName.has(skill.name)) byName.set(skill.name, skill);
+			await collect(env, path, context, found);
 		}
 	}
+}
+
+/** One candidate, with its modification time: what the walk is for, and what the cache is keyed on. */
+async function collect(env: ExecutionEnv, path: string, context: Context, found: WalkedSkill[]): Promise<void> {
+	const info = await env.fileInfo(path, context);
+	if (!info.ok) {
+		if (info.error.code === "not_found") return;
+		throw new Error(`cannot scan ${path} on the machine the tools run on: ${info.error.message}`);
+	}
+	found.push({ path, mtimeMs: info.value.mtimeMs });
 }
 
 /**

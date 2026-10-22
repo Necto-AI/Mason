@@ -39,12 +39,13 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
+import { appendFile, chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
+import { SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
 
 const run = promisify(execFile);
 
@@ -213,6 +214,25 @@ export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promi
 		await tighten(directory);
 	}
 	if (!existsSync(paths.soul)) await writeFile(paths.soul, `${defaultSoul}\n`, { encoding: "utf8", mode: 0o600 });
+	await seedShippedSkills(paths);
+}
+
+/**
+ * Copy the skills mason ships into the agent's half, once each.
+ *
+ * `SHIPPED_SKILLS_DIR` is a path inside the repository, and the tool machine has the home, not the repository: scanned
+ * from there, `generative-ui` would be indexed in the dev stack and absent in the deployment while the prompt went on
+ * telling the model to read it. Seeding puts one root on both machines. A name that already exists is left alone, so a
+ * personal skill of the same name wins without a second root and an edited copy is not clobbered by a restart.
+ */
+async function seedShippedSkills(paths: HousePaths): Promise<void> {
+	const shipped = await readdir(SHIPPED_SKILLS_DIR).catch(() => [] as string[]);
+	for (const name of shipped) {
+		const to = join(paths.skillsDir, name);
+		if (existsSync(to)) continue;
+		// `force: false` keeps this a seed: nothing under an existing name is ever replaced.
+		await cp(join(SHIPPED_SKILLS_DIR, name), to, { recursive: true, force: false }).catch(() => undefined);
+	}
 }
 
 /** Best effort: a home on a filesystem without Unix modes is still a home. */

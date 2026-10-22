@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import { daemonCommand } from "../src/server/env.ts";
+import { discoverSkills } from "../src/server/extensions/skills.ts";
 import {
 	appendFact,
 	capText,
@@ -469,6 +470,23 @@ test("the same home boots once it has been migrated", async (t) => {
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
 	assert.equal(await readFile(paths.soul, "utf8"), "You are SOUL-MARKER.\n", "boot does not replace Denis's soul");
 	assert.equal(await readFile(join(paths.agentDir, "profile.md"), "utf8"), "Denis prefers short answers.\n");
+});
+
+test("ensureHouse() seeds the skills mason ships into the agent's half, and never overwrites one", async () => {
+	const paths = housePaths(join(await tempDir("mason-house-seed-"), "home"));
+	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
+	const seeded = join(paths.skillsDir, "generative-ui", "SKILL.md");
+	assert.ok(existsSync(seeded), "the shipped skill is in the home, which is what the tool machine has");
+	const index = await discoverSkills(toolMachine(paths.home), [paths.skillsDir], BACKGROUND_CONTEXT);
+	assert.ok(
+		index.some((skill) => skill.name === "generative-ui"),
+		"and the index lists it, so the prompt's pointer is not pointing at nothing",
+	);
+
+	// Denis's own copy of the same skill wins: seeding fills a gap, it does not restore a default over him.
+	await writeFile(seeded, "---\nname: generative-ui\ndescription: Denis's own widget notes.\n---\n", "utf8");
+	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
+	assert.match(await readFile(seeded, "utf8"), /Denis's own widget notes/, "a second boot leaves the file alone");
 });
 
 async function gitAvailable(): Promise<boolean> {
