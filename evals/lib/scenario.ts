@@ -7,7 +7,10 @@
 export interface Scenario {
 	readonly id: string;
 	readonly about: string;
-	/** Files to plant in the agent's half of the home before the run, relative to it (`profile.md`, `skills/x/SKILL.md`). */
+	/**
+	 * Files to plant in the home before the run, by path relative to the half they belong in (`soul.md` is the server's,
+	 * `profile.md` and `skills/x/SKILL.md` are the agent's; `lib/runner.ts` resolves each through `housePaths`).
+	 */
 	readonly home?: Record<string, string>;
 	/** What each stub tool answers. `bash` matches a substring of the command; `read` matches the path exactly. */
 	readonly stubs?: {
