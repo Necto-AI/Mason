@@ -71,7 +71,7 @@ export interface AgentRuntime {
 
 export interface OpenAgentRuntimeOptions {
 	/**
-	 * Where `agent.sqlite` and `hooks.json` live. Defaults to `MASON_DATA`, else `<home>/data`.
+	 * Where `agent.sqlite` and `hooks.json` live. Defaults to `MASON_DATA`, else `<home>/service/data`.
 	 *
 	 * It used to default to `.data` in the current directory, which meant the agent's state was a property of the shell
 	 * it was started from: two checkouts ran two agents, a script run from a copy read the conversation in the copy,
@@ -157,12 +157,14 @@ export async function openAgentRuntime(
 	context: Context,
 	options: OpenAgentRuntimeOptions = {},
 ): Promise<AgentRuntime> {
-	// The agent's home: its soul, its profile, its log, its skills, its state, and the directory it works in.
-	// Created once, and never overwritten. The workspace is its own directory, not the code's: an agent that can edit
-	// the program that runs it is a different product.
+	// The agent's home: its soul, its profile, its log, its skills, its state, and the directory it works in, in the two
+	// halves the deployment mounts separately. Created once, and never overwritten. The workspace is its own directory,
+	// not the code's: an agent that can edit the program that runs it is a different product.
 	const house = configureHouse(housePaths(options.houseHome));
 	await ensureHouse(house, DEFAULT_SOUL);
-	await ensureRepository(house.home);
+	// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
+	// commits there from the same machine the log is written on.
+	await ensureRepository(house.agentDir);
 	const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 	const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 

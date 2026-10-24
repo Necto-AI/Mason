@@ -9,8 +9,39 @@ was in the code before it was in a compose file.
 ```
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
                           │
-                          └── volumes: mason-home, mason-workspace, env-keys
+                          └── volumes: mason-agent (both containers), mason-service, env-keys
 ```
+
+## The two halves of the home
+
+`MASON_HOME` is still one root, and it has two halves with different owners:
+
+| Half | What is in it | Where it is mounted |
+|---|---|---|
+| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
+| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+
+The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
+`service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
+its own provider credential even if a prompt tells it to. The soul is the clearest case: the bot has no path to the job
+it was hired to do, which is what lets apiary hand several bots different souls from the same codebase.
+
+**The home's repository is the memory repo, and it lives at `agent/.git`.** `remember` appends a fact to
+`agent/log/YYYY-MM-DD.md` and commits it *on the tool machine*, in that repository, in one call — the log and its
+history share a filesystem, so a memory is never written without its commit because a second process in another
+container was down. `service/` is deliberately **unversioned** from the split onwards: the soul, the roster, the
+credentials and the database are not in the history.
+
+A home migrated from before the split (`npm run doctor -- migrate`) is the one place to be careful about `git`. The
+migration does not move the old repository into `agent/`: it stays at the home root, on the server, with the history it
+had, and both halves leave its index and enter its `.gitignore` so the agent's writes are not dirt in it forever.
+`agent/.git` is then created fresh, and the agent's history begins at the migration. Only `agent/` is a volume, so the
+frozen repository at the home root lives in the mason container's filesystem: run `doctor` before the first `up` on the
+host if you want to keep that history, because recreating the container takes it with it.
+
+In the **dev stack** (`npm run dev:stack`) there are no containers: `agent/` and `service/` are ordinary sibling
+directories on one filesystem, reached by the loopback SSH daemon. That is a layout, not a boundary — a tool can see
+`service/` there — and the writable-roots policy is what protects it for a developer.
 
 ## Before the first `up`
 
@@ -66,14 +97,14 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 
 ```text
 mason listening on http://0.0.0.0:8787
-[data] /home/mason/.mason/data
+[data] /home/mason/.mason/service/data
 [auth] minted a token for this home; open one of these once, per browser or device:
 [auth]   http://127.0.0.1:8787/?token=mason_…
 ```
 
 Open that link once, in each browser. It spends the token on an `HttpOnly` cookie and redirects to the bare page, so the
 token never stays in the address bar, the history or a `Referer`. The plaintext token is shown exactly once and stored
-only as a hash in `mason-home/config.json`; a lost one is replaced, never recovered.
+only as a hash in `mason-service/config.json`; a lost one is replaced, never recovered.
 
 The URL in that line is assembled from what the server knows about itself, which is the container: `127.0.0.1:8787` is
 right on the host as long as `MASON_PORT` is 8787 and nothing sits in front of it. Behind a proxy, or on a different
@@ -85,14 +116,14 @@ Before the server starts, the boot prints what it prepared:
 ```text
 [deploy] copied settings.json from /run/pi-agent
 [deploy] copied auth.json from /run/pi-agent
-[deploy] generated the env keypair in /home/mason/.mason/ssh
-[deploy] published /home/mason/.mason/ssh/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys
+[deploy] generated the env keypair in /home/mason/.mason/service/ssh
+[deploy] published /home/mason/.mason/service/ssh/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys
 [deploy] waiting for mason@mason-env:22
 [deploy] pinned 2 host key(s) for pi-env-mason-env from mason-env:22
 [deploy] added "Ilya" to the roster
 [deploy] added "Denis" to the roster
-[deploy] seeded 2 name(s) from TEAM into /home/mason/.mason/roster.json
-[deploy] tools run on mason@mason-env:22, in /home/mason/.mason/workspace
+[deploy] seeded 2 name(s) from TEAM into /home/mason/.mason/service/roster.json
+[deploy] tools run on mason@mason-env:22, in /home/mason/.mason/agent/workspace
 ```
 
 If the env host never answers, mason refuses to start rather than run an agent with nowhere to put a tool, and says so
@@ -123,33 +154,39 @@ of five people (docs/ROOM-IDENTITY.md); it stops being acceptable when a strange
 ## Provider credentials, and what the volume now holds
 
 The mounted directory is read-only and is the *input*. On every boot, mason copies `settings.json` and `auth.json` into
-`mason-home/pi/` (`0700`, files `0600`) and points `PI_CODING_AGENT_DIR` at the copy. Two reasons, both load-bearing:
+`mason-service/pi/` (`0700`, files `0600`) and points `PI_CODING_AGENT_DIR` at the copy. Two reasons, both load-bearing:
 
 - pi takes a lock file beside `auth.json` **even to read it** (`proper-lockfile`), and a directory it cannot write is a
   credential store it opens empty — the read path swallows the failure, the server starts, and every turn fails late with
   no key. A copy in a directory mason owns removes that failure instead of betting on the mount's permissions.
 - The copy is redone on every boot, so a rotated key lands on a restart rather than at some remembered moment.
 
-The consequence is worth stating plainly: **the `mason-home` volume holds a copy of your provider key.** It is
+The consequence is worth stating plainly: **the `mason-service` volume holds a copy of your provider key.** It is
 deliberate, and it makes the volume a credential of the same weight as the key itself: back it up encrypted, do not
 paste it into a bug report, and remember that anyone who can read the volume can spend the key. Nothing about it is
 ever baked into an image — the key never exists in a layer, only in a volume you control.
 
 ## What to back up
 
-**`mason-home`, and nothing else.** It is the agent: `soul.md`, `profile.md`, the dated log, `skills/`, `data/agent.sqlite`
-(the transcript and the hooks), `roster.json`, `config.json` (the token hashes — no plaintext token lives here), `ssh/`
-(the env key and the pinned host key) and `pi/` (the copied provider credential). `mason-workspace` is inside it and
-`env-keys` is one public key, so neither needs its own backup. A backup that includes the volume includes the provider
-key; treat the archive accordingly.
+**Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
+shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
+history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
+home root, which is not a volume. `mason-service` is the server: `soul.md`,
+`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `data/agent.sqlite`
+(the transcript and the hooks), `data/connectors.json`, `data/seeded-skills.json` (which shipped skills this home was
+seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
+`env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
+provider key; treat the archive accordingly.
 
 ```sh
-docker run --rm -v mason-home:/data:ro -v "$PWD":/backup alpine \
-  tar -czf /backup/mason-home-$(date +%F).tar.gz -C /data .
+for volume in mason-agent mason-service; do
+  docker run --rm -v "$volume":/data:ro -v "$PWD":/backup alpine \
+    tar -czf "/backup/$volume-$(date +%F).tar.gz" -C /data .
+done
 ```
 
-Restore it into a fresh `mason-home` and the agent comes back with its memory, its roster and its paired devices; the
-env keypair comes with it, and the host key is re-pinned on the next boot.
+Restore both into fresh volumes and the agent comes back with its memory, its roster and its paired devices; the env
+keypair comes with `mason-service`, and the host key is re-pinned on the next boot.
 
 ## What is exposed, and what is not
 
@@ -166,9 +203,10 @@ env keypair comes with it, and the host key is re-pinned on the next boot.
 
 ## The path agreement, and the one honest limitation
 
-The agent's workspace is `/home/mason/.mason/workspace` and that exact string is what the server sends to the env
+The agent's workspace is `/home/mason/.mason/agent/workspace` and that exact string is what the server sends to the env
 container as the `cwd` for a tool call. It is not derived, negotiated, or made relative on the way: it is one path used
-on two machines, so `mason-workspace` is mounted at **the same absolute path in both containers**. The path is a
+on two machines, so `mason-agent` is mounted at **the same absolute path in both containers** — the whole agent's half,
+not only the workspace, because the profile, the log, the skills and the repository are read there too. The path is a
 constant rather than an `.env` variable on purpose — a fresh named volume takes the ownership of the directory it is
 mounted over, and only the paths the images create are owned by the agent's uid. Move the home to `/srv/mason` in
 `.env` and the volume comes up root-owned, the workspace is not writable, and the failure reads as a tool that cannot
@@ -193,16 +231,17 @@ Two smaller honest notes:
   `/run/env-keys` owned by that uid, not group- or world-writable, which is required twice over: mason writes there, and
   `StrictModes` refuses a key file under a world-writable directory with `bad ownership or modes for directory …` — a
   login that fails with a message about a directory rather than about a key. If you change the uid/gid, wipe the volumes
-  (`docker compose down && docker volume rm mason-home mason-workspace env-keys`) and start again; a half-migrated
+  (`docker compose down && docker volume rm mason-agent mason-service env-keys`) and start again; a half-migrated
   volume is a workspace nobody can write to.
 
 ## What is in the env image, and why nothing else is
 
-ubuntu 24.04 plus `openssh-server`. No `pi-env` daemon: `sshConnection()` uploads the binary over the connection, checks
+ubuntu 24.04 plus `openssh-server` and `git`. The `git` is not for the upload: `remember` appends a fact and commits it
+on that machine, in `agent/.git`. No `pi-env` daemon: `sshConnection()` uploads the binary over the connection, checks
 its SHA-256 on the far side, renames it into place and deletes older ones. An image that carried a daemon would freeze a
 protocol version inside the deployment and then disagree with the mason image that replaced it — silently, because the
 upload is designed never to fail loudly about a version it did not ship.
 
 A tool runs as `mason` inside that container, with `env -i` and a nine-variable allowlist from the server side, so it
-cannot read the server's environment or the provider key. It can read and write the shared workspace, and that is the
-whole of what it has.
+cannot read the server's environment or the provider key. It can read and write `agent/` — the profile, the log,
+the skills, the workspace and the repository — and that is the whole of what it has. `service/` is not mounted there.

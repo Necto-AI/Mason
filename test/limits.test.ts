@@ -154,9 +154,9 @@ describe("the agent's state", () => {
 			onReport: () => {},
 		});
 		try {
-			assert.equal(runtime.dataDir, join(houseHome, "data"));
-			assert.equal(await mode(join(houseHome, "data", "agent.sqlite")), 0o600);
-			assert.equal(await mode(join(houseHome, "data")), 0o700);
+			assert.equal(runtime.dataDir, join(houseHome, "service", "data"));
+			assert.equal(await mode(join(houseHome, "service", "data", "agent.sqlite")), 0o600);
+			assert.equal(await mode(join(houseHome, "service", "data")), 0o700);
 		} finally {
 			await runtime.close();
 		}

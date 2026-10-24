@@ -11,8 +11,8 @@
  * it keeps names canonical (no "ilya" vs "Ilya" in one transcript), and it makes the author on every message a value
  * the server chose rather than a string the client made up.
  *
- * The file sits beside `config.json` in the home — `house.ts` builds the path — is written atomically, and is read per
- * request: removing a person lands on the next one, like revoking a token.
+ * The file sits beside `config.json` in the service half of the home — `house.ts` builds the path — is written
+ * atomically, and is read per request: removing a person lands on the next one, like revoking a token.
  */
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -25,7 +25,7 @@ export interface Person {
 	readonly addedAt: string;
 }
 
-/** `~/.mason/roster.json`. Unknown keys survive a rewrite, the same way the config file's do. */
+/** `~/.mason/service/roster.json`. Unknown keys survive a rewrite, the same way the config file's do. */
 export interface Roster {
 	readonly people: readonly Person[];
 	readonly [key: string]: unknown;
@@ -76,7 +76,7 @@ export async function readRoster(paths: HousePaths): Promise<Roster> {
 }
 
 async function writeRoster(paths: HousePaths, roster: Roster): Promise<void> {
-	await mkdir(paths.home, { recursive: true, mode: 0o700 });
+	await mkdir(dirname(paths.roster), { recursive: true, mode: 0o700 });
 	const temporary = `${paths.roster}.${process.pid}.tmp`;
 	await writeFile(temporary, `${JSON.stringify(roster, null, 2)}\n`, { mode: 0o600 });
 	await rename(temporary, paths.roster);
