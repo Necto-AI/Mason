@@ -9,9 +9,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { after, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import type { PromptSection } from "@earendil-works/pi-durable";
+import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
-import { housePaths } from "../src/server/house.ts";
+import { ensureHouse, housePaths } from "../src/server/house.ts";
 import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
 import {
 	DEFAULT_SOUL,
@@ -23,9 +26,40 @@ import {
 } from "../src/server/prompt.ts";
 
 const directories = new Set<string>();
+
+/**
+ * The tool machine: a real `pi-env` environment over a real daemon, which is what the agent's own files are read
+ * through. Absolute paths, so its cwd is only a starting point.
+ */
+const connection = new Connection({ command: daemonCommand(localDaemon()) });
+const toolMachine = new LocalExecutionEnv({ connection, cwd: tmpdir() });
+
 after(async () => {
+	connection.close();
 	for (const directory of directories) await rm(directory, { recursive: true, force: true });
 });
+
+/** The turn a render happens in. The resident memo is keyed on it, so a test that edits a file advances it. */
+let turn = 0;
+
+function nextTurn(): void {
+	turn += 1;
+}
+
+/**
+ * What a section is handed: the environment of the turn, and the live document it reads the turn's identity from.
+ *
+ * `taskId` is the turn, so a second render can be asked to happen in the next turn — which is the only way a test can
+ * see whether the text is stable because the files are, or because the memo handed back the first render's string.
+ */
+function promptInput(overrides: Record<string, unknown> = {}, taskId = turn): unknown {
+	return {
+		conversationId: 1,
+		env: toolMachine,
+		read: { snapshot: async () => ({ run: { taskId, inputs: [] } }) },
+		...overrides,
+	};
+}
 
 async function tempDir(prefix: string): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -44,6 +78,8 @@ async function withHouseHome(run: () => Promise<void>): Promise<void> {
 	const previous = process.env.MASON_HOME;
 	process.env.MASON_HOME = home;
 	try {
+		// Both halves, with the modes a fresh install creates: a section reads a file in a home that exists.
+		await ensureHouse(housePaths(), DEFAULT_SOUL);
 		await run();
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;
@@ -61,10 +97,22 @@ function sectionOf(key: string): PromptSection {
 /**
  * A section as it reaches the system prompt, mirroring `renderSections` in
  * `vendor/pi/packages/durable/src/harness/prompt.ts`: a tagged section is wrapped in its key, a tag-less one is passed
- * through bare. The render arguments are unused by these sections, which read the filesystem.
+ * through bare, and a renderer that throws keeps the text that was already shown.
  */
-async function renderSection(promptSection: PromptSection, input: unknown = undefined): Promise<string | undefined> {
-	const text = await promptSection.render(input as never, undefined as never);
+async function renderSection(
+	promptSection: PromptSection,
+	input: unknown = promptInput(),
+	shown?: string,
+): Promise<string | undefined> {
+	let text: string | undefined;
+	try {
+		text = await promptSection.render(input as never, BACKGROUND_CONTEXT as never);
+	} catch (error) {
+		// The engine's rule, which is the reason a resident read is allowed to throw: the prompt keeps what it had and
+		// the request still goes out.
+		if (shown !== undefined) return shown;
+		throw error;
+	}
 	if (text === undefined) return undefined;
 	return promptSection.tag === false ? text : `<${promptSection.key}>\n${text}\n</${promptSection.key}>`;
 }
@@ -140,6 +188,121 @@ test("the profile section truncates an over-long profile instead of eating the p
 	});
 });
 
+/**
+ * The two rules of `resident.ts`, at the seam a reader can see: what the prompt says, and when it changes.
+ *
+ * An edit during a turn is not a mid-turn change of mind — the turn keeps the context it started with, and the next turn
+ * reads the file again.
+ */
+test("the profile section follows the file, one turn behind", async () => {
+	await withHouseHome(async () => {
+		nextTurn();
+		await writeFile(housePaths().profile, "Denis prefers short answers.\n", "utf8");
+		const first = await renderSection(sectionOf("profile"));
+		assert.match(first ?? "", /Denis prefers short answers\./);
+
+		// The same turn: the prompt is the one the turn started with, however many model requests it takes.
+		await writeFile(housePaths().profile, "Denis prefers long answers.\n", "utf8");
+		assert.equal(await renderSection(sectionOf("profile")), first, "a mid-turn edit does not disturb the turn");
+
+		nextTurn();
+		const second = await renderSection(sectionOf("profile"));
+		assert.match(second ?? "", /Denis prefers long answers\./, "the next turn reads the file the agent wrote");
+		assert.doesNotMatch(second ?? "", /short answers/);
+	});
+});
+
+/**
+ * The failure rule: a tool machine that cannot answer leaves the prompt as it was. Returning `undefined` instead would
+ * remove the section, and the agent would lose its memory to a sleeping machine.
+ *
+ * And it costs one round trip per file per turn, not one per model request: the memo records the failure, so a turn
+ * that makes six requests against a sleeping machine waits for one timeout, not six.
+ */
+test("an unreachable tool machine throws, keeps the shown profile, and is tried once per turn", async () => {
+	await withHouseHome(async () => {
+		nextTurn();
+		await writeFile(housePaths().profile, "Denis prefers short answers.\n", "utf8");
+		const shown = await renderSection(sectionOf("profile"));
+		assert.ok(shown !== undefined);
+
+		// A new turn, and an environment that cannot answer: the connection is gone, which is what a sleeping tool
+		// machine looks like. It counts its reads, because "one failed round trip per turn" is a claim this test makes.
+		nextTurn();
+		const unreachable = () => {
+			const env = {
+				id: "pi-env:gone",
+				cwd: "/",
+				reads: 0,
+				readTextFile: async () => {
+					env.reads += 1;
+					return { ok: false, error: { code: "unknown", message: "connection lost" } } as const;
+				},
+			};
+			return env;
+		};
+		const broken = unreachable();
+		const input = promptInput({ env: broken });
+		await assert.rejects(
+			() => renderSection(sectionOf("profile"), input),
+			/connection lost/,
+			"the renderer throws instead of claiming there is no profile",
+		);
+		assert.equal(
+			await renderSection(sectionOf("profile"), input, shown),
+			shown,
+			"and the engine keeps the text it had, so the prompt is unchanged",
+		);
+		assert.equal(broken.reads, 1, "two renders in one turn cost one failed read");
+	});
+});
+
+/**
+ * The memo is a cost, not a policy: two conversations busy at the same time must not evict each other and pay twice.
+ */
+test("two busy conversations keep their own turn memo", async () => {
+	await withHouseHome(async () => {
+		nextTurn();
+		let reads = 0;
+		const broken = {
+			id: "pi-env:gone",
+			cwd: "/",
+			readTextFile: async () => {
+				reads += 1;
+				return { ok: false, error: { code: "unknown", message: "connection lost" } } as const;
+			},
+		};
+		const render = (conversationId: number) =>
+			renderSection(sectionOf("profile"), promptInput({ conversationId, env: broken }));
+		await assert.rejects(() => render(1));
+		await assert.rejects(() => render(2), "a second conversation pays its own read");
+		await assert.rejects(() => render(1), "and does not make the first one pay again");
+		assert.equal(reads, 2, "one failed read per conversation in the turn");
+	});
+});
+
+/**
+ * A skill written a minute ago is in the index of the next request: the scan is cached by the roots' modification times
+ * and re-probed on every render, so writing a skill is enough to use it.
+ */
+test("the skills section picks up a skill written after the first render", async () => {
+	await withHouseHome(async () => {
+		const paths = housePaths();
+		await mkdir(paths.skillsDir, { recursive: true });
+		await mkdir(join(paths.skillsDir, "first"), { recursive: true });
+		await writeFile(join(paths.skillsDir, "first", "SKILL.md"), "---\nname: first\ndescription: The first one.\n---\n");
+		const before = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(before, /first/, "the skill that was there is indexed");
+
+		await mkdir(join(paths.skillsDir, "second"), { recursive: true });
+		await writeFile(join(paths.skillsDir, "second", "SKILL.md"), "---\nname: second\ndescription: The second one.\n---\n");
+		// A directory's mtime moves when an entry is added; the probe sees it on the next render, in the same turn.
+		const after = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(after, /second/, "the skill written a moment ago is indexed");
+		assert.match(after, /first/, "and the one beside it is still there");
+	});
+});
+
 test("discoverSkills() finds nested SKILL.md files and reads their frontmatter", async () => {
 	const shipped = await tempDir("mason-skills-shipped-");
 	const personal = await tempDir("mason-skills-personal-");
@@ -150,13 +313,57 @@ test("discoverSkills() finds nested SKILL.md files and reads their frontmatter",
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	const [skill] = skills;
 	assert.ok(skill, "the nested skill is found");
 	assert.equal(skill.name, "pr");
 	assert.equal(skill.description, "Review a pull request.");
 	assert.equal(skill.filePath, join(shipped, "engineering/pr/SKILL.md"));
 	assert.ok(isAbsolute(skill.filePath), "the location is absolute, so the model can read it from any cwd");
+});
+
+/**
+ * The listing sort, which the rendered index cannot show on its own: two skills that declare the same name resolve to
+ * whichever file the walk reaches first, so the walk has to be ordered by entry name rather than by whatever order the
+ * filesystem returns. A stub environment is the only way to say that — a real `readdir` gives a different order on every
+ * filesystem and on some of them an apparently stable one — and the point being pinned is that the order must not matter.
+ */
+test("discoverSkills() walks in entry-name order, so a duplicate name resolves the same way everywhere", async () => {
+	const contents: Record<string, string> = {
+		"/skills/zeta-copy/SKILL.md": "---\nname: weekly\ndescription: Created first.\n---\n",
+		"/skills/alpha-copy/SKILL.md": "---\nname: weekly\ndescription: Named first.\n---\n",
+	};
+	const entry = (path: string, kind: "file" | "directory") => ({
+		name: path.slice(path.lastIndexOf("/") + 1),
+		path,
+		kind,
+		size: 0,
+		mtimeMs: 0,
+	});
+	const listing = (path: string) => {
+		if (path === "/skills") {
+			// Deliberately not alphabetical: the reverse of the order the index must produce.
+			return [entry("/skills/zeta-copy", "directory"), entry("/skills/alpha-copy", "directory")];
+		}
+		const file = `${path}/SKILL.md`;
+		return file in contents ? [entry(file, "file")] : [];
+	};
+	const stub = {
+		id: "stub:order",
+		cwd: "/",
+		listDir: async (path: string) => ({ ok: true as const, value: listing(path) }),
+		fileInfo: async (path: string) => ({ ok: true as const, value: entry(path, "file") }),
+		readTextFile: async (path: string) =>
+			path in contents
+				? { ok: true as const, value: contents[path] as string }
+				: { ok: false as const, error: { code: "not_found" as const, message: path } },
+	};
+	const skills = await discoverSkills(stub as never, ["/skills"], BACKGROUND_CONTEXT);
+	assert.deepEqual(
+		skills.map((skill) => skill.description),
+		["Named first."],
+		"the alphabetically first directory wins the duplicate name, whatever order the listing came back in",
+	);
 });
 
 test("a personal skill shadows a shipped skill with the same name", async () => {
@@ -181,7 +388,7 @@ test("a personal skill shadows a shipped skill with the same name", async () => 
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	assert.deepEqual(
 		skills.map((skill) => skill.name),
 		["pr", "weekly"],
@@ -203,7 +410,7 @@ test("a skill without a frontmatter name is named after its directory", async ()
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	// pi's loader falls back to the folder name, which is already the label a person reads.
 	assert.deepEqual(
 		skills.map((skill) => ({ name: skill.name, description: skill.description, path: skill.filePath })),
@@ -227,7 +434,7 @@ test("renderSkills() lists each skill's name, description and absolute path, and
 		"utf8",
 	);
 
-	const skills = await discoverSkills(shipped, personal);
+	const skills = await discoverSkills(toolMachine, [personal, shipped], BACKGROUND_CONTEXT);
 	const text = renderSkills(skills) ?? "";
 	assert.ok(text.length > 0, "two skills render a block");
 	assert.match(text, /Use the read tool to load a skill's file/, "the index says how a body is loaded");
@@ -253,7 +460,7 @@ test("the shipped generative-ui skill carries its name, use-when description and
 
 	// Discovery reaches the same file through the shipped root and parses the fields the index renders.
 	const personal = await tempDir("mason-skills-personal-");
-	const generative = (await discoverSkills(SHIPPED_SKILLS_DIR, personal)).find(
+	const generative = (await discoverSkills(toolMachine, [personal, SHIPPED_SKILLS_DIR], BACKGROUND_CONTEXT)).find(
 		(skill) => skill.name === "generative-ui",
 	);
 	assert.ok(generative, "the shipped root is where generative-ui comes from");
@@ -288,34 +495,74 @@ test("the proactive rules carry the untrusted-payload rule and name the markers 
 /**
  * The reason the prefix is assembled this way: a section whose bytes differ between two renders of unchanged files
  * silently invalidates the provider's prompt cache on every turn, and nothing else in the suite would notice.
+ *
+ * The second render happens in the *next* turn. Two renders inside one turn prove nothing — the per-turn memo hands
+ * back the first string whatever the scanner did — and the skills order is the part most likely to drift, so the home
+ * is given skills whose walk order (by directory, case-sensitively sorted) is not their name order.
  */
-test("every section renders byte-identically twice, so an unchanged conversation keeps its cache", async () => {
+test("every section renders byte-identically in the next turn, so an unchanged conversation keeps its cache", async () => {
 	await withHouseHome(async () => {
-		await writeFile(housePaths().soul, "You are SOUL-STABILITY, a test agent.\n", "utf8");
-		await writeFile(
-			housePaths().profile,
-			"# Denis\nPrefers short answers and numbers to adjectives.\n",
-			"utf8",
-		);
-		const sections: Array<readonly [PromptSection, unknown]> = [
-			...(["preamble", "cwd", "proactive_guidelines", "delivery"] as const).map(
-				(key) => [sectionOf(key), key === "cwd" ? { env: { cwd: "/home/user/dev/mason" } } : undefined] as const,
-			),
-			[sectionOf("profile"), undefined],
-			[sectionOf("skills"), undefined],
-			[sectionOf("generative_ui"), undefined],
-		];
-		for (const [promptSection, input] of sections) {
-			const first = await renderSection(promptSection, input);
-			const second = await renderSection(promptSection, input);
-			assert.equal(second, first, `${promptSection.key} is stable across renders`);
+		const paths = housePaths();
+		await writeFile(paths.soul, "You are SOUL-STABILITY, a test agent.\n", "utf8");
+		await writeFile(paths.profile, "# Denis\nPrefers short answers and numbers to adjectives.\n", "utf8");
+		// The directories are named so the walk reaches `zeta` first and the index has to say `alpha` first: the name of
+		// a skill is its frontmatter, and a directory name is only the fallback.
+		for (const [directory, name] of [
+			["a-zeta", "zeta"],
+			["b-alpha", "alpha"],
+		] as const) {
+			await mkdir(join(paths.skillsDir, directory), { recursive: true });
+			await writeFile(
+				join(paths.skillsDir, directory, "SKILL.md"),
+				`---\nname: ${name}\ndescription: The ${name} one.\n---\n`,
+				"utf8",
+			);
 		}
+
+		const skills = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(skills, /alpha/);
+		assert.match(skills, /zeta/);
+		// The declared names are the order, not the order the directories happen to come back in.
+		assert.ok(
+			skills.indexOf("The alpha one.") < skills.indexOf("The zeta one."),
+			"the index is ordered by skill name, whatever order the walk found them in",
+		);
+		// Every section, including the resident ones: the profile and the skills index are the bytes that could drift.
+		// The second render is asked for in the next turn, so it re-reads the files instead of being handed this turn's
+		// memo: identical bytes across the boundary is what keeps the provider's cached prefix valid, and a section that
+		// only looked stable because the memo answered for it would not keep it.
+		for (const promptSection of PROMPT_SECTIONS) {
+			const first = await renderSection(promptSection, promptInput());
+			nextTurn();
+			const second = await renderSection(promptSection, promptInput());
+			assert.equal(second, first, `${promptSection.key} is stable across a turn boundary`);
+		}
+	});
+});
+
+/**
+ * A skill's description is edited in place — no entry appears, no directory's mtime moves in a way a root probe would
+ * see. The index has to follow the file, or the prompt goes on describing a skill by what it used to say.
+ */
+test("the skills index follows a description edited in place", async () => {
+	await withHouseHome(async () => {
+		const paths = housePaths();
+		await mkdir(join(paths.skillsDir, "weekly"), { recursive: true });
+		const file = join(paths.skillsDir, "weekly", "SKILL.md");
+		await writeFile(file, "---\nname: weekly\ndescription: Write the weekly update.\n---\n", "utf8");
+		assert.match((await renderSection(sectionOf("skills"))) ?? "", /Write the weekly update\./);
+
+		nextTurn();
+		await writeFile(file, "---\nname: weekly\ndescription: Write the Monday update.\n---\n", "utf8");
+		const after = (await renderSection(sectionOf("skills"))) ?? "";
+		assert.match(after, /Write the Monday update\./, "the edited description is what the next turn reads");
+		assert.doesNotMatch(after, /weekly update\./);
 	});
 });
 
 test("an empty home renders no skills section at all", async () => {
 	const empty = await tempDir("mason-skills-empty-");
-	assert.equal(renderSkills(await discoverSkills(empty, empty)), undefined, "nothing to say, so nothing is said");
+	assert.equal(renderSkills(await discoverSkills(toolMachine, [empty, empty], BACKGROUND_CONTEXT)), undefined, "nothing to say, so nothing is said");
 });
 
 /**
@@ -351,9 +598,7 @@ test("the prompt is one registry: no other extension brings a section, and the o
 test("the prompt never points the agent at pi's docs or at its own source", async () => {
 	const rendered = (
 		await Promise.all(
-			PROMPT_SECTIONS.map((promptSection) =>
-				renderSection(promptSection, { env: { cwd: "/home/user/dev/mason" } }),
-			),
+			PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection)),
 		)
 	)
 		.filter((text) => text !== undefined)

@@ -35,12 +35,12 @@ Build a durable, proactive personal agent ("Muse"-style) on `pi-durable`:
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
 │   │   ├── admission.ts               # Where a submission came from, and where it waits (hook vs. user)
 │   │   ├── auth.ts                    # Who may talk to the server: token file, bearer/query, Origin gate
-│   │   ├── house.ts                   # The agent's home: ~/.mason paths, soul/profile reads, log, git
+│   │   ├── house.ts                   # The agent's home: agent/ and service/ paths, soul/profile reads, log, git
 │   │   ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view, and the cache report
 │   │   ├── extensions/
-│   │   │   ├── skills.ts              # The skills index (pi's loadSkills): shipped <repo>/skills + personal ~/.mason/skills
-│   │   │   ├── memory.ts              # The `remember` tool: one dated fact in ~/.mason/log/
+│   │   │   ├── skills.ts              # The skills index (pi's loadSkills): one root, agent/skills/ (seeded at boot)
+│   │   │   ├── memory.ts              # The `remember` tool: one dated fact in agent/log/
 │   │   │   ├── delivery.ts            # The send_to_user tool: the one channel that reaches the user
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, HTTP webhook trigger, proactive submit)
@@ -119,12 +119,12 @@ you everything the agent is told. A test fails if another base extension grows a
 
 | key | tag | source |
 |---|---|---|
-| `preamble` | none (the prompt's opening) | `~/.mason/soul.md`, else `DEFAULT_SOUL` |
+| `preamble` | none (the prompt's opening) | `service/soul.md`, else `DEFAULT_SOUL` |
 | `cwd` | `<cwd>` | `input.env?.cwd` |
 | `proactive_guidelines` | `<proactive_guidelines>` | plain text: how to handle `[EVENT HOOK: …]`, act and report once |
 | `delivery` | `<delivery>` | plain text: only `send_to_user` reaches the reader |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
-| `profile` | `<profile>` | `~/.mason/profile.md` capped, or the first-run interview instruction |
+| `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 
 Section text is one of three kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
@@ -215,7 +215,7 @@ export interface EventHookConfig {
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
-- Opens SQLite storage at `~/.mason/data/agent.sqlite` via `openNodeSqliteStorage` from `@earendil-works/pi-durable/storage/sqlite/node` (or `MemoryStorage` in tests). The directory is `MASON_DATA` when set, else `<home>/data`, and the file is `0600` (§4.1c): the transcript is not a property of the directory the server happened to be started from.
+- Opens SQLite storage at `~/.mason/service/data/agent.sqlite` via `openNodeSqliteStorage` from `@earendil-works/pi-durable/storage/sqlite/node` (or `MemoryStorage` in tests). The directory is `MASON_DATA` when set, else `<home>/service/data`, and the file is `0600` (§4.1c): the transcript is not a property of the directory the server happened to be started from.
 - Model configuration:
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
@@ -223,35 +223,58 @@ export interface EventHookConfig {
 - **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui` — is what every conversation gets. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5).
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends the missing base names to a stored list, in base order, in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: only the user's own steer cuts in, and a trigger source that asks to steer is downgraded to a follow-up. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
-- **The workspace.** A conversation's `cwd` defaults to `~/.mason/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
+- **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
 - **The delivery gate.** `send_to_user` is a tool, so calling it is the model's choice and the prompt is only advice: a turn can end with the model's prose in the transcript and nothing on the wire, and the reader sees silence. The `delivery` extension therefore carries a `GenerationTask` `onYield` hook. `beforeRequest` reads the turn's progress from the model's own context — everything after the last real input, with a `send_to_user` or `generateSandboxedUi` call counting as delivered — and memoizes it; `onYield` continues the run with one reminder when a turn is about to end undelivered. The memo is per generation and a tool round starts a new one, so the context is the durable record, not the memo. The reminder is a `pi.user` entry (the only role a continuation can add) carrying `DELIVERY_REMINDER` from `src/shared/contract.ts`; the projection drops an entry with exactly that text, so the reader never sees it. Once per turn: a generation whose context already holds the reminder does not remind again, and a second silent answer becomes one `notice` — "The agent finished without sending you a message." — because a turn the reader cannot interpret is worse than a turn that admits it failed (§4.1a).
 
 ### 3.5 `~/.mason/` — The Agent's Home
 
-Everything the agent is made of is a file Denis can read, diff and revert, in one directory:
+Everything the agent is made of is a file Denis can read, diff and revert, in one root with two halves:
 
 ```text
 ~/.mason/
-├── soul.md                 # The first section of the system prompt: the agent's own voice
-├── profile.md              # Who Denis is: agent-managed, resident, capped
-├── config.json             # Credentials that may talk to the server: one hashed token per device (§4.1b)
-├── roster.json             # Who is in the room: the names a browser may claim, read per request (§4.1b)
-├── log/2026-10-20.md       # Dated facts, one per line, read on demand
-├── skills/<name>/SKILL.md  # Denis's own skills; they shadow the shipped ones
-├── workspace/              # The directory the agent works in; not the repo that runs it
-└── data/                   # agent.sqlite and hooks.json: the state, in the home it describes (§4.1c)
+├── agent/                  # Mounted into the tool machine at this same absolute path (ADR 0002)
+│   ├── profile.md          # Who Denis is: agent-managed, resident, capped, read through the execution environment
+│   ├── log/2026-10-20.md   # Dated facts, one per line, appended and committed by `remember` on the tool machine
+│   ├── journal/            # Where the daily journal will be written
+│   ├── skills/<name>/SKILL.md  # Denis's own skills, and the shipped ones seeded here on first boot
+│   ├── agents/             # Worker definitions, beside skills so `write` can edit them
+│   ├── workspace/          # The directory the agent works in; not the repo that runs it
+│   └── .git                # The home's repository: the agent's memory and its history
+└── service/                # Never mounted into the tool machine
+    ├── soul.md             # The first section of the system prompt: the agent's own voice
+    ├── config.json         # Credentials that may talk to the server: one hashed token per device (§4.1b)
+    ├── roster.json         # Who is in the room: the names a browser may claim, read per request (§4.1b)
+    ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
+    ├── pi/                 # The copy of the provider credential
+    └── data/               # agent.sqlite, hooks.json and connectors.json (§4.1c)
 ```
+
+**The boundary is a mount until writable roots lands.** In the deployment `service/` does not exist in the tool
+machine's filesystem, so `bash` cannot reach the token hashes, the connector secret, the database, the SSH key or the
+provider credential — the split holds for every tool, not only the ones that honour a policy. In the dev stack there
+are no containers: both halves are sibling directories on one filesystem and a tool can see `service/`, so the
+writable-roots policy is what makes the split meaningful for a developer. `service/` is unversioned. `agent/.git` is the memory repo, created when the home is first
+opened or when a pre-split home is migrated; `npm run doctor -- migrate` moves a home from before the split into this
+shape, freezes the old repository at the home root (both halves leave its index and enter its `.gitignore`) and starts
+the agent's history fresh in `agent/`.
 
 The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json` and `agent.sqlite` are
 `0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither is a thing to
 leave readable by every other account on the machine.
 
+The skills walk is one accepted deviation from the rest of this section: it reads symbolic links as nothing (a link is
+skipped rather than followed) and it does not honour a `.gitignore` inside `agent/skills/`, so a skill kept out of the
+memory repo by an ignore rule is still indexed.
+
 `src/server/house.ts` owns the layout and every read and write; nothing else builds a path by hand, with one
 acknowledged exception — `configPath` in `auth.ts`, which predates the rule and keeps `readConfig`/`writeConfig` taking
 a home rather than a path.
 Opening the runtime creates the home if it is missing — `log/`, `skills/`, and `soul.md` from `DEFAULT_SOUL`, written
-once and never overwritten — and initialises it as a git repository, so a memory write is a commit Denis can revert. A
+once and never overwritten — seeds the skills mason ships into `agent/skills/` (a name that already exists is left
+alone), and initialises `agent/` as a git repository, so a memory write is a commit Denis can revert. A home from
+before the split is refused before anything is created: boot names `npm run doctor -- migrate` and stops, because
+writing the new layout beside the old files would lose the soul and make the migration ambiguous. A
 runtime takes `houseHome`, else `MASON_HOME`, else `~/.mason`, and configures that home for every section that reads
 it; tests pass `houseHome` (or set `MASON_HOME` for sections rendered outside a runtime) and no test touches the real
 one.
@@ -263,7 +286,7 @@ than appended to per turn.
 
 | Section | What it holds | Budget |
 |---|---|---|
-| `soul` (tag-less: the prompt's opening) | `~/.mason/soul.md`, or `DEFAULT_SOUL` on a fresh install | none enforced — it is Denis's own voice, ~480 characters by default |
+| `soul` (tag-less: the prompt's opening) | `service/soul.md`, or `DEFAULT_SOUL` on a fresh install | none enforced — it is Denis's own voice, ~480 characters by default |
 | `cwd` | the workspace the tools run in | one path |
 | `proactive_guidelines` | how to answer an `[EVENT HOOK: ...]` input, and what an untrusted payload fence means | a fixed ~1,000-character constant |
 | `team` | the transcript is shared; a person's message starts `[from <name>] `, and no prefix means no author | a fixed ~300-character constant |
@@ -277,10 +300,11 @@ turn and on every turn after it. The per-conversation toggle, the `setSandboxedU
 `ENABLE_SANDBOXED_UI` are gone: the client renders a widget whenever one arrives, so hiding the tool protected nothing,
 and a tool that appears mid-conversation invalidates the provider's prompt cache.
 
-**Skills.** Two roots, one index. Mason ships `<repo>/skills/`; Denis keeps `~/.mason/skills/`. Both are walked
-recursively for `SKILL.md` — nesting is allowed (`engineering/pr/SKILL.md`), because grouping skills is how a person
-keeps them — and a personal skill whose name matches a shipped one shadows it, so a default can be changed without
-forking it and no install step is involved. A `SKILL.md` is YAML frontmatter (`name`, `description`) then markdown; a
+**Skills.** One root, one index. `agent/skills/` is walked recursively for `SKILL.md` — nesting is allowed
+(`engineering/pr/SKILL.md`), because grouping skills is how a person keeps them. Mason's own skills are seeded into that
+root at boot, copied only when no directory of that name exists, so a personal skill of the same name wins and an edited
+copy is not restored over: `<repo>/skills/` is not a root at all, which is what makes the index the same in the dev
+stack and in the deployment, where the tool machine has the home and not the repository. A `SKILL.md` is YAML frontmatter (`name`, `description`) then markdown; a
 missing `name` falls back to the directory name. The prompt carries the index only, and the agent reads the file when a
 task matches, so a large skill library costs nothing until it is used. `skills/generative-ui/SKILL.md` — the parameter
 order, the design system, the sandbox limits — is why the widget manual left the resident prompt.
@@ -292,8 +316,8 @@ then write the answers, under a page at a time, rewriting as it learns. The head
 quote text the agent did not write, so it is declared data about the user, and what he asks in a conversation always
 wins over it.
 
-**The `remember` tool and the log.** `~/.mason/log/YYYY-MM-DD.md` holds facts, one per line, appended as
-`- HH:MM — <fact>` under a `# YYYY-MM-DD` heading. The home is a git repository, so each append is committed —
+**The `remember` tool and the log.** `agent/log/YYYY-MM-DD.md` holds facts, one per line, appended as
+`- HH:MM — <fact>` under a `# YYYY-MM-DD` heading. `agent/` is a git repository, so each append is committed —
 best-effort: a fact that lands but does not commit is still a memory. `remember(fact)` is the only tool that appends to the log
 (and the only one that grows memory), and it only accumulates, one sentence per call; it is replay-unsafe, because the same fact recorded twice is
 noise in a file a person reads. Nothing is recalled through a search tool: the agent reads the log with `read` when it
@@ -436,7 +460,7 @@ the sender's HMAC against `connectors.json`, and can do exactly one thing: fire 
 connector's secret is not a token — it cannot read, claim, or call — so the door it opens is a door into `hooks.fire`
 and nothing else.
 
-**The credential.** `~/.mason/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
+**The credential.** `service/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
 mode 0600, home 0700. Only hashes are stored: that file is exactly the kind of thing that gets pasted into a bug report
 or a backup, and a file that cannot leak a live token is worth a little inconvenience. `npm run token -- add --label
 phone` prints a new token once; `list` shows what exists, `revoke <id>` kills one device without touching the others. A
@@ -537,14 +561,14 @@ no option to change that, and `vendor/pi` is read-only here, so `env -i` is the 
 `PI_ENV_*` is deliberately not passed: the parent consumes it to decide *where* to run, and a tool has no business
 knowing the host or the identity file.
 
-**Where the state is.** `~/.mason/data/`, not `.data` next to the code. `.data` made the agent's state a property of the
+**Where the state is.** `~/.mason/service/data/`, not `.data` next to the code. `.data` made the agent's state a property of the
 shell it was started from: two checkouts ran two agents, a script started in a copy read the copy's conversation, and a
 throwaway server opened the real transcript while probing. A server that finds a `.data/agent.sqlite` beside it now says
 so instead of starting a second, empty-looking agent:
 
 ```text
-[data] /home/user/.mason/data
-[data] ignoring ./.data (an older home): move it with `mv .data /home/user/.mason/data`
+[data] /home/user/.mason/service/data
+[data] ignoring ./.data (an older home): move it with `mv .data /home/user/.mason/service/data`
 ```
 
 **What this does not do.** It does not sandbox the process: a tool still runs as the server's user, with that user's
@@ -724,7 +748,7 @@ widget's own content.
    - Verifies crash/reopen recovery (`harness.close()` -> `Harness.open()` -> `harness.resume()`).
 2. **`test/house.test.ts`, `test/prompt.test.ts`, `test/cache-telemetry.test.ts`:** the home — its layout, the dated
    log line, the caps, the git repository; the resident prompt — `soul.md` or `DEFAULT_SOUL`, the first-run profile
-   interview, the skills index (shipped + personal, shadowing, nesting) and the pointer-only widget section; and the
+   interview, the skills index (one seeded root, nesting) and the pointer-only widget section; and the
    `[cache]` line's arithmetic. Every test uses a temporary `houseHome` and never the real `~/.mason`.
 3. **`test/chord-e2e.test.ts`:**
    - Starts the HTTP + WebSocket server and connects a real Chord browser-mode `Host` over `webSocketLink`.

@@ -13,8 +13,15 @@ mode because `bash` can talk its way around a mode.
 - **The server reads `agent/` through the execution environment**, not through `node:fs`: the same `RemoteExecutionEnv`
   the tools use. `service/` is read directly by the server and stays invisible to every tool.
 - **Reads are snapshotted per turn and never retried inside one.** A read that fails keeps the previously shown text
-  rather than blanking the prompt, and costs one failed round trip per turn rather than one per model request.
+  rather than blanking the prompt, and costs one failed round trip per turn rather than one per model request. On the
+  first turn of a conversation there is no previously shown text to keep, so the section is simply absent from that
+  turn's prompt; the next turn reads the file again.
 - **`soul.md` is service-owned and simply not readable by the bot.** No read-only copy, no mode bit; the file is not
   in the bot's world at all.
-- **The layout change is a one-time, re-runnable migration** (`npm run doctor -- migrate`) that moves files with `git
-  mv` inside the home's own repository, so it can be inspected and reverted like any other commit.
+- **The layout change is a one-time, re-runnable migration** (`npm run doctor -- migrate`). The repository that
+  existed before the split is not moved: it stays at the home root, on the server, where it may hold whatever it held,
+  and it is frozen there — both halves leave its index and enter its `.gitignore` — so the agent's writes are not dirt
+  in it forever. The agent's own repository is created fresh in `agent/`, and its history begins at the migration; the
+  pre-split history stays in the repository at the home root, which is never a path inside the tool machine. Booting a
+  home from before the split refuses and names the command, because writing the new layout beside the old files would
+  lose the soul to `DEFAULT_SOUL` and make every entry ambiguous.

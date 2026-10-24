@@ -5,7 +5,7 @@
  * server refusing and accepting requests — the socket and `/api` are where the hole was.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -64,8 +64,9 @@ describe("tokens", () => {
 		const home = await temporaryHome();
 		const minted = await mintToken(home, "browser");
 		assert.ok(minted.token.length > 0);
-		assert.equal((await stat(home)).mode & 0o777, 0o700);
-		assert.equal((await stat(join(home, "config.json"))).mode & 0o777, 0o600);
+		// The server's half is the private one: the token hashes are not in the half a tool can see.
+		assert.equal((await stat(join(home, "service"))).mode & 0o777, 0o700);
+		assert.equal((await stat(join(home, "service", "config.json"))).mode & 0o777, 0o600);
 	});
 
 	it("keeps other devices' tokens when one is revoked, and says so when it is not there", async () => {
@@ -101,7 +102,8 @@ describe("tokens", () => {
 	it("reads a hand-edited config as no tokens rather than crashing", async () => {
 		const home = await temporaryHome();
 		await ensureToken(home);
-		await writeFile(join(home, "config.json"), `{"tokens":[{"id":"tok_1"}],"future":true}`, "utf8");
+		await mkdir(join(home, "service"), { recursive: true });
+		await writeFile(join(home, "service", "config.json"), `{"tokens":[{"id":"tok_1"}],"future":true}`, "utf8");
 		const config = await readConfig(home);
 		assert.deepEqual(config.tokens, [], "a malformed record is dropped, not trusted");
 		assert.equal(config.future, true, "unknown keys are kept");
