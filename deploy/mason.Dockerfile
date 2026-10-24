@@ -19,13 +19,15 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git openssh-client tzdata \
  && rm -rf /var/lib/apt/lists/*
 
-# The image ships a `node` account at 1000:1000. Rename it rather than adding a second account, so the uid that owns
-# the home, the workspace and the SSH key is the uid mason-env's login user has.
+# The image ships a `node` account at 1000:1000. Rename it rather than adding a second account, so the uid that owns the
+# home, both halves of it and the SSH key is the uid mason-env's login user has.
 RUN groupmod --new-name mason node \
  && usermod --login mason --home /home/mason node \
  && install -d -o mason -g mason -m 0700 /home/mason \
  && install -d -o mason -g mason -m 0700 /home/mason/.mason \
- && install -d -o mason -g mason -m 0700 /home/mason/.mason/workspace \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent/workspace \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/service \
  && install -d -o mason -g mason -m 0755 /run/env-keys
 
 WORKDIR /app

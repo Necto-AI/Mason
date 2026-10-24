@@ -7,6 +7,10 @@
  *
  * Nothing is recalled through a search tool: the log is read with `read` when the agent needs history, which is the
  * whole reason it is plain markdown.
+ *
+ * The write and its commit happen on the tool machine, in one call: `agent/` is the volume the agent owns and the one
+ * the history lives on, so a commit that needed a second process in another container would be a history that stops at
+ * the first crash.
  */
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
@@ -26,10 +30,12 @@ export const rememberTool = defineTool({
 	parameters: RememberParams,
 	// An interrupted call settles as an error instead of rerunning: the same fact twice is noise in the log.
 	replay: "unsafe",
-	execute: async ({ fact }) => {
+	execute: async ({ fact }, api, context) => {
 		const paths = currentHouse();
-		await ensureRepository(paths.home);
-		const path = await appendFact(paths, fact);
+		const env = api.env;
+		if (env === undefined) throw new Error("no execution environment: the agent's home is on the tool machine");
+		await ensureRepository(paths.agentDir);
+		const path = await appendFact(env, paths, fact, context);
 		return {
 			output: [{ type: "text", text: `Remembered in ${path}` }],
 			details: { path, length: fact.length },

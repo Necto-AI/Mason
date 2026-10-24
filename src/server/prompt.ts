@@ -2,20 +2,28 @@
  * The agent's entire system prompt, in one place and in order.
  *
  * Every section that reaches the model is declared here: its key, whether it is tagged, and where its text comes from —
- * a file in `~/.mason/` (`soul.md`, `profile.md`), a directory scan (`skills/`), or a constant in this file. No other
- * extension contributes a section, and the agent carries no `instructions` of its own, so this list is the whole prompt:
- * an audit reads one file, and a test fails if anything else appears.
+ * a service-owned file read by the server (`service/soul.md`), an agent-owned file read through the execution
+ * environment (`agent/profile.md`, `agent/skills/`), or a constant in this file. No other extension contributes a
+ * section, and the agent carries no `instructions` of its own, so this list is the whole prompt: an audit reads one
+ * file, and a test fails if anything else appears.
+ *
+ * Which half a section reads from is not cosmetic. `service/` is never mounted into the tool machine, so the soul is a
+ * file the bot cannot see, let alone rewrite; `agent/` is on the tool machine, so the profile and the skills index are
+ * the bytes the agent itself can edit, read through the same environment its tools use.
  *
  * The order is the prompt's shape: identity, then the environment, then how to behave when woken, then the one channel
  * to the reader, then what the agent knows (skills, who it works for), then what it can build.
  */
+import type { Context } from "@earendil-works/chord";
 import { defineExtension, section, type PromptSection } from "@earendil-works/pi-durable";
+import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
+import { readResidentFile, type ResidentInput } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
 
 /**
- * What a fresh install starts from, and what `~/.mason/soul.md` is created with. Short on purpose.
+ * What a fresh install starts from, and what `~/.mason/service/soul.md` is created with. Short on purpose.
  *
  * This replaces the default preamble a coding agent opens with ("you are a personal coding agent…"): it is the agent's
  * own voice, written by the person the agent works for, and fixed for the conversation so the cached prefix holds.
@@ -69,10 +77,15 @@ spoken to — then write the answers to that path with the \`write\` tool as sho
 him, how to reach him, how he wants to be treated. Keep it under a page; rewrite it as you learn.`;
 }
 
-/** `profile.md`, behind a header that makes it data: a profile can quote text the agent did not write. */
-async function renderProfile(): Promise<string> {
+/**
+ * `profile.md`, behind a header that makes it data: a profile can quote text the agent did not write.
+ *
+ * Read through the execution environment, so the prompt carries what the agent wrote with `write`, and so a profile
+ * edited during a turn lands in the next one (`resident.ts` holds both rules).
+ */
+async function renderProfile(input: ResidentInput, context: Context): Promise<string> {
 	const path = currentHouse().profile;
-	const text = await readHouseFile(path);
+	const text = await readResidentFile(input, path, context);
 	if (text === undefined) return firstRun(path);
 	return [
 		"# About the person you work for",
@@ -91,12 +104,22 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	section("proactive_guidelines", () => PROACTIVE_GUIDELINES),
 	// Beside the hook section: both say how to read the shape of a turn before the agent acts on it.
 	section("team", () => TEAM_GUIDELINES),
-	section("skills", () => renderSkills(discoverSkills())),
-	section("profile", () => renderProfile()),
+	// Scanned on the tool machine, and re-probed on every render: a skill written a minute ago is in the next request.
+	// One root, seeded from the repository at boot (`house.ts`), so the deployment's tool machine has the same skills.
+	section("skills", async (input, context) =>
+		renderSkills(await discoverSkills(environmentOf(input), [currentHouse().skillsDir], context)),
+	),
+	section("profile", (input, context) => renderProfile(input, context)),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),
 	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.
 	section("delivery", () => DELIVERY_INVARIANT),
 ];
+
+/** The environment a section must read agent-owned files through; a section without one cannot answer. */
+function environmentOf(input: ResidentInput): ExecutionEnv {
+	if (input.env === undefined) throw new Error("no execution environment: the agent's files are on the tool machine");
+	return input.env;
+}
 
 /** The only extension in the runtime that has sections. Everything else contributes tools, hooks or state. */
 export const Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS });

@@ -6,6 +6,7 @@
 # `[auth]` / `[data]` boot lines already use.
 #
 # Order, and why:
+#   0. the two halves of the home — `agent/` and `service/`, since the server's own state goes in the second one;
 #   1. the provider credential — a deployment with no model must say so before it spends minutes waiting for a machine
 #      it cannot use;
 #   2. the env keypair — the key is what makes the rest of the boot possible;
@@ -27,10 +28,15 @@ fi
 
 model_required="${MASON_MODEL_REQUIRED:-1}"
 wait_attempts="${MASON_ENV_WAIT_ATTEMPTS:-30}"
-ssh_dir="$MASON_HOME/ssh"
-pi_dir="$MASON_HOME/pi"
+# The home is two halves: `agent/` is the agent's own files and its history, mounted into the tool machine too;
+# `service/` is everything the server owns and no tool can see (src/server/house.ts). This script only touches the
+# service half, except for creating both directories.
+agent_dir="$MASON_HOME/agent"
+service_dir="$MASON_HOME/service"
+ssh_dir="$service_dir/ssh"
+pi_dir="$service_dir/pi"
 
-install -d -m 0700 "$MASON_HOME"
+install -d -m 0700 "$MASON_HOME" "$agent_dir" "$service_dir"
 
 # 1. The provider credential, copied out of the read-only mount.
 #
@@ -75,8 +81,9 @@ if [ "$model_required" = "1" ] && [ ! -f "$pi_dir/auth.json" ]; then
 fi
 export PI_CODING_AGENT_DIR="$pi_dir"
 
-# 2. The key mason logs in with. Generated once, into the home, never in an image; the public half goes to the shared
-# volume, which is how it reaches mason-env without a copy step or a secret in either image.
+# 2. The key mason logs in with. Generated once, into the service half of the home, never in an image; the public half
+# goes to the shared volume, which is how it reaches mason-env without a copy step or a secret in either image. The key
+# stays in `service/` on purpose: it is the door, and the tool machine must not be able to read it.
 install -d -m 0700 "$ssh_dir"
 if [ ! -f "$ssh_dir/id_ed25519" ]; then
   ssh-keygen -q -t ed25519 -N '' -C mason-env -f "$ssh_dir/id_ed25519"
@@ -129,7 +136,7 @@ echo "[deploy] pinned $(wc -l < "$known_hosts") host key(s) for $MASON_ENV_ALIAS
 #
 # Names are written by `npm run team -- add`, not by this script: the CLI owns validation and the file's mode, and a
 # second writer would be a second spelling of the rule.
-roster="$MASON_HOME/roster.json"
+roster="$service_dir/roster.json"
 if [ -f "$roster" ]; then
   echo "[deploy] roster present: not seeding from TEAM"
 else
@@ -165,7 +172,7 @@ export PI_ENV_SSH_PORT="$MASON_ENV_PORT"
 export PI_ENV_SSH_IDENTITY="$ssh_dir/id_ed25519"
 export PI_ENV_SSH_KNOWN_HOSTS="$known_hosts"
 export PI_ENV_SSH_ALIAS="$MASON_ENV_ALIAS"
-echo "[deploy] tools run on $MASON_ENV_USER@$MASON_ENV_HOST:$MASON_ENV_PORT, in $MASON_HOME/workspace"
+echo "[deploy] tools run on $MASON_ENV_USER@$MASON_ENV_HOST:$MASON_ENV_PORT, in $agent_dir/workspace"
 # `npm run dev` is this same command; exec'ing node directly keeps one process as PID 1, so SIGTERM reaches the server
 # that installs the handler rather than an npm wrapper that may not pass it on.
 exec node --conditions=source --experimental-strip-types src/server/main.ts

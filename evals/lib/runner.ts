@@ -18,7 +18,7 @@ import { openAgentRuntime } from "../../src/server/runtime.ts";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
 import { Memory } from "../../src/server/extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "../../src/server/extensions/sandboxed-ui.ts";
-import { housePaths, logPathFor } from "../../src/server/house.ts";
+import { housePaths, HOUSE_ENTRIES, logPathFor, type HousePaths } from "../../src/server/house.ts";
 import { Prompt } from "../../src/server/prompt.ts";
 import { StubTools } from "./stubs.ts";
 import type { Scenario, Trace } from "./scenario.ts";
@@ -81,6 +81,7 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 				widgetArguments: undefined,
 				inputTokens: 0,
 				outputTokens: 0,
+				reminders: 0,
 				turns: [],
 				finished: false,
 				error: error instanceof Error ? error.message : String(error),
@@ -125,8 +126,28 @@ async function submit(conversation: Conversation, turn: Turn, timeoutMs: number)
 }
 
 async function seed(home: string, scenario: Scenario): Promise<void> {
-	for (const [path, content] of Object.entries(scenario.home ?? {})) {
-		const target = join(home, path);
+	await seedHome(home, scenario.home ?? {});
+}
+
+/**
+ * Where a scenario's file lands: the path `housePaths` resolves it to.
+ *
+ * The prompt reads the soul from `service/soul.md` — a file no tool can see — and the profile and the skills index from
+ * `agent/`. A seeder that planted `soul.md` under `agent/` put every scenario's persona in a file nothing reads, so all
+ * six ran on the shipped default soul and still looked plausible, because the scenario text overlaps it.
+ */
+export function seedPath(paths: HousePaths, file: string): string {
+	const name = file.split("/")[0] ?? file;
+	const entry = HOUSE_ENTRIES.find((candidate) => candidate.name === name);
+	// A file mason has never heard of belongs with the agent's own: that is the half the tool machine sees.
+	return join(entry?.half === "service" ? paths.serviceDir : paths.agentDir, file);
+}
+
+/** Plant a scenario's `home` files before the runtime opens the home, so `ensureHouse` fills the gaps around them. */
+export async function seedHome(home: string, files: Record<string, string>): Promise<void> {
+	const paths = housePaths(home);
+	for (const [file, content] of Object.entries(files)) {
+		const target = seedPath(paths, file);
 		await mkdir(dirname(target), { recursive: true });
 		await writeFile(target, content, "utf8");
 	}

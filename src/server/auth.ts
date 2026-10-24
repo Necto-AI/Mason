@@ -3,7 +3,7 @@
  *
  * One owner, a few named credentials, and every entry point proving it: the Chord socket, `/api/*`, the webhook. A
  * token is minted once (`npm run token -- add --label phone`), shown once, and stored as a hash in
- * `~/.mason/config.json` (mode 0600) — that file is exactly the kind of thing that ends up pasted into a bug report,
+ * `~/.mason/service/config.json` (mode 0600) — that file is exactly the kind of thing that ends up pasted into a bug report,
  * so it must not hold a live credential.
  *
  * Three gates, answering different questions:
@@ -31,7 +31,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { networkInterfaces } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { housePaths } from "./house.ts";
 
 /** A named credential. The token itself exists only in the hand of whoever minted it. */
 export interface TokenRecord {
@@ -43,7 +44,7 @@ export interface TokenRecord {
 	readonly createdAt: string;
 }
 
-/** `~/.mason/config.json`. Unknown keys are preserved: this file grows with the agent. */
+/** `~/.mason/service/config.json`. Unknown keys are preserved: this file grows with the agent. */
 export interface MasonConfig {
 	readonly tokens?: readonly TokenRecord[];
 	/** HMAC key that signs browser session cookies. Generated alongside the first token, and never shown. */
@@ -67,8 +68,9 @@ const SESSION_VERSION_PERSON = "v2";
 /** 30 days: a phone that re-pairs every morning is a phone nobody uses. Revoking the token ends it immediately. */
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
+/** `service/config.json`: the server's half of the home, which no tool ever sees. */
 export function configPath(home: string): string {
-	return join(home, "config.json");
+	return housePaths(home).config;
 }
 
 export async function readConfig(home: string): Promise<MasonConfig> {
@@ -108,12 +110,13 @@ function isSessionKey(value: unknown): value is string {
  * and the modes are set on the directory too: `~/.mason` holds the agent's soul and its credentials.
  */
 async function writeConfig(home: string, config: MasonConfig): Promise<void> {
-	await mkdir(home, { recursive: true, mode: 0o700 });
-	const temporary = `${configPath(home)}.${process.pid}.tmp`;
+	const path = configPath(home);
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	const temporary = `${path}.${process.pid}.tmp`;
 	await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-	await rename(temporary, configPath(home));
-	await chmod(dirname(configPath(home)), 0o700).catch(() => {});
-	await chmod(configPath(home), 0o600).catch(() => {});
+	await rename(temporary, path);
+	await chmod(dirname(path), 0o700).catch(() => {});
+	await chmod(path, 0o600).catch(() => {});
 }
 
 export function readTokens(config: MasonConfig): readonly TokenRecord[] {
