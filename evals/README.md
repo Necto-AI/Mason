@@ -23,6 +23,11 @@ reads the real files inside the temp home and workspace, which is how a `remembe
 Throwaway: each run gets a fresh temp home and workspace (`mkdtemp`, removed in `finally`), seeded with the scenario's
 `home` files and using in-memory storage. Nothing reads or writes `~/.mason`, and nothing in the repo is touched.
 
+The seeded home is the two-half home, so a file lands where the prompt reads it: `soul.md` goes to `service/soul.md` (the
+server's half, which no tool can see), and `profile.md`, `skills/`, `log/` and anything else go to `agent/` (the half the
+tool machine mounts). `lib/runner.ts` resolves each seeded path through `housePaths`, and `test/eval-home.test.ts` pins
+that: seeded under the wrong half, a scenario's soul is a file nothing reads and every run silently uses `DEFAULT_SOUL`.
+
 ## Running
 
 ```bash
@@ -111,8 +116,10 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
 
 - `id` names the scenario and is what `--only` matches. `about` is the one line stored beside the trace and shown to
   the judge.
-- `home` is files to plant in the temp home before the run, keyed by path relative to it (`profile.md`,
-  `skills/x/SKILL.md`). Its file names are also what the `bash` stub prints for `ls`, along with `log` and `workspace`.
+- `home` is files to plant in the temp home before the run, keyed by path relative to the half they belong to: `soul.md`
+  lands in `service/`, `profile.md`, `skills/x/SKILL.md` and anything mason does not know lands in `agent/`, exactly as
+  `housePaths` resolves them. Its file names are also what the `bash` stub prints for `ls`, along with `log` and
+  `workspace`.
 - `stubs.bash[].match` is a substring of the command, first match wins; `stubs.read[].path` matches the path exactly or
   any path ending in `/<path>`.
 - `turns` runs oldest first. A turn is either `{ "text": ... }` or `{ "hook": { name, description?, payload? } }`, the

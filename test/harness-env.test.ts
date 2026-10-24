@@ -3,6 +3,7 @@
  * agent speak first, and a run interrupted by a restart picks up where it stopped.
  */
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
-import { currentHouse } from "../src/server/house.ts";
+import { currentHouse, logPathFor } from "../src/server/house.ts";
 import { projectTranscript } from "../src/server/projection.ts";
 
 const directories = new Set<string>();
@@ -88,8 +89,8 @@ describe("durable harness + pi-env", () => {
 	it("runs write, edit, read, and bash through the pi-env daemon", async () => {
 		const directory = await tempDir("pda-env-");
 		// The soul is a file in the agent's home, not in the workspace.
-		await mkdir(join(directory, "house"), { recursive: true });
-		await writeFile(join(directory, "house", "soul.md"), "You are SOUL-MARKER, a test agent.\n");
+		await mkdir(join(directory, "house", "service"), { recursive: true });
+		await writeFile(join(directory, "house", "service", "soul.md"), "You are SOUL-MARKER, a test agent.\n");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
 			toolCall("write", { path: "note.txt", content: "hello world\n" }, "w"),
@@ -133,13 +134,54 @@ describe("durable harness + pi-env", () => {
 			// The four calls, the answer that carries the delivery, and the note that closes the turn.
 			assert.equal(entries.filter((entry) => entry.kind === "pi.assistant").length, 6);
 
-			// The home's `soul.md` and the working directory reach the system prompt.
+			// The home's `service/soul.md` and the working directory reach the system prompt.
 			const system = entries
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
 			assert.match(system, /SOUL-MARKER/);
 			assert.ok(system.includes(directory), "the cwd section names the working directory");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("remembers through the tool machine, and the next turn's prompt carries what was written there", async () => {
+		const directory = await tempDir("pda-split-home-");
+		const { access, faux } = fauxAccess();
+		faux.setResponses([
+			// Both writes land on the agent's half, through the daemon: the log by `remember`, the profile by `write`.
+			toolCall("remember", { fact: "Budgets are reviewed on Fridays." }, "r"),
+			// The agent's half of the home `openFor` opens: the profile is written where the prompt will read it.
+			toolCall("write", { path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" }, "w"),
+			toolCall("send_to_user", { message: "Noted." }, "d"),
+			fauxAssistantMessage(fauxText("Noted.")),
+			// A second turn, so the prompt is rendered again: the profile written above is now the agent's memory.
+			toolCall("send_to_user", { message: "Second." }, "d2"),
+			fauxAssistantMessage(fauxText("Second.")),
+		]);
+		const runtime = await openFor(directory, access);
+		try {
+			const conversation = await runtime.conversation();
+			assert.equal(
+				(await (await conversation.submit({ type: "input", content: "Remember the review day." }, BACKGROUND_CONTEXT)).wait(BACKGROUND_CONTEXT)).status,
+				"done",
+			);
+			const remembered = await readFile(logPathFor(currentHouse()), "utf8");
+			assert.match(remembered, /^- \d\d:\d\d — Budgets are reviewed on Fridays\.$/m, "the log is the one the tool machine wrote");
+			assert.ok(existsSync(join(currentHouse().agentDir, ".git")), "and the commit happened where the files are");
+
+			assert.equal(
+				(await (await conversation.submit({ type: "input", content: "Anything else?" }, BACKGROUND_CONTEXT)).wait(BACKGROUND_CONTEXT)).status,
+				"done",
+			);
+			// The next turn's prompt is read through the same environment: what `write` put on the agent's half is what
+			// the model is told about the person it works for.
+			const system = (await readEntries(runtime))
+				.filter((entry) => entry.kind === "pi.system")
+				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
+				.join("\n");
+			assert.match(system, /Denis prefers short answers\./, "the profile written through the environment is in the prompt");
 		} finally {
 			await runtime.close();
 		}
