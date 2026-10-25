@@ -8,9 +8,14 @@
  * The prompt says one paragraph about this tool (see `GENERATIVE_UI_POINTER` in `../prompt.ts`); the design system, the
  * parameter ordering and the sandbox limits live in `skills/generative-ui/SKILL.md`, which the agent reads when it
  * decides to build something.
+ *
+ * A widget is something the reader sees, and `projection.ts` renders one only out of a call the model made itself: a
+ * widget built from inside another tool is a nested call whose result goes back to the script instead. So `execute()`
+ * refuses one, with the instruction that gets the widget in front of the reader.
  */
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
+import { nestedRefusal } from "./nested.ts";
 
 export const GenerateSandboxedUiParams = Type.Object({
 	initialHeight: Type.Optional(Type.Number({ description: "Estimated height in pixels of the finished widget" })),
@@ -25,14 +30,27 @@ export const GenerateSandboxedUiParams = Type.Object({
 	),
 });
 
+/**
+ * What a script is told instead of a widget nobody would see: what happened, and what to do about it. Code mode turns
+ * an error result into a rejection (`vendor/pi/packages/durable/src/codemode/codemode.ts:280-291`), so the text has to
+ * say the call rejects — a script that read it as advice would carry on believing the reader had the widget.
+ */
+const WIDGET_NESTED_REFUSAL =
+	"generateSandboxedUi cannot render from inside a script: the call rejects, and a widget built by a nested call never reaches the reader. Catch it and carry on with the script. Call generateSandboxedUi directly from the turn.";
+
 export const generateSandboxedUiTool = defineTool({
 	name: "generateSandboxedUi",
 	description:
-		"Render an interactive HTML/CSS/JS widget inline in the user's chat. Use for charts, diagrams, and calculators.",
+		"Render an interactive HTML/CSS/JS widget inline in the user's chat. Use for charts, diagrams, and calculators. Call this directly, never from inside a script: a widget built by a nested call never reaches the reader.",
 	parameters: GenerateSandboxedUiParams,
-	// The tool is a renderer: it produces no side effects and its result is the arguments themselves.
+	// The tool is a renderer: it produces no side effects and its result is the arguments themselves. A nested call
+	// renders nothing, which is why it is answered with the instruction rather than with "UI generated".
 	replay: "safe",
-	execute: async (args) => ({ output: [{ type: "text", text: "UI generated" }], details: args }),
+	execute: async (args, api) => {
+		const refusal = nestedRefusal(api, WIDGET_NESTED_REFUSAL);
+		if (refusal !== undefined) return refusal;
+		return { output: [{ type: "text", text: "UI generated" }], details: args };
+	},
 });
 
 export const GenerateSandboxedUiExtension = defineExtension({
