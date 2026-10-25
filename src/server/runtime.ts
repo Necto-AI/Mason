@@ -31,6 +31,7 @@ import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
+import { readIntegrations, setIntegrations } from "./integrations.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
 /**
@@ -179,6 +180,10 @@ export async function openAgentRuntime(
 	// not the code's: an agent that can edit the program that runs it is a different product.
 	const house = configureHouse(housePaths(options.houseHome));
 	await ensureHouse(house, DEFAULT_SOUL);
+	// The integration list, once, before anything can run: the tool surface and the prompt section are decided at boot,
+	// and a file that cannot be read is refused here rather than leaving the process with fewer tools than the operator
+	// configured and no way to notice.
+	setIntegrations((await readIntegrations(house)).integrations);
 	// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
 	// commits there from the same machine the log is written on.
 	await ensureRepository(house.agentDir);

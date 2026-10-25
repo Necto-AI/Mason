@@ -17,6 +17,7 @@
  *     ├── soul.md             # the first section of the system prompt, supplied by the operator
  *     ├── config.json         # the token hashes and the session key (`auth.ts`)
  *     ├── roster.json         # who is in the room (`roster.ts`)
+ *     ├── integrations.json   # the services mason reaches (`integrations.ts`)
  *     ├── ssh/                # the key mason logs into the env machine with
  *     ├── pi/                 # the copy of the provider credential
  *     └── data/               # agent.sqlite, hooks.json, connectors.json, seeded-skills.json
@@ -74,6 +75,11 @@ export interface HousePaths {
 	readonly config: string;
 	/** The names a browser may claim as its author: the roster, read per request (`roster.ts`). */
 	readonly roster: string;
+	/**
+	 * The services mason reaches — an MCP endpoint and a trigger per entry — read once at boot (`integrations.ts`). Not in
+	 * `HOUSE_ENTRIES`: the file arrived after the split, so no home from before it has one to carry across.
+	 */
+	readonly integrations: string;
 	/** The key masonry logs into the tool machine with, and the pinned host key beside it. */
 	readonly sshDir: string;
 	/** The copy of pi's `settings.json` and `auth.json` the server reads (`deploy/mason-entrypoint.sh`). */
@@ -118,6 +124,7 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
 		roster: join(serviceDir, "roster.json"),
+		integrations: join(serviceDir, "integrations.json"),
 		sshDir: join(serviceDir, "ssh"),
 		piDir: join(serviceDir, "pi"),
 	};
