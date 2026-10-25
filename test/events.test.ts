@@ -24,6 +24,7 @@ import type { RunningServer } from "../src/server/main.ts";
 import { startServer } from "../src/server/main.ts";
 import { readEnvelope, verifySignature } from "../src/server/events.ts";
 import { housePaths, type HousePaths } from "../src/server/house.ts";
+import { EVENT_BODY_MAX_BYTES } from "../src/server/limits.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 
@@ -43,6 +44,7 @@ async function temporaryHome(): Promise<HousePaths> {
 /** Two integrations with their own secrets, one switched off, and one with no trigger face at all. */
 const telegramSecret = "0f".repeat(32);
 const docsSecret = "1e".repeat(32);
+const pagerSecret = "3b".repeat(32);
 
 const integrationsFile = {
 	integrations: {
@@ -123,15 +125,24 @@ function deliver(
 	});
 }
 
-/** Every hook trigger in the durable transcript: one per fire pi-durable admitted. */
-async function hookEntries(runtime: AgentRuntime): Promise<{ readonly text: string }[]> {
+/** Every hook trigger in the durable transcript: one per fire pi-durable admitted, with what it carries. */
+async function hookEntries(
+	runtime: AgentRuntime,
+): Promise<{ readonly text: string; readonly data: Record<string, unknown> }[]> {
 	const conversation = await runtime.conversation();
 	const page = await conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT);
 	return page.items
 		.filter((entry) => entry.kind === HOOK_ENTRY_KIND)
 		.map((entry) => {
 			const content = entry.model?.[0]?.content;
-			return { text: typeof content === "string" ? content : "" };
+			const data = entry.data;
+			return {
+				text: typeof content === "string" ? content : "",
+				data:
+					typeof data === "object" && data !== null && !Array.isArray(data)
+						? (data as Record<string, unknown>)
+						: {},
+			};
 		});
 }
 
@@ -139,7 +150,10 @@ async function hookEntries(runtime: AgentRuntime): Promise<{ readonly text: stri
  * Waits until the transcript holds `count` hook entries. A fire is admitted at once but a busy conversation queues the
  * inputs behind the running turn, so the entries arrive when the run ends — and this is what the reader's history says.
  */
-async function settledHookEntries(runtime: AgentRuntime, count: number): Promise<{ readonly text: string }[]> {
+async function settledHookEntries(
+	runtime: AgentRuntime,
+	count: number,
+): Promise<{ readonly text: string; readonly data: Record<string, unknown> }[]> {
 	const deadline = Date.now() + 5_000;
 	let entries = await hookEntries(runtime);
 	while (entries.length < count && Date.now() < deadline) {
@@ -197,6 +211,44 @@ describe("the envelope", () => {
 			assert.ok("error" in result, `${JSON.stringify(body)} was accepted`);
 			assert.match(result.error, field);
 		}
+	});
+
+	it("refuses an id holding a control character, because the accept log prints it as one line", () => {
+		for (const id of ["issue\n1421", "issue\r1421", "issue\u00001421", "issue\u007f1421"]) {
+			const result = read(envelope({ id }));
+			assert.ok("error" in result, `${JSON.stringify(id)} was accepted`);
+			assert.match(result.error, /"id" must be one line/);
+		}
+	});
+
+	it("accepts an id that is long but one line: dots, dashes, colons and slashes to the cap", () => {
+		const punctuated = `${"a".repeat(176)}-issue:1421.opened/fix_2`;
+		assert.equal(punctuated.length, 200, "the cap itself, not one over it");
+		assert.deepEqual(read(envelope({ id: punctuated })), {
+			v: 1,
+			id: punctuated,
+			kind: "issue.opened",
+			payload: "Ilya opened issue #1421",
+		});
+		assert.deepEqual(read(envelope({ id: "x".repeat(200) })), {
+			v: 1,
+			id: "x".repeat(200),
+			kind: "issue.opened",
+			payload: "Ilya opened issue #1421",
+		});
+	});
+
+	it("refuses a kind that is not a token: a newline, a space, a leading dot", () => {
+		for (const kind of ["issue\nopened", "issue opened", ".issue.opened"]) {
+			const result = read(envelope({ kind }));
+			assert.ok("error" in result, `${JSON.stringify(kind)} was accepted`);
+			assert.match(result.error, /"kind" must be a short token/);
+		}
+	});
+
+	it("accepts a token kind such as issue.opened", () => {
+		const result = read(envelope({ kind: "issue.opened" }));
+		assert.deepEqual(result, { v: 1, id: "issue-1421-opened", kind: "issue.opened", payload: "Ilya opened issue #1421" });
 	});
 
 	it("refuses an over-long payload rather than truncating it", () => {
@@ -268,6 +320,7 @@ describe("the event door", () => {
 			for (const [label, body, field] of [
 				["v2", JSON.stringify(envelope({ v: 2 })), /"v"/],
 				["no id", JSON.stringify(envelope({ id: undefined })), /"id"/],
+				["an id with a newline", JSON.stringify(envelope({ id: "issue\n1421" })), /"id" must be one line/],
 				["over-long payload", JSON.stringify(envelope({ payload: "x".repeat(2_001) })), /"payload"/],
 				["not an object", "[]", /JSON object/],
 			] as const) {
@@ -304,6 +357,102 @@ describe("the event door", () => {
 			assert.equal((await hookEntries(second.server.runtime)).length, 1, "a restart does not forget a request id");
 		} finally {
 			await second.close();
+		}
+	});
+
+	it("keys a fire by integration and id, so two integrations on one hook are two doors", async () => {
+		const paths = await temporaryHome();
+		// Both point at one hook, which is what the spec allows: `id` is unique within an integration, not across a hook.
+		await writeIntegrations(paths, {
+			integrations: {
+				telegram: { enabled: true, trigger: { hook: "workspace-check", secret: telegramSecret } },
+				pager: { enabled: true, trigger: { hook: "workspace-check", secret: pagerSecret } },
+			},
+		});
+		const server = await serve(paths);
+		try {
+			const body = JSON.stringify(envelope({ id: "1" }));
+			assert.equal((await deliver(server, "telegram", body)).status, 202);
+			assert.equal((await deliver(server, "pager", body, signature(pagerSecret, body))).status, 202);
+			assert.equal((await settledHookEntries(server.server.runtime, 2)).length, 2, "two senders, two events");
+
+			// The same integration naming the same delivery again is still that one fire.
+			assert.equal((await deliver(server, "telegram", body)).status, 202, "a redelivery is acknowledged, not refused");
+			assert.equal((await hookEntries(server.server.runtime)).length, 2, "and adds nothing to the transcript");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("carries the sender's kind into the entry and the prompt", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			const body = JSON.stringify(envelope({ kind: "issue.opened", payload: "Ilya opened issue #1421" }));
+			assert.equal((await deliver(server, "telegram", body)).status, 202);
+			const [entry] = await settledHookEntries(server.server.runtime, 1);
+			assert.equal(entry?.data.kind, "issue.opened", "the transcript says what happened, for the reader and for the log");
+			assert.match(entry?.text ?? "", /Event: issue\.opened/, "and the model is told without parsing the prose");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("answers 405 to a verb that is not POST on a door that exists", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			const answer = await fetch(`${server.base}/api/events/telegram`);
+			assert.equal(answer.status, 405, "the door is there, so the verb is the sender's mistake to see");
+			assert.deepEqual(await answer.json(), { error: "method not allowed" });
+			assert.equal((await hookEntries(server.server.runtime)).length, 0, "a non-POST fires nothing");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("refuses a body over the cap with a 413 before the signature is read", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			// No signature at all: the cap is checked first, so this is a 413 and not the 401 a bare body would get.
+			const body = "x".repeat(EVENT_BODY_MAX_BYTES + 1);
+			const answer = await deliver(server, "telegram", body, null);
+			assert.equal(answer.status, 413);
+			assert.deepEqual(await answer.json(), { error: "payload too large", maxBytes: EVENT_BODY_MAX_BYTES });
+			assert.equal((await hookEntries(server.server.runtime)).length, 0, "an over-long body is dropped, never truncated");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("re-reads the switch at boot: a disabled door is 404, and the same door fires once it is enabled", async () => {
+		const paths = await temporaryHome();
+		const file = (enabled: boolean) => ({
+			integrations: { telegram: { enabled, trigger: { hook: "workspace-check", secret: telegramSecret } } },
+		});
+		const body = JSON.stringify(envelope({ id: "switched-on" }));
+
+		await writeIntegrations(paths, file(false));
+		const off = await serve(paths);
+		try {
+			assert.equal((await deliver(off, "telegram", body)).status, 404, "a disabled integration has no door");
+			assert.equal((await hookEntries(off.server.runtime)).length, 0);
+		} finally {
+			await off.close();
+		}
+
+		// The switch is read once, at boot: enabling it is the restart, and the door answers on the far side of one.
+		await writeIntegrations(paths, file(true));
+		const on = await serve(paths, { token: off.token });
+		try {
+			assert.equal((await deliver(on, "telegram", body)).status, 202, "the same path is a door after the restart");
+			await settledHookEntries(on.server.runtime, 1);
+		} finally {
+			await on.close();
 		}
 	});
 
