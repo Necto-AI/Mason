@@ -60,6 +60,19 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 	createToolSearchExtension(),
 ];
 
+/**
+ * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,
+ * then what this boot built for itself — `mcp` when it reached a tools face, `codemode` always.
+ *
+ * It is exported because it is the answer to a question a test asks: a stored selection is repaired with exactly these,
+ * and a list written down a second time in a test would go on passing after a base extension was added to the array.
+ * The extra extensions a caller installs are not here: they are the caller's to select, and only these are
+ * unconditional.
+ */
+export function unconditionalExtensionNames(perBoot: readonly string[]): readonly string[] {
+	return [...BASE_EXTENSIONS.map((extension) => extension.name), ...perBoot];
+}
+
 export interface AgentModelRef {
 	provider: string;
 	modelId: string;
@@ -229,13 +242,10 @@ export async function openAgentRuntime(
 		...(mcp.extension === undefined ? [] : [mcp.extension]),
 		codemode.extension,
 	];
-	// What a stored explicit selection is repaired with. The extra extensions a caller installs are not: they are the
-	// caller's to select, and only these are unconditional.
-	const unconditionalExtensions: readonly Extension[] = [
-		...BASE_EXTENSIONS,
-		...(mcp.extension === undefined ? [] : [mcp.extension]),
-		codemode.extension,
-	];
+	const unconditional = unconditionalExtensionNames([
+		...(mcp.extension === undefined ? [] : [mcp.extension.name]),
+		codemode.extension.name,
+	]);
 	const registry: Registry = createRegistry();
 	for (const extension of extensionList) registry.install(extension);
 
@@ -285,7 +295,7 @@ export async function openAgentRuntime(
 	// had connected. A failed repair is a failed guarantee, so the server does not start with it — but it also does not
 	// start with the hooks and the env manager left open.
 	try {
-		if (options.repairBase !== false) await appendMissingExtensions(root, unconditionalExtensions, context);
+		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
 	} catch (error) {
 		await hooks.close();
 		// Everything the boot opened closes with it: a refused start must not leave a sandbox or a socket behind.
@@ -358,7 +368,7 @@ async function readConversation(conversation: Conversation, context: Context): P
 }
 
 /**
- * Return the unconditional extensions a stored explicit selection lacks, appended in the order they are given.
+ * Append the unconditional extension names a stored explicit selection lacks, in the order they are given.
  *
  * These are the base extensions plus, on a boot that reached one, the MCP tools, and code mode: no conversation may be
  * without `delivery`, and a conversation whose stored array predates any of them — an array is used verbatim — would
@@ -367,14 +377,14 @@ async function readConversation(conversation: Conversation, context: Context): P
  */
 async function appendMissingExtensions(
 	root: Conversation,
-	unconditional: readonly Extension[],
+	unconditional: readonly string[],
 	context: Context,
 ): Promise<void> {
 	await root.commit(async (tx) => {
 		const stored = (await tx.doc(AgentDoc, root.id)).extensions;
 		if (!Array.isArray(stored)) return;
-		const missing = unconditional.filter((extension) => !stored.includes(extension.name));
-		if (missing.length > 0) stored.push(...missing.map((extension) => extension.name));
+		const missing = unconditional.filter((name) => !stored.includes(name));
+		if (missing.length > 0) stored.push(...missing);
 	}, context);
 }
 

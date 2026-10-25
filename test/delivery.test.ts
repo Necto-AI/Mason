@@ -14,13 +14,15 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
 import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "../src/server/prompt.ts";
-import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
+import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime, unconditionalExtensionNames } from "../src/server/runtime.ts";
 
 /**
- * Every extension a boot installs unconditionally, in order: the base list, then code mode, which `openAgentRuntime`
- * builds per boot because its sandbox dies with the runtime. Both are what a stored selection is repaired with.
+ * Every extension a boot installs unconditionally, in order: the base list, then the ones `openAgentRuntime` builds per
+ * boot — code mode here, since this home has no integration. `openRuntime` below writes nothing to a tools face, so the
+ * per-boot part is code mode alone; it is named rather than assumed, and the runtime's own list is what is asserted
+ * against, so a base extension added later is covered without a second list going stale.
  */
-const BOOT_EXTENSIONS: readonly string[] = [...BASE_EXTENSIONS.map((extension) => extension.name), "codemode"];
+const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode"]);
 
 test("send_to_user is replay-unsafe, so a restart never delivers the same message twice", () => {
 	assert.equal(sendToUserTool.name, "send_to_user");
