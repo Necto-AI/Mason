@@ -42,6 +42,7 @@ import {
 	readGithubEvent,
 	verifyGithubSignature,
 } from "./connectors.ts";
+import { EVENT_BODY_MAX_BYTES, EVENT_SIGNATURE_HEADER, EVENTS_PATH, readEnvelope, verifySignature } from "./events.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
 	createFireLimiter,
@@ -348,14 +349,15 @@ async function handleRequest(
 		}
 	}
 
-	// Everything under `/api` is the owner's, except two doors that cannot present a token: the liveness probe, and a
-	// connector's deliveries, which are authenticated by the sender's own HMAC below (src/server/connectors.ts) and can
-	// do exactly one thing. The static shell is public on purpose: it is a bundle with no secrets in it, and the page
-	// is where a reader is told that this browser is not paired.
+	// Everything under `/api` is the owner's, except three doors that cannot present a token: the liveness probe, and
+	// the two event doors, which are authenticated by the sender's own HMAC below (src/server/connectors.ts and
+	// src/server/events.ts) and can do exactly one thing. The static shell is public on purpose: it is a bundle with no
+	// secrets in it, and the page is where a reader is told that this browser is not paired.
 	let device: TokenRecord | undefined;
 	let claimed: string | undefined;
 	const connectorDelivery = url.pathname === GITHUB_DELIVERY_PATH;
-	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health" && !connectorDelivery) {
+	const eventDelivery = isEventPath(url.pathname);
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health" && !connectorDelivery && !eventDelivery) {
 		const auth = await authenticate(request, store);
 		if (!auth.ok) {
 			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
@@ -428,6 +430,64 @@ async function handleRequest(
 		} catch (error) {
 			if (error instanceof UnknownHookError) {
 				return json(response, 500, { error: `the connector fires ${connector.hookId}, which is not a hook` });
+			}
+			throw error;
+		}
+	}
+
+	// The generic event door: one path, one verb, one effect — one fire of the hook the integration's trigger names
+	// (§3.3). The path names the integration; the boot resolved which ones are enabled, and a delivery is never a way to
+	// read, claim or call. A misspelt name, a disabled integration and one with no trigger all answer `404` like a path
+	// that is not a door, because which of them it is is not a sender's business.
+	if (eventDelivery) {
+		const name = integrationFromEventPath(url.pathname);
+		const integration = name === undefined ? undefined : currentIntegrations()[name];
+		const trigger = integration?.trigger;
+		if (name === undefined || integration === undefined || !integration.enabled || trigger === undefined) {
+			console.warn(`[events] refused a delivery to ${name ?? "a path that names no integration"}: no enabled trigger face there`);
+			return notFound(response);
+		}
+		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
+		// Before the body is read: a delivery is a whole turn, and a loop of them is a bill. The key is the integration's
+		// own, so one chatty sender cannot spend another's minute.
+		const wait = fires.take(`integration:${name}`);
+		if (wait !== undefined) {
+			console.warn(`[events] refused a delivery for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
+			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
+			return;
+		}
+		const raw = await readRawBodyCapped(request, EVENT_BODY_MAX_BYTES);
+		if (raw === undefined) {
+			console.warn(`[events] refused a delivery for ${name}: over ${EVENT_BODY_MAX_BYTES} bytes`);
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: EVENT_BODY_MAX_BYTES }));
+			return;
+		}
+		// The signature is the door: it is checked over the raw bytes, before a single field is parsed, and a refusal says
+		// nothing about which half failed.
+		if (!verifySignature(trigger.secret, raw, headerValue(request, EVENT_SIGNATURE_HEADER))) {
+			console.warn(`[events] refused a delivery for ${name}: bad or missing signature`);
+			return json(response, 401, { error: "unauthorized" });
+		}
+		const envelope = readEnvelope(raw);
+		if ("error" in envelope) {
+			console.warn(`[events] refused a delivery for ${name}: ${envelope.error}`);
+			return json(response, 400, { error: envelope.error });
+		}
+		try {
+			// `id` is the delivery's identity, so a redelivery is this same fire however much later it arrives; `payload` is
+			// the sender's text, which the hooks engine fences as untrusted data before the model reads it.
+			const submission = await runtime.hooks.fire(trigger.hook, {
+				payload: envelope.payload,
+				requestId: explicitRequestId(trigger.hook, envelope.id),
+			});
+			return json(response, 202, { submissionId: submission.id });
+		} catch (error) {
+			if (error instanceof UnknownHookError) {
+				// Boot validation should have refused this process; a `500` here means the hook list changed under a boot.
+				console.warn(`[events] ${name} fires ${trigger.hook}, which is not a hook`);
+				return json(response, 500, { error: "the integration's hook is not a hook" });
 			}
 			throw error;
 		}
@@ -583,6 +643,24 @@ function contentSecurityPolicy(host: string | undefined): string {
 function socketOrigins(host: string | undefined): string {
 	if (host === undefined || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) return "";
 	return ` ws://${host} wss://${host}`;
+}
+
+/**
+ * Whether a path belongs to the generic event door at all — including the malformed ones.
+ *
+ * The bare prefix counts, and so does anything under it: a sender that lost the integration name, or added a second
+ * segment, gets the door's `404` rather than the token gate's `401`. A door whose bad shapes look like a missing cookie
+ * is a door whose operator cannot tell a broken sender from a broken pairing.
+ */
+function isEventPath(pathname: string): boolean {
+	return pathname === EVENTS_PATH.slice(0, -1) || pathname.startsWith(EVENTS_PATH);
+}
+
+/** The integration a door path names: exactly one segment, no trailing slash. `undefined` for any other shape. */
+function integrationFromEventPath(pathname: string): string | undefined {
+	if (!pathname.startsWith(EVENTS_PATH)) return undefined;
+	const name = pathname.slice(EVENTS_PATH.length);
+	return name === "" || name.includes("/") ? undefined : name;
 }
 
 /** The pages a pairing link may land on: the shell, and the shell's file name. */

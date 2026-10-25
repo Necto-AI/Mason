@@ -33,7 +33,7 @@ import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
-import { currentIntegrations, readIntegrations, setIntegrations } from "./integrations.ts";
+import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
@@ -230,6 +230,18 @@ export async function openAgentRuntime(
 	const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 	const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
+	// The hooks manager exists before the harness opens, because a trigger that fires a hook no build defines has to
+	// refuse the boot before anything can run: the door names one hook, so a name that is not a hook is a door that would
+	// accept a delivery and drop it. This is config, not health — a missing hook is fatal whatever the container's own
+	// `required` says.
+	const hooks = new HooksManager({
+		conversation: () => harness.root(BACKGROUND_CONTEXT),
+		statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
+		...(options.onReport === undefined ? {} : { onReport: options.onReport }),
+	});
+	for (const hook of builtinHooks()) hooks.define(hook);
+	assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
+
 	const storage =
 		options.storageOverride ??
 		(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
@@ -279,13 +291,6 @@ export async function openAgentRuntime(
 		},
 		context,
 	);
-
-	const hooks = new HooksManager({
-		conversation: () => harness.root(BACKGROUND_CONTEXT),
-		statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
-		...(options.onReport === undefined ? {} : { onReport: options.onReport }),
-	});
-	for (const hook of builtinHooks()) hooks.define(hook);
 
 	const root = await harness.root(context, {
 		agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
@@ -398,4 +403,27 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 		// No modes on this filesystem; nothing to set.
 	}
 	return storage;
+}
+
+/**
+ * A trigger's hook is a name in a file, so a build that does not define it must refuse rather than start.
+ *
+ * Only enabled integrations are checked: a disabled one's door answers `404`, and a name is not a reason to keep an
+ * integration the operator switched off from ever being switched on again. The message names the file, the integration
+ * and the hook, because all three are what a person has to change.
+ */
+function assertTriggersHaveHooks(
+	integrations: Record<string, Integration>,
+	hooks: HooksManager,
+	path: string,
+): void {
+	for (const [name, integration] of Object.entries(integrations)) {
+		if (!integration.enabled) continue;
+		const hook = integration.trigger?.hook;
+		if (hook === undefined || hooks.has(hook)) continue;
+		throw new Error(
+			`${path}: integration "${name}" has a trigger that fires "${hook}", which is not a hook. A delivery there ` +
+				"would fire nothing, so the server does not start with one.",
+		);
+	}
 }

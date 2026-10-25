@@ -1,15 +1,17 @@
 /**
- * `npm run integration -- <list|add|remove|enable|disable> …` — the services mason reaches.
+ * `npm run integration -- <list|add|remove|enable|disable|secret> …` — the services mason reaches.
  *
  * The config (`src/server/integrations.ts`) is read once at boot, so this command says what the *next* start does: the
  * tool surface and the prompt are decided then, and a list that changed under a running turn would change what the
  * model can do between two messages of one conversation. Editing the file is a restart, and the command says so every
  * time it writes.
  *
- * It edits the tools face — the one that reaches an MCP endpoint — because that is the half that exists. The trigger
- * face arrives with #43, and a secret it holds is never printed here, not even truncated: a person pastes it into the
- * container, and nothing mason prints is a place it should appear.
+ * It edits the tools face — the one that reaches an MCP endpoint — and the trigger's secret, because a secret is
+ * minted rather than typed. The trigger still fires only a hook this build defines, so `secret` asks for the hook on
+ * the first run and keeps it afterwards. A secret is never printed by anything else, not even truncated: a person
+ * pastes it into the container, and nothing mason prints is a place it should appear.
  */
+import { randomBytes } from "node:crypto";
 import { housePaths } from "../src/server/house.ts";
 import {
 	readIntegrations,
@@ -28,11 +30,13 @@ function usage(): never {
   npm run integration -- remove <name>
   npm run integration -- enable <name>
   npm run integration -- disable <name>
+  npm run integration -- secret <name> [--hook <hook-id>]
 
   home: ${house.home}
   the list is ${house.integrations} (0600, in the server's half) and is read once at boot: a change applies on restart.
   add refuses a name that is already there unless --replace is passed, and a name is lowercase letters, digits and dashes.
-  nothing here prints a secret: a trigger's belongs to the container, and is written by hand until #43.`);
+  secret mints 32 bytes for the trigger's HMAC key and prints it once; --hook names the hook a first trigger fires.
+  nothing else here prints a secret.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -102,6 +106,45 @@ async function remove(): Promise<void> {
 	console.log("The list is read once at boot: start the server again for this to take effect.");
 }
 
+/**
+ * Mints the trigger secret, 32 bytes of it, and stores it through the same atomic write as every other entry. The hook
+ * is asked for once and kept: a rotation replaces the key, not the identity of the door. A `--hook` beside an existing
+ * trigger is refused rather than ignored, because an operator who passes one is trying to change something.
+ */
+async function secret(): Promise<void> {
+	const name = args[0];
+	if (name === undefined) usage();
+	const { integrations } = await readIntegrations(house);
+	const existing = integrations[name];
+	if (existing === undefined) {
+		console.error(`no integration ${name}: \`npm run integration -- list\` shows the ones this home has`);
+		process.exit(1);
+	}
+	const asked = option("--hook");
+	const current = existing.trigger?.hook;
+	if (current !== undefined && asked !== undefined) {
+		console.error(`${name} already has a trigger on ${current}: --hook only names the hook of a first secret`);
+		process.exit(1);
+	}
+	const hook = current ?? asked;
+	if (hook === undefined) {
+		console.error(`${name} has no trigger yet: pass --hook <hook-id>, the hook a delivery there fires`);
+		process.exit(1);
+	}
+	const written = await writeIntegration(house, name, {
+		...existing,
+		trigger: { ...(existing.trigger ?? {}), hook, secret: randomBytes(32).toString("hex") },
+	});
+	const trigger = written.trigger;
+	if (trigger === undefined) return;
+	console.log(`${name} trigger fires ${trigger.hook}; secret in ${house.integrations} (0600):`);
+	console.log();
+	console.log(`  ${trigger.secret}`);
+	console.log();
+	console.log("paste it into the sender as the HMAC key; it is shown once, and a new secret replaces it here.");
+	console.log("The list is read once at boot: start the server again for this to take effect.");
+}
+
 // A refusal from the config module is the operator's message, not a stack trace: the message names the path and the
 // entry, which is what a person has to fix.
 try {
@@ -110,6 +153,7 @@ try {
 	else if (command === "enable") await toggle(true);
 	else if (command === "disable") await toggle(false);
 	else if (command === "remove") await remove();
+	else if (command === "secret") await secret();
 	else usage();
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
