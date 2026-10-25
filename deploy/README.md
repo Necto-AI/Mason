@@ -234,6 +234,10 @@ seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.
 
+A home upgraded from a build that still had the GitHub connector also keeps a `service/data/connectors.json`: no code
+reads it (the migration moved `data/` wholesale, so it came along), every secret in it opens nothing, and it is safe to
+delete before you take the archive.
+
 ```sh
 for volume in mason-agent mason-service; do
   docker run --rm -v "$volume":/data:ro -v "$PWD":/backup alpine \
@@ -256,8 +260,12 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
   `X-Forwarded-Proto: https` so the session cookie is issued `Secure`.
-- `/api/health` is unauthenticated by design (a monitor that needs a token is a monitor nobody runs). Everything else
-  goes through `src/server/auth.ts`; there is no route in this deployment that does not.
+- Two paths are outside `src/server/auth.ts` on purpose, and each can do exactly one thing. `/api/health` answers one word
+  and needs no credential at all (a monitor that needs a token is a monitor nobody runs), and
+  `POST /api/events/<integration>` is authenticated by that integration's trigger secret: the HMAC is the door, and the
+  door opens `hooks.fire` and nothing else — it cannot read, claim or call. Everything else under `/api`, and the Chord
+  socket, goes through `src/server/auth.ts`; the shell itself is served publicly because it is a bundle with no secrets in
+  it, and it is where a browser is told it is not paired.
 
 ## The path agreement, and the one honest limitation
 
