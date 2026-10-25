@@ -5,6 +5,10 @@
 # run in the process that thinks, and this is where they run instead. The two are joined by SSH, not by a shared
 # process, and mason hands the env container its key on first boot (deploy/mason-entrypoint.sh).
 #
+# A deployment that reaches a third-party system adds one more container per integration, on the `mason-mcp` network; the
+# commented template at the end of `services:` is what a person copies, and service/integrations.json is what tells mason
+# where each one is. An integration is not a mason container: another project's image, another project's release cycle.
+#
 # Build contexts: the mason image is built from the REPOSITORY ROOT (`context: ..`), because the image is the repo —
 # its TypeScript run from source, its `vendor/pi` submodule, its built web client. Check the submodule out before
 # building: `git submodule update --init --recursive`. The env image is built from this directory alone.
@@ -65,6 +69,9 @@ services:
       - mason-edge
       # In: the env machine. Nothing on mason-edge can reach mason-env.
       - mason-internal
+      # In: the integration containers (see the template at the end of this file's services). This is the only member of
+      # mason-mcp that is not an integration, and the only one that reaches into it.
+      - mason-mcp
     ports:
       # Loopback only, and that is the security boundary: a TLS proxy on the host forwards here, and the port is not
       # reachable from any other machine. The container port stays 8787; MASON_PORT moves the host side.
@@ -82,6 +89,11 @@ services:
       # under $MASON_HOME/pi is what PI_CODING_AGENT_DIR points at. The copy has to be writable — pi takes a lock beside
       # auth.json even to read it.
       MASON_PI_AGENT_SRC: /run/pi-agent
+      # The integrations, read from a copy the same way pi's directory is: the mounted file is the operator's input, and
+      # the copy under $MASON_HOME/service is what the server reads at boot. One difference — this copy is also what
+      # `npm run integration` writes, so the entrypoint leaves it alone when the mount is missing, because an operator
+      # who added an integration inside the container did not ask for a restart to delete it.
+      MASON_INTEGRATIONS_SRC: /run/integrations.json
       # 1: refuse to start when there is no provider credential, naming the path. 0: a stack deliberately without a
       # model (the UI loads, no turn can run).
       MASON_MODEL_REQUIRED: ${MASON_MODEL_REQUIRED:-1}
@@ -114,6 +126,14 @@ services:
         source: ${MASON_PI_AGENT_DIR:?set MASON_PI_AGENT_DIR in .env to the directory holding pi's settings.json and auth.json}
         target: /run/pi-agent
         read_only: true
+      - type: bind
+        # The integrations the operator wrote, copied on every boot into $MASON_HOME/service/integrations.json. Create
+        # it beside this file before the first `up` (an empty `{"integrations": {}}` is a stack with no integration at
+        # all): a source that does not exist is a directory to the runtime, which the entrypoint reads as no input. It
+        # has to be readable by uid ${MASON_UID:-1000}, the account the server runs as.
+        source: ./integrations.json
+        target: /run/integrations.json
+        read_only: true
     healthcheck:
       # /api/health is the one unauthenticated route: a monitor that needs a token is a monitor nobody runs.
       test:
@@ -126,14 +146,42 @@ services:
       start_period: 180s
       retries: 3
 
+  # An integration: one more container for a system mason should reach without a rebuild — GitHub, a docs server, an
+  # internal API (docs/adr/0003-integrations-are-services.md). Nothing in this repo changes for it: no image, no
+  # TypeScript, no extension. Copy the block below, uncomment it, and give it the integration's own name and image; the
+  # service name is the host `integrations.json` points at.
+  #
+  # mason-example:
+  #   # Their image, not ours: an integration is a service somebody else maintains, and it carries its own updates,
+  #   # healthcheck and language.
+  #   image: ghcr.io/example/mcp-example:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     # The upstream credential belongs to the container that uses it (ADR-0003), so it lives in deploy/.env beside
+  #     # this file and in this container's environment — never in `service/`, never in an image. mason holds the URL and
+  #     # a description, nothing that can authenticate as anybody.
+  #     EXAMPLE_TOKEN: ${EXAMPLE_TOKEN:?set EXAMPLE_TOKEN in deploy/.env}
+  #   networks:
+  #     # In: mason reaches its MCP endpoint by name here — http://mason-example:8082/mcp, the `tools.url` in
+  #     # integrations.json. No other container on mason-mcp can reach it, and mason-env is not on this network.
+  #     - mason-mcp
+  #     # Out: mason-edge is the only way out to the third party's API. Leave it out and the integration can be reached
+  #     # by mason and can reach nothing.
+  #     - mason-edge
+  #   # No `ports`, here or on any integration: the container is reached by name on mason-mcp, and a published port
+  #   # would be a second door into a service that holds a credential, with no token of mason's in front of it.
+  #   #
+  #   # No `mason-service` volume, and no `mason-agent` volume either: an integration keeps its own state or none, and
+  #   # what it must never be able to read is the home.
+
 volumes:
   # The agent: profile.md, log/, journal/, skills/, agents/, workspace/ and the repository that holds its memory.
   # Mounted into both containers at /home/mason/.mason/agent. Back this up.
   mason-agent:
     name: mason-agent
-  # The service: soul.md, roster.json, config.json (the token hashes), connectors.json, data/agent.sqlite, ssh/ (the env
-  # key) and pi/ (the copied provider credential). Mounted only into the mason container. Back this up too, encrypted:
-  # it holds the provider key.
+  # The service: soul.md, roster.json, config.json (the token hashes), integrations.json, connectors.json,
+  # data/agent.sqlite, ssh/ (the env key) and pi/ (the copied provider credential). Mounted only into the mason
+  # container. Back this up too, encrypted: it holds the provider key.
   mason-service:
     name: mason-service
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
@@ -146,4 +194,13 @@ networks:
   # `internal: true` is the env machine's whole network policy: no gateway, no DNS beyond the compose network, no
   # route out. A tool cannot exfiltrate what it reads, and nothing outside can reach the sshd.
   mason-internal:
+    internal: true
+  # The integration containers, and mason. `internal: true` plus no published port is the whole access policy: an MCP
+  # server on this network is reachable by name from mason, and unreachable from the host, from another machine and from
+  # the internet.
+  #
+  # mason-env must never join it. A tool machine that can reach an MCP server directly reaches a capability its operator
+  # never approved — the tool surface is decided in mason, at boot, out of integrations.json, and a `bash` that could
+  # curl the same endpoint would make that decision advisory. The missing membership is what makes it a decision.
+  mason-mcp:
     internal: true
