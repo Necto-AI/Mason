@@ -6,8 +6,8 @@
  * not understand, because the file grows and a hand-written note is not mason's to drop. A trigger secret is never
  * printed, not even truncated.
  *
- * Stage A only: nothing connects. The health fields of the route are the place stage B fills in, and are asserted here
- * as the shape it will fill.
+ * The two files are tested apart from each other: the list on disk through `readIntegrations` and the command, and the
+ * route through a started server — a reachable server is a fake MCP server on an in-memory transport, never a port.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -19,16 +19,15 @@ import { promisify } from "node:util";
 import { after, describe, it } from "node:test";
 import { housePaths, type HousePaths } from "../src/server/house.ts";
 import {
-	integrationStatus,
-	integrationSummaries,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
-	setIntegrations,
 	writeIntegration,
 	type Integration,
 } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
+import type { McpTransportFactory } from "../src/server/mcp.ts";
+import { fakeServer, ISSUE_TOOL, SEARCH_TOOL } from "./support/mcp.ts";
 
 const run = promisify(execFile);
 
@@ -236,49 +235,6 @@ describe("the integration list on disk", () => {
 	});
 });
 
-describe("the booted set", () => {
-	it("answers for the list it booted with, sorted, with health for stage B", () => {
-		setIntegrations({
-			github: { ...github, tools: { url: "http://mason-github:8082/mcp", required: true } },
-			docs: {
-				enabled: false,
-				description: "The internal documentation server",
-				tools: { url: "http://mason-docs:8080/mcp" },
-				trigger: { hook: "docs-activity", secret: "s".repeat(32) },
-			},
-		});
-		// What stage B's client will write when it connects; stage A leaves the map empty.
-		integrationStatus().set("github", { connected: true, tools: 7, error: null });
-		integrationStatus().set("docs", { connected: false, tools: 0, error: "connect ECONNREFUSED mason-docs:8080" });
-
-		assert.deepEqual(integrationSummaries(), [
-			{
-				name: "docs",
-				enabled: false,
-				hasTools: true,
-				hasTrigger: true,
-				connected: false,
-				tools: 0,
-				error: "connect ECONNREFUSED mason-docs:8080",
-			},
-			{
-				name: "github",
-				enabled: true,
-				hasTools: true,
-				hasTrigger: false,
-				connected: true,
-				tools: 7,
-				error: null,
-			},
-		]);
-
-		// A new boot's findings replace the last one's: a status from a previous process is not news.
-		setIntegrations({});
-		assert.deepEqual(integrationSummaries(), []);
-		assert.equal(integrationStatus().size, 0);
-	});
-});
-
 /**
  * The command itself, spawned the way an operator runs it: `npm run integration -- …` with `MASON_HOME` pointing at a
  * temporary home, so the assertion is the file it wrote and the line it printed rather than the module's API.
@@ -384,10 +340,54 @@ describe("the integration command", () => {
 	});
 });
 
+/**
+ * A running server over `paths`, booted with the transport its connections use. The route is the subject of these
+ * tests, so nothing here reaches into the module's registry: a server is started, and the answer is what it says.
+ */
+async function serve(
+	paths: HousePaths,
+	transport: McpTransportFactory,
+	token?: string,
+): Promise<{ url: string; token: string; close: () => Promise<void> }> {
+	const directory = dirname(paths.home);
+	const server = await startServer({
+		port: 0,
+		hostname: "127.0.0.1",
+		storage: "memory",
+		dataDir: join(directory, "data"),
+		workspaceDir: join(directory, "workspace"),
+		houseHome: paths.home,
+		faux: true,
+		onReport: () => {},
+		mcpTransport: transport,
+	});
+	// A fresh home mints one token, and a second boot over the same home does not: the token outlives the process, so a
+	// caller that has it, has it.
+	const paired = token ?? server.pairingToken;
+	assert.ok(paired, "a fresh home mints one token, which is what pairs this test");
+	return {
+		url: `http://127.0.0.1:${server.port}/api/integrations`,
+		token: paired,
+		close: () => server.close(),
+	};
+}
+
+/** What the route answers, as a client reads it. */
+async function reported(url: string, token: string): Promise<Record<string, unknown>[]> {
+	const answer = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+	assert.equal(answer.status, 200);
+	const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
+	return body.integrations;
+}
+
+/** Every server down: the shape of a boot nobody's containers have come up for. */
+function downAll(): never {
+	throw new Error("no container in a test");
+}
+
 describe("the integrations route", () => {
 	it("answers this boot's list, sorted, and refuses a request without a token", async () => {
 		const paths = await temporaryHome();
-		const directory = dirname(paths.home);
 		await writeRaw(
 			paths,
 			JSON.stringify({
@@ -397,30 +397,14 @@ describe("the integrations route", () => {
 				},
 			}),
 		);
-		const server = await startServer({
-			port: 0,
-			hostname: "127.0.0.1",
-			storage: "memory",
-			dataDir: join(directory, "data"),
-			workspaceDir: join(directory, "workspace"),
-			houseHome: paths.home,
-			faux: true,
-			onReport: () => {},
-			// A boot with a tools face reaches for it, so the test hands it a transport that is down instead of a port.
-			mcpTransport: () => {
-				throw new Error("no container in a test");
-			},
-		});
+		// A boot with a tools face reaches for it, so the test hands it a transport that is down instead of a port.
+		const server = await serve(paths, downAll);
 		try {
-			const url = `http://127.0.0.1:${server.port}/api/integrations`;
-			assert.equal((await fetch(url)).status, 401, "the route is the owner's, like the rest of the API");
+			assert.equal((await fetch(server.url)).status, 401, "the route is the owner's, like the rest of the API");
 
-			assert.ok(server.pairingToken, "a fresh home mints one token, which is what pairs this test");
-			const answer = await fetch(url, { headers: { authorization: `Bearer ${server.pairingToken}` } });
-			assert.equal(answer.status, 200);
-			const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
-			assert.deepEqual(body.integrations.map((entry) => entry.name), ["docs", "github"], "sorted by name");
-			assert.deepEqual(body.integrations[1], {
+			const integrations = await reported(server.url, server.token);
+			assert.deepEqual(integrations.map((entry) => entry.name), ["docs", "github"], "sorted by name");
+			assert.deepEqual(integrations[1], {
 				name: "github",
 				enabled: true,
 				hasTools: true,
@@ -431,7 +415,7 @@ describe("the integrations route", () => {
 			});
 			// A disabled integration is not attempted at all, so it has no health to report: the route says what is, not what
 			// would be if the switch were flipped.
-			assert.deepEqual(body.integrations[0], {
+			assert.deepEqual(integrations[0], {
 				name: "docs",
 				enabled: false,
 				hasTools: true,
@@ -440,10 +424,69 @@ describe("the integrations route", () => {
 				tools: 0,
 				error: null,
 			});
-			// The shape is the boot's, not the file's: a change after boot is a restart, and nothing here saw it.
-			assert.deepEqual([...integrationStatus().keys()], ["github"], "the boot recorded what it tried");
 		} finally {
 			await server.close();
+		}
+	});
+
+	it("reports a server it reached, with the tools it offered", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					github,
+					docs: {
+						enabled: true,
+						description: "The internal documentation server",
+						tools: { url: "http://mason-docs:8080/mcp" },
+						trigger: { hook: "docs-activity", secret: "s".repeat(32) },
+					},
+				},
+			}),
+		);
+		const reachable = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
+		// The container that came up and the one that did not, told apart by the url the boot asks for.
+		const server = await serve(paths, (url) => (url.includes("mason-github") ? reachable.transport : downAll()));
+		try {
+			assert.deepEqual(await reported(server.url, server.token), [
+				{
+					name: "docs",
+					enabled: true,
+					hasTools: true,
+					hasTrigger: true,
+					connected: false,
+					tools: 0,
+					error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no container in a test',
+				},
+				{ name: "github", enabled: true, hasTools: true, hasTrigger: false, connected: true, tools: 2, error: null },
+			]);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("does not report a connection the boot before this one made", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(paths, JSON.stringify({ integrations: { github } }));
+		const reachable = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
+		const first = await serve(paths, () => reachable.transport);
+		try {
+			assert.deepEqual((await reported(first.url, first.token))[0]?.connected, true, "the first boot reached it");
+		} finally {
+			await first.close();
+		}
+
+		// The same home, the same process, and this time nothing answers: what the route says is this boot's finding,
+		// because a status left over from a connection that has since died is worse than no status at all.
+		const second = await serve(paths, downAll, first.token);
+		try {
+			const [github] = await reported(second.url, second.token);
+			assert.equal(github?.connected, false, "the previous boot's connection is not news");
+			assert.match(String(github?.error), /no container in a test/);
+			assert.equal(github?.tools, 0);
+		} finally {
+			await second.close();
 		}
 	});
 

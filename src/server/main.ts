@@ -32,7 +32,8 @@ import {
 	type TokenStore,
 } from "./auth.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
-import { integrationSummaries } from "./integrations.ts";
+import { integrationSummaries } from "./integration-status.ts";
+import { currentIntegrations } from "./integrations.ts";
 import {
 	connectorsPath,
 	GITHUB_DELIVERY_PATH,
@@ -483,7 +484,9 @@ async function handleRequest(
 
 	// What this boot's integration list is, and whether its servers answered. Behind the same gate as the rest of `/api`,
 	// and the only place health appears: a prompt section that carried it would differ between two turns of one build.
-	if (url.pathname === "/api/integrations") return json(response, 200, { integrations: integrationSummaries() });
+	if (url.pathname === "/api/integrations") {
+		return json(response, 200, { integrations: integrationSummaries(currentIntegrations()) });
+	}
 
 	const fire = /^\/api\/hooks\/([^/]+)\/fire$/.exec(url.pathname);
 	if (fire !== null && request.method === "POST") {
