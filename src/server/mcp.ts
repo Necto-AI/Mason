@@ -5,7 +5,9 @@
  * Streamable HTTP per enabled integration, its `tools/list` registered as deferred tools. Boot is the only moment this
  * happens, because the tool list is prompt prefix: a surface that changed when a server reconnected would re-price the
  * prefix mid-conversation, and one that changed when a container restarted would change what the model can do between
- * two messages of one turn. So the connection is made here, once, and the tools live with the process.
+ * two messages of one turn. So the connection is made here, once, and the tools live with the process — with one retry
+ * per server, because mason and an integration's container usually restart together and the first attempt can land
+ * before the other end has bound its port.
  *
  * Every MCP tool is `deferred`. A server may offer forty tools with schemas nobody needs this turn; declaring them all
  * would spend the context the deferred list exists to save, and `tool_search` is what promotes one on demand. That also
@@ -18,14 +20,16 @@
  *
  * Results are mapped with `toLlmContent`, so text and images pass through and audio, resource links and binary
  * resources become a short placeholder. Two callers read a result differently, and the harness makes that a declaration
- * rather than a special case: `output` is what the model is shown and is bounded to 20 KB, while `structuredOutput` is
- * what a program receives and is not bounded at all. So every MCP tool declares `structuredOutputSchema` and returns the
- * server's own result there — a code-mode script gets all 200 KB of a page and decides what the model needs to hear.
+ * rather than a special case: `output` is what the model is shown and loses the middle above 20 KB, while
+ * `structuredOutput` is what a program receives and is not bounded at all. So every MCP tool declares
+ * `structuredOutputSchema` and returns the server's own result there — a code-mode script gets all 200 KB of a page and
+ * decides what the model needs to hear.
  */
 import { createHash } from "node:crypto";
 import type { JsonValue } from "@earendil-works/chord";
 import {
 	type CallToolResult,
+	type LlmContent,
 	McpClient,
 	type McpTransport,
 	StreamableHttpTransport,
@@ -45,14 +49,35 @@ const MAX_TOOL_NAME_LENGTH = 64;
  */
 const REQUEST_TIMEOUT_MS = 15_000;
 /**
- * What one declared call returns. A 200 KB tool result is context nobody asked for, and the model can be given the
- * same capability in pieces; a code-mode script, which can filter before the model reads anything, gets it all.
+ * How often boot tries one server, and how long it waits between tries. Two, because the failure this exists for is a
+ * container that is still coming up: mason and the integration restart together on the same host, and the second
+ * attempt lands a moment after the first said the port was closed.
  */
-const OUTPUT_MAX_BYTES = 20_000;
+const CONNECT_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 250;
+/**
+ * What one declared call shows the model. A 200 KB tool result is context nobody asked for, and the model can be given
+ * the same capability in pieces; a code-mode script, which can filter before the model reads anything, gets it all.
+ *
+ * The number is the coding agent's `MCP_OUTPUT_MAX_BYTES` in `vendor/pi/packages/coding-agent/src/extensions/mcp/tools.ts`,
+ * kept equal on purpose: one MCP server answers a mason tool and a coding-agent tool the same way, and an operator who
+ * tunes one should not be surprised by the other.
+ */
+const MCP_OUTPUT_MAX_BYTES = 20 * 1024;
+/** What stands where the middle of a result was removed. A line of its own, so the head and the tail read separately. */
+function droppedLine(dropped: number, total: number): string {
+	return `[… ${dropped} of ${total} bytes dropped: this is the start and the end of a longer result …]`;
+}
 /**
  * One block of the server's own `content`, as the coding agent declares it: a compact type carrying the fields text and
  * image blocks have, `additionalProperties` so a block the protocol adds later still passes. Scripts read
  * `content[0].text` and hand an image block to `image()` as it is.
+ *
+ * Copied, not imported, and hand-kept in step with the coding agent's
+ * `vendor/pi/packages/coding-agent/src/extensions/mcp/tools.ts`: it is not part of that package's surface (which exports
+ * `createMcpExtension`, an extension for the coding agent's own runtime, whose tools are its `ToolDefinition`s with
+ * pi-tui renderers rather than pi-durable's `ToolRegistration`), so the schema a script of either product reads is
+ * copied here and diffed against that file when `vendor/pi` moves.
  */
 const CONTENT_BLOCK_SCHEMA = {
 	type: "object",
@@ -123,6 +148,11 @@ export interface McpTools {
  * `[A-Za-z0-9_]` becomes `_`, so an integration named `my-docs` and a tool named `issues.list` still make a name a
  * script can call and a provider accepts. Sanitizing can map two tools to one name (`a-b` and `a_b`); `isTaken` reports
  * names another tool already has, and those get the suffix instead.
+ *
+ * Copied from the coding agent for the same reason as `CONTENT_BLOCK_SCHEMA`: the rule is not exported by
+ * `@earendil-works/pi-coding-agent`, it lives in `vendor/pi/packages/coding-agent/src/extensions/mcp/tools.ts`, and a
+ * name that differed between the two products would be a tool a script half the docs describe cannot call. Diff them
+ * against that file when `vendor/pi` moves.
  */
 export function createMcpToolName(
 	integration: string,
@@ -161,9 +191,9 @@ function createMcpTool(integration: string, client: McpClient, tool: McpTool, na
 		// Not offered until tool_search loads it. Every MCP tool is deferred, without a per-tool policy: the list of a
 		// server is not a thing an operator should have to curate to keep the prefix small.
 		deferred: true,
-		// The split between the two callers, which the harness applies by itself: it bounds `output` and leaves
-		// `structuredOutput` as it is, so a model-issued call spends at most 20 KB and a script gets the whole result.
-		outputLimits: { maxBytes: OUTPUT_MAX_BYTES },
+		// The split between the two callers, which the harness applies by itself: `structuredOutput` is not bounded, so a
+		// script gets the whole result, and `output` is bounded by `execute` rather than by `outputLimits` because the bound
+		// is a middle removal the harness does not offer (`headAndTail`).
 		structuredOutputSchema: MCP_RESULT_SCHEMA,
 		// Unsafe, pi's default, stated because it matters: a call interrupted by a restart settles as interrupted rather
 		// than reaching a server twice. An MCP tool may create an issue; a rerun would create it twice.
@@ -177,12 +207,56 @@ function createMcpTool(integration: string, client: McpClient, tool: McpTool, na
 				content.push({ type: "text", text: `MCP tool ${integration}/${tool.name} returned an error` });
 			}
 			return {
-				output: content,
+				output: headAndTail(content),
 				structuredOutput: scriptResult(result),
 				...(result.isError === true ? { isError: true } : {}),
 			};
 		},
 	});
+}
+
+/**
+ * `content` with its text bounded to `MCP_OUTPUT_MAX_BYTES` by removing the middle: the head, one line saying how many
+ * bytes went, and the tail. Non-text blocks are kept as they are, so a server's images still arrive.
+ *
+ * The model's channel only, and the reason it is here rather than in the tool's `outputLimits`: the harness truncation
+ * keeps the head and drops the tail (`retain: "head"`), which loses the end of the thing a model most often needs — the
+ * summary, the last commit, the closing tag, the error at the bottom of the log. Both ends cost the same and say more.
+ * A result short enough to fit is returned untouched, block for block.
+ */
+function headAndTail(content: readonly LlmContent[]): LlmContent[] {
+	const text = content
+		.flatMap((item) => (item.type === "text" ? [item.text] : []))
+		.join("\n");
+	const bytes = Buffer.from(text, "utf8");
+	if (bytes.length <= MCP_OUTPUT_MAX_BYTES) return [...content];
+	// Two newlines around the marker, and the marker written with the largest number it can carry (`dropped <= total`),
+	// so the bound holds whatever the arithmetic lands on.
+	const reserve = Buffer.byteLength(droppedLine(bytes.length, bytes.length), "utf8") + 2;
+	const keeping = MCP_OUTPUT_MAX_BYTES - reserve;
+	const headEnd = startOfCharacter(bytes, Math.floor(keeping / 2));
+	const tailStart = endOfCharacter(bytes, bytes.length - (keeping - Math.floor(keeping / 2)));
+	const head = bytes.subarray(0, headEnd).toString("utf8");
+	const tail = bytes.subarray(tailStart).toString("utf8");
+	const dropped = bytes.length - Buffer.byteLength(head, "utf8") - Buffer.byteLength(tail, "utf8");
+	return [
+		{ type: "text", text: `${head}\n${droppedLine(dropped, bytes.length)}\n${tail}` },
+		...content.filter((item) => item.type !== "text"),
+	];
+}
+
+/** The nearest character start at or before `index`: a cut inside a UTF-8 sequence would be replacement characters. */
+function startOfCharacter(bytes: Buffer, index: number): number {
+	let at = Math.min(index, bytes.length);
+	while (at > 0 && (bytes[at] & 0xc0) === 0x80) at -= 1;
+	return at;
+}
+
+/** The nearest character start at or after `index`, for the same reason at the other end. */
+function endOfCharacter(bytes: Buffer, index: number): number {
+	let at = Math.max(index, 0);
+	while (at < bytes.length && (bytes[at] & 0xc0) === 0x80) at += 1;
+	return at;
 }
 
 /**
@@ -286,24 +360,39 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
 	return { extension: defineExtension({ name: "mcp", tools: registered }), tools: registered, close };
 }
 
-/** One client, connected, initialized and asked what it offers. It stays open for the tool calls that follow. */
+/**
+ * One client, connected, initialized and asked what it offers. It stays open for the tool calls that follow.
+ *
+ * Tried `CONNECT_ATTEMPTS` times: each attempt gets its own client, because a client that failed to connect is done —
+ * its transport is closed before the next try, so a half-open socket is not left behind by the attempt that worked. The
+ * last attempt's error is the one reported, because it is the one that describes the server as the boot found it.
+ */
 async function connect(
 	name: string,
 	url: string,
 	openTransport: McpTransportFactory,
 ): Promise<{ readonly client: McpClient; readonly listed: readonly McpTool[] }> {
-	const client = new McpClient({
-		name: CLIENT_NAME,
-		version: CLIENT_VERSION,
-		requestTimeoutMs: REQUEST_TIMEOUT_MS,
-	});
-	try {
-		await client.connect(openTransport(url));
-		return { client, listed: await client.listTools() };
-	} catch (error) {
-		await client.close().catch(() => {});
-		throw new Error(`MCP integration "${name}" at ${url}: ${errorMessage(error)}`);
+	let failure: unknown;
+	for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt += 1) {
+		const client = new McpClient({
+			name: CLIENT_NAME,
+			version: CLIENT_VERSION,
+			requestTimeoutMs: REQUEST_TIMEOUT_MS,
+		});
+		try {
+			await client.connect(openTransport(url));
+			return { client, listed: await client.listTools() };
+		} catch (error) {
+			failure = error;
+			await client.close().catch(() => {});
+			if (attempt < CONNECT_ATTEMPTS) await delay(RETRY_DELAY_MS);
+		}
 	}
+	throw new Error(`MCP integration "${name}" at ${url}: ${errorMessage(failure)}`);
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function httpTransport(url: string): McpTransport {
