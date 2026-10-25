@@ -73,11 +73,12 @@ export function connectAgent(options: ConnectOptions): AgentConnection {
 
 	open();
 	// Order matters: a reference created while the host has no upstream never binds. The first `connect` must
-	// happen first; later connects re-hold the existing reference.
-	const agent = host.get(AgentService, {});
+	// happen first; later connects re-hold the existing reference. A hold rather than an awaited get: the shell renders
+	// the reference's status while it is still loading.
+	const agent = host.hold(AgentService, {});
 
 	return {
-		agent: agent as Ref<typeof AgentService>,
+		agent,
 		state: () => state,
 		subscribe(listener) {
 			listeners.add(listener);

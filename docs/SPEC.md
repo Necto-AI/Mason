@@ -575,14 +575,14 @@ so instead of starting a second, empty-looking agent:
 files. That is what the machine boundary is for (§`docs/EXECUTION-TARGETS.md`), and it is why the microVM is the last
 slice rather than a nicety.
 
-### 4.2 Bridging `Conversation.viewState()` to Chord State on the Server
+### 4.2 Bridging the Conversation View to Chord State on the Server
 
 In `src/server/main.ts`, inside `server.serve(AgentService, (_input, _principal, self) => ...)`:
 ```ts
 const viewResource = self.resource("viewState", {
   version: 1,
   open: async ({ signal }) => {
-    return await rootConversation.viewState(withAbortSignal(BACKGROUND_CONTEXT, signal));
+    return await runtime.viewState(withAbortSignal(signal, BACKGROUND_CONTEXT));
   },
   close: (vs) => vs.dispose(),
 });
@@ -601,6 +601,10 @@ self.on("viewSync", viewResource, (nextView, ctx) => {
   agentStatus.replace(ctx, statusFor(nextView));
 });
 ```
+`runtime.viewState()` is `Conversation.watch()` (`@earendil-works/pi-durable`) fanned out: a watch takes one listener,
+so `src/server/runtime.ts` keeps the subscriber set, delivers the current view to each new subscriber the way the
+replicated state it replaces hydrated its own, and stops the watch in `dispose()`. A read that should leave no watch
+behind — `/api/status` — is `runtime.viewSnapshot()`.
 `projectTranscript()` / `projectQueued()` are pure functions in `src/server/projection.ts`; `statusFor()` is
 `deriveAgentStatus()` from `src/server/status.ts`: a pure function of the committed view
 (`pi.live`, `pi.inbox`, `pi.agent`), the hook list and the model reference.
@@ -779,10 +783,10 @@ on message quality against `evals/rubric.md`. Scenario shape, flags, trace field
 
 ## 7. Notes from building this (Chord behaviour worth knowing)
 
-1. **A reference created before the host has an upstream never binds.** `createHost()` (client) + `host.get()`
-   + `host.connect()` leaves the reference in `loading` forever: the re-hold pass in `connect()` only visits
-   references that already lost a link. The browser client therefore connects first and takes the reference
-   afterwards (`src/web/client.ts`); later reconnects re-hold that same reference.
+1. **A reference created before the host has an upstream never binds.** `createHost()` (client) + `host.hold()`
+   (or an awaited `host.get()`) + `host.connect()` leaves the reference in `loading` forever: the re-hold pass in
+   `connect()` only visits references that already lost a link. The browser client therefore connects first and takes
+   the reference afterwards (`src/web/client.ts`); later reconnects re-hold that same reference.
 2. **A remote state hydrates only while subscribed.** `ref.member.value` is `undefined` until something
    subscribes, and the first delivery to a new subscriber is `undefined` before the snapshot arrives. Every
    client keeps its `view` / `agentStatus` subscriptions (and its last snapshot) for the lifetime of the page.
