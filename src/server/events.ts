@@ -23,7 +23,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export const EVENTS_PATH = "/api/events/";
 
 /** `sha256=<hex hmac-sha256 of the raw body>`, the shape GitHub already sends: a header's name is a sender's choice, its
- * form is mason's, and `connectors.ts` verifies GitHub's with this same function. */
+ * form is mason's. */
 export const EVENT_SIGNATURE_HEADER = "x-mason-signature";
 
 /** A `payload` is a paragraph a person reads, not a document: far more than a real event, far less than a prompt can hold. */

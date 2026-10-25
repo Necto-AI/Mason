@@ -369,10 +369,8 @@ export function builtinHooks(): Array<Omit<EventHookConfig, "fireCount">> {
 				"Your previous attempt failed before it finished, so the task is still open. Resume it from where it stopped: keep what is already done, redo only the step that failed, and do not start over from scratch. The failure was:\n{{payload}}",
 		},
 		{
-			// The other half of the GitHub connector: the connector authenticates a delivery and compacts it, this hook
-			// decides what to do about it. Disabled is not an option — a connector with no hook to fire would accept a
-			// delivery and drop it — so it is enabled whenever the connector is configured, and a delivery is the only
-			// thing that can make it fire.
+			// Inert until something wakes it: no sender in this build fires it, so nothing here is a second door. It stays as
+			// the natural target for a relay that compacts a repository's events into one trigger delivery.
 			id: "github-activity",
 			name: "GitHub activity",
 			description: "An issue or pull request event from a repository: what happened, and whether it needs an answer.",
