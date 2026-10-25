@@ -406,6 +406,10 @@ describe("the integrations route", () => {
 			houseHome: paths.home,
 			faux: true,
 			onReport: () => {},
+			// A boot with a tools face reaches for it, so the test hands it a transport that is down instead of a port.
+			mcpTransport: () => {
+				throw new Error("no container in a test");
+			},
 		});
 		try {
 			const url = `http://127.0.0.1:${server.port}/api/integrations`;
@@ -423,10 +427,21 @@ describe("the integrations route", () => {
 				hasTrigger: false,
 				connected: false,
 				tools: 0,
+				error: 'MCP integration "github" at http://mason-github:8082/mcp: no container in a test',
+			});
+			// A disabled integration is not attempted at all, so it has no health to report: the route says what is, not what
+			// would be if the switch were flipped.
+			assert.deepEqual(body.integrations[0], {
+				name: "docs",
+				enabled: false,
+				hasTools: true,
+				hasTrigger: false,
+				connected: false,
+				tools: 0,
 				error: null,
 			});
 			// The shape is the boot's, not the file's: a change after boot is a restart, and nothing here saw it.
-			assert.deepEqual(integrationStatus().size, 0, "stage A connects nothing, so nothing has a health yet");
+			assert.deepEqual([...integrationStatus().keys()], ["github"], "the boot recorded what it tried");
 		} finally {
 			await server.close();
 		}
