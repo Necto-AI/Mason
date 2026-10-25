@@ -17,11 +17,15 @@
  * behaviour, for the one integration the team cannot work without.
  *
  * Results are mapped with `toLlmContent`, so text and images pass through and audio, resource links and binary
- * resources become a short placeholder. A declared call's output is bounded to ~20 KB by the harness; stage B2 decides
- * how a code-mode script gets the whole result, because the harness applies those limits to a nested result too.
+ * resources become a short placeholder. Two callers read a result differently, and the harness makes that a declaration
+ * rather than a special case: `output` is what the model is shown and is bounded to 20 KB, while `structuredOutput` is
+ * what a program receives and is not bounded at all. So every MCP tool declares `structuredOutputSchema` and returns the
+ * server's own result there — a code-mode script gets all 200 KB of a page and decides what the model needs to hear.
  */
 import { createHash } from "node:crypto";
+import type { JsonValue } from "@earendil-works/chord";
 import {
+	type CallToolResult,
 	McpClient,
 	type McpTransport,
 	StreamableHttpTransport,
@@ -41,9 +45,44 @@ const MAX_TOOL_NAME_LENGTH = 64;
 const REQUEST_TIMEOUT_MS = 15_000;
 /**
  * What one declared call returns. A 200 KB tool result is context nobody asked for, and the model can be given the
- * same capability in pieces; the full result stays reachable in stage B2 through code mode.
+ * same capability in pieces; a code-mode script, which can filter before the model reads anything, gets it all.
  */
 const OUTPUT_MAX_BYTES = 20_000;
+/**
+ * One block of the server's own `content`, as the coding agent declares it: a compact type carrying the fields text and
+ * image blocks have, `additionalProperties` so a block the protocol adds later still passes. Scripts read
+ * `content[0].text` and hand an image block to `image()` as it is.
+ */
+const CONTENT_BLOCK_SCHEMA = {
+	type: "object",
+	properties: {
+		type: { enum: ["text", "image", "audio", "resource_link", "resource"] },
+		text: { type: "string" },
+		data: { type: "string" },
+		mimeType: { type: "string" },
+	},
+	required: ["type"],
+	additionalProperties: true,
+};
+/**
+ * What a script receives from an MCP tool: the server's result without `_meta`, untruncated — the `CallToolResult` as
+ * the coding agent declares it, so a script here and a script in the coding agent read the same thing. `structuredContent`
+ * is left open because a server may send any JSON value, with or without declaring a schema for it.
+ *
+ * A plain JSON Schema in `Type.Unsafe` rather than a `Type.Object`, like the server's input schema below: the harness
+ * validates `structuredOutput` against it with a JSON Schema check, so it is carried as the server's protocol shapes it,
+ * not compiled into TypeBox's own kinds.
+ */
+const MCP_RESULT_SCHEMA = Type.Unsafe<JsonValue>({
+	type: "object",
+	properties: {
+		content: { type: "array", items: CONTENT_BLOCK_SCHEMA },
+		structuredContent: {},
+		isError: { type: "boolean" },
+	},
+	required: ["content", "isError"],
+	additionalProperties: true,
+});
 /** Who the server sees on the wire. Not a credential: this slice has none (the network is the boundary). */
 const CLIENT_NAME = "mason";
 const CLIENT_VERSION = "0.1.0";
@@ -71,6 +110,11 @@ export interface McpTools {
 	readonly extension: Extension | undefined;
 	/** Every tool registered, in declaration order. */
 	readonly tools: readonly ToolRegistration[];
+	/**
+	 * Closes every client this boot opened. The tools hold their client, and a client holds a socket, so a runtime that
+	 * closed without this would leave one connection per integration behind for the life of the process.
+	 */
+	close(): Promise<void>;
 }
 
 /**
@@ -116,9 +160,10 @@ function createMcpTool(integration: string, client: McpClient, tool: McpTool, na
 		// Not offered until tool_search loads it. Every MCP tool is deferred, without a per-tool policy: the list of a
 		// server is not a thing an operator should have to curate to keep the prefix small.
 		deferred: true,
-		// The declared call is bounded here. Stage B2 must decide how a code-mode script gets the full result: the harness
-		// applies these limits to a nested result as well, so a script calling this tool would see the same 20 KB.
+		// The split between the two callers, which the harness applies by itself: it bounds `output` and leaves
+		// `structuredOutput` as it is, so a model-issued call spends at most 20 KB and a script gets the whole result.
 		outputLimits: { maxBytes: OUTPUT_MAX_BYTES },
+		structuredOutputSchema: MCP_RESULT_SCHEMA,
 		// Unsafe, pi's default, stated because it matters: a call interrupted by a restart settles as interrupted rather
 		// than reaching a server twice. An MCP tool may create an issue; a rerun would create it twice.
 		replay: "unsafe",
@@ -130,9 +175,37 @@ function createMcpTool(integration: string, client: McpClient, tool: McpTool, na
 			if (result.isError === true && !content.some((item) => item.type === "text" && item.text !== "")) {
 				content.push({ type: "text", text: `MCP tool ${integration}/${tool.name} returned an error` });
 			}
-			return { output: content, ...(result.isError === true ? { isError: true } : {}) };
+			return {
+				output: content,
+				structuredOutput: scriptResult(result),
+				...(result.isError === true ? { isError: true } : {}),
+			};
 		},
 	});
+}
+
+/**
+ * The server's result as a program reads it: its own content blocks, its structured content, and whether it failed.
+ *
+ * The blocks are the server's, not `toLlmContent`'s: a script can decide about an audio block or a resource link, and
+ * the model's view has already flattened those into a placeholder. `_meta` is dropped as the coding agent drops it: it
+ * is transport bookkeeping, and a script that wanted it could not act on it anyway.
+ */
+function scriptResult(result: CallToolResult): JsonValue {
+	return jsonCopy({
+		content: result.content,
+		...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+		isError: result.isError === true,
+	});
+}
+
+/**
+ * `value` as the JSON it already is. The result came off the wire parsed by pi-mcp and is about to be stored in the
+ * call's document, which serializes it anyway; the round trip is what turns MCP's own block interfaces into the plain
+ * JSON `JsonValue` names, and it also stops a script's value from aliasing the client's objects.
+ */
+function jsonCopy(value: unknown): JsonValue {
+	return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 /** What one integration's attempt came to: its client and tools, or why there is none. */
@@ -157,7 +230,7 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
 			integration.enabled && integration.tools !== undefined ? [{ name, tools: integration.tools }] : [],
 		)
 		.sort((left, right) => (left.name < right.name ? -1 : 1));
-	if (wanted.length === 0) return { extension: undefined, tools: [] };
+	if (wanted.length === 0) return { extension: undefined, tools: [], close: async () => {} };
 	const log = options.log ?? ((line: string) => console.log(line));
 	const openTransport = options.openTransport ?? httpTransport;
 	// In parallel: twenty integrations must not mean twenty timeouts of boot latency.
@@ -193,7 +266,15 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
 		statuses.set(result.name, { connected: true, tools: result.listed.length, error: null });
 		log(`[mcp] ${result.name}: connected, ${result.listed.length} tool${result.listed.length === 1 ? "" : "s"}`);
 	}
+	const clients = reached.flatMap((result) => ("client" in result ? [result.client] : []));
+	const close = async () => {
+		// One client refusing to close must not keep the others open, and there is nothing to report: the process is
+		// shutting down, and a half-closed socket dies with it.
+		await Promise.all(clients.map((client) => client.close().catch(() => {})));
+	};
 	if (refused !== undefined) {
+		// The clients that did connect have nobody left to serve: the boot refuses, so they close with it.
+		await close();
 		throw new Error(
 			`integration "${refused.name}" is required and could not be reached (${refused.error}): the boot refuses ` +
 				"rather than run with fewer tools than the operator said it cannot work without",
@@ -201,7 +282,7 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
 	}
 	// The name is fixed and the tools are the boot's: a conversation selecting it gets exactly these, and a boot with no
 	// integration installs nothing at all — the surface without MCP is the surface before it.
-	return { extension: defineExtension({ name: "mcp", tools: registered }), tools: registered };
+	return { extension: defineExtension({ name: "mcp", tools: registered }), tools: registered, close };
 }
 
 /** One client, connected, initialized and asked what it offers. It stays open for the tool calls that follow. */
