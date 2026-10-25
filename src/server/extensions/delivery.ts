@@ -6,6 +6,13 @@
  * has to return. The turn carries on afterwards, which lets the model send a progress note and then the result in
  * the same turn.
  *
+ * Delivery is a top-level act, because the projection renders a message only out of a call the model made itself. A
+ * call made from inside another tool — `tools.send_to_user()` in a code-mode script — is a nested call whose result
+ * goes back to the script instead of into the transcript. Nothing about it reaches the reader, yet the script would be
+ * told "delivered" and go on as if the reader had the message: the turn ends with the projection's "The agent finished
+ * without sending you a message." notice, which is the truth discovered too late. So `execute()` refuses one, with the
+ * instruction that puts the message where the reader is.
+ *
  * `replay` is set explicitly, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would
  * deliver the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error
  * result, which the client shows as a bubble that may not have reached the reader.
@@ -14,6 +21,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { DELIVERY_REMINDER, MESSAGE_TOOL, WIDGET_TOOL } from "../../shared/contract.ts";
+import { nestedRefusal } from "./nested.ts";
 
 const SendToUserParams = Type.Object({
 	message: Type.String({
@@ -22,19 +30,28 @@ const SendToUserParams = Type.Object({
 	}),
 });
 
+/**
+ * What a script is told instead of a delivery nobody would see: what happened, and what to do about it. Code mode turns
+ * an error result into a rejection (`vendor/pi/packages/durable/src/codemode/codemode.ts:280-291`), so the text has to
+ * say the call rejects — a script that read it as advice would carry on believing the reader had been written to.
+ */
+const DELIVERY_NESTED_REFUSAL =
+	"send_to_user cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and send it with send_to_user directly.";
+
 export const sendToUserTool = defineTool({
 	name: MESSAGE_TOOL,
 	description:
-		"Send the user a message. Only messages sent this way are seen by the user; everything else you write in a turn is working notes. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
+		"Send the user a message. Only messages sent this way are seen by the user; everything else you write in a turn is working notes. Call this directly, never from inside a script: a message sent by a nested call never reaches the reader. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
 	parameters: SendToUserParams,
 	replay: "unsafe",
-	// The commit is the delivery: nothing to do, so nothing to undo, retry or wait for.
-	execute: async ({ message }) => ({
-		output: [{ type: "text", text: "delivered" }],
-		details: { length: message.length },
-	}),
+	// The commit is the delivery: nothing to do, so nothing to undo, retry or wait for. A nested call has nothing to
+	// commit at all, which is why it is answered with the instruction rather than with "delivered".
+	execute: async ({ message }, api) => {
+		const refusal = nestedRefusal(api, DELIVERY_NESTED_REFUSAL);
+		if (refusal !== undefined) return refusal;
+		return { output: [{ type: "text", text: "delivered" }], details: { length: message.length } };
+	},
 });
-
 
 /**
  * What the turn did so far, read from the only thing a hook can see: the model's own context.
@@ -98,6 +115,9 @@ const REMINDED = "delivery.reminded";
  * and the model gets one more chance to say what it meant to say. Once per turn, because the reminder is itself a
  * `pi.user` entry and the next generation can see it; a second silent answer is left to the projection, which shows a
  * notice rather than nothing.
+ *
+ * Every delivery this walk can see is one the reader can see, because a nested one is refused: the gate and the
+ * projection read the same top-level call.
  */
 export const deliveryGate = hook(GenerationTask, {
 	beforeRequest: async ({ messages }, api, context) => {
