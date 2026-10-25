@@ -34,7 +34,7 @@ journal, skills, worker definitions, workspace.
 _Avoid_: user data, workspace (the workspace is one directory inside it)
 
 **service-owned files**:
-The part of the home the bot never sees: soul, roster, credentials, connector secrets, the database, keys.
+The part of the home the bot never sees: soul, roster, credentials, integration secrets, the database, keys.
 _Avoid_: config, internal state
 
 **workspace**:
@@ -91,7 +91,7 @@ The model's tool calls and their results, between two generations of the same tu
 _Avoid_: tool step, iteration
 
 **hook**:
-Something outside the conversation that can wake the bot: a webhook, a connector event, a schedule.
+Something outside the conversation that can wake the bot: an integration event, a webhook, a schedule.
 _Avoid_: trigger, event source, listener
 
 **fire**:
@@ -105,6 +105,21 @@ _Avoid_: cron job, schedule, timer
 **delivery**:
 The one path by which anything reaches a person. A turn with nothing worth saying delivers nothing.
 _Avoid_: message, response, output
+
+## Integrations
+
+**integration**:
+Another system mason is connected to. It has two halves, either of which may be absent: tools it lends the bot, and
+a trigger that wakes the bot with its events.
+_Avoid_: connector, plugin, client, app
+
+**trigger**:
+The half of an integration that wakes the bot: one authenticated event becomes one fire.
+_Avoid_: webhook, connector, source, listener
+
+**tool surface**:
+The tools one integration lends the bot, named before the conversation starts and fixed for its life.
+_Avoid_: tool list, MCP server (that is the process, not the surface), plugin API
 
 ## The room
 
