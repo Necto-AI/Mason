@@ -21,7 +21,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 | Half | What is in it | Where it is mounted |
 |---|---|---|
 | `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
-| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
@@ -229,7 +229,7 @@ history begins at the migration if the home was migrated, since the pre-split hi
 home root, which is not a volume. `mason-service` is the server: `soul.md`,
 `roster.json`, `config.json` (the token hashes — no plaintext token lives here), `integrations.json` (the integrations
 mason reaches, and each one's trigger secret), `data/agent.sqlite`
-(the transcript and the hooks), `data/connectors.json`, `data/seeded-skills.json` (which shipped skills this home was
+(the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.

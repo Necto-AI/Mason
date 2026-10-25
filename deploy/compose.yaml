@@ -44,7 +44,7 @@ services:
       # skills, worker definitions and workspace, and the repository its memory is committed to. One path on two
       # machines is what makes a tool's cwd, a `read` and a `git commit` mean the same thing on both.
       #
-      # `service/` is deliberately absent: no soul, no roster, no token hashes, no connector secret, no database, no SSH
+      # `service/` is deliberately absent: no soul, no roster, no token hashes, no trigger secret, no database, no SSH
       # key, no provider credential. That absence is the boundary — a mount, not a mode bit that `chmod` can undo.
       - mason-agent:/home/mason/.mason/agent
     # No daemon in the image and none started here: mason uploads `pi-env` over the connection and verifies its SHA-256
@@ -112,7 +112,7 @@ services:
       # The dated memory log is `agent/log/YYYY-MM-DD.md` in the server's local time, so the container's zone is the reader's.
       TZ: ${TZ:-UTC}
     volumes:
-      # The server's own state: soul, roster, config, connectors, the database, the SSH key, the copied credential.
+      # The server's own state: soul, roster, config, integrations, the database, the SSH key, the copied credential.
       - mason-service:/home/mason/.mason/service
       # The agent's half, shared with mason-env at the same path. Writable here because the server reads it through the
       # execution environment and writes the profile's first-run defaults — but the boundary that matters is that
@@ -179,8 +179,8 @@ volumes:
   # Mounted into both containers at /home/mason/.mason/agent. Back this up.
   mason-agent:
     name: mason-agent
-  # The service: soul.md, roster.json, config.json (the token hashes), integrations.json, connectors.json,
-  # data/agent.sqlite, ssh/ (the env key) and pi/ (the copied provider credential). Mounted only into the mason
+  # The service: soul.md, roster.json, config.json (the token hashes), integrations.json (the services and their trigger
+  # secrets), data/agent.sqlite, ssh/ (the env key) and pi/ (the copied provider credential). Mounted only into the mason
   # container. Back this up too, encrypted: it holds the provider key.
   mason-service:
     name: mason-service
