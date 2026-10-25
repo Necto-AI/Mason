@@ -12,6 +12,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
+import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "../src/server/prompt.ts";
 import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
 
@@ -31,6 +32,13 @@ test("the delivery extension rides in the base extension list, not behind a togg
 		BASE_EXTENSIONS.some((extension) => extension.name === Delivery.name),
 		"every conversation can speak",
 	);
+});
+
+test("the tool descriptions say the rule the refusal enforces: call it directly, never from inside a script", () => {
+	// The refusal is the backstop for a model that sends from a script anyway; the description is what asks it not to,
+	// so the sentence the refusal answers is pinned here, for both tools that reach the reader.
+	assert.match(sendToUserTool.description, /never from inside a script/);
+	assert.match(generateSandboxedUiTool.description, /never from inside a script/);
 });
 
 /** The same agent over the same storage in the same directory: a restart. */
@@ -186,8 +194,30 @@ test("a selection that is already complete is not written to", async () => {
 });
 
 test("execute only returns: the committed call is the delivery", async () => {
-	const result = await sendToUserTool.execute({ message: "Standup moved to nine." }, {} as never, {} as never);
+	// A model-issued call: its own ID, with no `/` in it, so a script's refusal does not apply.
+	const result = await sendToUserTool.execute(
+		{ message: "Standup moved to nine." },
+		{ callId: "call-7" } as never,
+		{} as never,
+	);
 	assert.deepEqual(result, { output: [{ type: "text", text: "delivered" }], details: { length: 22 } });
 	assert.equal(result.isError, undefined);
 	assert.equal(result.control, undefined);
+});
+
+/** The text of a result, as the model reads it: the only channel a refusal has. */
+function outputText(output: readonly { readonly type: string; readonly text?: string }[] | undefined): string {
+	return (output ?? []).flatMap((item) => (item.type === "text" ? [item.text ?? ""] : [])).join("");
+}
+
+test("a call made from inside a script is refused, and told where the message has to go", async () => {
+	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
+	const result = await sendToUserTool.execute(
+		{ message: "Standup moved to nine." },
+		{ callId: "call-7/1" } as never,
+		{} as never,
+	);
+	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
+	assert.match(outputText(result.output), /cannot deliver from inside a script/);
+	assert.match(outputText(result.output), /send it with send_to_user directly/, "the model is told what to do");
 });
