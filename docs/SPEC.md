@@ -245,6 +245,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # Credentials that may talk to the server: one hashed token per device (§4.1b)
     ├── roster.json         # Who is in the room: the names a browser may claim, read per request (§4.1b)
+    ├── integrations.json   # The services mason reaches: each entry's MCP endpoint and trigger, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
     └── data/               # agent.sqlite, hooks.json and connectors.json (§4.1c)
@@ -259,9 +260,14 @@ opened or when a pre-split home is migrated; `npm run doctor -- migrate` moves a
 shape, freezes the old repository at the home root (both halves leave its index and enter its `.gitignore`) and starts
 the agent's history fresh in `agent/`.
 
-The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json` and `agent.sqlite` are
-`0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither is a thing to
-leave readable by every other account on the machine.
+The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json`, `integrations.json` and
+`agent.sqlite` are `0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither
+is a thing to leave readable by every other account on the machine.
+
+`integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a trigger that wakes
+it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
+there and a list that changed under a running turn would re-price the prefix and change what the model can do between
+two messages of one conversation.
 
 The skills walk is one accepted deviation from the rest of this section: it reads symbolic links as nothing (a link is
 skipped rather than followed) and it does not honour a `.gitignore` inside `agent/skills/`, so a skill kept out of the
