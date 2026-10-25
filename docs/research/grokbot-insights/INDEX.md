@@ -22,6 +22,10 @@ Run: 11 parallel research subagents, model `opencode-go/deepseek-v4.1-flash`, th
 
 `12` and `13` are companions, not thirteenth and fourteenth lecture notes: they distill *other* sources — xAI's shipped changelog (a video transcript) and a talk on harness engineering itself — so they say what shipped and what the discipline now argues, rather than what the guest lecture argued. `12` reads as the gap list against what shipped; `13` is reference only and proposes no change.
 
+**Sibling set:** [`../always-on-agents/`](../always-on-agents/INDEX.md) (2026-10-26) is the product-side companion —
+what Grok Bot, Muse, dots, Hermes Agent, OpenBot and OpenClaw actually built, cited to vendor pages and source code.
+Where the two overlap on Grok Bot, that set carries the technical facts these notes do not.
+
 ## Cross-cutting conclusions (from all 11 files)
 
 1. **pi-durable already covers the durable-agent hard part** — the gaps are app-level edges: trigger mapping, schedules-as-tasks, channels, batching (10, 08).
