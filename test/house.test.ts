@@ -78,6 +78,8 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			soul: join(home, "service", "soul.md"),
 			config: join(home, "service", "config.json"),
 			roster: join(home, "service", "roster.json"),
+			// Later than the split: no home from before it has one, so no migration carries it.
+			integrations: join(home, "service", "integrations.json"),
 			sshDir: join(home, "service", "ssh"),
 			piDir: join(home, "service", "pi"),
 			dataDir: join(home, "service", "data"),
