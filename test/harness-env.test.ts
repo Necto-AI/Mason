@@ -59,12 +59,7 @@ function openFor(
 
 /** The transcript as the client receives it: the projection, not the entries behind it. */
 async function readTranscript(runtime: AgentRuntime) {
-	const view = await runtime.viewState(BACKGROUND_CONTEXT);
-	try {
-		return projectTranscript(view.value);
-	} finally {
-		view.dispose();
-	}
+	return projectTranscript(await runtime.viewSnapshot(BACKGROUND_CONTEXT));
 }
 
 async function readEntries(runtime: AgentRuntime) {

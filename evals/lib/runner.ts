@@ -57,14 +57,14 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 			let deliveredBefore = 0;
 			for (const turn of scenario.turns) {
 				const status = await submit(conversation, turn, options.timeoutMs ?? 180_000);
-				const view = (await runtime.viewState(CONTEXT)).value;
+				const view = await runtime.viewSnapshot(CONTEXT);
 				// The view is cumulative: what this turn delivered is the growth since the last one, so a later turn
 				// that says nothing cannot borrow the message an earlier turn already delivered.
 				const deliveredNow = projectTranscript(view).filter((item) => item.kind === "delivered").length;
 				turns.push({ delivered: deliveredNow - deliveredBefore, status });
 				deliveredBefore = deliveredNow;
 			}
-			const view = (await runtime.viewState(CONTEXT)).value;
+			const view = await runtime.viewSnapshot(CONTEXT);
 			return { trace: collect(scenario, options.model, view, turns), logText: await readLog(directory) };
 		} finally {
 			await runtime.close();
