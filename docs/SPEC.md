@@ -575,14 +575,14 @@ so instead of starting a second, empty-looking agent:
 files. That is what the machine boundary is for (§`docs/EXECUTION-TARGETS.md`), and it is why the microVM is the last
 slice rather than a nicety.
 
-### 4.2 Bridging `Conversation.viewState()` to Chord State on the Server
+### 4.2 Bridging the Conversation View to Chord State on the Server
 
 In `src/server/main.ts`, inside `server.serve(AgentService, (_input, _principal, self) => ...)`:
 ```ts
 const viewResource = self.resource("viewState", {
   version: 1,
   open: async ({ signal }) => {
-    return await rootConversation.viewState(withAbortSignal(BACKGROUND_CONTEXT, signal));
+    return await runtime.viewState(withAbortSignal(signal, BACKGROUND_CONTEXT));
   },
   close: (vs) => vs.dispose(),
 });
@@ -601,6 +601,10 @@ self.on("viewSync", viewResource, (nextView, ctx) => {
   agentStatus.replace(ctx, statusFor(nextView));
 });
 ```
+`runtime.viewState()` is `Conversation.watch()` (`@earendil-works/pi-durable`) fanned out: a watch takes one listener,
+so `src/server/runtime.ts` keeps the subscriber set, delivers the current view to each new subscriber the way the
+replicated state it replaces hydrated its own, and stops the watch in `dispose()`. A read that should leave no watch
+behind — `/api/status` — is `runtime.viewSnapshot()`.
 `projectTranscript()` / `projectQueued()` are pure functions in `src/server/projection.ts`; `statusFor()` is
 `deriveAgentStatus()` from `src/server/status.ts`: a pure function of the committed view
 (`pi.live`, `pi.inbox`, `pi.agent`), the hook list and the model reference.

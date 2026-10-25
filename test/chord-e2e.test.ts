@@ -150,7 +150,7 @@ async function openClient(
 	});
 	const agent = browser.get(AgentService, {}) as unknown as Ref;
 	const state: State = { runStatuses: [] };
-	// The raw view, subscribed server-side: the tests assert both what the client is sent and what stays behind.
+	// The raw view, watched server-side: the tests assert both what the client is sent and what stays behind.
 	const raw = await server.runtime.viewState(BACKGROUND_CONTEXT);
 	raw.subscribe((value) => {
 		state.serverView = value;
@@ -172,7 +172,7 @@ async function openClient(
 		agent,
 		state,
 		async close() {
-			raw.dispose();
+			await raw.dispose();
 			await browser.close();
 			await server.close();
 			if (previousHouseHome === undefined) delete process.env.MASON_HOME;
