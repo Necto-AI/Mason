@@ -330,6 +330,45 @@ describe("the integration command", () => {
 		assert.ok(!listed.stdout.includes(secret.slice(0, 8)), "not even a prefix of one");
 	});
 
+	it("mints a trigger secret once, stores it 0600, and keeps the rest of the entry", async () => {
+		const paths = await temporaryHome();
+		await writeIntegration(paths, "telegram", {
+			enabled: true,
+			description: "The team's Telegram group",
+			tools: { url: "http://mason-telegram:8082/mcp" },
+		});
+
+		const minted = await integration(paths.home, "secret", "telegram", "--hook", "workspace-check");
+		const secret = /^ {2}([0-9a-f]{64})$/m.exec(minted.stdout)?.[1];
+		assert.ok(secret, `the secret is printed once, on a line of its own: ${minted.stdout}`);
+		assert.equal(minted.stdout.split(secret).length - 1, 1, "one delivery of one secret, never a second mention");
+		const stored = (await readIntegrations(paths)).integrations.telegram;
+		assert.equal(stored?.trigger?.hook, "workspace-check");
+		assert.equal(stored?.trigger?.secret, secret);
+		assert.deepEqual(stored?.tools, { url: "http://mason-telegram:8082/mcp" }, "the rest of the entry is kept");
+		assert.equal((await stat(paths.integrations)).mode & 0o777, 0o600);
+
+		// A rotation replaces the key and keeps the hook, so the door's identity does not move with its secret.
+		const rotated = await integration(paths.home, "secret", "telegram");
+		const rotatedSecret = /^ {2}([0-9a-f]{64})$/m.exec(rotated.stdout)?.[1];
+		assert.ok(rotatedSecret);
+		assert.notEqual(rotatedSecret, secret);
+		assert.equal((await readIntegrations(paths)).integrations.telegram?.trigger?.hook, "workspace-check");
+
+		// A --hook beside an existing trigger is refused rather than silently ignored, and a first secret needs one.
+		await assert.rejects(
+			() => integration(paths.home, "secret", "telegram", "--hook", "morning-brief"),
+			/already has a trigger/,
+		);
+		await writeIntegration(paths, "docs", { enabled: true, description: "The docs", tools: { url: "http://mason-docs:8080/mcp" } });
+		await assert.rejects(() => integration(paths.home, "secret", "docs"), /--hook/);
+
+		// The list and the refusal name the hook and never the secret.
+		const listed = (await integration(paths.home, "list")).stdout;
+		assert.match(listed, /trigger workspace-check/);
+		assert.ok(!listed.includes(rotatedSecret), "a secret in a printed line is a secret in a log");
+	});
+
 	it("prints the home and the file it edits when it is asked how to be used", async () => {
 		const paths = await temporaryHome();
 		// No command: the usage block, which is where a person looks first.
@@ -440,7 +479,7 @@ describe("the integrations route", () => {
 						enabled: true,
 						description: "The internal documentation server",
 						tools: { url: "http://mason-docs:8080/mcp" },
-						trigger: { hook: "docs-activity", secret: "s".repeat(32) },
+						trigger: { hook: "workspace-check", secret: "s".repeat(32) },
 					},
 				},
 			}),
