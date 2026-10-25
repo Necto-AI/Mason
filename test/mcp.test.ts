@@ -380,6 +380,10 @@ describe("the boot", () => {
 		const bare = await boot(bareDirectory);
 		try {
 			assert.deepEqual(await declared(connected.runtime), await declared(bare.runtime), "a connected server costs no prefix");
+			// Code mode is in both lists: it is installed at boot whatever any integration offers, so the surface moves once,
+			// in the commit that added it, and never when a container appears.
+			assert.ok((await declared(connected.runtime)).includes("codemode"), "code mode is offered either way");
+			assert.ok((await declared(bare.runtime)).includes("codemode"));
 			assert.deepEqual(await deferred(connected.runtime), ["mcp__github__issues_create", SEARCH_TOOL_NAME]);
 			assert.deepEqual(await deferred(bare.runtime), []);
 		} finally {

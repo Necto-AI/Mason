@@ -16,6 +16,12 @@ import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.t
 import { DEFAULT_SOUL, Prompt } from "../src/server/prompt.ts";
 import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
 
+/**
+ * Every extension a boot installs unconditionally, in order: the base list, then code mode, which `openAgentRuntime`
+ * builds per boot because its sandbox dies with the runtime. Both are what a stored selection is repaired with.
+ */
+const BOOT_EXTENSIONS: readonly string[] = [...BASE_EXTENSIONS.map((extension) => extension.name), "codemode"];
+
 test("send_to_user is replay-unsafe, so a restart never delivers the same message twice", () => {
 	assert.equal(sendToUserTool.name, "send_to_user");
 	// Explicit in the registration, though it is pi's default: an interrupted call settles as an `interrupted`
@@ -89,7 +95,7 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 			const stored = [CodingTools.name, Prompt.name];
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				[...stored, ...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => !stored.includes(name))],
+				[...stored, ...BOOT_EXTENSIONS.filter((name) => !stored.includes(name))],
 				"the missing base names are appended in base order, and the stored order survives",
 			);
 			assert.ok(
@@ -122,10 +128,7 @@ test("a selection missing several base names gets them back in base order", asyn
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				[
-					CodingTools.name,
-					...BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== CodingTools.name),
-				],
+				[CodingTools.name, ...BOOT_EXTENSIONS.filter((name) => name !== CodingTools.name)],
 				"the missing base names are appended in base order",
 			);
 		} finally {
@@ -160,7 +163,7 @@ test("a selection stored as an edit is left as it is", async () => {
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
-				BASE_EXTENSIONS.map((extension) => extension.name).filter((name) => name !== Prompt.name),
+				BOOT_EXTENSIONS.filter((name) => name !== Prompt.name),
 				"the edit still removes what it removed, and the base selection still speaks",
 			);
 		} finally {
