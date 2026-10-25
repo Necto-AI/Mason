@@ -369,8 +369,8 @@ export function builtinHooks(): Array<Omit<EventHookConfig, "fireCount">> {
 				"Your previous attempt failed before it finished, so the task is still open. Resume it from where it stopped: keep what is already done, redo only the step that failed, and do not start over from scratch. The failure was:\n{{payload}}",
 		},
 		{
-			// Inert until something wakes it: no sender in this build fires it, so nothing here is a second door. It stays as
-			// the natural target for a relay that compacts a repository's events into one trigger delivery.
+			// Inert until a configuration names it: no shipped configuration fires it, though an integration's trigger may.
+			// It stays as the natural target for a relay that compacts a repository's events into one trigger delivery.
 			id: "github-activity",
 			name: "GitHub activity",
 			description: "An issue or pull request event from a repository: what happened, and whether it needs an answer.",

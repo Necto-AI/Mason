@@ -145,7 +145,7 @@ reaches into private helpers of the roster or asserts the exact cookie string.
 ## Out of Scope
 
 - File uploads, attachments, and any change to what a message can carry beyond its text.
-- Connectors, hooks that fire from outside, and any access to GitHub, Yandex Disk, or mail.
+- Integrations, hooks that fire from outside, and any access to GitHub, Yandex Disk, or mail.
 - Per-person tokens, per-person conversations, private threads, DMs, or any partitioning of memory.
 - Presence ("who is online"), typing indicators, read receipts, and mention autocompletion.
 - Deleting or editing a message after it is sent.

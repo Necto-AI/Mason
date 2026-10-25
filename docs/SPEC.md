@@ -209,11 +209,22 @@ export interface EventHookConfig {
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no sender in this build fires it, and a hook nothing calls costs nothing.
+  - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though an integration's trigger may name it, and a hook nothing calls costs nothing.
   - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
 - **`integration.trigger`: the generic event door** (`src/server/events.ts`, `src/server/main.ts`). An integration's trigger is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It has one verb — deliver an event — and that verb becomes one fire of the hook its config names, which is a prompt with the payload fenced as untrusted data (above). `POST /api/events/<integration>` is the path; `<integration>` is a configured name, and the secret that verifies the body is that integration's own. The route is outside the token gate because the HMAC is the door.
   - **Envelope v1.** `{ "v": 1, "id": "issue-1421-opened", "kind": "issue.opened", "payload": "Ilya opened issue #1421 …" }`. `v` must be the integer `1`: a version mason does not know is a bug in the sender, refused `400` rather than guessed at. `id` is the delivery's identity — non-empty, at most 200 characters, and one line: a control character in it is refused, because the accept log prints it as-is and a newline would forge the rest of the line — unique within that integration — and it becomes ``explicitRequestId(hook.id, `${name}:${id}`)``, the integration's name inside the key because a sender only promises uniqueness inside its own stream: two integrations on one hook that both call a delivery `1` are two events, and each fires. A duplicate from the same integration is the same fire however much later it arrives: the durable log never forgets a request id, so no table of seen ids exists, and a redelivery after a restart is still one event. `kind` is a short token labelling what happened — letters, digits and `.` `_` `:` `-`, the first character a letter or a digit, at most 64 — never free text: it becomes one line of the accept log and the prompt's label, so a newline or a space in it is refused, and `issue.opened`, `push` or `chat.message` are the shapes it names. It is never a dispatch key — one trigger, one hook — and mason makes no decision from it. `payload` is **a string** (at most 2 000 characters) written by the sender for a person to read; mason never parses structure, and an over-long payload is refused rather than truncated, because a truncated event is a lie about what happened. Unknown keys are ignored (a sender may add fields before mason knows them), and a body that is not a JSON object is a `400` naming the field.
   - **Signature, limits, identity.** `X-Mason-Signature: sha256=<hex hmac-sha256(secret, raw body)>`, compared in constant time over the bytes that arrived, before JSON parsing; missing or wrong is `401` with no detail, no hint which half failed. The secret is 32 bytes hex, stored `0600` through the same atomic write as the rest of the file, and minted by `npm run integration -- secret <name> [--hook <hook-id>]`, which prints it exactly once. Limits are per integration: a 256 KiB body cap (`413`) and 6 deliveries a minute (`429` with `retry-after`), so one chatty sender cannot spend another's budget. Boot refuses an **enabled** integration whose trigger names a hook this build does not define, naming the integration and the hook: a door that fires nothing is a silent black hole, and it is a config error, not a missing optional container. A disabled integration is not checked — its door is `404`, and a name is no reason to keep an integration the operator switched off from ever being switched on again. The switch is read at boot, so enabling it is the restart that runs the same check.
+  - **A delivery by hand.** The door's one prerequisite is an HMAC over the exact bytes that are sent, and there is no wrapper script for it: any sender that can run `openssl` is a sender. The secret is the one `npm run integration -- secret <name>` printed once; the name in the path is the integration's.
+
+    ```sh
+    SECRET=…                     # the integration's trigger secret, printed once
+    BODY='{"v":1,"id":"issue-1421-opened","kind":"issue.opened","payload":"Ilya opened issue #1421"}'
+    SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+    curl -sS -X POST http://127.0.0.1:8787/api/events/github \
+      -H 'content-type: application/json' -H "x-mason-signature: sha256=$SIG" --data-binary "$BODY"
+    ```
+
+    `id` is what makes a redelivery the same event: `--data-binary` sends those bytes unaltered, so signing them is signing what arrives.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -578,6 +589,9 @@ so instead of starting a second, empty-looking agent:
 [data] /home/user/.mason/service/data
 [data] ignoring ./.data (an older home): move it with `mv .data /home/user/.mason/service/data`
 ```
+
+A home upgraded from a build that still had the GitHub connector also carries a `connectors.json` there: the migration
+moved `data/` wholesale, and nothing reads that file now — its secrets open nothing — so it is safe to delete.
 
 **What this does not do.** It does not sandbox the process: a tool still runs as the server's user, with that user's
 files. That is what the machine boundary is for (§`docs/EXECUTION-TARGETS.md`), and it is why the microVM is the last

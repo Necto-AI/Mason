@@ -135,7 +135,8 @@ services:
         target: /run/integrations.json
         read_only: true
     healthcheck:
-      # /api/health is the one unauthenticated route: a monitor that needs a token is a monitor nobody runs.
+      # /api/health needs no credential: a monitor that needs a token is a monitor nobody runs. The only other way past
+      # the token gate is POST /api/events/<integration>, and the sender's HMAC is its credential.
       test:
         - CMD-SHELL
         - node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
