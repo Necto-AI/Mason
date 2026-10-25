@@ -11,117 +11,25 @@
  */
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { after, describe, it } from "node:test";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
-import {
-	fauxAssistantMessage,
-	fauxProvider,
-	type FauxResponseStep,
-	fauxText,
-	fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
-import {
-	type CallToolResult,
-	JSON_RPC_ERROR_CODES,
-	LATEST_PROTOCOL_VERSION,
-	McpError,
-	type JsonRpcMessage,
-	type JsonRpcRequest,
-	type McpTransport,
-	type Tool as McpTool,
-} from "@earendil-works/pi-mcp";
-import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
+import { describe, it } from "node:test";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import type { McpTransport } from "@earendil-works/pi-mcp";
 import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import { createCodemode } from "../src/server/extensions/codemode.ts";
-import { housePaths } from "../src/server/house.ts";
-import type { Integration } from "../src/server/integrations.ts";
-import type { McpTransportFactory } from "../src/server/mcp.ts";
-import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-
-const directories = new Set<string>();
-after(async () => {
-	for (const directory of directories) await rm(directory, { recursive: true, force: true });
-});
-
-async function temporaryDirectory(): Promise<string> {
-	const directory = await mkdtemp(join(tmpdir(), "mason-codemode-"));
-	directories.add(directory);
-	return directory;
-}
-
-const GITHUB: Integration = {
-	enabled: true,
-	description: "Issues and pull requests for the team's repositories",
-	tools: { url: "http://mason-github:8082/mcp" },
-};
-
-const SEARCH_TOOL: McpTool = {
-	name: "issues.search",
-	description: "Search issues by text",
-	inputSchema: { type: "object", properties: { query: { type: "string" } } },
-};
-
-/** The name the tool is registered under: what a script calls as `tools.mcp__github__issues_search`. */
-const SEARCH_TOOL_NAME = "mcp__github__issues_search";
-
-/** A script that calls the deferred tool and returns the server's own text, as a script would read it. */
-const SEARCH_SCRIPT = `const result = await tools.${SEARCH_TOOL_NAME}({ query: "bug" }); return result.content[0].text;`;
-
-interface FakeServer {
-	readonly transport: McpTransport;
-	/** Every `tools/call` the client made, in order. */
-	readonly calls: { name: string; args: Record<string, unknown> }[];
-}
-
-/** A fake MCP server: it initializes, lists one tool, and answers `tools/call` with `answer`. */
-async function fakeServer(answer: () => CallToolResult): Promise<FakeServer> {
-	const pair = createInMemoryTransportPair();
-	const calls: FakeServer["calls"] = [];
-	pair.server.onMessage((message: JsonRpcMessage) => {
-		if (!("id" in message) || !("method" in message)) return;
-		const request: JsonRpcRequest = message;
-		void (async () => {
-			try {
-				await pair.server.send({ jsonrpc: "2.0", id: request.id, result: resultOf(request) });
-			} catch (error) {
-				await pair.server.send({
-					jsonrpc: "2.0",
-					id: request.id,
-					error: {
-						code: JSON_RPC_ERROR_CODES.internalError,
-						message: error instanceof Error ? error.message : String(error),
-					},
-				});
-			}
-		})();
-	});
-	await pair.server.start();
-	return { transport: pair.client, calls };
-
-	function resultOf(request: JsonRpcRequest): unknown {
-		switch (request.method) {
-			case "initialize":
-				return {
-					protocolVersion: LATEST_PROTOCOL_VERSION,
-					capabilities: { tools: {} },
-					serverInfo: { name: "fake", version: "1.0.0" },
-				};
-			case "tools/list":
-				return { tools: [SEARCH_TOOL] };
-			case "tools/call": {
-				const params = (request.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
-				calls.push({ name: params.name ?? "", args: params.arguments ?? {} });
-				return answer();
-			}
-			default:
-				throw new McpError(JSON_RPC_ERROR_CODES.methodNotFound, `Method not found: ${request.method}`);
-		}
-	}
-}
+import {
+	boot,
+	declared,
+	fakeServer,
+	GITHUB,
+	resultFor,
+	SEARCH_SCRIPT,
+	SEARCH_TOOL,
+	SEARCH_TOOL_NAME,
+	scriptThenSpeak,
+	temporaryDirectory,
+	toolResults,
+	turn,
+} from "./support/mcp.ts";
 
 /** The client end of a transport, counting how often the runtime closed it. */
 function watched(inner: McpTransport): { transport: McpTransport; closes: () => number } {
@@ -142,88 +50,9 @@ function watched(inner: McpTransport): { transport: McpTransport; closes: () => 
 	};
 }
 
-function fauxAccess(steps: readonly FauxResponseStep[]): ResolvedModel {
-	const faux = fauxProvider();
-	const models = createModels();
-	models.setProvider(faux.provider);
-	faux.setResponses([...steps]);
-	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };
-}
-
-interface BootOptions {
-	readonly integrations?: Record<string, Integration>;
-	readonly transport?: McpTransportFactory;
-	readonly steps?: readonly FauxResponseStep[];
-}
-
-/** A boot of the real runtime over a temporary home, with a scripted model and an injected way to the server. */
-async function boot(directory: string, options: BootOptions = {}): Promise<AgentRuntime> {
-	if (options.integrations !== undefined) {
-		const paths = housePaths(join(directory, "house"));
-		await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
-		await writeFile(paths.integrations, JSON.stringify({ integrations: options.integrations }), { mode: 0o600 });
-	}
-	return openAgentRuntime(BACKGROUND_CONTEXT, {
-		dataDir: join(directory, "data"),
-		workspaceDir: directory,
-		houseHome: join(directory, "house"),
-		storage: "memory",
-		modelAccess: fauxAccess(options.steps ?? []),
-		...(options.transport === undefined ? {} : { mcpTransport: options.transport }),
-		onReport: () => {},
-	});
-}
-
-/** The names of the tools the model is offered: the list the prompt prefix pays for. */
-async function declared(runtime: AgentRuntime): Promise<string[]> {
-	const agent = await (await runtime.conversation()).agent(BACKGROUND_CONTEXT);
-	return agent.tools.map((tool) => tool.name);
-}
-
-/** Runs the scripted turn to its end. */
-async function turn(runtime: AgentRuntime): Promise<void> {
-	const submission = await (await runtime.conversation()).submit({ type: "input", content: "Anything new?" }, BACKGROUND_CONTEXT);
-	await submission.wait(BACKGROUND_CONTEXT);
-}
-
-/** What each tool result told the model, by tool name. */
-async function toolResults(runtime: AgentRuntime): Promise<{ name: string; isError: boolean; text: string }[]> {
-	const conversation = await runtime.conversation();
-	const page = await conversation.entries({}, 1000, undefined, BACKGROUND_CONTEXT);
-	return page.items.flatMap((entry) => {
-		const message = entry.kind === "pi.tool-result" ? entry.model?.[0] : undefined;
-		if (message?.role !== "toolResult") return [];
-		return [
-			{
-				name: message.toolName,
-				isError: message.isError,
-				text: message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
-			},
-		];
-	});
-}
-
-/** The one result a tool produced in the turn. */
-function resultOf(results: { name: string; text: string }[], name: string): string {
-	const found = results.filter((result) => result.name === name);
-	assert.equal(found.length, 1, `exactly one ${name} result`);
-	return found[0]!.text;
-}
-
-/** The three steps every scripted turn ends with: the script, one message to the reader, and the model stopping. */
-function scriptThenSpeak(code: string): FauxResponseStep[] {
-	return [
-		fauxAssistantMessage([fauxToolCall("codemode", { code }, { id: "script" })], { stopReason: "toolUse" }),
-		fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message: "Done." }, { id: "sent" })], {
-			stopReason: "toolUse",
-		}),
-		fauxAssistantMessage(fauxText("Nothing else to report.")),
-	];
-}
-
 describe("a script is the second way in", () => {
 	it("calls a deferred tool the model was never offered, and the server's text comes back", async () => {
-		const server = await fakeServer(() => ({ content: [{ type: "text", text: "ISSUE-412: search is slow" }] }));
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ISSUE-412: search is slow" }] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
@@ -233,7 +62,7 @@ describe("a script is the second way in", () => {
 		try {
 			assert.ok(!(await declared(runtime)).includes(SEARCH_TOOL_NAME), "the model was never offered this tool");
 			await turn(runtime);
-			const script = resultOf(await toolResults(runtime), "codemode");
+			const script = resultFor(await toolResults(runtime), "codemode");
 			assert.match(script, /Script completed/);
 			assert.match(script, /ISSUE-412: search is slow/, "the script read the server's own text");
 			assert.deepEqual(
@@ -250,11 +79,11 @@ describe("a script is the second way in", () => {
 		}
 	});
 
-	it("gets the whole result while a model-issued call to the same tool is bounded", async () => {
-		// Just past what a declared call may spend, with a marker at the very end: a bounded result loses the marker, and
-		// a script that filtered nothing still has it.
-		const answer = `${"x".repeat(23_900)}END-MARKER`;
-		const server = await fakeServer(() => ({ content: [{ type: "text", text: answer }] }));
+	it("gets the whole result, both ends and all, while a model-issued call to the same tool is bounded by the middle", async () => {
+		// A result past what a declared call may show, with a marker at each end: the model keeps both ends and loses the
+		// middle, and a script that filtered nothing still has every byte.
+		const answer = `START-MARKER${"x".repeat(30_000)}END-MARKER`;
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: answer }] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
@@ -278,15 +107,18 @@ describe("a script is the second way in", () => {
 		try {
 			await turn(runtime);
 			const results = await toolResults(runtime);
-			const script = resultOf(results, "codemode");
-			const direct = resultOf(results, SEARCH_TOOL_NAME);
+			const script = resultFor(results, "codemode");
+			const direct = resultFor(results, SEARCH_TOOL_NAME);
 
-			assert.ok(script.length > 20_000, `the script's result is ${script.length} characters, not a bounded one`);
-			assert.match(script, /END-MARKER/, "the script received the result whole");
-			assert.ok(!direct.includes("END-MARKER"), "the model's call lost the end of the result");
-			const kept = /^x*/.exec(direct)?.[0].length ?? 0;
-			assert.ok(kept <= 20_000, `${kept} bytes of the server's text is more than the 20 KB a declared call may spend`);
-			assert.match(direct, /Output truncated/);
+			// The script's own text, which the sandbox hands back whole: the bound is on what the model is shown, not on
+			// what a program receives as `structuredOutput`.
+			assert.ok(script.includes(answer), `the script's result carries all ${answer.length} characters`);
+			assert.match(direct, /^START-MARKER/, "the model kept the beginning");
+			assert.match(direct, /END-MARKER$/, "and the end, which head-only truncation would have dropped");
+			assert.match(direct, /bytes dropped: this is the start and the end of a longer result/, "and is told what went");
+			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
+			assert.ok(!direct.includes("x".repeat(11_000)), "the middle is what went");
+			assert.ok(Buffer.byteLength(direct) <= 20 * 1024, `${Buffer.byteLength(direct)} bytes is more than the 20 KB cap`);
 			assert.deepEqual(
 				server.calls.map((call) => call.name),
 				["issues.search", "issues.search"],
@@ -311,7 +143,7 @@ describe("a script is the second way in", () => {
 			await codemode.close();
 		}
 
-		const server = await fakeServer(() => ({ content: [] }));
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
@@ -350,7 +182,7 @@ async function until(ready: () => boolean): Promise<boolean> {
 
 describe("the runtime's life", () => {
 	it("closing it closes the MCP clients and the sandbox, and leaves no worker thread behind", async () => {
-		const server = await fakeServer(() => ({ content: [{ type: "text", text: "ok" }] }));
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
 		const transport = watched(server.transport);
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
@@ -380,7 +212,7 @@ describe("the runtime's life", () => {
 			const runtime = await boot(directory, { steps: scriptThenSpeak("return 6 * 7;") });
 			try {
 				await turn(runtime);
-				const script = resultOf(await toolResults(runtime), "codemode");
+				const script = resultFor(await toolResults(runtime), "codemode");
 				assert.match(script, /Script completed/, `round ${round} ran its script`);
 				assert.match(script, /42/, "and the script's own value came back");
 			} finally {

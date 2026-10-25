@@ -3,226 +3,43 @@
  * `tool_search`.
  *
  * Everything here runs against a fake MCP server on an in-memory transport, injected through the boot's
- * `mcpTransport` seam: no test dials a port, so a test can describe a server that offers two tools or one that is
- * down without a container existing.
+ * `mcpTransport` seam: no test dials a port, so a test can describe a server that offers two tools, one that is still
+ * coming up, or one that is down without a container existing.
  *
  * The two facts worth pinning are the ones a person cannot see from the code: that a connected integration does not
  * change what the model is offered (the deferred list is the whole point), and that the tools are still reachable
  * once asked for (a deferred tool nobody can load is a tool that does not exist).
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { after, describe, it } from "node:test";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai/models";
-import {
-	fauxAssistantMessage,
-	fauxProvider,
-	type FauxResponseStep,
-	fauxText,
-	fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
-import {
-	type CallToolResult,
-	JSON_RPC_ERROR_CODES,
-	LATEST_PROTOCOL_VERSION,
-	McpError,
-	type JsonRpcMessage,
-	type JsonRpcRequest,
-	type Tool as McpTool,
-} from "@earendil-works/pi-mcp";
-import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
+import { describe, it } from "node:test";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import type { Tool as McpTool } from "@earendil-works/pi-mcp";
 import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import { housePaths } from "../src/server/house.ts";
 import { integrationStatus } from "../src/server/integration-status.ts";
-import type { Integration } from "../src/server/integrations.ts";
 import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
 import { startServer } from "../src/server/main.ts";
-import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-
-const directories = new Set<string>();
-after(async () => {
-	for (const directory of directories) await rm(directory, { recursive: true, force: true });
-});
-
-async function temporaryDirectory(): Promise<string> {
-	const directory = await mkdtemp(join(tmpdir(), "mason-mcp-"));
-	directories.add(directory);
-	return directory;
-}
-
-const GITHUB: Integration = {
-	enabled: true,
-	description: "Issues and pull requests for the team's repositories",
-	tools: { url: "http://mason-github:8082/mcp" },
-};
-
-/** The same server, marked as the one the team cannot work without. */
-const REQUIRED_GITHUB: Integration = { ...GITHUB, tools: { url: "http://mason-github:8082/mcp", required: true } };
-
-const ISSUE_TOOL: McpTool = {
-	name: "issues.create",
-	description: "Open an issue in a repository",
-	inputSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
-};
-
-const SEARCH_TOOL: McpTool = {
-	name: "issues.search",
-	description: "Search issues by text",
-	inputSchema: { type: "object", properties: { query: { type: "string" } } },
-};
-
-/** The declared name of `SEARCH_TOOL` on `github`: what a test asks `tool_search` to find. */
-const SEARCH_TOOL_NAME = "mcp__github__issues_search";
-
-interface FakeServer {
-	/** The client end of the pair: what the boot's transport factory hands back. */
-	readonly transport: InMemoryTransport;
-	/** Every `tools/call` the client made, in order. */
-	readonly calls: { name: string; args: Record<string, unknown> }[];
-}
-
-/** The `tools/call` parameters, as the fake server needs them. */
-function callOf(params: unknown): { name: string; args: Record<string, unknown> } {
-	const record = typeof params === "object" && params !== null ? (params as Record<string, unknown>) : {};
-	const args = record.arguments;
-	return {
-		name: typeof record.name === "string" ? record.name : "",
-		args: typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {},
-	};
-}
-
-/**
- * A fake MCP server: it initializes, lists `tools`, and answers `tools/call` with `answer`. Statements arrive on one
- * end of an in-memory pair, so the client speaks the real protocol and never touches a socket.
- */
-async function fakeServer(
-	tools: readonly McpTool[],
-	answer: (name: string, args: Record<string, unknown>) => CallToolResult,
-): Promise<FakeServer> {
-	const pair = createInMemoryTransportPair();
-	const calls: FakeServer["calls"] = [];
-	pair.server.onMessage((message: JsonRpcMessage) => {
-		if (!("id" in message) || !("method" in message)) return;
-		const request: JsonRpcRequest = message;
-		void (async () => {
-			try {
-				await pair.server.send({ jsonrpc: "2.0", id: request.id, result: resultOf(request) });
-			} catch (error) {
-				await pair.server.send({
-					jsonrpc: "2.0",
-					id: request.id,
-					error: {
-						code: JSON_RPC_ERROR_CODES.internalError,
-						message: error instanceof Error ? error.message : String(error),
-					},
-				});
-			}
-		})();
-	});
-	await pair.server.start();
-	return { transport: pair.client, calls };
-
-	function resultOf(request: JsonRpcRequest): unknown {
-		switch (request.method) {
-			case "initialize":
-				return {
-					protocolVersion: LATEST_PROTOCOL_VERSION,
-					capabilities: { tools: {} },
-					serverInfo: { name: "fake", version: "1.0.0" },
-				};
-			case "tools/list":
-				return { tools };
-			case "tools/call": {
-				const { name, args } = callOf(request.params);
-				calls.push({ name, args });
-				return answer(name, args);
-			}
-			default:
-				throw new McpError(JSON_RPC_ERROR_CODES.methodNotFound, `Method not found: ${request.method}`);
-		}
-	}
-}
-
-/** A boot that reaches for a server nobody is listening on: the container is down, so the factory refuses. */
-function downTransport(): never {
-	throw new Error("no container in a test");
-}
+import {
+	boot,
+	declared,
+	deferred,
+	downTransport,
+	fakeServer,
+	GITHUB,
+	ISSUE_TOOL,
+	REQUIRED_GITHUB,
+	SEARCH_TOOL,
+	SEARCH_TOOL_NAME,
+	temporaryDirectory,
+	toolResults,
+	turn,
+} from "./support/mcp.ts";
 
 /** The schema as a provider reads it: the declared object, not the marker `Type.Unsafe` keeps out of the JSON. */
 function schemaOf(parameters: unknown): Record<string, unknown> {
 	return JSON.parse(JSON.stringify(parameters)) as Record<string, unknown>;
-}
-
-function fauxAccess(steps: readonly FauxResponseStep[]): { access: ResolvedModel; faux: ReturnType<typeof fauxProvider> } {
-	const faux = fauxProvider();
-	const models = createModels();
-	models.setProvider(faux.provider);
-	faux.setResponses([...steps]);
-	return { access: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true }, faux };
-}
-
-interface BootOptions {
-	readonly integrations?: Record<string, Integration>;
-	readonly transport?: McpTransportFactory;
-	readonly steps?: readonly FauxResponseStep[];
-	/** Keep the conversation on disk, so a second boot is a restart of the same agent rather than a new one. */
-	readonly persist?: boolean;
-}
-
-/** A boot of the real runtime over a temporary home, with a scripted model and an injected way to reach the servers. */
-async function boot(
-	directory: string,
-	options: BootOptions = {},
-): Promise<{ runtime: AgentRuntime; faux: ReturnType<typeof fauxProvider> }> {
-	if (options.integrations !== undefined) {
-		const paths = housePaths(join(directory, "house"));
-		await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
-		await writeFile(paths.integrations, JSON.stringify({ integrations: options.integrations }), { mode: 0o600 });
-	}
-	const { access, faux } = fauxAccess(options.steps ?? []);
-	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
-		dataDir: join(directory, "data"),
-		workspaceDir: directory,
-		houseHome: join(directory, "house"),
-		...(options.persist === true ? {} : { storage: "memory" as const }),
-		modelAccess: access,
-		...(options.transport === undefined ? {} : { mcpTransport: options.transport }),
-		onReport: () => {},
-	});
-	return { runtime, faux };
-}
-
-/** The names of the tools the model is offered, which is the list the prompt prefix pays for. */
-async function declared(runtime: AgentRuntime): Promise<string[]> {
-	const agent = await (await runtime.conversation()).agent(BACKGROUND_CONTEXT);
-	return agent.tools.map((tool) => tool.name);
-}
-
-/** The names the model can load with `tool_search`: deferred tools, offered to nobody yet. */
-async function deferred(runtime: AgentRuntime): Promise<string[]> {
-	const agent = await (await runtime.conversation()).agent(BACKGROUND_CONTEXT);
-	return agent.deferred.map((tool) => tool.name);
-}
-
-/** Runs the scripted turn to its end. */
-async function turn(runtime: AgentRuntime, content = "Anything new?"): Promise<void> {
-	const submission = await (await runtime.conversation()).submit({ type: "input", content }, BACKGROUND_CONTEXT);
-	await submission.wait(BACKGROUND_CONTEXT);
-}
-
-/** What the model was told by each tool result: committed entries, which the projection then drops as not the reader's. */
-async function toolResults(runtime: AgentRuntime): Promise<{ name: string; isError: boolean; text: string }[]> {
-	const conversation = await runtime.conversation();
-	const page = await conversation.entries({}, 1000, undefined, BACKGROUND_CONTEXT);
-	return page.items.flatMap((entry) => {
-		const message = entry.kind === "pi.tool-result" ? entry.model?.[0] : undefined;
-		if (message?.role !== "toolResult") return [];
-		const text = message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-		return [{ name: message.toolName, isError: message.isError, text }];
-	});
 }
 
 describe("what a server offers", () => {
@@ -260,9 +77,9 @@ describe("what a server offers", () => {
 			openTransport: () => server.transport,
 			log: () => {},
 		});
-		assert.deepEqual(schemaOf(mcp.tools[0].parameters), { type: "object", properties: {} });
+		assert.deepEqual(schemaOf(mcp.tools[0]?.parameters), { type: "object", properties: {} });
 		// No description on the server: the name is the only true thing left to say about it.
-		assert.equal(mcp.tools[0].description, "ping");
+		assert.equal(mcp.tools[0]?.description, "ping");
 	});
 });
 
@@ -311,7 +128,7 @@ describe("the boot", () => {
 		const mcp = await connectIntegrations({ integrations: { github: { enabled: true } }, log: () => {} });
 		assert.deepEqual(mcp.tools, []);
 		assert.equal(mcp.extension, undefined, "nothing to reach means nothing installed, not an empty extension");
-		const { runtime } = await boot(directory);
+		const runtime = await boot(directory);
 		try {
 			assert.ok(!(await declared(runtime)).some((name) => name.startsWith("mcp__")));
 			assert.ok(!(await deferred(runtime)).some((name) => name.startsWith("mcp__")));
@@ -333,6 +150,26 @@ describe("the boot", () => {
 		assert.equal(integrationStatus().size, 0, "nothing was tried, so nothing has health");
 	});
 
+	it("tries a server that refused once more, so a container still starting is not a boot without its tools", async () => {
+		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
+		let attempts = 0;
+		const starting: McpTransportFactory = () => {
+			attempts += 1;
+			// The port a container has not bound yet: the first attempt is refused, the one 250 ms later is not.
+			if (attempts === 1) throw new Error("connect ECONNREFUSED mason-github:8082");
+			return server.transport;
+		};
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: starting });
+		try {
+			assert.equal(attempts, 2, "the boot asked twice");
+			assert.deepEqual(await deferred(runtime), ["mcp__github__issues_create", SEARCH_TOOL_NAME], "the tools arrived");
+			assert.deepEqual(integrationStatus().get("github"), { connected: true, tools: 2, error: null });
+		} finally {
+			await runtime.close();
+		}
+	});
+
 	it("logs one line about an unreachable optional integration, records it, and goes on without its tools", async () => {
 		const lines: string[] = [];
 		const mcp = await connectIntegrations({
@@ -341,9 +178,9 @@ describe("the boot", () => {
 			log: (line) => lines.push(line),
 		});
 		assert.deepEqual(mcp.tools, []);
-		assert.equal(lines.length, 1);
-		assert.match(lines[0], /github/);
-		assert.match(lines[0], /no container in a test/);
+		assert.equal(lines.length, 1, "one line per integration, whatever it took to give up on it");
+		assert.match(lines[0] ?? "", /github/);
+		assert.match(lines[0] ?? "", /no container in a test/);
 		assert.deepEqual(integrationStatus().get("github"), {
 			connected: false,
 			tools: 0,
@@ -352,7 +189,7 @@ describe("the boot", () => {
 
 		// The same through the real boot: it starts, and the tools a person configured are simply absent.
 		const directory = await temporaryDirectory();
-		const { runtime } = await boot(directory, { integrations: { github: GITHUB }, transport: downTransport });
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: downTransport });
 		try {
 			assert.ok(!(await declared(runtime)).some((name) => name.startsWith("mcp__")));
 			assert.equal(integrationStatus().get("github")?.connected, false);
@@ -380,16 +217,16 @@ describe("the boot", () => {
 		});
 		const bare = await boot(bareDirectory);
 		try {
-			assert.deepEqual(await declared(connected.runtime), await declared(bare.runtime), "a connected server costs no prefix");
+			assert.deepEqual(await declared(connected), await declared(bare), "a connected server costs no prefix");
 			// Code mode is in both lists: it is installed at boot whatever any integration offers, so the surface moves once,
 			// in the commit that added it, and never when a container appears.
-			assert.ok((await declared(connected.runtime)).includes("codemode"), "code mode is offered either way");
-			assert.ok((await declared(bare.runtime)).includes("codemode"));
-			assert.deepEqual(await deferred(connected.runtime), ["mcp__github__issues_create", SEARCH_TOOL_NAME]);
-			assert.deepEqual(await deferred(bare.runtime), []);
+			assert.ok((await declared(connected)).includes("codemode"), "code mode is offered either way");
+			assert.ok((await declared(bare)).includes("codemode"));
+			assert.deepEqual(await deferred(connected), ["mcp__github__issues_create", SEARCH_TOOL_NAME]);
+			assert.deepEqual(await deferred(bare), []);
 		} finally {
-			await connected.runtime.close();
-			await bare.runtime.close();
+			await connected.close();
+			await bare.close();
 		}
 	});
 
@@ -398,27 +235,31 @@ describe("the boot", () => {
 		// A home that booted before any integration existed: its stored extension selection is the array from that boot,
 		// which knows nothing about `mcp`. An array is used verbatim, so nothing would bring the new tools back.
 		const first = await boot(directory, { persist: true });
-		const before = await declared(first.runtime);
-		await first.runtime.close();
+		const before = await declared(first);
+		await first.close();
 
 		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
-		const second = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport, persist: true });
+		const second = await boot(directory, {
+			integrations: { github: GITHUB },
+			transport: () => server.transport,
+			persist: true,
+		});
 		try {
 			assert.deepEqual(
-				await declared(second.runtime),
+				await declared(second),
 				before,
 				"the selection was repaired, and what the model is offered did not move",
 			);
-			assert.ok((await deferred(second.runtime)).includes(SEARCH_TOOL_NAME), "an existing home gets the capability");
+			assert.ok((await deferred(second)).includes(SEARCH_TOOL_NAME), "an existing home gets the capability");
 		} finally {
-			await second.runtime.close();
+			await second.close();
 		}
 	});
 
 	it("lets tool_search find a deferred tool by its description, and declares it on the next request", async () => {
 		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
 		const directory = await temporaryDirectory();
-		const { runtime } = await boot(directory, {
+		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
 			transport: () => server.transport,
 			// The model asks for a capability it was not offered, then speaks. The second request is the one that must
@@ -438,18 +279,17 @@ describe("the boot", () => {
 			await turn(runtime);
 			assert.ok((await declared(runtime)).includes(SEARCH_TOOL_NAME), "loaded, and recorded on the branch");
 			const [loaded] = (await toolResults(runtime)).filter((result) => result.name === "tool_search");
-			assert.match(loaded.text, new RegExp(SEARCH_TOOL_NAME));
+			assert.match(loaded?.text ?? "", new RegExp(SEARCH_TOOL_NAME));
 		} finally {
 			await runtime.close();
 		}
 	});
 
-	it("bounds what a declared call returns, so a 30 KB result is not 30 KB of context", async () => {
-		const server = await fakeServer([SEARCH_TOOL], () => ({
-			content: [{ type: "text", text: "x".repeat(30_000) }],
-		}));
+	it("keeps both ends of a 30 KB result and drops the middle, naming the bytes it dropped", async () => {
+		const answer = `START-MARKER${"x".repeat(30_000)}END-MARKER`;
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: answer }] }));
 		const directory = await temporaryDirectory();
-		const { runtime } = await boot(directory, {
+		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
 			transport: () => server.transport,
 			steps: [
@@ -469,14 +309,16 @@ describe("the boot", () => {
 			await turn(runtime);
 			assert.deepEqual(server.calls, [{ name: "issues.search", args: { query: "bug" } }], "the model's arguments reach the server");
 			const [result] = (await toolResults(runtime)).filter((entry) => entry.name === SEARCH_TOOL_NAME);
-			// The server's own text, which is what the limit is about: the harness adds its own notice after it, and that
-			// notice is short and says more than another 10 KB of the same character would.
-			const kept = /^x*/.exec(result.text)?.[0].length ?? 0;
-			assert.ok(kept <= 20_000, `${kept} bytes of the server's text is more than the 20 KB a declared call may spend`);
-			assert.ok(kept > 19_000, "the head is kept: an empty answer would be as bad as a huge one");
-			assert.ok(!result.text.includes("x".repeat(20_001)), "the rest did not land in the transcript");
-			assert.match(result.text, /Output truncated/);
-			assert.equal(result.isError, false);
+			const text = result?.text ?? "";
+			// The head is where a result starts and the tail is where it ends, and the two the model most needs are the
+			// ones a head-only truncation would lose: what this asserts is that both survived and the middle did not.
+			assert.match(text, /^START-MARKER/, "the beginning survived");
+			assert.match(text, /END-MARKER$/, "and so did the end");
+			assert.match(text, /\[… \d+ of 30022 bytes dropped: this is the start and the end of a longer result …\]/);
+			assert.ok(Buffer.byteLength(text) <= 20 * 1024, `${Buffer.byteLength(text)} bytes is more than the 20 KB a declared call may spend`);
+			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
+			assert.ok(!text.includes("x".repeat(11_000)), "the middle did not land in the transcript");
+			assert.equal(result?.isError, false);
 		} finally {
 			await runtime.close();
 		}
@@ -488,11 +330,7 @@ describe("the integrations route", () => {
 		const directory = await temporaryDirectory();
 		const paths = housePaths(join(directory, "house"));
 		await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
-		await writeFile(
-			paths.integrations,
-			JSON.stringify({ integrations: { github: GITHUB } }),
-			{ mode: 0o600 },
-		);
+		await writeFile(paths.integrations, JSON.stringify({ integrations: { github: GITHUB } }), { mode: 0o600 });
 		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
 		const mason = await startServer({
 			port: 0,
