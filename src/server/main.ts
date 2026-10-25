@@ -144,7 +144,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				cwd: runtime.workspaceDir,
 			});
 
-		// `viewState()` is the durable conversation's own Chord state; this object mirrors it into its
+		// `viewState()` is the durable conversation's own watch of the view; this object mirrors it into its
 		// own cell so every connected browser gets snapshots and structural diffs.
 		const viewResource = self.resource("viewState", {
 			version: 1,
@@ -471,13 +471,12 @@ async function handleRequest(
 	}
 
 	if (url.pathname === "/api/status") {
-		const view = await runtime.viewState(BACKGROUND_CONTEXT);
-		const status = deriveAgentStatus(view.value, {
+		const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+		const status = deriveAgentStatus(view, {
 			hooks: runtime.hooks.list(),
 			model: runtime.model,
 			cwd: runtime.workspaceDir,
 		});
-		view.dispose();
 		return json(response, 200, status);
 	}
 

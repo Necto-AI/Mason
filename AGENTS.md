@@ -14,7 +14,7 @@ The browser client is the chat area of `apiary` re-implemented in React: [`docs/
 
 1. **Do NOT touch `apiary`.** This project is standalone and will later serve as the foundation for refactoring `apiary`.
 2. **Work against the local clone in `vendor/pi` — a git submodule pinned to an exact commit:**
-   - `vendor/pi` — `DenisSud/pi` (upstream `earendil-works/pi` plus the fleet's patches), currently `aa9cf15be`.
+   - `vendor/pi` — `DenisSud/pi` (upstream `earendil-works/pi` plus the fleet's patches), currently `f321e5bdd`.
    - After a fresh clone: `git submodule update --init`.
    - `scripts/link-vendor.mjs` (run by `npm install`) symlinks the `@earendil-works/*` packages into `node_modules/`.
    - Vendor source is resolved through the `paths` map in `tsconfig.json` — tsc and esbuild both honour it — so the submodule stays pristine.

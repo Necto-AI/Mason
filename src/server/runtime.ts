@@ -4,7 +4,7 @@
  */
 import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AttachedReplicatedState, Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -53,6 +53,20 @@ export interface AgentModelRef {
 	modelId: string;
 }
 
+/**
+ * The conversation view while it is being watched: the latest revision, and each later one, as a Chord resource
+ * subscribes to it. A `conversation.watch()` handle observes through one listener only, so this is where the fan-out
+ * lives.
+ */
+export interface ConversationState {
+	/** The latest revision; the acquisition one until a commit arrives. */
+	readonly value: ConversationView;
+	/** The current view, then every later revision. */
+	subscribe(listener: (view: ConversationView) => void): () => void;
+	/** Stop the watch; the last value stays readable. Idempotent. */
+	dispose(): Promise<void>;
+}
+
 export interface AgentRuntime {
 	readonly harness: Harness;
 	readonly rootId: ConversationId;
@@ -65,7 +79,10 @@ export interface AgentRuntime {
 	/** `false` when the model access is the offline faux provider, so the UI can say so. */
 	readonly modelIsFaux: boolean;
 	conversation(): Promise<Conversation>;
-	viewState(context: Context): Promise<AttachedReplicatedState<ConversationView>>;
+	/** The view, watched until `dispose()`: what the Chord resource mirrors into the client's cells. */
+	viewState(context: Context): Promise<ConversationState>;
+	/** One committed read of the view, leaving no watch behind: what `/api/status` asks for. */
+	viewSnapshot(context: Context): Promise<ConversationView>;
 	close(): Promise<void>;
 }
 
@@ -243,13 +260,49 @@ export async function openAgentRuntime(
 		model: ref,
 		modelIsFaux: faux,
 		conversation: () => Promise.resolve(root),
-		viewState: (viewContext) => root.viewState(viewContext),
+		viewState: (viewContext) => watchConversation(root, viewContext),
+		viewSnapshot: (viewContext) => readConversation(root, viewContext),
 		async close() {
 			await hooks.close();
 			await harness.close(BACKGROUND_CONTEXT);
 			await envManager.close();
 		},
 	};
+}
+
+/**
+ * Watch `conversation`'s view for as long as the returned state is alive: one watch, started at acquisition, handed to
+ * every subscriber in turn. Subscribing delivers the current view first, the way the replicated state it replaces
+ * hydrated its listeners.
+ */
+async function watchConversation(conversation: Conversation, context: Context): Promise<ConversationState> {
+	const watch = await conversation.watch(context);
+	const listeners = new Set<(view: ConversationView) => void>();
+	watch.start(async (view) => {
+		for (const listener of [...listeners]) listener(view);
+	});
+	return {
+		get value() {
+			return watch.value;
+		},
+		subscribe(listener) {
+			listeners.add(listener);
+			listener(watch.value);
+			return () => listeners.delete(listener);
+		},
+		async dispose() {
+			listeners.clear();
+			await watch.stop();
+		},
+	};
+}
+
+/** Read the view once: the acquisition revision of a watch that is stopped before it can deliver anything. */
+async function readConversation(conversation: Conversation, context: Context): Promise<ConversationView> {
+	const watch = await conversation.watch(context);
+	const value = watch.value;
+	await watch.stop();
+	return value;
 }
 
 /**

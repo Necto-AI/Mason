@@ -80,8 +80,8 @@ async function runScripted(directory: string, script: ReturnType<typeof recorder
 		const conversation = await runtime.conversation();
 		const submission = await conversation.submit({ type: "input", content: prompt }, BACKGROUND_CONTEXT);
 		const settled = await submission.wait(BACKGROUND_CONTEXT);
-		const state = await runtime.viewState(BACKGROUND_CONTEXT);
-		return { settled, transcript: projectTranscript(state.value), requests: script.requests };
+		const state = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+		return { settled, transcript: projectTranscript(state), requests: script.requests };
 	} finally {
 		await runtime.close();
 	}
