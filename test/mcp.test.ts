@@ -36,7 +36,8 @@ import {
 import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
 import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import { housePaths } from "../src/server/house.ts";
-import { integrationStatus, type Integration } from "../src/server/integrations.ts";
+import { integrationStatus } from "../src/server/integration-status.ts";
+import type { Integration } from "../src/server/integrations.ts";
 import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
 import { startServer } from "../src/server/main.ts";
 import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";

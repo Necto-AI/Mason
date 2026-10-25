@@ -17,12 +17,14 @@
  * read or cannot be validated throws, naming the path, and the boot refuses. A *missing* file is the one honest empty
  * set: nothing was configured.
  *
- * Stage A holds the config, the command and the route; the client that connects and registers tools arrives with stage B
- * (`mcp.ts`), and fills the health registry at the bottom of this file. Health is server state and never a prompt
- * section: it varies between turns, and the resident prefix must be byte-identical between two turns of one build.
+ * Stage A holds the config, the command and the snapshot those two are read from; the client that connects and registers
+ * tools arrives with stage B (`mcp.ts`), and writes what it found into the registry in `integration-status.ts`. Health is
+ * server state and never a prompt section: it varies between turns, and the resident prefix must be byte-identical
+ * between two turns of one build.
  */
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { writeFileAtomic } from "./atomic.ts";
+import { clearIntegrationStatus } from "./integration-status.ts";
 import type { HousePaths } from "./house.ts";
 
 /** A trigger secret shorter than this is a guess away from being no door: 32 bytes hex, or the like. */
@@ -67,29 +69,11 @@ export interface Integrations {
 	readonly integrations: Record<string, Integration>;
 }
 
-/** What stage B found when it tried to reach an integration: the connection, the tool count, and why it failed. */
-export interface IntegrationHealth {
-	readonly connected: boolean;
-	readonly tools: number;
-	readonly error: string | null;
-}
-
-/** One integration as `/api/integrations` answers it. Server state: the prompt never carries any of this. */
-export interface IntegrationSummary {
-	readonly name: string;
-	readonly enabled: boolean;
-	readonly hasTools: boolean;
-	readonly hasTrigger: boolean;
-	readonly connected: boolean;
-	readonly tools: number;
-	readonly error: string | null;
-}
-
 /**
- * The message a refusal carries: the path, the entry, and what to fix. An operator reads this, so it says where and
+ * The prefix a refusal carries: the path, the entry, and then what to fix. An operator reads this, so it says where and
  * why rather than that something went wrong.
  */
-function why(where: string, name: string, message: string): string {
+function refusal(where: string, name: string, message: string): string {
 	return `${where}: integration "${name}" ${message}`;
 }
 
@@ -156,10 +140,10 @@ function parseFile(
  * that says it in quotes would leave an integration on that its author believed off.
  */
 function validate(where: string, name: string, value: unknown): Integration {
-	if (name === "") throw new Error(why(where, name, "has no name: the key is the name"));
+	if (name === "") throw new Error(refusal(where, name, "has no name: the key is the name"));
 	if (!NAME.test(name)) {
 		throw new Error(
-			why(
+			refusal(
 				where,
 				name,
 				"is not a usable name: lowercase letters, digits and dashes, starting with a letter or a digit " +
@@ -168,13 +152,13 @@ function validate(where: string, name: string, value: unknown): Integration {
 		);
 	}
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(why(where, name, "is not a JSON object"));
+		throw new Error(refusal(where, name, "is not a JSON object"));
 	}
 	const raw = value as Record<string, unknown>;
 	const enabled = raw.enabled;
 	if (typeof enabled !== "boolean") {
 		throw new Error(
-			why(where, name, 'needs "enabled": true or "enabled": false — it is the only switch, and a face that is present is on'),
+			refusal(where, name, 'needs "enabled": true or "enabled": false — it is the only switch, and a face that is present is on'),
 		);
 	}
 	const tools = readTools(where, name, raw.tools);
@@ -192,13 +176,13 @@ function validate(where: string, name: string, value: unknown): Integration {
 function readTools(where: string, name: string, value: unknown): IntegrationTools | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(why(where, name, 'has a "tools" face that is not an object'));
+		throw new Error(refusal(where, name, 'has a "tools" face that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
 	const url = raw.url;
 	if (typeof url !== "string" || !isHttpUrl(url)) {
 		throw new Error(
-			why(
+			refusal(
 				where,
 				name,
 				`has no usable tools url (${typeof url === "string" ? url : "none given"}): it is an MCP endpoint over ` +
@@ -209,7 +193,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 	const required = raw.required;
 	if (required !== undefined && typeof required !== "boolean") {
 		throw new Error(
-			why(where, name, 'has a "tools.required" that is not true or false: it decides whether a dead server refuses the boot'),
+			refusal(where, name, 'has a "tools.required" that is not true or false: it decides whether a dead server refuses the boot'),
 		);
 	}
 	return { ...raw, url, ...(required === undefined ? {} : { required }) };
@@ -223,32 +207,38 @@ function readDescription(where: string, name: string, value: unknown, required: 
 	if (value === undefined) {
 		if (required) {
 			throw new Error(
-				why(where, name, 'has a tools face and no "description": it is the only thing the model is told about it'),
+				refusal(where, name, 'has a tools face and no "description": it is the only thing the model is told about it'),
 			);
 		}
 		return undefined;
 	}
 	if (typeof value !== "string" || value.trim() === "") {
-		throw new Error(why(where, name, 'has an empty "description": one line saying what these tools are for, and to whom'));
+		throw new Error(refusal(where, name, 'has an empty "description": one line saying what these tools are for, and to whom'));
 	}
 	// Trimmed, because it is a line in the prompt: the space around it is nobody's intent.
 	return value.trim();
 }
 
+/**
+ * The trigger half. Validated here rather than at the door because `integrations.json` is one file for two faces: a
+ * trigger that cannot work makes the file bad, so it fails the boot that reads it. #43 owns the door — the route, the
+ * signature check and the rate limit — not the file, and a door that validated its own config could never be walked up
+ * to with a bad file without the server having started on it.
+ */
 function readTrigger(where: string, name: string, value: unknown): IntegrationTrigger | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(why(where, name, 'has a "trigger" that is not an object'));
+		throw new Error(refusal(where, name, 'has a "trigger" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
 	const hook = raw.hook;
 	if (typeof hook !== "string" || hook.trim() === "") {
-		throw new Error(why(where, name, 'has a "trigger" with no "hook": a delivery\'s one verb is firing a named hook'));
+		throw new Error(refusal(where, name, 'has a "trigger" with no "hook": a delivery\'s one verb is firing a named hook'));
 	}
 	const secret = raw.secret;
 	if (typeof secret !== "string" || secret.length < TRIGGER_SECRET_MIN) {
 		throw new Error(
-			why(
+			refusal(
 				where,
 				name,
 				`has a trigger secret shorter than ${TRIGGER_SECRET_MIN} characters: an HMAC key that can be guessed is not a door`,
@@ -311,20 +301,6 @@ function ordered(integrations: Record<string, Integration>): Record<string, Inte
 }
 
 /**
- * The whole file, written privately and through a rename: a reader never sees half a list, and a crash mid-write leaves
- * the previous one in place. Same idiom as `config.json` and `roster.json`, for the same reason — this file holds a
- * trigger secret.
- */
-async function writeFileAtomic(path: string, file: Record<string, unknown>): Promise<void> {
-	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-	await rename(temporary, path);
-	await chmod(dirname(path), 0o700).catch(() => {});
-	await chmod(path, 0o600).catch(() => {});
-}
-
-/**
  * The set this process booted with.
  *
  * The readers that cannot await — the prompt section and the route — take it from here, and it is one snapshot: two
@@ -337,39 +313,9 @@ let configured: Record<string, Integration> = {};
 export function setIntegrations(integrations: Record<string, Integration>): void {
 	configured = integrations;
 	// A new boot's findings replace the last one's: a connection status from a previous process is not news.
-	statuses.clear();
+	clearIntegrationStatus();
 }
 
 export function currentIntegrations(): Record<string, Integration> {
 	return configured;
-}
-
-/**
- * What stage B's client found. It is a registry rather than a return value because the boot that connects and the
- * request that reports happen in different places; the client writes here, `/api/integrations` reads.
- */
-const statuses = new Map<string, IntegrationHealth>();
-
-/** The map the client fills, one entry per integration it tried to reach. Never rendered into a prompt. */
-export function integrationStatus(): Map<string, IntegrationHealth> {
-	return statuses;
-}
-
-/** The booted set with its health, sorted by name: what `/api/integrations` answers. */
-export function integrationSummaries(): IntegrationSummary[] {
-	return Object.keys(configured)
-		.sort()
-		.map((name) => {
-			const integration = configured[name];
-			const health = statuses.get(name);
-			return {
-				name,
-				enabled: integration.enabled,
-				hasTools: integration.tools !== undefined,
-				hasTrigger: integration.trigger !== undefined,
-				connected: health?.connected ?? false,
-				tools: health?.tools ?? 0,
-				error: health?.error ?? null,
-			};
-		});
 }

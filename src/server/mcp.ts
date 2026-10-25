@@ -34,7 +34,8 @@ import {
 } from "@earendil-works/pi-mcp";
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import { Type, type TUnsafe } from "typebox";
-import { integrationStatus, type Integration } from "./integrations.ts";
+import { integrationStatus } from "./integration-status.ts";
+import type { Integration } from "./integrations.ts";
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`; the name is also the identifier a script calls. */
 const MAX_TOOL_NAME_LENGTH = 64;
