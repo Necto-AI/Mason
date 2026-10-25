@@ -72,7 +72,7 @@ interface Client {
 	readonly close: () => Promise<void>;
 }
 
-type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["get"]> & {
+type Ref = ReturnType<ReturnType<typeof createHost<{ kind: "server" }>>["hold"]> & {
 	transcript: { subscribe(listener: (value: TranscriptItem[] | undefined) => void): () => void };
 	queued: { subscribe(listener: (value: QueuedItem[] | undefined) => void): () => void };
 	agentStatus: { subscribe(listener: (value: AgentStatus | undefined) => void): () => void };
@@ -148,7 +148,7 @@ async function openClient(
 		},
 		onError: () => {},
 	});
-	const agent = browser.get(AgentService, {}) as unknown as Ref;
+	const agent = browser.hold(AgentService, {}) as unknown as Ref;
 	const state: State = { runStatuses: [] };
 	// The raw view, watched server-side: the tests assert both what the client is sent and what stays behind.
 	const raw = await server.runtime.viewState(BACKGROUND_CONTEXT);

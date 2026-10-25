@@ -783,10 +783,10 @@ on message quality against `evals/rubric.md`. Scenario shape, flags, trace field
 
 ## 7. Notes from building this (Chord behaviour worth knowing)
 
-1. **A reference created before the host has an upstream never binds.** `createHost()` (client) + `host.get()`
-   + `host.connect()` leaves the reference in `loading` forever: the re-hold pass in `connect()` only visits
-   references that already lost a link. The browser client therefore connects first and takes the reference
-   afterwards (`src/web/client.ts`); later reconnects re-hold that same reference.
+1. **A reference created before the host has an upstream never binds.** `createHost()` (client) + `host.hold()`
+   (or an awaited `host.get()`) + `host.connect()` leaves the reference in `loading` forever: the re-hold pass in
+   `connect()` only visits references that already lost a link. The browser client therefore connects first and takes
+   the reference afterwards (`src/web/client.ts`); later reconnects re-hold that same reference.
 2. **A remote state hydrates only while subscribed.** `ref.member.value` is `undefined` until something
    subscribes, and the first delivery to a new subscriber is `undefined` before the snapshot arrives. Every
    client keeps its `view` / `agentStatus` subscriptions (and its last snapshot) for the lifetime of the page.
