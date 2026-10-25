@@ -22,6 +22,7 @@ import {
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
+	triggerFor,
 	writeIntegration,
 	type Integration,
 } from "../src/server/integrations.ts";
@@ -423,6 +424,20 @@ async function reported(url: string, token: string): Promise<Record<string, unkn
 function downAll(): never {
 	throw new Error("no container in a test");
 }
+
+describe("the trigger a door may use", () => {
+	it("is a trigger face on an enabled integration, and nothing else", () => {
+		const integrations: Record<string, Integration> = {
+			on: { enabled: true, trigger: { hook: "workspace-check", secret: "0f".repeat(32) } },
+			off: { enabled: false, trigger: { hook: "workspace-check", secret: "1e".repeat(32) } },
+			"tools-only": { ...github },
+		};
+		assert.equal(triggerFor(integrations, "on")?.hook, "workspace-check");
+		assert.equal(triggerFor(integrations, "off"), undefined, "a disabled integration's door is nowhere");
+		assert.equal(triggerFor(integrations, "tools-only"), undefined, "tools are not a door");
+		assert.equal(triggerFor(integrations, "nobody"), undefined);
+	});
+});
 
 describe("the integrations route", () => {
 	it("answers this boot's list, sorted, and refuses a request without a token", async () => {

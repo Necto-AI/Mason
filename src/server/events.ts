@@ -13,16 +13,17 @@
  * redelivery after a restart — or days later — is the same fire. `kind` is a label for the log, never a dispatch key:
  * one trigger, one hook. `payload` is text, refused when it is over the cap rather than truncated, because a truncated
  * event is a lie about what happened.
+ *
+ * Two of these reach the accept log, so both are held to one line: `kind` is a token, and `id`, which is whatever opaque
+ * key a provider chose, may not carry a control character — a newline in it would forge the rest of that line.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-
-/** How many bytes a delivery may be: an envelope carries a paragraph, and the cap bounds what a sender can buffer. */
-export const EVENT_BODY_MAX_BYTES = 256 * 1024;
 
 /** The one path a trigger answers on: `/api/events/<integration>` (main.ts). */
 export const EVENTS_PATH = "/api/events/";
 
-/** `sha256=<hex hmac-sha256 of the raw body>`, the shape GitHub already sends (`verifyGithubSignature`). */
+/** `sha256=<hex hmac-sha256 of the raw body>`, the shape GitHub already sends: a header's name is a sender's choice, its
+ * form is mason's, and `connectors.ts` verifies GitHub's with this same function. */
 export const EVENT_SIGNATURE_HEADER = "x-mason-signature";
 
 /** A `payload` is a paragraph a person reads, not a document: far more than a real event, far less than a prompt can hold. */
@@ -31,8 +32,19 @@ const PAYLOAD_MAX = 2_000;
 /** Long enough for a provider's event id, short enough that the key stays a key. */
 const ID_MAX = 200;
 
-/** A short token: the log line and the prompt's label, nothing structural. */
-const KIND_MAX = 64;
+/**
+ * The bytes a log line or a terminal acts on rather than shows, C0 and DEL. An `id` may be a provider's opaque key, so it
+ * is free text within its cap — but whatever it holds ends up in the accept log verbatim, and a carriage return would
+ * rewrite the line in front of it.
+ */
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
+
+/**
+ * A short token, not free text: the kind is the accept log's label and the prompt's one line, so a newline or a space in
+ * it would split one label into two and forge the rest of a line. Letters, digits and `.` `_` `:` `-`, the first character
+ * a letter or a digit, at most 64 — enough for `issue.opened`, `push` or `chat.message`, and nothing that needs quoting.
+ */
+const KIND_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 /** The v1 envelope, checked. Unknown keys are ignored: a sender may add fields before mason knows them. */
 export interface EventEnvelope {
@@ -45,10 +57,11 @@ export interface EventEnvelope {
 /**
  * Whether the header signs exactly these bytes with this secret.
  *
- * Over the raw bytes, before JSON parsing, exactly as `verifyGithubSignature` does: re-serialising changes whitespace
- * and key order, and the signature would then be over something the sender never signed. Comparison is constant-time,
- * because a check that leaks how far it got can be guessed a byte at a time. A missing or malformed header is simply
- * not the sender's signature; the caller learns nothing beyond a `401`.
+ * Over the raw bytes, before JSON parsing: re-serialising changes whitespace and key order, and the signature would then
+ * be over something the sender never signed. Comparison is constant-time, because a check that leaks how far it got can
+ * be guessed a byte at a time. A missing or malformed header is simply not the sender's signature; the caller learns
+ * nothing beyond a `401`. One implementation, because two copies of a signature check are two chances for one of them to
+ * drift: a header's name is the sender's, the bytes and the HMAC are mason's.
  */
 export function verifySignature(secret: string, raw: Buffer, header: string | undefined): boolean {
 	if (header === undefined || !header.startsWith("sha256=")) return false;
@@ -79,10 +92,19 @@ export function readEnvelope(raw: Buffer): EventEnvelope | { error: string } {
 	if (fields.v !== 1) return { error: '"v" must be the integer 1' };
 	const id = fields.id;
 	if (typeof id !== "string" || id === "") return { error: '"id" must be a non-empty string' };
+	// Before the cap, because this is the rule that keeps one delivery one line: the id is interpolated into the accept log
+	// as-is, and a newline in it would let a sender forge entries in it.
+	if (CONTROL_CHARACTER.test(id)) {
+		return { error: '"id" must be one line: it holds a control character, and the accept log prints it as-is' };
+	}
 	if (id.length > ID_MAX) return { error: `"id" is ${id.length} characters; the cap is ${ID_MAX}` };
 	const kind = fields.kind;
-	if (typeof kind !== "string" || kind === "") return { error: '"kind" must be a non-empty string' };
-	if (kind.length > KIND_MAX) return { error: `"kind" is ${kind.length} characters; the cap is ${KIND_MAX}` };
+	if (typeof kind !== "string" || !KIND_TOKEN.test(kind)) {
+		return {
+			error:
+				'"kind" must be a short token — letters, digits and "." "_" ":" "-", starting with a letter or a digit, at most 64 characters — such as "issue.opened", "push" or "chat.message", with no spaces or newlines',
+		};
+	}
 	const payload = fields.payload;
 	if (typeof payload !== "string") return { error: '"payload" must be a string' };
 	if (payload.length > PAYLOAD_MAX) {

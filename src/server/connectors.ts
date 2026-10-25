@@ -10,9 +10,10 @@
  * two answer different questions: `config.json` says who may speak as the owner, this says which sender may wake the
  * agent about an event. A leak of one is not a leak of the other.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { verifySignature } from "./events.ts";
 import type { HousePaths } from "./house.ts";
 
 /** How much of an event's free text reaches the prompt. Enough to judge an issue, far short of the body limit. */
@@ -90,16 +91,14 @@ export function mintConnectorSecret(): string {
 /**
  * GitHub's `X-Hub-Signature-256`: `sha256=<hex hmac of the raw body>`.
  *
- * Over the raw bytes, not the parsed JSON: re-serialising changes whitespace and key order, and the signature would
- * never match. Comparison is constant-time, because a signature check that leaks how far it got is a signature check
- * that can be guessed a byte at a time.
+ * The same check the generic door makes (`events.verifySignature`), under a different header name: the form is mason's,
+ * so there is one implementation of it, and a header's name is the sender's to choose. What stays untouched is this
+ * route's own shape — its `429` / `413` / `401` responses are the ones GitHub already gets — because it predates the
+ * door and reshaping it buys nothing; but a second copy of the HMAC comparison is how one door quietly stops matching
+ * the other.
  */
 export function verifyGithubSignature(secret: string, body: Buffer, header: string | undefined): boolean {
-	if (header === undefined || !header.startsWith("sha256=")) return false;
-	const claimed = Buffer.from(header.slice("sha256=".length), "hex");
-	if (claimed.length !== 32) return false;
-	const expected = createHmac("sha256", secret).update(body).digest();
-	return timingSafeEqual(claimed, expected);
+	return verifySignature(secret, body, header);
 }
 
 /** The kinds of event that are worth a turn. Everything else is acknowledged and dropped. */

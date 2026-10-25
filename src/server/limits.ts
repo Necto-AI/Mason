@@ -22,6 +22,12 @@ export const HOOK_BODY_MAX_BYTES = 32 * 1024;
  */
 export const GITHUB_BODY_MAX_BYTES = 256 * 1024;
 
+/**
+ * A generic event delivery: how many bytes a trigger may send. An envelope carries a paragraph, and the cap bounds what
+ * a sender can buffer; a delivery over it is dropped with `413` before the signature is read, never truncated.
+ */
+export const EVENT_BODY_MAX_BYTES = 256 * 1024;
+
 /** Fires one hook may start per window, counted per hook id. */
 export const HOOK_FIRE_LIMIT = 6;
 
