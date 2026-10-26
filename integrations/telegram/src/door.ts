@@ -5,10 +5,11 @@
  * mason's door answers `202` and nothing else is a delivery (`src/server/events.ts`). The four answers below it are each
  * a different thing, and this file keeps them apart:
  *
- * - **A refusal** — `400` a bad envelope, `401` a bad signature, `404` a path that names no integration — is final. The
- *   offset advances past it, because a message the door will never accept must not be retried forever: it would block
- *   the chat behind it, and every retry would make the same refusal again. It is logged with the body's own `error`
- *   rather than swallowed, so the operator can fix the config and know what was lost.
+ * - **A refusal** — `400` a bad envelope, `401` a bad signature, `404` a path that names no integration, `405` a method
+ *   that is not POST, `413` a body over the door's cap — is final, and only those five are. The offset advances past it,
+ *   because a message the door will never accept must not be retried forever: it would block the chat behind it, and
+ *   every retry would make the same refusal again. It is logged with the body's own `error` rather than swallowed, so the
+ *   operator can fix the config and know what was lost.
  * - **`429` over the budget is a wait, not a verdict.** The door answers six deliveries a minute and says in
  *   `retry-after` when it has room; the same bytes are posted again after exactly that, which is one fire either way
  *   because the envelope's id never changes. One line names the wait — not one a second — and a wait longer than
@@ -19,25 +20,33 @@
  *   container is the ordinary case, and the second attempt usually lands after the other end has bound its port. Past
  *   that it is reported as unreachable and `src/poller.ts` holds the batch, because an id that was never delivered is
  *   never seen again.
- * - **Anything else** — a proxy's HTML page, a `500` — is logged as one line and treated as a refusal: the door is not
- *   going to be made to work by this container, and the offset must not stall on it.
+ * - **Any other status** — the door's own `500`, a sidecar's `502`, a proxy's `503` with an HTML page — is not a verdict
+ *   at all: nothing said the same bytes will get the same answer, and a door that failed to fire the hook did not refuse
+ *   the event. It is reported as unreachable exactly like a network failure, so `src/poller.ts` holds the batch and
+ *   tries the same bytes again rather than losing a message to a restart on the mason side.
  *
  * The signature is over the exact bytes posted: `JSON.stringify` once, then the same string signed and sent. Re-encoding
  * on the way out would sign something the door never received, which is precisely the failure the header exists to
  * catch.
  */
 import { signBody, type EventEnvelope } from "./envelope.ts";
-import { describeError, type Log } from "./log.ts";
+import { describeError, formatDuration, type Log } from "./log.ts";
 import type { Fetch, FetchResponse } from "./telegram.ts";
 
 /** Three retries after the first try, and 250 ms doubling: a container pair restarting together is the case this is for. */
 export const RETRY_ATTEMPTS = 3;
 export const RETRY_BACKOFF_MS = 250;
 /**
- * The longest `retry-after` this will sit through. The door's window is a minute, so a real answer is far below it; this
- * is the cap that keeps a wrong one — a proxy quoting an hour — from parking the poller on a single message.
+ * The longest `retry-after` this will sit through: this container's own cap, not a budget the door has. The door's window
+ * is a minute, so a real answer is far below it; this is the cap that keeps a wrong one — a proxy quoting an hour — from
+ * parking the poller on a single message.
  */
 export const MAX_THROTTLE_WAIT_MS = 5 * 60_000;
+/**
+ * The statuses that mean the same thing on every attempt, and the only ones after which the offset may advance: a bad
+ * envelope, a bad signature, a path that names no integration, a method that is not POST, a body over the cap.
+ */
+export const FINAL_REFUSAL_STATUSES: readonly number[] = [400, 401, 404, 405, 413];
 
 export type DoorResult =
 	| { readonly kind: "accepted" }
@@ -90,7 +99,8 @@ export class EventDoor {
 			if (outcome.kind === "throttled") {
 				// Not final, and not a network failure either: the message is good and the door is full. `src/poller.ts`
 				// holds the batch, which is the same message tried again later.
-				const asked = outcome.waitMs === undefined ? "no wait it could read" : `a ${outcome.waitMs / 1_000} s wait`;
+				const asked =
+					outcome.waitMs === undefined ? "no wait it could read" : `a ${formatDuration(outcome.waitMs)} wait`;
 				this.#options.log(
 					"error",
 					`${this.#options.integration}: the door is over its budget and named ${asked} for ${envelope.id};` +
@@ -136,11 +146,16 @@ export class EventDoor {
 			}
 			const text = await answer.text().catch(() => "");
 			if (answer.status !== 429) {
-				const reason = refusalReason(text);
+				const reason = answerReason(text);
+				const said = `${answer.status}${reason === undefined ? "" : `: ${reason}`}`;
+				if (!FINAL_REFUSAL_STATUSES.includes(answer.status)) {
+					// Not a refusal: a `500` is the door failing to fire the hook, a `502` is a sidecar that never reached it.
+					// Neither says the same bytes will get the same answer, so this is the network-failure path, not the end.
+					return { kind: "failed", error: `the door answered ${said}` };
+				}
 				this.#options.log(
 					"warn",
-					`${this.#options.integration}: the door refused ${envelope.id} with ${answer.status}` +
-						`${reason === undefined ? "" : `: ${reason}`}; the offset advances past it`,
+					`${this.#options.integration}: the door refused ${envelope.id} with ${said}; the offset advances past it`,
 				);
 				return { kind: "refused", status: answer.status };
 			}
@@ -148,7 +163,7 @@ export class EventDoor {
 			if (waitMs === undefined || waitMs > this.#maxWaitMs) return { kind: "throttled", waitMs };
 			this.#options.log(
 				"warn",
-				`${this.#options.integration}: the door is over its budget; waiting ${Math.round(waitMs / 1_000)}s` +
+				`${this.#options.integration}: the door is over its budget; waiting ${formatDuration(waitMs)}` +
 					` and posting ${envelope.id} again`,
 			);
 			await this.#sleep(waitMs);
@@ -156,18 +171,26 @@ export class EventDoor {
 	}
 }
 
-/** The door's own sentence about a refusal: `{ "error": "…" }`, which is what its `400` answers carry. */
-function refusalReason(text: string): string | undefined {
+/**
+ * The body as a JSON object, or `undefined` when it is not one — a proxy's HTML page, an empty body. Every field this file
+ * reads out of an answer goes through here, so "is this JSON at all" is decided in one place.
+ */
+function jsonObject(text: string): Record<string, unknown> | undefined {
 	if (text === "") return undefined;
 	try {
 		const parsed = JSON.parse(text) as unknown;
-		if (typeof parsed === "object" && parsed !== null) {
-			const error = (parsed as { error?: unknown }).error;
-			if (typeof error === "string" && error !== "") return error;
-		}
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		return parsed as Record<string, unknown>;
 	} catch {
-		// A proxy's error page is not JSON, and its first line is still the best sentence available.
+		return undefined;
 	}
+}
+
+/** The door's own sentence about an answer: `{ "error": "…" }`, which is what its `400` and `500` bodies carry. */
+function answerReason(text: string): string | undefined {
+	const error = jsonObject(text)?.error;
+	if (typeof error === "string" && error !== "") return error;
+	// A proxy's error page is not JSON, and its first line is still the best sentence available.
 	const line = text.split("\n", 1)[0]?.trim();
 	return line === "" ? undefined : line;
 }
@@ -186,13 +209,6 @@ function retryAfterMs(answer: FetchResponse, text: string): number | undefined {
 
 /** mason's `429` body: `{ "error": "too many deliveries", "retryAfterSeconds": 42 }`. */
 function bodyRetryAfter(text: string): number | undefined {
-	if (text === "") return undefined;
-	try {
-		const parsed = JSON.parse(text) as unknown;
-		if (typeof parsed !== "object" || parsed === null) return undefined;
-		const seconds = (parsed as { retryAfterSeconds?: unknown }).retryAfterSeconds;
-		return typeof seconds === "number" ? seconds : undefined;
-	} catch {
-		return undefined;
-	}
+	const seconds = jsonObject(text)?.retryAfterSeconds;
+	return typeof seconds === "number" ? seconds : undefined;
 }

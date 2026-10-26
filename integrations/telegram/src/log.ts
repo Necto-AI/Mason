@@ -45,6 +45,14 @@ export function createLog(secrets: readonly string[], sink: LogSink = (line) => 
 }
 
 /**
+ * A wait as a log line states it: whole seconds and an `s`. One helper, so the two lines about a single wait — the one
+ * naming what was asked and the one naming what was waited — never disagree about it.
+ */
+export function formatDuration(ms: number): string {
+	return `${Math.round(ms / 1_000)}s`;
+}
+
+/**
  * An unknown thrown value as one line, with the cause it was hiding.
  *
  * `Error` loses its stack on purpose: a log line is a line. The cause does not go with it, though — `fetch failed` is

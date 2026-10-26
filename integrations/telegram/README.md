@@ -44,16 +44,18 @@ longer than a minute ends the tool call with a message the model can act on inst
   an over-long payload rather than truncating it and a refusal advances the offset — the event would be lost.
 - `202` is expected. What each other answer means, and what the offset does about it:
   - **A refusal advances past it.** `400` (a bad envelope), `401` (a bad signature), `404` (a path that names no
-    integration): logged with the integration's name and the body's own `error`, and the offset moves on, because a
-    message the door will never accept must not block the chat behind it.
+    integration), `405` (not a POST), `413` (over the body cap): logged with the integration's name and the body's own
+    `error`, and the offset moves on, because a message the door will never accept must not block the chat behind it.
+    Those five and no others — they are the answers a retry would get again.
   - **`429` waits.** The door's budget is six deliveries a minute and its answer says in `retry-after` when it has room
     again. The same envelope — same bytes, same signature, same `tg-<update_id>` — is posted once that long, which is one
-    fire either way; a wait longer than five minutes is not sat through, and one that names no number is not guessed at.
-    One line says so each time, not one a second.
-  - **A door that cannot be reached retries the batch.** A refused connection, a timeout, or a `429` this will not wait
-    out: the offset does **not** advance and nothing is persisted. The same batch is posted again after a backoff that
-    starts at a second and doubles to half a minute, with one log line a minute while it is down and one when it answers
-    again. Redelivery is free because a batch's ids are the update ids, and the door dedupes on them.
+    fire either way; a wait longer than `MAX_THROTTLE_WAIT_MS` (five minutes, this container's own cap) is not sat
+    through, and one that names no number is not guessed at. One line says so each time, not one a second.
+  - **A door that cannot be reached retries the batch.** A refused connection, a timeout, an answer that is not one of
+    the five above (mason's own `500`, a sidecar's `502` — a door that failed did not refuse the event), or a `429` this
+    will not wait out: the offset does **not** advance and nothing is persisted. The same batch is posted again after a
+    backoff that starts at a second and doubles to half a minute, with one log line a minute while it is down and one
+    when it answers again. Redelivery is free because a batch's ids are the update ids, and the door dedupes on them.
 
 **What is dropped, and where.** A message from a bot, an edit, a chat that is not in `TELEGRAM_ALLOWED_CHATS`, and
 anything without text (media, a service notice) never becomes an event, and a chat we did not choose never enters
@@ -101,10 +103,13 @@ In a private chat there is no privacy mode: every message arrives.
 
 There is no published port, here or on any integration. The container listens on `8082` inside the `mason-mcp` compose
 network, which is `internal: true`, and mason reaches it by name; the host, another machine and the internet cannot. Its
-own way out is `mason-egress`, which is also `internal: true` and whose only reachable address is the `vpn` sidecar at
-`http://vpn:1080` — so the sidecar is the route to Telegram, and there is no route to anything else. Mason is not on
-`mason-egress`, which is what keeps the proxy this container's route rather than mason's: mason reaches this container,
-this container reaches the sidecar, and nothing else is a route.
+way out is `mason-egress`, which is also `internal: true` and whose only reachable address is the `vpn` sidecar at
+`http://vpn:1080` — so the sidecar is this container's whole route to Telegram, and there is no route to anything else.
+That is a difference between the two containers, not a wall between them: mason shares `mason-edge` with the sidecar and
+could open the same proxy, and it would gain nothing by it, because `mason-edge` already gives mason egress of its own.
+What the two `internal: true` networks keep off the proxy is the tool machine — `mason-env` joins neither `mason-edge` nor `mason-egress`, so
+it has no route to the proxy at all. mason reaches this container, this container reaches the sidecar, and nothing else is
+a route out of it.
 
 ## Running it
 

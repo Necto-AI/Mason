@@ -1,6 +1,7 @@
 /**
  * The trigger face's memory: first boot starts from now, a restart resumes, a refused delivery moves on, and a door
- * that could not be reached leaves the batch exactly where it was.
+ * that could not take a message — unreachable, or answering something that is no verdict — leaves the batch exactly where
+ * it was.
  *
  * The state here is a real directory — `StateFiles` is half of what is being tested — while Telegram and the door are
  * scripted, so each test is one sequence of answers rather than a mock of the process.
@@ -239,7 +240,7 @@ describe("the offset on a restart", () => {
 		const down = await pollAgainstDoor(
 			[
 				{ kind: "accepted" },
-				{ kind: "unreachable", error: "the door answered 429 with a 3600 s wait" },
+				{ kind: "unreachable", error: "the door answered 429 with a 3600s wait" },
 				{ kind: "accepted" },
 				{ kind: "accepted" },
 			],
@@ -253,12 +254,30 @@ describe("the offset on a restart", () => {
 	it("logs at most once a minute while the door is down, and never once a second", async () => {
 		const down = await pollAgainstDoor([{ kind: "unreachable", error: "connect ECONNREFUSED" }], { stopAfter: 7 });
 
-		const complaints = down.lines.filter((line) => line.includes("the door is unreachable"));
+		const complaints = down.lines.filter((line) => line.includes("the door did not take update"));
 		assert.equal(complaints.length, 2);
 		assert.equal(down.door.envelopes.length, 7);
 		// 1 s doubling to a half-minute ceiling: the seventh wait already crosses the minute the log is kept to.
 		assert.deepEqual(down.waits, [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
 		assert.deepEqual(await readOffset(down.state, down.directory), { offset: 100 });
+	});
+
+	it("names the update and the reason in one line, without calling a 5xx unreachable", async () => {
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "unreachable", error: "the door answered 500: the integration's hook is not a hook" },
+				{ kind: "accepted" },
+			],
+			{ stopAfter: 1 },
+		);
+
+		assert.deepEqual(
+			down.lines.filter((line) => line.includes("did not take update")),
+			[
+				"[telegram] warn: the door did not take update 100 (the door answered 500: the integration's hook is not a hook); " +
+					"holding the batch rather than advancing past it",
+			],
+		);
 	});
 
 	it("advances past a message the filter dropped", async () => {
