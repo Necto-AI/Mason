@@ -24,6 +24,12 @@ COPY src ./src
 # image also runs without one, and owned by the unprivileged user that writes it.
 RUN mkdir -p /data && chown node:node /data
 
+# The agent's inbox: where an incoming file lands, and the only directory of the agent's home this container can see. The
+# compose file mounts a volume here at the same path it is mounted at in the tool machine, which is what makes the path in
+# an event open the same bytes on both. Everything else of the home — the profile, the log, the skills, the memory
+# repository — does not exist in this image at all.
+RUN mkdir -p /home/mason/.mason/agent/workspace/inbox && chown node:node /home/mason/.mason/agent/workspace/inbox
+
 USER node
 
 # Documentation, not a route: nothing publishes this port, and mason reaches it by name on mason-mcp.
