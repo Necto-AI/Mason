@@ -21,10 +21,11 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import type { RunningServer } from "../src/server/main.ts";
 import { startServer } from "../src/server/main.ts";
-import { readEnvelope, verifySignature } from "../src/server/events.ts";
+import { readCommand, readEnvelope, verifySignature } from "../src/server/events.ts";
 import { housePaths, type HousePaths } from "../src/server/house.ts";
 import { EVENT_BODY_MAX_BYTES } from "../src/server/limits.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
+import { isBusy } from "../src/server/status.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
@@ -47,8 +48,14 @@ const pagerSecret = "3b".repeat(32);
 
 const integrationsFile = {
 	integrations: {
-		telegram: { enabled: true, trigger: { hook: "workspace-check", secret: telegramSecret } },
+		telegram: {
+			enabled: true,
+			trigger: { hook: "workspace-check", secret: telegramSecret },
+			commands: ["stop", "compact", "clear", "status"],
+		},
 		docs: { enabled: true, trigger: { hook: "morning-brief", secret: docsSecret } },
+		// A second door that declares one command, so the key's integration half is tested as well as the id half.
+		pager: { enabled: true, trigger: { hook: "workspace-check", secret: pagerSecret }, commands: ["stop"] },
 		// Disabled, and its hook deliberately does not exist: a switched-off door is not a reason to refuse the boot.
 		off: { enabled: false, trigger: { hook: "no-such-hook", secret: "2a".repeat(32) } },
 		"no-trigger": { enabled: true },
@@ -105,6 +112,24 @@ function signature(secret: string, body: string): string {
 
 function envelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return { v: 1, id: "issue-1421-opened", kind: "issue.opened", payload: "Ilya opened issue #1421", ...overrides };
+}
+
+/** A command in the door's second kind: the word a person typed after the slash, and nothing else. */
+function command(payload: string, id = "chat-1"): Record<string, unknown> {
+	return { v: 1, id, kind: "command", payload };
+}
+
+/** Every command the durable log was told about: one entry per claim, which is what its dedupe is read from. */
+async function commandEntries(runtime: AgentRuntime): Promise<Record<string, unknown>[]> {
+	const conversation = await runtime.conversation();
+	const page = await conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT);
+	return page.items
+		.filter((entry) => entry.kind === "app.command")
+		.map((entry) =>
+			typeof entry.data === "object" && entry.data !== null && !Array.isArray(entry.data)
+				? (entry.data as Record<string, unknown>)
+				: {},
+		);
 }
 
 /** A delivery with the right header unless one is passed; `null` sends no signature at all. */
@@ -264,6 +289,47 @@ describe("the envelope", () => {
 			assert.ok("error" in result, `${body} was accepted`);
 			assert.match(result.error, /JSON object|not JSON/);
 		}
+	});
+});
+
+describe("the command a payload names", () => {
+	const all = ["stop", "compact", "clear", "status"];
+
+	it("reads a declared word, and the argument only compact reads", () => {
+		assert.deepEqual(readCommand("stop", all), { command: "stop", argument: undefined });
+		assert.deepEqual(readCommand(" status ", all), { command: "status", argument: undefined });
+		assert.deepEqual(readCommand("compact keep the pricing thread", all), {
+			command: "compact",
+			argument: "keep the pricing thread",
+		});
+		assert.deepEqual(readCommand("compact", all), { command: "compact", argument: undefined });
+		// A trailing space is nobody's instruction: a chat client may send one, and an argument of nothing is no argument.
+		assert.deepEqual(readCommand("compact   ", all), { command: "compact", argument: undefined });
+	});
+
+	it("leaves an undeclared word to the relay, rather than refusing it", () => {
+		for (const payload of ["", "start", "stopp", "Stop", "status please"]) {
+			const declared = payload === "status please" ? ["stop"] : all;
+			assert.deepEqual(readCommand(payload, declared), { undeclared: true }, payload);
+		}
+		// The set is closed: a name mason does not have is undeclared even if the file said otherwise.
+		assert.deepEqual(readCommand("restart", ["stop", "restart"]), { undeclared: true });
+	});
+
+	it("holds a declared command to its shape, naming the rule it broke", () => {
+		const withArgument = readCommand("status now", all);
+		assert.ok("error" in withArgument);
+		assert.match(withArgument.error, /"status" takes no argument/);
+
+		const long = readCommand(`compact ${"x".repeat(201)}`, all);
+		assert.ok("error" in long);
+		assert.match(long.error, /"compact" takes at most 200 characters/);
+
+		// Exactly the cap is a line, not a document: it is accepted, and it is the argument as typed.
+		assert.deepEqual(readCommand(`compact ${"x".repeat(200)}`, all), {
+			command: "compact",
+			argument: "x".repeat(200),
+		});
 	});
 });
 
@@ -530,6 +596,213 @@ describe("the event door", () => {
 				const message = error instanceof Error ? error.message : String(error);
 				assert.ok(message.includes("telegram"), `the refusal names the integration: ${message}`);
 				assert.ok(message.includes("no-such-hook"), `the refusal names the hook: ${message}`);
+				return true;
+			},
+		);
+	});
+});
+
+describe("a command at the door", () => {
+	it("runs a declared command and answers the one line a chat reads", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			const stopped = await deliver(server, "telegram", JSON.stringify(command("stop")));
+			assert.equal(stopped.status, 200);
+			assert.deepEqual(await stopped.json(), { handled: true, reply: "stopped" });
+
+			// A status changes nothing and answers from the view this boot derives, so the line is the live one.
+			const status = await deliver(server, "telegram", JSON.stringify(command("status", "chat-2")));
+			assert.equal(status.status, 200);
+			const { handled, reply } = (await status.json()) as { handled?: unknown; reply?: unknown };
+			assert.equal(handled, true);
+			assert.match(String(reply), /^idle: nothing queued; no integration connected; nothing unreachable since boot$/);
+
+			// Neither of them is a turn: a command that fired a hook would leave an entry, and a chat is not a wake-up.
+			assert.equal((await hookEntries(server.server.runtime)).length, 0);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("still stops a turn after six messages have spent the integration's minute", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			for (let index = 0; index < 6; index += 1) {
+				const body = JSON.stringify(envelope({ id: `burst-${index}` }));
+				assert.equal((await deliver(server, "telegram", body)).status, 202, `message ${index}`);
+			}
+			// The whole point: the six messages that just spent the minute are the ones whose turn a person now wants to
+			// stop, so a refusal here would be the door refusing to let somebody interrupt what it started.
+			const stop = await deliver(server, "telegram", JSON.stringify(command("stop", "burst-7")));
+			assert.equal(stop.status, 200);
+			assert.deepEqual(await stop.json(), { handled: true, reply: "stopped" });
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("spends six commands a minute on its own budget, leaving the message budget alone", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			for (let index = 0; index < 6; index += 1) {
+				const body = JSON.stringify(command("stop", `stop-${index}`));
+				assert.equal((await deliver(server, "telegram", body)).status, 200, `command ${index}`);
+			}
+			const refused = await deliver(server, "telegram", JSON.stringify(command("stop", "stop-7")));
+			assert.equal(refused.status, 429, "a command is still a bill the sender controls");
+			assert.ok(Number(refused.headers.get("retry-after")) >= 1);
+			// And the other way round: commands are not a way to spend the integration's message budget either.
+			const message = JSON.stringify(envelope({ id: "after-the-commands" }));
+			assert.equal((await deliver(server, "telegram", message)).status, 202);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("answers handled:false for a word the integration does not declare, and fires nothing", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			// `docs` declares no commands at all, so even a word mason knows is the sender's own business.
+			for (const body of [command("stop", "chat-1"), command("start", "chat-2"), command("stopp", "chat-3")]) {
+				const answer = await deliver(server, "docs", JSON.stringify(body), signature(docsSecret, JSON.stringify(body)));
+				assert.equal(answer.status, 200, JSON.stringify(body));
+				assert.deepEqual(await answer.json(), { handled: false }, "the relay is told to send the message it has");
+			}
+			assert.equal((await hookEntries(server.server.runtime)).length, 0);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("refuses a malformed command with a 400 naming the rule, and a bad signature before it is read", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			const body = JSON.stringify(command("status now"));
+			const malformed = await deliver(server, "telegram", body);
+			assert.equal(malformed.status, 400);
+			const { error } = (await malformed.json()) as { error?: unknown };
+			assert.match(String(error), /"status" takes no argument/);
+
+			// The signature is the door: a body the door would refuse with a `400` is a `401` when the sender did not sign
+			// it, because nothing is parsed until the bytes are the sender's.
+			const unsigned = await deliver(server, "telegram", body, signature(docsSecret, body));
+			assert.equal(unsigned.status, 401);
+			assert.deepEqual(await unsigned.json(), { error: "unauthorized" });
+			assert.equal((await hookEntries(server.server.runtime)).length, 0);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("admits one command per id, so a redelivery answers rather than acting twice", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			const body = JSON.stringify(command("stop", "chat-7"));
+			for (const what of ["the first delivery", "the redelivery"]) {
+				const answer = await deliver(server, "telegram", body);
+				assert.equal(answer.status, 200, what);
+				assert.deepEqual(await answer.json(), { handled: true, reply: "stopped" }, what);
+			}
+			assert.deepEqual(await commandEntries(server.server.runtime), [{ command: "stop" }], "one claim for two deliveries");
+			// The same id at another door is another command: an id is unique within its integration, not across them.
+			const elsewhere = JSON.stringify(command("stop", "chat-7"));
+			const other = await deliver(server, "pager", elsewhere, signature(pagerSecret, elsewhere));
+			assert.equal(other.status, 200);
+			assert.deepEqual(await other.json(), { handled: true, reply: "stopped" });
+			assert.equal((await commandEntries(server.server.runtime)).length, 2);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("stops a turn that is running, because a command is not queued behind it", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		// A turn that cannot finish until the test says so: `/stop` is then genuinely posted into a running conversation.
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			async () => {
+				await held;
+				return fauxAssistantMessage(fauxText("the turn that was stopped"));
+			},
+		]);
+		const directory = dirname(paths.home);
+		const server = await startServer({
+			port: 0,
+			hostname: "127.0.0.1",
+			storage: "memory",
+			dataDir: join(directory, "data"),
+			workspaceDir: join(directory, "workspace"),
+			houseHome: paths.home,
+			modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
+			onReport: () => {},
+		});
+		try {
+			const token = server.pairingToken;
+			assert.ok(token, "a fresh home mints one token, which is what pairs this test");
+			const base = `http://127.0.0.1:${server.port}`;
+			const conversation = await server.runtime.conversation();
+			await conversation.submit({ type: "input", content: "think about it for a while" }, BACKGROUND_CONTEXT);
+
+			const deadline = Date.now() + 5_000;
+			while (!isBusy(await server.runtime.viewSnapshot(BACKGROUND_CONTEXT))) {
+				assert.ok(Date.now() < deadline, "the turn started, so `/stop` has something to stop");
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+
+			const body = JSON.stringify(command("stop", "while-running"));
+			const stopped = fetch(`${base}/api/events/telegram`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-mason-signature": signature(telegramSecret, body) },
+				body,
+			});
+			// The door waits for the conversation to be idle again, so the turn is let go once the abort is in flight.
+			release();
+			const answer = await stopped;
+			assert.equal(answer.status, 200);
+			assert.deepEqual(await answer.json(), { handled: true, reply: "stopped" });
+			assert.equal(isBusy(await server.runtime.viewSnapshot(BACKGROUND_CONTEXT)), false, "the turn is over");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("refuses a boot whose integration declares a command mason does not have, naming the set", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths, {
+			integrations: {
+				telegram: {
+					enabled: true,
+					trigger: { hook: "workspace-check", secret: telegramSecret },
+					commands: ["stop", "stopp"],
+				},
+			},
+		});
+		await assert.rejects(
+			() => serve(paths),
+			(error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				assert.ok(message.includes(paths.integrations), `the refusal names the file: ${message}`);
+				assert.match(message, /"stopp"/);
+				assert.match(message, /stop, compact, clear, status/, "the refusal names the whole set, so the fix is one line");
 				return true;
 			},
 		);

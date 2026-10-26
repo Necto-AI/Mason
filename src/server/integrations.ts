@@ -24,6 +24,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { writeFileAtomic } from "./atomic.ts";
+import { COMMAND_NAMES, isCommandName } from "./events.ts";
 import { clearIntegrationStatus } from "./integration-status.ts";
 import type { HousePaths } from "./house.ts";
 
@@ -61,6 +62,11 @@ export interface Integration {
 	readonly description?: string;
 	readonly tools?: IntegrationTools;
 	readonly trigger?: IntegrationTrigger;
+	/**
+	 * What the trigger's secret may ask for beyond a fire, out of the closed set in `events.ts`. Absent or empty means
+	 * none, so an existing trigger secret gains no vocabulary by being read.
+	 */
+	readonly commands?: readonly string[];
 	readonly [key: string]: unknown;
 }
 
@@ -164,12 +170,14 @@ function validate(where: string, name: string, value: unknown): Integration {
 	const tools = readTools(where, name, raw.tools);
 	const description = readDescription(where, name, raw.description, tools !== undefined);
 	const trigger = readTrigger(where, name, raw.trigger);
+	const commands = readCommands(where, name, raw.commands);
 	return {
 		...raw,
 		enabled,
 		...(description === undefined ? {} : { description }),
 		...(tools === undefined ? {} : { tools }),
 		...(trigger === undefined ? {} : { trigger }),
+		...(commands === undefined ? {} : { commands }),
 	};
 }
 
@@ -248,6 +256,34 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
 	return { ...raw, hook, secret };
 }
 
+/**
+ * The commands a trigger may issue, checked against the closed set `events.ts` owns. A name this build does not have
+ * refuses the boot rather than sitting in the file doing nothing: a command an operator believes they gave a chat and
+ * that never ran is the quiet loss this module is shaped against, and the refusal names the whole set so the fix is one
+ * line away.
+ */
+function readCommands(where: string, name: string, value: unknown): readonly string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		throw new Error(refusal(where, name, 'has a "commands" that is not a list: the command names this trigger may issue'));
+	}
+	const commands: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string" || !isCommandName(entry)) {
+			throw new Error(
+				refusal(
+					where,
+					name,
+					`declares the command ${typeof entry === "string" ? `"${entry}"` : JSON.stringify(entry)}, which mason does ` +
+						`not have: the whole set is ${COMMAND_NAMES.join(", ")}`,
+				),
+			);
+		}
+		commands.push(entry);
+	}
+	return commands;
+}
+
 function isHttpUrl(url: string): boolean {
 	try {
 		const { protocol } = new URL(url);
@@ -308,13 +344,25 @@ function ordered(integrations: Record<string, Integration>): Record<string, Inte
  * Read from the boot's snapshot (`currentIntegrations()`), never from the file: whether a trigger exists is config, and
  * config is settled at boot.
  */
-export function triggerFor(
-	integrations: Record<string, Integration>,
-	name: string,
-): IntegrationTrigger | undefined {
+export function triggerFor(integrations: Record<string, Integration>, name: string): IntegrationTrigger | undefined {
+	return live(integrations, name)?.trigger;
+}
+
+/**
+ * What a trigger may issue besides a fire: the commands its entry declares, and none at all when there is no door to ask
+ * through. A declaration without a trigger face is not an error, because it grants nothing until there is a secret to
+ * spend it with — and the moment there is one, this is the list it is held to.
+ */
+export function commandsFor(integrations: Record<string, Integration>, name: string): readonly string[] {
+	const integration = live(integrations, name);
+	if (integration === undefined || integration.trigger === undefined) return [];
+	return integration.commands ?? [];
+}
+
+/** One entry that is switched on, which is what both faces of the door are read from. */
+function live(integrations: Record<string, Integration>, name: string): Integration | undefined {
 	const integration = integrations[name];
-	if (integration === undefined || !integration.enabled) return undefined;
-	return integration.trigger;
+	return integration === undefined || !integration.enabled ? undefined : integration;
 }
 
 /**

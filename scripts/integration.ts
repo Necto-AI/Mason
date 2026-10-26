@@ -13,6 +13,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { housePaths } from "../src/server/house.ts";
+import { COMMAND_NAMES } from "../src/server/events.ts";
 import {
 	readIntegrations,
 	removeIntegration,
@@ -31,11 +32,14 @@ function usage(): never {
   npm run integration -- enable <name>
   npm run integration -- disable <name>
   npm run integration -- secret <name> [--hook <hook-id>]
+  npm run integration -- commands <name> <a,b,c>
 
   home: ${house.home}
   the list is ${house.integrations} (0600, in the server's half) and is read once at boot: a change applies on restart.
   add refuses a name that is already there unless --replace is passed, and a name is lowercase letters, digits and dashes.
   secret mints 32 bytes for the trigger's HMAC key and prints it once; --hook names the hook a first trigger fires.
+  commands declares what that trigger may ask mason to do beyond firing the hook: a comma-separated list out of
+  ${COMMAND_NAMES.join(", ")}, and an empty list takes the vocabulary away.
   nothing else here prints a secret.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
@@ -53,7 +57,11 @@ async function list(): Promise<void> {
 		const integration = integrations[name];
 		const tools = integration.tools === undefined ? "no tools" : integration.tools.url;
 		const trigger = integration.trigger === undefined ? "no trigger" : `trigger ${integration.trigger.hook}`;
-		console.log(`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${tools}  ${trigger}`);
+		const commands =
+			integration.commands === undefined || integration.commands.length === 0
+				? ""
+				: `, commands ${integration.commands.join(",")}`;
+		console.log(`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${tools}  ${trigger}${commands}`);
 	}
 }
 
@@ -145,6 +153,33 @@ async function secret(): Promise<void> {
 	console.log("The list is read once at boot: start the server again for this to take effect.");
 }
 
+/**
+ * Declares what the trigger's secret may ask for beyond a fire.
+ *
+ * The names are the closed set `events.ts` owns, so an unknown one is refused here by the same validation a boot does,
+ * with the whole set in the message: a typo must not become a command that silently never runs. An empty list is how the
+ * vocabulary is taken away again, because "none" and "not written" mean the same thing and one of them can be typed.
+ */
+async function setCommands(): Promise<void> {
+	const name = args[0];
+	const list = args[1];
+	if (name === undefined || list === undefined) usage();
+	const { integrations } = await readIntegrations(house);
+	const existing = integrations[name];
+	if (existing === undefined) {
+		console.error(`no integration ${name}: \`npm run integration -- list\` shows the ones this home has`);
+		process.exit(1);
+	}
+	const commands = list
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter((entry) => entry !== "");
+	const written = await writeIntegration(house, name, { ...existing, commands });
+	const declared = written.commands ?? [];
+	console.log(`${name} may issue ${declared.length === 0 ? "no commands" : declared.join(", ")}`);
+	console.log("The list is read once at boot: start the server again for this to take effect.");
+}
+
 // A refusal from the config module is the operator's message, not a stack trace: the message names the path and the
 // entry, which is what a person has to fix.
 try {
@@ -154,6 +189,7 @@ try {
 	else if (command === "disable") await toggle(false);
 	else if (command === "remove") await remove();
 	else if (command === "secret") await secret();
+	else if (command === "commands") await setCommands();
 	else usage();
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
