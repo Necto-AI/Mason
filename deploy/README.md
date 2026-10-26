@@ -543,13 +543,26 @@ Two smaller honest notes:
 
 ## What is in the env image, and why nothing else is
 
-ubuntu 24.04 plus `openssh-server`, `git`, `curl`, `jq` and `gh`. The `git` is not for the upload: `remember` appends a
-fact and commits it on that machine, in `agent/.git`. `gh` and `curl` are there because the tools of a machine with a
-route out can work on a repository — `gh issue list`, `gh pr create`, a clone, a build. No `pi-env` daemon:
+ubuntu 24.04 plus `openssh-server`, `git`, `curl`, `jq`, `gh` and OCR. The `git` is not for the upload: `remember`
+appends a fact and commits it on that machine, in `agent/.git`. `gh` and `curl` are there because the tools of a machine
+with a route out can work on a repository — `gh issue list`, `gh pr create`, a clone, a build. No `pi-env` daemon:
 `sshConnection()` uploads the binary over the connection, checks its SHA-256 on the far side, renames it into place and
 deletes older ones. An image that carried a daemon would freeze a protocol version inside the deployment and then
 disagree with the mason image that replaced it — silently, because the upload is designed never to fail loudly about a
 version it did not ship.
+
+**OCR is in the image**, and it is a binary rather than a service for one reason: the file is already there. A photo of a
+page, a scan, a screenshot or a PDF arrives in a chat, lands on the `mason-inbox` volume, and that same path is on this
+machine — so `indra-ocr <path> --format md` is one process away, with no upload, no second copy and nothing to reach over
+a network. It is Indra (`datalab-to/indra`), pinned to tag `v1.1.2`, the same OCR `~/dev/pi-setup` installs; CPU only, no
+torch, no GPU, no port, no credential, and no configuration. Its ~76 MB of weights are fetched at build time into the
+Hugging Face cache of the `mason` account, so the first message is not the slow one and a machine with no route out reads
+a page all the same — a build that cannot fetch fails instead of shipping an OCR that downloads later. The agent reaches
+for it through the `ocr` skill (`skills/ocr/SKILL.md`), not through code (`docs/CAPABILITY-PLAN.md`, phase 3).
+
+It is also the one thing here that makes the image noticeably bigger: 214 MB → 688 MB when this was written, of which a
+349 MB virtualenv (`opencv-python-headless` 72 MB, `onnxruntime` 68 MB, `numpy` 43 MB, `pip` 16 MB, the rest their
+dependencies) and 74 MB of weights, on top of 39 MB of `python3` and `python3-venv` in the apt layer above.
 
 A tool runs as `mason` inside that container, with `env -i` and a nine-variable allowlist from the server side, so it
 cannot read the server's environment or the provider key. It can read and write `agent/` — the profile, the log,
