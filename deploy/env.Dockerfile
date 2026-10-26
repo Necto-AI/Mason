@@ -14,12 +14,19 @@ FROM docker.io/library/ubuntu:24.04
 ARG MASON_UID=1000
 ARG MASON_GID=1000
 
-# openssh-server and git. The tools already on the image are enough for the upload: sh, coreutils (sha256sum, mktemp,
-# mkdir, chmod, mv) and a shell for the login session. `git` is not for the upload: `remember` appends a fact and
+# openssh-server, git, and the three tools a worker on a repository needs: `gh` (its own apt repository, key and source
+# list below), `curl` and `jq`. The tools already on the image are enough for the upload: sh, coreutils (sha256sum,
+# mktemp, mkdir, chmod, mv) and a shell for the login session. `git` is not for the upload: `remember` appends a fact and
 # commits it on this machine, in the repository that lives in the agent's half of the home, because the log and its
 # history have to share a filesystem (src/server/house.ts, `appendFact`).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server git \
+ && apt-get install -y --no-install-recommends openssh-server git curl ca-certificates jq gnupg \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
 # The package generates host keys in its postinst. Left in place they would be baked into the image and shared by every
@@ -37,6 +44,12 @@ RUN set -eux; \
     groupadd --gid "${MASON_GID}" mason; \
     useradd --uid "${MASON_UID}" --gid "${MASON_GID}" --create-home --home-dir /home/mason --shell /bin/bash mason; \
     chmod 0700 /home/mason
+
+# `useradd` leaves the account locked (its password field is `!`), and sshd refuses a locked account outright with
+# `User mason not allowed because account is locked` before it ever looks at the key — even with `PubkeyAuthentication
+# yes`, because with `UsePAM no` nothing can unlock it later. `*` is "no password, not locked": the account still cannot
+# be logged into with a password (`PasswordAuthentication no`), and a key is the only way in, which is the intent.
+RUN usermod -p '*' mason
 
 # The volumes, with the ownership they need on a first `up`. Whichever container starts first initialises an empty
 # named volume from the directory in its own image, so both images carry the same answer: `env-keys` writable by the

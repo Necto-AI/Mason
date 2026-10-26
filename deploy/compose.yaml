@@ -33,10 +33,18 @@ services:
     environment:
       # The one account sshd allows in (`AllowUsers`); the same name the mason service logs in as.
       MASON_ENV_USER: ${MASON_ENV_USER:-mason}
-    # No `ports`, and only the internal network: there is no route into this container from the host and none out of it
-    # to anywhere. The one thing that reaches it is mason, over mason-internal, with a key it generated.
+      # The `gh` credential the tool machine uses, and the only reason this container has a token of its own. `gh` reads
+      # `GH_TOKEN` from the environment before it reads any config, so the value lives in `deploy/.env` and here, never
+      # in a file a command could rewrite. Absent means no `gh` at all, which is the pre-existing state and not an error.
+      GH_TOKEN: ${GH_TOKEN:-}
+    # Two networks, and the second one is a decision rather than a default: `mason-edge` is an ordinary bridge with a
+    # gateway, so this container has a route to the internet, and a tool can `curl`, `gh` and clone. That is what a
+    # worker on a repository needs and what a fence against exfiltration forbids — the tool machine can send out what
+    # it can read, and it can read the agent's half of the home. The fence is intact for everything that does not need
+    # the internet (a deployment that leaves this line out keeps it); here it is opened on purpose.
     networks:
       - mason-internal
+      - mason-edge
     volumes:
       # Read-only here: mason writes the public half of the key it generated, sshd reads it at login.
       - env-keys:/run/env-keys:ro
@@ -47,6 +55,11 @@ services:
       # `service/` is deliberately absent: no soul, no roster, no token hashes, no trigger secret, no database, no SSH
       # key, no provider credential. That absence is the boundary — a mount, not a mode bit that `chmod` can undo.
       - mason-agent:/home/mason/.mason/agent
+      # A checkout the agent works in on behalf of a person, at its host path so that every path in a report, an issue
+      # and a prompt means the same thing on the host and in the container. Read-write: the worker commits, branches and
+      # pushes. Defaults to the clinical-compass checkout on the deploy host; set REPO_DIR in `deploy/.env` to move it,
+      # and leave it pointing at a directory that exists — a bind of a missing path is a container that will not start.
+      - ${REPO_DIR:-/home/denis/dev/clinical-compass}:${REPO_DIR:-/home/denis/dev/clinical-compass}
     # No daemon in the image and none started here: mason uploads `pi-env` over the connection and verifies its SHA-256
     # on the far side before it runs (vendor/pi/packages/env/src/ssh.ts, deployDaemon).
 
