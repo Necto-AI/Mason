@@ -58,7 +58,7 @@ export interface TranscriberOptions {
 	readonly url: string;
 	/** The route to it. The platform's own fetch, because this is not Telegram and the VPN proxy is Telegram's. */
 	readonly fetch: Fetch;
-	/** How long one request may take. Injected so a test does not wait the real twenty seconds. */
+	/** How long one request may take. Injected so a test does not wait the real twelve seconds. */
 	readonly timeoutMs?: number;
 	/** The largest file worth posting, in bytes. Injected for the same reason the inbox's ceiling is. */
 	readonly maxBytes?: number;

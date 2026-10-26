@@ -130,7 +130,7 @@ services:
       # The stack this container belongs to, and the volume its env key lands in: the entrypoint names both in the one
       # message an operator reads while a boot is failing, and a name that points at the wrong stack is worse than none.
       MASON_STACK: ${MASON_STACK:-mason}
-      MASON_ENV_KEYS_VOLUME: ${MASON_ENV_KEYS_VOLUME:-env-keys}
+      MASON_ENV_KEYS_VOLUME: ${MASON_ENV_KEYS_VOLUME:-${MASON_STACK:-mason}-env-keys}
       # 1: refuse to start when there is no provider credential, naming the path. 0: a stack deliberately without a
       # model (the UI loads, no turn can run).
       MASON_MODEL_REQUIRED: ${MASON_MODEL_REQUIRED:-1}
@@ -310,13 +310,13 @@ networks:
   mason-edge:
   # `internal: true` is the inbound half of the env machine's network policy: no gateway of its own, no DNS beyond the
   # compose network, so nothing outside can reach the sshd and the tool session cannot answer a call it never got. The
-  # outbound half is a second network, `mason-edge` on the `mason-env` service above: a fence a deployment leaves on for
+  # outbound half is a second network, `mason-out` on the `mason-env` service above: a fence a deployment leaves on for
   # a stack that runs no untrusted command, and turns off for a worker on a repository.
   mason-internal:
     internal: true
-  # The integration containers, and mason. `internal: true` plus no published port is the whole access policy: an MCP
-  # server on this network is reachable by name from mason, and unreachable from the host, from another machine and from
-  # the internet.
+  # The integration containers, mason, and the transcriber. `internal: true` plus no published port is the whole access
+  # policy: an MCP server on this network is reachable by name from mason, and unreachable from the host, from another
+  # machine and from the internet.
   #
   # mason-env must never join it. A tool machine that can reach an MCP server directly reaches a capability its operator
   # never approved — the tool surface is decided in mason, at boot, out of integrations.json, and a `bash` that could
@@ -332,8 +332,8 @@ networks:
   # no direct route to anything, and the only reachable address on it is the `vpn` sidecar's mixed inbound at
   # `http://vpn:1080`. An integration that needs a proxy joins this instead of mason-edge, and only that proxy's own
   # container is on both, so this network is the integration's one way out. mason and mason-env are not members: mason
-  # reaches the proxy from mason-edge, where it already has egress of its own and needs nothing more, and mason-env is on
-  # no egress network at all.
+  # reaches the proxy from mason-edge, where it already has egress of its own and needs nothing more, and mason-env's own
+  # route out is `mason-out`, which no integration is on.
   #
   # A direct `mason-edge` membership beside this one would defeat it: mason-edge is an ordinary bridge with a gateway, so
   # the container would have its own way out to the internet and the proxy would be decoration.
