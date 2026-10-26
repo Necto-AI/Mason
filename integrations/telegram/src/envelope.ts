@@ -89,7 +89,14 @@ export function renderPayload(event: ChatEvent): string {
 	const reply = event.replyToMessageId === undefined ? "" : `, replying to ${event.replyToMessageId}`;
 	const prefix = `${event.sender}${handle} in chat ${event.chatId}${title}${reply}: `;
 	const file = event.file === undefined ? "" : `, with a file at ${event.file.path}`;
-	return `${prefix}${fitText(event.text, PAYLOAD_MAX - prefix.length - file.length)}${file}`;
+	// The clause is never cut and the text always is, which works while the clause itself fits. A path long enough to leave
+	// no room at all (a misconfigured `TELEGRAM_INBOX`) would otherwise produce a payload over the cap that the door
+	// refuses, and a refused delivery is a message nobody reads: the prefix gives way instead, from the left.
+	// When even that does not fit, the path is dropped rather than cut: a truncated path is one the agent would try to
+	// open and not find, which is worse than a payload that says a file exists and cannot be named. `TELEGRAM_INBOX` is
+	// checked at startup for this, so reaching it is a bug rather than a setting.
+	const named = PAYLOAD_MAX - prefix.length - file.length >= 0 ? file : ", with a file this payload has no room to name";
+	return `${prefix}${fitText(event.text, PAYLOAD_MAX - prefix.length - named.length)}${named}`;
 }
 
 /**

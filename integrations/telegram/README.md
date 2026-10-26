@@ -44,7 +44,7 @@ longer than a minute ends the tool call with a message the model can act on inst
   open:
 
   ```json
-  {"v":1,"id":"tg-8812","kind":"chat.message",
+  {"v":1,"id":"tg-448860480","kind":"chat.message",
    "payload":"Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at /home/mason/.mason/agent/workspace/inbox/448860480-report.pdf"}
   ```
 

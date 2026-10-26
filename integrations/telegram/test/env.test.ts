@@ -33,6 +33,19 @@ describe("the configuration", () => {
 		assert.equal(config.port, 8082);
 	});
 
+	it("names the inbox directory, and refuses a relative one because a relative path names nothing on the other machine", () => {
+		assert.equal(readConfig(environment()).inboxDir, "/home/mason/.mason/agent/workspace/inbox");
+		assert.equal(
+			readConfig(environment({ TELEGRAM_INBOX: "/srv/inbox" })).inboxDir,
+			"/srv/inbox",
+			"an override is a mount agreement, not a preference",
+		);
+		assert.throws(
+			() => readConfig(environment({ TELEGRAM_INBOX: "inbox" })),
+			(error: unknown) => error instanceof ConfigError && error.message.includes("TELEGRAM_INBOX is not an absolute path"),
+		);
+	});
+
 	it("names every missing variable at once rather than one per attempt", () => {
 		assert.throws(
 			() => readConfig({}),

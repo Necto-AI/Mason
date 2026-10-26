@@ -20,7 +20,8 @@ services:
   # poll that posts one signed event per chat message to POST /api/events/telegram. Uncomment it after minting the secret
   # on the mason side — `docker compose exec mason npm run integration -- add telegram --url http://mason-telegram:8082/mcp
   # --description "The team chat"`, then `secret telegram --hook team-chat`, then paste what it printed once into
-  # deploy/.env — and after adding the same four variables there. Nothing here reaches into the home.
+  # deploy/.env — and after adding the same four variables there. Nothing here reaches into the home except one directory
+  # of it: `mason-inbox`, below, which is a volume of its own rather than a view of `mason-agent`.
   #
   mason-telegram:
     # Built by compose from the package in this repository (`integrations/telegram`), and published on its own release
@@ -55,8 +56,8 @@ services:
       # one of its networks.
       - mason-egress
     volumes:
-      # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service` and no
-      # `mason-agent`: the bot token is Telegram's credential, not mason's, and the home is not this container's to read.
+      # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service`: the bot
+      # token is Telegram's credential, not mason's, and the server's half of the home is not this container's to read.
       - mason-telegram-data:/data
       # The one directory of the agent's home this container sees, and the whole of what it shares with it: a file a
       # message carried is written here, and the event names it by path. `mason-env` mounts the same volume at the same

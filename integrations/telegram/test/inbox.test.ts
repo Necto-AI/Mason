@@ -7,7 +7,7 @@
  * through this file are one sequence of answers rather than a mock of a client.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -218,10 +218,38 @@ describe("the name a file is written under", () => {
 	it("caps a long name, so a path in a payload stays a path and not a paragraph", async () => {
 		const { inbox, dir } = await rig({ filePath: "documents/x" }, bytes(2));
 
-		await inbox.save(attachment({ name: `${"a".repeat(400)}.pdf` }), { updateId: 11 });
+		const outcome = await inbox.save(attachment({ name: `${"a".repeat(400)}.pdf` }), { updateId: 11 });
 
 		const [name] = await readdir(dir);
-		assert.equal(name?.length, "11-".length + 100);
+		assert.ok(name !== undefined && Buffer.byteLength(name, "utf8") <= "11-".length + 200);
+		// The promise the whole branch makes: the path in the payload is a path on disk.
+		assert.equal(outcome.kind, "saved");
+		if (outcome.kind === "saved") assert.equal((await stat(outcome.file.path)).isFile(), true);
+	});
+
+	it("caps a Cyrillic name by bytes, not by characters, because the filesystem counts bytes", async () => {
+		const { inbox, dir } = await rig({ filePath: "documents/x" }, bytes(2));
+
+		// 120 Cyrillic characters are 240 bytes: over the cap, and ordinary enough to arrive from a Russian phone.
+		const outcome = await inbox.save(attachment({ name: `${"ж".repeat(120)}.pdf` }), { updateId: 12 });
+
+		assert.equal(outcome.kind, "saved", "an ordinary non-Latin name must not be ENAMETOOLONG");
+		const [name] = await readdir(dir);
+		assert.ok(name !== undefined && Buffer.byteLength(name, "utf8") <= "12-".length + 200);
+	});
+
+	it("never cuts a surrogate pair in half, so every path it answers is a file that exists", async () => {
+		const { inbox, dir } = await rig({ filePath: "documents/x" }, bytes(2));
+
+		// An emoji is two UTF-16 units. Cutting on units can end the name in half of one, which is a path no file has.
+		const outcome = await inbox.save(attachment({ name: `${"😀".repeat(200)}.pdf` }), { updateId: 13 });
+
+		assert.equal(outcome.kind, "saved");
+		if (outcome.kind !== "saved") return;
+		assert.equal((await stat(outcome.file.path)).isFile(), true);
+		assert.deepEqual(await readdir(dir), [outcome.file.name]);
+		// `toWellFormed` asks the question exactly: a well-formed string carries no half of a pair.
+		assert.equal(outcome.file.name, outcome.file.name.toWellFormed());
 	});
 });
 
@@ -251,6 +279,52 @@ describe("the sweep", () => {
 		await inbox.save(attachment(), { updateId: 12 });
 
 		assert.deepEqual(await readdir(dir), ["12-report.pdf"]);
+	});
+
+	it("deletes the oldest files once the volume is over its ceiling, even when nothing is a week old", async () => {
+		const root = await tempRoot();
+		const now = Date.now();
+		// Four files of 1 KiB, the ceiling at 2 KiB: age says keep them all, size says keep two.
+		for (const [name, ageMs, size] of [
+			["1-oldest", 4_000, 1_024],
+			["2-next", 3_000, 1_024],
+			["3-newer", 2_000, 1_024],
+			["4-newest", 1_000, 1_024],
+		] as const) {
+			const path = join(root, name);
+			await writeFile(path, bytes(size));
+			const stamp = (now - ageMs) / 1_000;
+			await utimes(path, stamp, stamp);
+		}
+		const lines: string[] = [];
+		const inbox = new Inbox({
+			api: new ScriptedFiles({ filePath: "documents/x" }, bytes(2)),
+			dir: root,
+			now: () => now,
+			maxBytes: 2 * 1_024,
+			log: createLog([], (line) => lines.push(line)),
+		});
+
+		await inbox.sweep();
+
+		assert.deepEqual((await readdir(root)).sort(), ["3-newer", "4-newest"], "oldest first, and the newest always survives");
+		assert.match(lines.join("\n"), /deleted 2 file\(s\) and 1 MiB/);
+	});
+
+	it("leaves a directory and a symlink alone, because a sweep is not a delete somewhere else", async () => {
+		const root = await tempRoot();
+		await mkdir(join(root, "a-directory"));
+		await writeFile(join(root, "target"), "x");
+		await symlink(join(root, "target"), join(root, "a-link"));
+		const inbox = new Inbox({
+			api: new ScriptedFiles({ filePath: "documents/x" }, bytes(2)),
+			dir: root,
+			log: createLog([], () => {}),
+		});
+
+		await inbox.sweep();
+
+		assert.deepEqual((await readdir(root)).sort(), ["a-directory", "a-link", "target"]);
 	});
 
 	it("is never a failed message: a volume it cannot read is one line, and the refusal says the rest", async () => {

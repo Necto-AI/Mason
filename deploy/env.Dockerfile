@@ -55,10 +55,17 @@ RUN usermod -p '*' mason
 # named volume from the directory in its own image, so both images carry the same answer: `env-keys` writable by the
 # mason uid (it is the file mason writes), and the agent's half owned by the same uid in both containers. Only
 # `agent/` is prepared here; `service/` has no directory in this image at all, which is the point of it.
+#
+# `workspace/inbox` is a volume of its own (`mason-inbox`), mounted here and in the telegram container at this same path,
+# and it is prepared here for the same reason as the rest: the container that starts first initialises an empty named
+# volume from the directory in its own image. Telegram is an optional half of the stack, so on a deployment that had one
+# before it had the bot, this container is the one that creates the volume — and a mount point missing from this image
+# would come up root-owned, which is every attachment refused with EACCES and one warn line per message.
 RUN install -d -o mason -g mason -m 0755 /run/env-keys \
  && install -d -o mason -g mason -m 0700 /home/mason/.mason \
  && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent \
- && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent/workspace
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent/workspace \
+ && install -d -o mason -g mason -m 0700 /home/mason/.mason/agent/workspace/inbox
 
 COPY env-entrypoint.sh /usr/local/bin/env-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/env-entrypoint.sh

@@ -34,6 +34,32 @@ function update(overrides: Record<string, unknown> = {}): TelegramUpdate {
 	};
 }
 
+describe("a GIF and a round video note", () => {
+	it("are files a person sent, so they become events", () => {
+		const gif = readMessage(
+			update({ text: undefined, animation: { file_id: "A1", file_unique_id: "U1", file_name: "party.mp4", file_size: 2_048 } }),
+			context(),
+		);
+		assert.ok("event" in gif, "a GIF from the picker is a file, not a service notice");
+		if ("event" in gif) {
+			assert.equal(gif.event.text, "sent a GIF: party.mp4");
+			assert.equal(gif.attachment?.kind, "animation");
+		}
+
+		const note = readMessage(update({ text: undefined, video_note: { file_id: "V1", file_unique_id: "U2" } }), context());
+		assert.ok("event" in note);
+		if ("event" in note) {
+			assert.equal(note.event.text, "sent a round video message");
+			assert.match(note.attachment?.name ?? "", /^video-note-U2\.mp4$/);
+		}
+	});
+
+	it("still skips what is neither words nor a file", () => {
+		const sticker = readMessage(update({ text: undefined, sticker: { file_id: "S1" } }), context());
+		assert.deepEqual(sticker, { skip: "no text" });
+	});
+});
+
 describe("which updates become events", () => {
 	it("reads a plain message in an allowed chat", () => {
 		const reading = readMessage(update(), context());

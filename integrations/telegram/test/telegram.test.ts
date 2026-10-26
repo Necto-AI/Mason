@@ -111,6 +111,22 @@ describe("sendChatAction", () => {
 	});
 });
 
+describe("getFile and the download", () => {
+	it("throws a request failure that names no token when the fetch itself rejects", async () => {
+		const client = new TelegramApi({
+			token: TOKEN,
+			fetch: async () => {
+				throw new Error(`connect ECONNREFUSED https://api.telegram.org/file/bot${TOKEN}/documents/x`);
+			},
+		});
+
+		await assert.rejects(
+			() => client.downloadFile({ filePath: "documents/x" }),
+			(error: unknown) => error instanceof TelegramError && /request failed:/.test(error.message) && !error.message.includes(TOKEN),
+		);
+	});
+});
+
 describe("getUpdates", () => {
 	it("asks for messages only, for the given offset, and holds the request open as long as it was told", async () => {
 		const { api: client, sent } = api(200, { ok: true, result: [] });
