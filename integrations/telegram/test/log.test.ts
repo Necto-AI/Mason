@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createLog, describeError, redact } from "../src/log.ts";
+import { createLog, describeError, formatDuration, redact } from "../src/log.ts";
 
 const TOKEN = "123456789:AAF-abcdefghijklmnopqrstuvwxyz012345";
 const SECRET = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
@@ -48,6 +48,16 @@ describe("describing a failure", () => {
 
 	it("describes a thrown non-error without pretending it is one", () => {
 		assert.equal(describeError("nope"), "nope");
+	});
+});
+
+describe("stating a wait", () => {
+	it("is whole seconds and an `s`, whatever precision the source had", () => {
+		// A `retry-after` may be fractional and a send queue's wait may be sub-second; one style is printed for both.
+		assert.equal(formatDuration(42_000), "42s");
+		assert.equal(formatDuration(3_600_000), "3600s");
+		assert.equal(formatDuration(3_500), "4s");
+		assert.equal(formatDuration(500), "1s");
 	});
 });
 

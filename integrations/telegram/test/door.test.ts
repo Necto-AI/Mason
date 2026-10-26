@@ -1,10 +1,11 @@
 /**
  * One delivery, as the door sees it: the bytes, the header, and what each answer means.
  *
- * The statuses here are the cases the trigger face has to survive without a person: accepted, refused (which is final and
- * must not be retried), over budget (which is a wait, and the same bytes go again) and unreachable (which is reported so
- * the batch is held rather than advanced past). The request the fake receives is asserted byte for byte, because the
- * signature is over those bytes and over nothing else.
+ * The statuses here are the cases the trigger face has to survive without a person: accepted, refused (only the five a
+ * retry would get the same answer to, which is final), over budget (which is a wait, and the same bytes go again) and
+ * unreachable (a network failure, or an answer that is no verdict at all, reported so the batch is held rather than
+ * advanced past). The request the fake receives is asserted byte for byte, because the signature is over those bytes and
+ * over nothing else.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -107,19 +108,42 @@ describe("a delivery the door refuses", () => {
 		assert.match(logged, /the offset advances past it/);
 	});
 
-	it("treats a 400 naming a field and a 404 naming an integration the same way: final", async () => {
-		for (const status of [400, 404]) {
+	it("treats every status the door refuses deterministically the same way: final", async () => {
+		for (const status of [400, 404, 405, 413]) {
 			const rig = door(() => answer(status, JSON.stringify({ error: "no enabled trigger face there" })));
 			assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "refused", status });
 			assert.equal(rig.sent.length, 1);
 		}
 	});
 
-	it("gives up on a body that is not JSON rather than pretending it read one", async () => {
+	it("does not treat a 5xx from the door as final, because a door that failed did not refuse", async () => {
+		// mason's own 500 (`src/server/main.ts`, the hook fired into a boot that no longer defines it), a sidecar's 502,
+		// and a status nobody wrote down: none of them is a verdict on the bytes, so the batch must be held.
+		for (const status of [500, 502, 503, 418]) {
+			const rig = door(() => answer(status, JSON.stringify({ error: "the integration's hook is not a hook" })));
+
+			const result = await rig.door.fire(ENVELOPE);
+
+			assert.deepEqual(result, {
+				kind: "unreachable",
+				error: `the door answered ${status}: the integration's hook is not a hook`,
+			});
+			// The network retries, unchanged: `250, 500, 1000` ms, then the report that holds the batch.
+			assert.equal(rig.sent.length, 4);
+			assert.deepEqual(rig.waits, [250, 500, 1_000]);
+			assert.doesNotMatch(rig.lines.join("\n"), /the offset advances past it/);
+		}
+	});
+
+	it("holds the batch for a body that is not JSON rather than pretending it read one", async () => {
 		const rig = door(() => answer(502, "<html>proxy says no</html>"));
 
-		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "refused", status: 502 });
-		assert.match(rig.lines.join("\n"), /502: <html>proxy says no<\/html>/);
+		assert.deepEqual(await rig.door.fire(ENVELOPE), {
+			kind: "unreachable",
+			error: "the door answered 502: <html>proxy says no</html>",
+		});
+		assert.match(rig.lines.join("\n"), /could not deliver tg-8811 after 4 attempts/);
+		assert.match(rig.lines.join("\n"), /the batch will be retried/);
 	});
 });
 
@@ -167,10 +191,18 @@ describe("a delivery the door is over budget for", () => {
 
 		const result = await rig.door.fire(ENVELOPE);
 
-		assert.deepEqual(result, { kind: "unreachable", error: "the door answered 429 with a 3600 s wait" });
+		assert.deepEqual(result, { kind: "unreachable", error: "the door answered 429 with a 3600s wait" });
 		assert.equal(rig.sent.length, 1);
 		assert.deepEqual(rig.waits, []);
-		assert.match(rig.lines.join("\n"), /named a 3600 s wait for tg-8811; holding it rather than advancing past it/);
+		assert.match(rig.lines.join("\n"), /named a 3600s wait for tg-8811; holding it rather than advancing past it/);
+	});
+
+	it("states a fractional wait in the same whole seconds as every other line", async () => {
+		const rig = door((attempt) => (attempt === 1 ? answer(429, "", { "retry-after": "3.5" }) : answer(202, "")));
+
+		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(rig.waits, [3_500]);
+		assert.match(rig.lines.join("\n"), /over its budget; waiting 4s and posting tg-8811 again/);
 	});
 
 	it("reports a 429 that names no wait at all the same way, rather than guessing", async () => {

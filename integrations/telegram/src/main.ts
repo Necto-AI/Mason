@@ -26,7 +26,7 @@ import { EventDoor } from "./door.ts";
 import { readConfig, ConfigError, type Config } from "./env.ts";
 import { directFetch, proxiedFetch } from "./fetch.ts";
 import { startMcpHttp } from "./http.ts";
-import { createLog, describeError, type Log } from "./log.ts";
+import { createLog, describeError, formatDuration, type Log } from "./log.ts";
 import { Poller } from "./poller.ts";
 import { SendQueue } from "./queue.ts";
 import { StateFiles } from "./state.ts";
@@ -78,8 +78,7 @@ async function main(): Promise<void> {
 	const queue = new SendQueue({
 		// A failed send is a tool result the model reads, so the queue redacts with the same two secrets the log does.
 		secrets: [config.botToken, config.triggerSecret],
-		onWait: (chatId, waitMs, reason) =>
-			log("info", `waiting ${Math.round(waitMs / 1_000)}s on chat ${chatId} (${reason})`),
+		onWait: (chatId, waitMs, reason) => log("info", `waiting ${formatDuration(waitMs)} on chat ${chatId} (${reason})`),
 	});
 
 	const tools = await startMcpHttp({

@@ -210,9 +210,10 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
 **Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose network,
 joined by mason and the integration containers only. No integration declares `ports:` — mason reaches it by name, so it
 needs none — and a published port would be a second door into a service holding a credential, with no token of mason's in
-front of it. mason keeps `mason-edge` for the model provider and each integration keeps it for its upstream. The network
-is the authentication on the MCP wire: as long as the only peer is mason, a shared secret would be a secret with one
-holder.
+front of it. mason keeps `mason-edge` for the model provider, and an integration keeps it for its upstream — or, where
+the upstream is not reachable from this host, the integration joins `mason-egress` instead and the proxy sidecar beside
+it keeps `mason-edge` (`mason-telegram`, below). The network is the authentication on the MCP wire: as long as the only
+peer is mason, a shared secret would be a secret with one holder.
 
 **`mason-env` is not on `mason-mcp`, and must not be.** The tool machine runs `bash` for a model that can be talked into
 anything. If it could reach an MCP endpoint directly, the tool surface would stop being what `integrations.json` says it
@@ -243,11 +244,16 @@ this runs on, so the integration is given `HTTPS_PROXY=http://vpn:1080` and reac
 `mason-telegram` container therefore joins `mason-mcp` and `mason-egress`, and not `mason-edge`: `mason-egress` is
 `internal: true`, so the proxy is the only address the container can reach, and — since `mason-edge` is an ordinary
 bridge with a gateway — being on it would have given the container its own way out and made the proxy decoration. The
-sidecar is the one member that has both (`mason-egress` in, `mason-edge` out), and no other container joins
-`mason-egress`, so mason cannot reach the proxy at all. The proxy's config is a real server's address and key, so it is
-a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json` (gitignored) and fill in the TODOs; it is
-mounted read-only, never baked into an image, and the sidecar publishes no port, because a published SOCKS port is an
-open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use it.
+sidecar is the only container that stands on both (`mason-egress` in, `mason-edge` out), and `mason-telegram` is the only
+other member of `mason-egress`, so that network is that container's single route and the proxy is its only address there.
+The proxy is not a fence between mason and an integration: mason stands on `mason-edge` as the sidecar does, so mason can
+open `vpn:1080` too — and it changes nothing, because `mason-edge` already gives mason egress of its own, which is why
+mason never joins `mason-egress` and has no use for the proxy. What `mason-egress` keeps off it is the tool machine:
+`mason-env` joins neither network, so it has no route to the proxy at all. The proxy's config is a real server's address
+and key, so it is a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json` (gitignored) and fill in
+the TODOs; it is mounted read-only, never baked into an image, and the sidecar publishes no port, because a published
+SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use
+it.
 
 ## What to back up
 
@@ -285,8 +291,9 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 - `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
   publishes a port, and `mason-env` is not a member (see "An integration" above).
 - `mason-egress` is the third, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
-  integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`; mason and
-  `mason-env` are not on it, so neither can reach that proxy.
+  integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`. Neither mason nor
+  `mason-env` joins it: mason reaches the proxy from `mason-edge` — it has egress of its own there, so the proxy gains it
+  nothing — while `mason-env` joins neither network, so the tool machine has no route to the proxy at all.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send

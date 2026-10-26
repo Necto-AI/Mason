@@ -11,10 +11,11 @@
  * admit twice. Writing per message would be a file write per chat line, for a stronger guarantee the dedupe already
  * gives for free.
  *
- * **The offset advances only past an answer.** A refused delivery (`400`, `401`, `404`) advances: the door's answer is
- * not this container's to argue with, and stalling on a body it will never accept would block the chat behind it
- * forever. `src/door.ts` logs each one with the body's own error. A door that could not be reached at all — refused
- * connection, timeout, a `429` whose wait was longer than the door's own budget allows — advances nothing: the batch is
+ * **The offset advances only past an answer.** A refused delivery (`400`, `401`, `404`, `405`, `413`) advances: the
+ * door's answer is not this container's to argue with, and stalling on a body it will never accept would block the chat
+ * behind it forever. `src/door.ts` logs each one with the body's own error. A door that could not be reached at all —
+ * refused connection, timeout, an answer that is not one of those five (`500`, a sidecar's `502`, a proxy's page), a `429`
+ * whose wait is longer than this container's own `MAX_THROTTLE_WAIT_MS` (`src/door.ts`) — advances nothing: the batch is
  * held and retried after a bounded backoff, because an update id that was never delivered is never seen again, and
  * nothing downstream could dedupe what never arrived.
  *
@@ -25,7 +26,7 @@ import type { ChatDirectory } from "./chats.ts";
 import type { DoorResult } from "./door.ts";
 import { envelopeFor, type EventEnvelope } from "./envelope.ts";
 import { readMessage, type FilterContext } from "./filter.ts";
-import { describeError, type Log } from "./log.ts";
+import { describeError, formatDuration, type Log } from "./log.ts";
 import type { StateFiles } from "./state.ts";
 import { TelegramError, type TelegramUpdate } from "./telegram.ts";
 
@@ -108,7 +109,7 @@ export class Poller {
 						: POLL_RETRY_MS;
 				this.#options.log(
 					"warn",
-					`poll failed: ${describeError(error)}; retrying in ${Math.round(waitMs / 1_000)}s`,
+					`poll failed: ${describeError(error)}; retrying in ${formatDuration(waitMs)}`,
 				);
 				await this.#sleep(waitMs);
 			}
@@ -189,7 +190,8 @@ export class Poller {
 					announcedAt = at;
 					this.#options.log(
 						"warn",
-						`the door is unreachable (${delivery.error}); holding update ${update.update_id} and retrying the batch`,
+						`the door did not take update ${update.update_id} (${delivery.error});` +
+							" holding the batch rather than advancing past it",
 					);
 				}
 				const waitMs = reconnectWaitMs(down);
