@@ -521,13 +521,6 @@ async function handleRequest(
 			// A command has a budget of its own, and it is not the fire budget. Both are a bill — `/compact` is a model call —
 			// but a person who has just sent six messages must still be able to say `/stop`, and a chat that spent the
 			// integration's minute on messages would otherwise be unable to interrupt the turn those messages started.
-			const wait = fires.take(`command:${name}`);
-			if (wait !== undefined) {
-				console.warn(`[events] refused a command for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
-				response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
-				response.end(JSON.stringify({ error: "too many commands", retryAfterSeconds: wait }));
-				return;
-			}
 			const reading = readCommand(envelope.payload, commandsFor(currentIntegrations(), name));
 			if ("error" in reading) {
 				console.warn(`[events] refused a command for ${name}: ${reading.error}`);
@@ -537,6 +530,17 @@ async function handleRequest(
 				// Not a refusal: the sender typed something mason has no use for, and it still has a message in hand. Saying so is
 				// what keeps `/start`, `/foo` and a mistaken `/stopp` ordinary text instead of an error.
 				return json(response, 200, { handled: false });
+			}
+			// The budget is spent here, immediately before the dispatch, and nowhere above it: only a command mason will act
+			// on is a bill. A word it does not declare and a malformed one are neither acted on nor charged, because they must
+			// not be able to spend the minute a real `/stop` needs — six `/stopp` used to make the seventh command a `429`,
+			// which is the opposite of what the separate budget was for.
+			const wait = fires.take(`command:${name}`);
+			if (wait !== undefined) {
+				console.warn(`[events] refused a command for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+				response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
+				response.end(JSON.stringify({ error: "too many commands", retryAfterSeconds: wait }));
+				return;
 			}
 			const reply = await runCommand(
 				await commandTarget(runtime),
