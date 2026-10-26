@@ -731,11 +731,14 @@ describe("a command at the door", () => {
 		const server = await serve(paths);
 		try {
 			const body = JSON.stringify(command("stop", "chat-7"));
-			for (const what of ["the first delivery", "the redelivery"]) {
-				const answer = await deliver(server, "telegram", body);
-				assert.equal(answer.status, 200, what);
-				assert.deepEqual(await answer.json(), { handled: true, reply: "stopped" }, what);
-			}
+			const first = await deliver(server, "telegram", body);
+			assert.equal(first.status, 200);
+			assert.deepEqual(await first.json(), { handled: true, reply: "stopped" });
+			// The redelivery finds the claim: nothing ran, and the answer is empty rather than a second "stopped" for an act
+			// that did not happen. The relay suppresses an empty reply, so the chat says nothing either.
+			const again = await deliver(server, "telegram", body);
+			assert.equal(again.status, 200);
+			assert.deepEqual(await again.json(), { handled: true, reply: "" });
 			assert.deepEqual(await commandEntries(server.server.runtime), [{ command: "stop" }], "one claim for two deliveries");
 			// The same id at another door is another command: an id is unique within its integration, not across them.
 			const elsewhere = JSON.stringify(command("stop", "chat-7"));
