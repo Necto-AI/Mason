@@ -23,36 +23,46 @@ interface Ran {
 	status: number;
 }
 
-/** A target that records what it was asked to do, and a claim that answers the same thing every time. */
+/** A target that records what it was asked to do, in order, and a claim that answers the same thing every time. */
 function stub(options: { readonly claimed?: boolean; readonly status?: string; readonly busy?: boolean } = {}): {
 	readonly target: CommandTarget;
 	readonly ran: Ran;
+	readonly steps: string[];
 	readonly claims: { requestId: string; command: CommandName; argument: string | undefined }[];
 } {
 	const ran: Ran = { abort: 0, clear: 0, compact: [], status: 0 };
+	const steps: string[] = [];
 	const claims: { requestId: string; command: CommandName; argument: string | undefined }[] = [];
 	const claimed = options.claimed ?? true;
 	const target: CommandTarget = {
 		abort: async () => {
+			steps.push("abort");
 			ran.abort += 1;
 		},
 		clear: async () => {
+			steps.push("clear");
 			ran.clear += 1;
 		},
 		compact: async (instructions) => {
+			steps.push("compact");
 			ran.compact.push(instructions);
 		},
 		status: async () => {
+			steps.push("status");
 			ran.status += 1;
 			return options.status ?? IDLE;
 		},
-		busy: async () => options.busy ?? false,
+		busy: async () => {
+			steps.push("busy");
+			return options.busy ?? false;
+		},
 		claim: async (requestId, command, argument) => {
+			steps.push("claim");
 			claims.push({ requestId, command, argument });
 			return claimed;
 		},
 	};
-	return { target, ran, claims };
+	return { target, ran, steps, claims };
 }
 
 describe("a command, dispatched", () => {
@@ -75,6 +85,31 @@ describe("a command, dispatched", () => {
 		const status = stub();
 		assert.equal(await runCommand(status.target, "command:telegram:4", "status", undefined), IDLE);
 		assert.deepEqual(status.ran, { abort: 0, clear: 0, compact: [], status: 1 });
+	});
+
+	it("aborts stop before it claims, and claims the other two before they act, because that is the trade", async () => {
+		// The property is order, not counts, so the steps are what is asserted. `abort` is idempotent and a failed abort
+		// must not leave a permanent "stopped" behind; a repeated clear or compact is worse than a lost one, so those two
+		// claim first. Tidying this into one rule breaks one of the three whichever rule a reader picks.
+		const stop = stub();
+		await runCommand(stop.target, "command:telegram:stop-9", "stop", undefined);
+		assert.deepEqual(stop.steps, ["abort", "claim"]);
+
+		const compact = stub();
+		await runCommand(compact.target, "command:telegram:compact-9", "compact", "the pricing thread");
+		assert.deepEqual(compact.steps, ["claim", "compact"]);
+
+		const clear = stub();
+		await runCommand(clear.target, "command:telegram:clear-9", "clear", undefined);
+		assert.deepEqual(clear.steps, ["claim", "busy", "clear"]);
+	});
+
+	it("aborts a redelivered stop again, because the claim is not a gate", async () => {
+		// Nothing is gated on the claim: the abort is idempotent, so a redelivery that reached it did no harm, and the log
+		// already holds the id that says so. Only the reply is suppressed: the first delivery already answered the chat.
+		const again = stub({ claimed: false });
+		assert.equal(await runCommand(again.target, "command:telegram:stop-1", "stop", undefined), undefined);
+		assert.deepEqual(again.steps, ["abort", "claim"]);
 	});
 
 	it("answers a redelivery with nothing, because the first delivery already answered", async () => {
