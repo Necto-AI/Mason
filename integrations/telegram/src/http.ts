@@ -7,7 +7,7 @@
  *
  * **Stateless on purpose.** No `Mcp-Session-Id`, no per-session state: mason opens one connection at boot and keeps it,
  * but a session that outlives neither side is a thing to expire, resume and apologise for, and both tools here are
- * independent calls. So every request gets its own `McpServer` and transport over the same two tools, and either end
+ * independent calls. So every request gets its own `McpServer` and transport over the same three tools, and either end
  * restarting is a reconnect rather than a stale session.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";

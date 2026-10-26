@@ -12,7 +12,7 @@
  * may be proxied, and the door's, which is always direct. One variable, one route — and the event path never depends on
  * the VPN being up, which is what keeps a VPN outage from looking like a delivery made.
  */
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { FormData as UndiciFormData, ProxyAgent, fetch as undiciFetch } from "undici";
 import type { Log } from "./log.ts";
 import type { Fetch, FetchRequest } from "./telegram.ts";
 
@@ -29,20 +29,48 @@ export function proxiedFetch(proxyUrl: string, log: Log): { readonly fetch: Fetc
 	const agent = new ProxyAgent(proxyUrl);
 	log("info", `Telegram API calls go through the proxy at ${proxyUrl}`);
 	return {
-		fetch: async (url, request) => undiciFetch(url, { ...initFor(request), dispatcher: agent }),
+		fetch: async (url, request) => {
+			const init = initFor(request);
+			return undiciFetch(url, {
+				...init,
+				...(init.body === undefined ? {} : { body: proxiedBody(init.body) }),
+				dispatcher: agent,
+			});
+		},
 		close: () => agent.close(),
 	};
 }
 
 /**
+ * The body `undici`'s client will encode.
+ *
+ * Both clients are spec-compliant and neither accepts the other's `FormData`: the platform's `fetch` brand-checks the
+ * built-in class and `undici` brand-checks its own, so a `FormData` handed straight to `undiciFetch` is posted as the
+ * string `[object FormData]` with a text content type rather than as multipart. The proxy route is the one that has to
+ * translate, and it translates here rather than at each call site, so an upload cannot be written that forgets which
+ * client it is talking to. The bytes are not copied: `undici` accepts the same global `Blob` the platform does, and only
+ * the class that enumerates the parts changes.
+ */
+export function proxiedBody(body: string | FormData): string | UndiciFormData {
+	if (typeof body === "string") return body;
+	const copy = new UndiciFormData();
+	for (const [name, value] of body) {
+		if (typeof value === "string") copy.append(name, value);
+		else copy.append(name, value, value.name);
+	}
+	return copy;
+}
+
+/**
  * The parts of a request both clients understand, built as a plain object rather than as either one's `RequestInit`.
  * Declaring one of the two types would make the object unusable by the other: Node's `fetch` and `undici`'s are the same
- * shape and two different type trees.
+ * shape and two different type trees. The one member they do not share is the body, because an upload's `FormData` has to
+ * belong to the client that encodes it, which is what `proxiedBody` above is for.
  */
 function initFor(request: FetchRequest): {
 	readonly method: "GET" | "POST";
 	readonly headers: Record<string, string>;
-	readonly body?: string;
+	readonly body?: string | FormData;
 	readonly signal?: AbortSignal;
 } {
 	return {
