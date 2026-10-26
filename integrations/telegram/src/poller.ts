@@ -25,8 +25,10 @@
  * **A command is an envelope of its own kind, and the message it came from is kept beside it.** Text that starts with a
  * slash is posted as `kind: "command"`, and mason answers whether it acted. `handled: false` means the word means
  * nothing there, so the same update goes to the door again as the message it always was: `/start`, `/foo` and a mistaken
- * `/stopp` reach the agent as text rather than disappearing or failing. `/help` never goes anywhere — it is the relay
- * describing itself, and `src/commands.ts` owns the words.
+ * `/stopp` reach the agent as text rather than disappearing or failing. A command the door *refuses* — a declared word
+ * with a stray argument, or one over the cap — falls back the same way, with the door's own sentence posted into the chat,
+ * because the person typing `/stop now` must be told something rather than watching a silent chat. `/help` never goes
+ * anywhere — it is the relay describing itself, and `src/commands.ts` owns the words.
  *
  * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
  * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away. The
@@ -223,7 +225,7 @@ export class Poller {
 				continue;
 			}
 			// The envelope being delivered. A command starts here and is replaced by the message when mason says it did not
-			// handle it, so the retry after a door that was down re-posts whichever one is still owed.
+			// handle it or refuses it, so the retry after a door that was down re-posts whichever one is still owed.
 			let envelope = prepared.envelope;
 			for (;;) {
 				const delivery = await this.#options.door.fire(envelope);
@@ -237,6 +239,15 @@ export class Poller {
 						announcedAt = undefined;
 					}
 					fired += 1;
+					if (delivery.kind === "refused" && envelope.kind === "command" && prepared.message !== undefined) {
+						// mason will not do this word with these words after it, and said why. The person's words are still a
+						// message, so the update becomes the one it always was — and the reason is posted into the chat, because a
+						// silent refusal is the one outcome worse than either. No loop risk: the fallback is a `chat.message`, and a
+						// refused message advances the offset.
+						this.#say(prepared.chatId, refusedLine(delivery.reason));
+						envelope = prepared.message;
+						continue;
+					}
 					if (delivery.kind === "accepted" && envelope.kind === "command") {
 						if (!delivery.answer.handled && prepared.message !== undefined) {
 							// The word means nothing there, so the update is the message it always was. Nothing was fired, and the
@@ -360,4 +371,15 @@ export class Poller {
 /** The wait before a batch the door could not take is tried again: 1 s, doubling, and no longer than half a minute. */
 export function reconnectWaitMs(failures: number): number {
 	return Math.min(RECONNECT_BACKOFF_MS * 2 ** Math.max(0, failures - 1), RECONNECT_BACKOFF_MAX_MS);
+}
+
+/**
+ * What a chat reads when the door refused a command: the door's own sentence, which is the only place the rule that was
+ * broken is written down. A refusal whose body carried nothing still says the one thing that matters — the word did not
+ * happen — rather than leaving the chat silent while the message it fell back to arrives.
+ */
+function refusedLine(reason: string | undefined): string {
+	return reason === undefined
+		? "mason could not run that command; it is being delivered as a message"
+		: `mason could not run that command: ${reason}; it is being delivered as a message`;
 }

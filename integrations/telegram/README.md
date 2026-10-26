@@ -113,7 +113,9 @@ stop,compact,clear,status` on the mason side); with none declared, every one of 
 not act on is not an error**: the door answers `{"handled":false}`, and this container posts the message it kept beside
 the command, so `/start`, `/foo` and a mistyped `/stopp` reach the agent as the text they were. A declared command that is
 malformed (an argument where mason takes none, more than 200 characters of instructions to `/compact`) is refused with a
-`400` and one line saying which rule it broke; the offset advances, because the person typed something mason will not do.
+`400`, and that falls back the same way with one difference: the door's own sentence about the rule that was broken is
+posted into the chat first, so `/stop now` tells the person why the word did not happen before the text arrives. The
+offset advances over both, because neither is something a retry would get a different answer to.
 
 The command envelope carries the id its message would have had, so a redelivery is one claim at the door and the command
 does not run twice. `/help` answers with what this relay forwards, because it cannot read `integrations.json`:

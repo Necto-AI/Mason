@@ -131,7 +131,7 @@ describe("a delivery the door refuses", () => {
 
 		const result = await rig.door.fire(ENVELOPE);
 
-		assert.deepEqual(result, { kind: "refused", status: 401 });
+		assert.deepEqual(result, { kind: "refused", status: 401, reason: "bad or missing signature" });
 		assert.equal(rig.sent.length, 1);
 		const logged = rig.lines.join("\n");
 		assert.match(logged, /telegram: the door refused tg-8811 with 401: bad or missing signature/);
@@ -141,7 +141,11 @@ describe("a delivery the door refuses", () => {
 	it("treats every status the door refuses deterministically the same way: final", async () => {
 		for (const status of [400, 404, 405, 413]) {
 			const rig = door(() => answer(status, JSON.stringify({ error: "no enabled trigger face there" })));
-			assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "refused", status });
+			assert.deepEqual(await rig.door.fire(ENVELOPE), {
+				kind: "refused",
+				status,
+				reason: "no enabled trigger face there",
+			});
 			assert.equal(rig.sent.length, 1);
 		}
 	});
