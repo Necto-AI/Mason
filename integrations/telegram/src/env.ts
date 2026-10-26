@@ -11,7 +11,7 @@
  * would deliver events that nothing accepts, and advance its offset past every one of them. Refusing to start is also
  * what a container supervisor understands: `restart: unless-stopped` retries, and the log says what to set.
  */
-import { DEFAULT_DATA_DIR, DEFAULT_MCP_PORT } from "./constants.ts";
+import { DEFAULT_DATA_DIR, DEFAULT_INBOX_DIR, DEFAULT_MCP_PORT } from "./constants.ts";
 
 /** Every variable the trigger face cannot run without. A name here is a name the refusal prints. */
 export const REQUIRED_VARIABLES = [
@@ -49,6 +49,8 @@ export interface Config {
 	readonly httpsProxy: string | undefined;
 	/** The volume this container keeps its offset in. */
 	readonly dataDir: string;
+	/** Where an attachment is written: a directory the tool machine mounts at this same path, so a payload's path opens. */
+	readonly inboxDir: string;
 	/** The MCP endpoint's port. Fixed at 8082 in the compose template; a variable here only so a test can move it. */
 	readonly port: number;
 }
@@ -107,6 +109,7 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 	}
 
 	const httpsProxy = (environment.HTTPS_PROXY ?? "").trim();
+	const inboxDir = value("TELEGRAM_INBOX");
 	return {
 		botToken: value("TELEGRAM_BOT_TOKEN"),
 		eventUrl,
@@ -114,6 +117,7 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 		allowedChats,
 		httpsProxy: httpsProxy === "" ? undefined : httpsProxy,
 		dataDir: (environment.DATA_DIR ?? "").trim() === "" ? DEFAULT_DATA_DIR : (environment.DATA_DIR ?? "").trim(),
+		inboxDir: inboxDir === "" ? DEFAULT_INBOX_DIR : inboxDir,
 		port,
 	};
 }
