@@ -46,6 +46,7 @@ import {
 } from "./events.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
+	COMMAND_LIMIT,
 	createFireLimiter,
 	EVENT_BODY_MAX_BYTES,
 	type FireLimiter,
@@ -412,6 +413,12 @@ export async function runCommand(
 			await target.clear();
 			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
 		}
+		default: {
+			// Every name in `COMMAND_NAMES` has an arm above, and this line is what makes a fifth one a compile error rather
+			// than a command that answers nothing.
+			const unhandled: never = command;
+			throw new Error(`no arm for command ${String(unhandled)}`);
+		}
 	}
 }
 
@@ -569,7 +576,7 @@ async function handleRequest(
 			// which is the opposite of what the separate budget was for.
 			const wait = fires.take(`command:${name}`);
 			if (wait !== undefined) {
-				console.warn(`[events] refused a command for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+				console.warn(`[events] refused a command for ${name}: ${COMMAND_LIMIT} a minute is the budget`);
 				response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
 				response.end(JSON.stringify({ error: "too many commands", retryAfterSeconds: wait }));
 				return;

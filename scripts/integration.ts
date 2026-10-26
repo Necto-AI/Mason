@@ -13,7 +13,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { housePaths } from "../src/server/house.ts";
-import { COMMAND_NAMES } from "../src/server/events.ts";
+import { COMMAND_NAMES, type CommandName, isCommandName } from "../src/server/events.ts";
 import {
 	readIntegrations,
 	removeIntegration,
@@ -170,10 +170,20 @@ async function setCommands(): Promise<void> {
 		console.error(`no integration ${name}: \`npm run integration -- list\` shows the ones this home has`);
 		process.exit(1);
 	}
-	const commands = list
-		.split(",")
-		.map((entry) => entry.trim())
-		.filter((entry) => entry !== "");
+	// Narrowed here rather than only in the reader, so a typo is refused before anything is written and the message
+	// carries the word the operator typed beside the whole set. The writer validates again on its way in: this is the
+	// sentence a person reads, not the last line of defence.
+	const commands: CommandName[] = [];
+	for (const entry of list.split(",").map((word) => word.trim()).filter((word) => word !== "")) {
+		if (!isCommandName(entry)) {
+			console.error(
+				`${house.integrations}: integration "${name}" declares the command "${entry}", which mason does not have: ` +
+					`the whole set is ${COMMAND_NAMES.join(", ")}`,
+			);
+			process.exit(1);
+		}
+		commands.push(entry);
+	}
 	const written = await writeIntegration(house, name, { ...existing, commands });
 	const declared = written.commands ?? [];
 	console.log(`${name} may issue ${declared.length === 0 ? "no commands" : declared.join(", ")}`);
