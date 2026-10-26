@@ -235,6 +235,25 @@ test("a call made from inside a script is refused, and told where the message ha
 	assert.match(outputText(result.output), /send it with send_to_user directly/, "the model is told what to do");
 });
 
+test("a hook with no chat tool answers in the console, and the result says nobody was reached", async () => {
+	// A schedule, a repository event, a retry: the hook names no message tool because there is no chat to answer in. The
+	// call is a real delivery — the console is the only reader such a turn has — and "delivered" would read as "a person
+	// has this", which is false and was exactly the sentence that hid the bug in a chat.
+	const input = "[EVENT HOOK: Morning brief]\nWrite the brief and send it with send_to_user.";
+	const result = await sendToUserTool.execute({ message: "Morning: three things need you." }, apiFor("call-10", input), {} as never);
+	assert.notEqual(result.isError, true, "the console is a reader, so this is not a refusal");
+	const text = outputText(result.output);
+	assert.match(text, /delivered to the operator console/);
+	assert.match(text, /no message reached a person/);
+	assert.match(text, /read when somebody opens the console/);
+});
+
+test("a person typing in the console still gets one word back", async () => {
+	const result = await sendToUserTool.execute({ message: "Standup moved." }, apiFor("call-11", "Move standup."), {} as never);
+	assert.equal(result.isError, undefined);
+	assert.equal(outputText(result.output), "delivered");
+});
+
 test("in a turn an event hook started, the delivery is refused with the tool that reaches the chat", async () => {
 	// The reader is in a chat, and the turn's input is the one that says so: the tool reads it, not a flag.
 	const result = await sendToUserTool.execute(

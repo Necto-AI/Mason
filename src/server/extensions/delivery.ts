@@ -46,7 +46,7 @@ import {
 	MESSAGE_TOOL,
 	WIDGET_TOOL,
 } from "../../shared/contract.ts";
-import { deliveryToolForTurn } from "../hooks.ts";
+import { deliveryToolForTurn, isHookTurn } from "../hooks.ts";
 import { isNestedCall, nestedRefusal, refusal } from "./nested.ts";
 
 const SendToUserParams = Type.Object({
@@ -79,21 +79,35 @@ function hookRefusal(tool: string, nested: boolean): string {
 	return `send_to_user cannot reach the reader in this turn: the call rejects, and a message sent this way never arrives. This turn came from an event hook, and the person it answers sees only what \`${tool}\` sends: call ${tool} directly, with the chat the payload names, and put the answer in that call.${fromScript}`;
 }
 
+/**
+ * What the model is told when a hook turn has no chat on the other end — a schedule, a repository event, a retry.
+ *
+ * `send_to_user` is a real delivery here: the console is the only reader such a turn has, and the call is committed.
+ * Saying just "delivered" would be true and misleading in the same breath — nobody is in a chat, so the answer waits in
+ * the transcript until somebody opens it. The sentence names that, and it names the fix a person can act on.
+ */
+const CONSOLE_ONLY_DELIVERY =
+	"delivered to the operator console. This turn came from an event hook whose instruction names no chat tool, so no message reached a person: the answer is in the transcript, and it is read when somebody opens the console.";
+
 export const sendToUserTool = defineTool({
 	name: MESSAGE_TOOL,
 	description:
-		"Send the user a message in the operator console. Only messages sent this way are seen there; everything else you write in a turn is working notes. In a turn an event hook started, the person is in a chat reached by that chat's own tool, and this call is refused. Call this directly, never from inside a script: a message sent by a nested call never reaches the reader. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
+		"Send the user a message in the operator console. Only messages sent this way are seen there; everything else you write in a turn is working notes. In a turn an event hook started, the person is in a chat reached by that chat's own tool, and this call is refused; a hook whose instruction names no chat tool — a schedule, a repository event — has no other reader, so the call lands here and the result says so. Call this directly, never from inside a script: a message sent by a nested call never reaches the reader. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
 	parameters: SendToUserParams,
 	replay: "unsafe",
 	// The commit is the delivery: nothing to do, so nothing to undo, retry or wait for. A nested call has nothing to
 	// commit at all, which is why it is answered with the instruction rather than with "delivered".
 	execute: async ({ message }, api, context) => {
 		// Which reader this turn has, read from the transcript rather than from anything the model was asked to do.
-		const reader = deliveryToolForTurn(await turnInput(api, context));
+		const input = await turnInput(api, context);
+		const reader = deliveryToolForTurn(input);
 		if (reader !== undefined) return refusal(hookRefusal(reader, isNestedCall(api)));
 		const nested = nestedRefusal(api, DELIVERY_NESTED_REFUSAL);
 		if (nested !== undefined) return nested;
-		return { output: [{ type: "text", text: "delivered" }], details: { length: message.length } };
+		// A console turn and a hooked turn with no chat both land in the transcript; only the second is worth saying out
+		// loud, because "delivered" there reads as "a person has this" and nobody does.
+		const text = isHookTurn(input) ? CONSOLE_ONLY_DELIVERY : "delivered";
+		return { output: [{ type: "text", text }], details: { length: message.length } };
 	},
 });
 
