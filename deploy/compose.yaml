@@ -117,6 +117,10 @@ services:
       MASON_INTEGRATIONS_SRC: /run/integrations.json
       # The bot's own files (`soul.md`, `skills/`), installed into the home on first boot when they are there.
       MASON_BOT_SRC: /run/bot
+      # 1: install `soul.md` even when the home already has one — the one boot that replaces a soul on purpose. A home
+      # that has ever started has a soul, because the server writes DEFAULT_SOUL into a fresh one, so without this a
+      # deployment given a soul months after it started would run the default one forever.
+      MASON_BOT_FORCE: ${MASON_BOT_FORCE:-0}
       # The stack this container belongs to, and the volume its env key lands in: the entrypoint names both in the one
       # message an operator reads while a boot is failing, and a name that points at the wrong stack is worse than none.
       MASON_STACK: ${MASON_STACK:-mason}
