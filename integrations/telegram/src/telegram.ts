@@ -32,6 +32,11 @@ export interface FetchResponse {
 	readonly ok: boolean;
 	readonly status: number;
 	readonly statusText: string;
+	/**
+	 * The response headers, read for one thing: a `429`'s `retry-after`. Optional because a fake in a test answers with a
+	 * status and a body, and both real clients here always carry them.
+	 */
+	readonly headers?: { get(name: string): string | null };
 	text(): Promise<string>;
 }
 

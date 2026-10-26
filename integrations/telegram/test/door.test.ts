@@ -1,9 +1,10 @@
 /**
  * One delivery, as the door sees it: the bytes, the header, and what each answer means.
  *
- * The statuses here are the three cases the trigger face has to survive without a person: accepted, refused (which is
- * final and must not be retried) and unreachable (which is retried and then abandoned). The request the fake receives is
- * asserted byte for byte, because the signature is over those bytes and over nothing else.
+ * The statuses here are the cases the trigger face has to survive without a person: accepted, refused (which is final and
+ * must not be retried), over budget (which is a wait, and the same bytes go again) and unreachable (which is reported so
+ * the batch is held rather than advanced past). The request the fake receives is asserted byte for byte, because the
+ * signature is over those bytes and over nothing else.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -26,8 +27,21 @@ interface Sent {
 	readonly request: FetchRequest;
 }
 
-function answer(status: number, body: string): FetchResponse {
-	return { ok: status >= 200 && status < 300, status, statusText: "", text: async () => body };
+function answer(status: number, body: string, headers: Record<string, string> = {}): FetchResponse {
+	return {
+		ok: status >= 200 && status < 300,
+		status,
+		statusText: "",
+		headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+		text: async () => body,
+	};
+}
+
+/** mason's `429`, as `src/server/main.ts` writes it: the header and the body's own field, saying the same number. */
+function tooManyDeliveries(seconds: number): FetchResponse {
+	return answer(429, JSON.stringify({ error: "too many deliveries", retryAfterSeconds: seconds }), {
+		"retry-after": String(seconds),
+	});
 }
 
 interface Door {
@@ -109,8 +123,68 @@ describe("a delivery the door refuses", () => {
 	});
 });
 
+describe("a delivery the door is over budget for", () => {
+	it("waits the retry-after it named, and posts the same bytes again", async () => {
+		const rig = door((attempt) => (attempt === 1 ? tooManyDeliveries(42) : answer(202, "")));
+
+		const result = await rig.door.fire(ENVELOPE);
+
+		assert.deepEqual(result, { kind: "accepted" });
+		assert.equal(rig.sent.length, 2);
+		assert.deepEqual(rig.waits, [42_000]);
+		// One fire, whichever delivery reached the door: the id is the dedupe and the bytes are identical.
+		assert.equal(rig.sent[1]?.request.body, rig.sent[0]?.request.body);
+		assert.equal(rig.sent[1]?.request.headers["x-mason-signature"], rig.sent[0]?.request.headers["x-mason-signature"]);
+		const logged = rig.lines.join("\n");
+		assert.match(logged, /over its budget; waiting 42s and posting tg-8811 again/);
+		// One line for the wait, and one for the delivery: not one per second of it.
+		assert.equal(rig.lines.length, 2);
+	});
+
+	it("reads retryAfterSeconds from the body when the answer carries no header", async () => {
+		const rig = door((attempt) =>
+			attempt === 1
+				? answer(429, JSON.stringify({ error: "too many deliveries", retryAfterSeconds: 3 }))
+				: answer(202, ""),
+		);
+
+		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(rig.waits, [3_000]);
+	});
+
+	it("does not eat the network retries: a 429 wait is not a failed attempt", async () => {
+		const rig = door((attempt) => {
+			if (attempt === 1) throw new Error("connect ECONNREFUSED");
+			return attempt === 2 ? tooManyDeliveries(1) : answer(202, "");
+		});
+
+		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(rig.waits, [250, 1_000]);
+	});
+
+	it("reports a wait longer than it will sit through as unreachable, so the batch is held", async () => {
+		const rig = door(() => tooManyDeliveries(3_600));
+
+		const result = await rig.door.fire(ENVELOPE);
+
+		assert.deepEqual(result, { kind: "unreachable", error: "the door answered 429 with a 3600 s wait" });
+		assert.equal(rig.sent.length, 1);
+		assert.deepEqual(rig.waits, []);
+		assert.match(rig.lines.join("\n"), /named a 3600 s wait for tg-8811; holding it rather than advancing past it/);
+	});
+
+	it("reports a 429 that names no wait at all the same way, rather than guessing", async () => {
+		const rig = door(() => answer(429, "<html>slow down</html>"));
+
+		const result = await rig.door.fire(ENVELOPE);
+
+		assert.deepEqual(result, { kind: "unreachable", error: "the door answered 429 with no wait it could read" });
+		assert.deepEqual(rig.waits, []);
+	});
+});
+
 describe("a delivery the network would not carry", () => {
-	it("is retried three times with backoff, then abandoned, and the offset moves on", async () => {
+	it("is retried three times with backoff, then reported so the batch is held", async () => {
 		const rig = door(() => {
 			throw new Error("connect ECONNREFUSED 127.0.0.1:8787");
 		});
@@ -120,7 +194,10 @@ describe("a delivery the network would not carry", () => {
 		assert.equal(rig.sent.length, 4);
 		assert.deepEqual(rig.waits, [250, 500, 1_000]);
 		assert.deepEqual(result, { kind: "unreachable", error: "connect ECONNREFUSED 127.0.0.1:8787" });
-		assert.match(rig.lines.join("\n"), /could not deliver tg-8811 after 4 attempts/);
+		const logged = rig.lines.join("\n");
+		assert.match(logged, /could not deliver tg-8811 after 4 attempts/);
+		assert.match(logged, /the batch will be retried/);
+		assert.doesNotMatch(logged, /the offset advances past it/);
 	});
 
 	it("stops retrying as soon as one attempt is accepted", async () => {
