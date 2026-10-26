@@ -3,9 +3,10 @@
  *
  * Every section that reaches the model is declared here: its key, whether it is tagged, and where its text comes from —
  * a service-owned file read by the server (`service/soul.md`), an agent-owned file read through the execution
- * environment (`agent/profile.md`, `agent/skills/`), or a constant in this file. No other extension contributes a
- * section, and the agent carries no `instructions` of its own, so this list is the whole prompt: an audit reads one
- * file, and a test fails if anything else appears.
+ * environment (`agent/profile.md`, `agent/skills/`), a computation over the boot's configuration
+ * (`service/integrations.json`), pi-durable's own renderer for the tools a script can call, or a constant in this file.
+ * No other extension contributes a section, and the agent carries no `instructions` of its own, so this list is the
+ * whole prompt: an audit reads one file, and a test fails if anything else appears.
  *
  * Which half a section reads from is not cosmetic. `service/` is never mounted into the tool machine, so the soul is a
  * file the bot cannot see, let alone rewrite; `agent/` is on the tool machine, so the profile and the skills index are
@@ -17,8 +18,10 @@
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, section, type PromptSection } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { capText, currentHouse, readHouseFile } from "./house.ts";
+import { CODEMODE_SECTION } from "./extensions/codemode.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
+import { capText, currentHouse, readHouseFile } from "./house.ts";
+import { currentIntegrations } from "./integrations.ts";
 import { readResidentFile, type ResidentInput } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
 
@@ -68,6 +71,33 @@ design system, and the sandbox limits. Keep it out of context until you actually
 
 /** Roughly 1200 tokens of profile: enough for who he is and how he wants to be treated, and no more. */
 const PROFILE_MAX_CHARS = 4_800;
+/**
+ * What the model is told about the services that lend it tools: their names and what each is for, and the one thing
+ * that connects a name here to a tool that exists — every MCP tool is deferred, so it is found rather than offered.
+ *
+ * Health, tool counts and schemas are deliberately absent. Health changes between turns and a resident section that
+ * changed with it would re-price the prefix on every reconnect, which is the cost this section exists to avoid; a
+ * schema belongs to the tool, and the tool is loaded when it is wanted.
+ */
+export const INTEGRATIONS_POINTER = `These services lend you tools, and none of them is in your tool list: \`tool_search\` finds the one that
+matches what you want to do.`;
+
+/**
+ * One line per enabled integration with a tools face, sorted by name, so two renders of one file are the same bytes and
+ * a file someone reordered renders equally. `undefined` when nothing qualifies: a section nobody can fill is absent
+ * from the prompt, not an empty header.
+ */
+function renderIntegrations(): string | undefined {
+	const lines = Object.entries(currentIntegrations())
+		.flatMap(([name, integration]) =>
+			integration.enabled && integration.tools !== undefined && integration.description !== undefined
+				? [`${name}: ${integration.description}`]
+				: [],
+		)
+		.sort();
+	if (lines.length === 0) return undefined;
+	return [INTEGRATIONS_POINTER, ...lines].join("\n");
+}
 
 /** What the profile section says when there is no profile yet: the first-run interview, not an empty header. */
 function firstRun(path: string): string {
@@ -111,6 +141,13 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	),
 	section("profile", (input, context) => renderProfile(input, context)),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),
+	// What exists beyond the tool list, by name and purpose only: a capability arrived without its schemas being paid
+	// for. Absent when no integration is enabled with a tools face.
+	section("integrations", () => renderIntegrations()),
+	// The tools a script can call, in pi-durable's own words: its `codemode` section object, declared here so this file
+	// stays the whole prompt and `delivery` stays the prompt's last word. A vendor extension installed with its section
+	// would place it by extension order instead, which is the order this list exists to decide.
+	CODEMODE_SECTION,
 	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.
 	section("delivery", () => DELIVERY_INVARIANT),
 ];

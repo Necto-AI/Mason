@@ -28,10 +28,10 @@
  * machine boundary (#20) brings TLS: an SSH tunnel or a TLS proxy is the honest answer before then.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { networkInterfaces } from "node:os";
-import { dirname } from "node:path";
+import { writeFileAtomic } from "./atomic.ts";
 import { housePaths } from "./house.ts";
 
 /** A named credential. The token itself exists only in the hand of whoever minted it. */
@@ -106,17 +106,11 @@ function isSessionKey(value: unknown): value is string {
 }
 
 /**
- * Write the config atomically and privately. The rename means a crash mid-write leaves the previous tokens in place,
- * and the modes are set on the directory too: `~/.mason` holds the agent's soul and its credentials.
+ * Write the config atomically and privately. A crash mid-write leaves the previous tokens in place, and the file and its
+ * directory are `0600`/`0700` (`atomic.ts`): this is the one file whose leak is a working credential.
  */
 async function writeConfig(home: string, config: MasonConfig): Promise<void> {
-	const path = configPath(home);
-	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-	await rename(temporary, path);
-	await chmod(dirname(path), 0o700).catch(() => {});
-	await chmod(path, 0o600).catch(() => {});
+	await writeFileAtomic(configPath(home), config);
 }
 
 export function readTokens(config: MasonConfig): readonly TokenRecord[] {

@@ -23,19 +23,27 @@ import {
 	type Registry,
 	type Storage,
 } from "@earendil-works/pi-durable";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createCodemode } from "./extensions/codemode.ts";
 import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
+import { currentIntegrations, readIntegrations, setIntegrations } from "./integrations.ts";
+import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
  * agent reaches the reader, so no conversation may be without it.
+ *
+ * Code mode and the MCP tools are not here: `openAgentRuntime` builds both per boot, because each owns something that
+ * dies with the runtime — a QuickJS sandbox and one client socket per integration — and a module constant would outlive
+ * the process's use of it.
  */
 export const BASE_EXTENSIONS: readonly Extension[] = [
 	CodingTools,
@@ -46,7 +54,24 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 	// Always on: the client renders a widget whenever one arrives, so hiding the tool protected nothing and a tool list
 	// that changes between turns breaks the prompt cache.
 	GenerateSandboxedUiExtension,
+	// Also always on, and inert while nothing is deferred: with no MCP tools loaded and no other deferred tool, it has
+	// nothing to find. Installed rather than added when something arrives, so the tool list does not grow a second time
+	// when an integration connects.
+	createToolSearchExtension(),
 ];
+
+/**
+ * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,
+ * then what this boot built for itself — `mcp` when it reached a tools face, `codemode` always.
+ *
+ * It is exported because it is the answer to a question a test asks: a stored selection is repaired with exactly these,
+ * and a list written down a second time in a test would go on passing after a base extension was added to the array.
+ * The extra extensions a caller installs are not here: they are the caller's to select, and only these are
+ * unconditional.
+ */
+export function unconditionalExtensionNames(perBoot: readonly string[]): readonly string[] {
+	return [...BASE_EXTENSIONS.map((extension) => extension.name), ...perBoot];
+}
 
 export interface AgentModelRef {
 	provider: string;
@@ -123,6 +148,11 @@ export interface OpenAgentRuntimeOptions {
 	 * never be absent from a real conversation; tests and evals turn it off when a narrowed selection is the point.
 	 */
 	readonly repairBase?: boolean;
+	/**
+	 * How the boot reaches an integration's MCP endpoint. Tests hand in one end of an in-memory pair, so no test dials a
+	 * port; production leaves it out and the client speaks Streamable HTTP to the url in `service/integrations.json`.
+	 */
+	readonly mcpTransport?: McpTransportFactory;
 	readonly settings?: HarnessSettings;
 }
 
@@ -179,6 +209,21 @@ export async function openAgentRuntime(
 	// not the code's: an agent that can edit the program that runs it is a different product.
 	const house = configureHouse(housePaths(options.houseHome));
 	await ensureHouse(house, DEFAULT_SOUL);
+	// The integration list, once, before anything can run: the tool surface and the prompt section are decided at boot,
+	// and a file that cannot be read is refused here rather than leaving the process with fewer tools than the operator
+	// configured and no way to notice.
+	setIntegrations((await readIntegrations(house)).integrations);
+	// The tools face of every enabled integration, reached here and nowhere else: `install()` publishes immediately and
+	// `selectExtensions` runs on every preparation, so a deferred list that was settled after the harness opened would be
+	// a surface that could still change under a running turn. A boot with no tools face connects nothing.
+	const mcp = await connectIntegrations({
+		integrations: currentIntegrations(),
+		...(options.mcpTransport === undefined ? {} : { openTransport: options.mcpTransport }),
+	});
+	// Code mode, per boot rather than in BASE_EXTENSIONS: its sandbox is permanent once closed, so one instance shared
+	// across boots would refuse the next runtime in the same process. It is the other way the model reaches a tool it
+	// was not offered (`tool_search` is the first), and the one that can read a whole result.
+	const codemode = createCodemode();
 	// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
 	// commits there from the same machine the log is written on.
 	await ensureRepository(house.agentDir);
@@ -191,7 +236,16 @@ export async function openAgentRuntime(
 
 	const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options));
 
-	const extensionList: readonly Extension[] = [...BASE_EXTENSIONS, ...(options.extensions ?? [])];
+	const extensionList: readonly Extension[] = [
+		...BASE_EXTENSIONS,
+		...(options.extensions ?? []),
+		...(mcp.extension === undefined ? [] : [mcp.extension]),
+		codemode.extension,
+	];
+	const unconditional = unconditionalExtensionNames([
+		...(mcp.extension === undefined ? [] : [mcp.extension.name]),
+		codemode.extension.name,
+	]);
 	const registry: Registry = createRegistry();
 	for (const extension of extensionList) registry.install(extension);
 
@@ -236,13 +290,17 @@ export async function openAgentRuntime(
 	const root = await harness.root(context, {
 		agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
 	});
-	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed
-	// would leave the conversation without it. A failed repair is a failed guarantee, so the server does not start
-	// with it — but it also does not start with the hooks and the env manager left open.
+	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
+	// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
+	// had connected. A failed repair is a failed guarantee, so the server does not start with it — but it also does not
+	// start with the hooks and the env manager left open.
 	try {
-		if (options.repairBase !== false) await appendMissingBaseExtensions(root, context);
+		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
 	} catch (error) {
 		await hooks.close();
+		// Everything the boot opened closes with it: a refused start must not leave a sandbox or a socket behind.
+		await codemode.close();
+		await mcp.close();
 		await envManager.close();
 		throw error;
 	}
@@ -265,6 +323,10 @@ export async function openAgentRuntime(
 		async close() {
 			await hooks.close();
 			await harness.close(BACKGROUND_CONTEXT);
+			// After the harness, so nothing can start a script in a sandbox that is closing or call a tool whose client is
+			// already gone; both are the process's, and both die with it.
+			await codemode.close();
+			await mcp.close();
 			await envManager.close();
 		},
 	};
@@ -306,18 +368,23 @@ async function readConversation(conversation: Conversation, context: Context): P
 }
 
 /**
- * Return the base extensions a stored explicit selection lacks, appended in `BASE_EXTENSIONS` order.
+ * Append the unconditional extension names a stored explicit selection lacks, in the order they are given.
  *
- * Only `BASE_EXTENSIONS` are unconditional, and no conversation may be without `delivery`, so a `pi.agent` doc that
- * predates one of them — an array is used verbatim — gets it back on open. The stored order is kept and nothing is
- * pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
+ * These are the base extensions plus, on a boot that reached one, the MCP tools, and code mode: no conversation may be
+ * without `delivery`, and a conversation whose stored array predates any of them — an array is used verbatim — would
+ * otherwise keep the tool out of reach while the route reported the integration connected. The stored order is kept and
+ * nothing is pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
  */
-async function appendMissingBaseExtensions(root: Conversation, context: Context): Promise<void> {
+async function appendMissingExtensions(
+	root: Conversation,
+	unconditional: readonly string[],
+	context: Context,
+): Promise<void> {
 	await root.commit(async (tx) => {
 		const stored = (await tx.doc(AgentDoc, root.id)).extensions;
 		if (!Array.isArray(stored)) return;
-		const missing = BASE_EXTENSIONS.filter((extension) => !stored.includes(extension.name));
-		if (missing.length > 0) stored.push(...missing.map((extension) => extension.name));
+		const missing = unconditional.filter((name) => !stored.includes(name));
+		if (missing.length > 0) stored.push(...missing);
 	}, context);
 }
 

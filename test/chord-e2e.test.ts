@@ -850,7 +850,9 @@ describe("chord client <-> server", () => {
 			const prompt = renderedSections(state.serverView);
 			assert.deepEqual(
 				[...prompt.keys()],
-				promptSectionKeys(),
+				// `integrations` is declared but has no text here: this boot has no integration with a tools face, and a
+				// section nobody can fill is left out of the prompt rather than rendered as an empty header.
+				promptSectionKeys().filter((key) => key !== "integrations"),
 				"the model reads exactly the sections prompt.ts declares, in that order",
 			);
 			const rendered = [...prompt.values()].join("\n");
