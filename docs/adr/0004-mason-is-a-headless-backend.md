@@ -67,7 +67,7 @@ to change, so the day this repository has no Telegram in it, this still holds.
   events a minute. A new interface is written by producing envelopes and naming the hook they fire; the mason-side
   change it may need is a hook, never a route.
 - **The outbound contract is one delivery, not yet one path.** `send_to_user` recorded in the transcript is what
-  reaches a person — `src/server/extensions/delivery.ts:2-16` performs no side effect at all: delivery is the call
+  reaches a person — `src/server/extensions/delivery.ts` (the header) performs no side effect at all: delivery is the call
   being committed — and the three projected cells are what a client is sent. Those are two halves of one guarantee,
   and today they are two writes: the chat is written to by the integration's own `send_message`
   (`integrations/telegram/src/mcp.ts:4`), the transcript by `send_to_user`, and nothing joins them. Reconciling them
