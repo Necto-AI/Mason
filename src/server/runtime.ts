@@ -33,7 +33,7 @@ import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
-import { currentIntegrations, readIntegrations, setIntegrations } from "./integrations.ts";
+import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 
@@ -224,112 +224,143 @@ export async function openAgentRuntime(
 	// across boots would refuse the next runtime in the same process. It is the other way the model reaches a tool it
 	// was not offered (`tool_search` is the first), and the one that can read a whole result.
 	const codemode = createCodemode();
-	// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
-	// commits there from the same machine the log is written on.
-	await ensureRepository(house.agentDir);
-	const workspaceDir = options.workspaceDir ?? house.workspaceDir;
-	const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
-
-	const storage =
-		options.storageOverride ??
-		(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
-
-	const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options));
-
-	const extensionList: readonly Extension[] = [
-		...BASE_EXTENSIONS,
-		...(options.extensions ?? []),
-		...(mcp.extension === undefined ? [] : [mcp.extension]),
-		codemode.extension,
-	];
-	const unconditional = unconditionalExtensionNames([
-		...(mcp.extension === undefined ? [] : [mcp.extension.name]),
-		codemode.extension.name,
-	]);
-	const registry: Registry = createRegistry();
-	for (const extension of extensionList) registry.install(extension);
-
-	const envManager =
-		options.env ??
-		createRuntimeEnvManager({
-			workspaceDir,
-			...(sshTargetFromEnv() === undefined ? {} : { ssh: sshTargetFromEnv() }),
-		});
-
-	const settings: HarnessSettings = {
-		...options.settings,
-		// Admission: only the user's steer cuts in, and queued follow-ups drain as one turn — the model prioritises
-		// between them, because nothing here can rank a fired hook against a wish the reader typed.
-		followUpMode: options.settings?.followUpMode ?? "all",
-		steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
-		// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
-		// every wake-up from re-paying for the whole prefix.
-		stream: { ...options.settings?.stream, cacheRetention: options.settings?.stream?.cacheRetention ?? "long" },
-		extensions: options.selection ?? extensionList,
-	};
-
-	const harness = await Harness.open(
-		storage,
-		{
-			models,
-			registry,
-			settings,
-			env: async (target) => envManager.envFor({ conversationId: String(target.conversationId), cwd: target.cwd }),
-			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
-		},
-		context,
-	);
-
-	const hooks = new HooksManager({
-		conversation: () => harness.root(BACKGROUND_CONTEXT),
-		statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
-		...(options.onReport === undefined ? {} : { onReport: options.onReport }),
-	});
-	for (const hook of builtinHooks()) hooks.define(hook);
-
-	const root = await harness.root(context, {
-		agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
-	});
-	// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
-	// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
-	// had connected. A failed repair is a failed guarantee, so the server does not start with it — but it also does not
-	// start with the hooks and the env manager left open.
+	// Everything below opens something that outlives the line that made it — a hook timer, a socket to an MCP server, a
+	// sandbox, an execution daemon — and a boot that refuses must not leave any of it running. There is one list, written
+	// in the order things were opened, and the success path and the unwind path both close it in reverse: a resource
+	// cannot be added to one and missed in the other, because there is only one. The extension repair used to be the only
+	// failure with something already open; now the whole body is caught, so a throw anywhere after the MCP clients exist
+	// closes them instead of leaking them for the life of the process.
+	const opened: Array<() => Promise<void>> = [() => mcp.close(), () => codemode.close()];
+	const reportClose = options.onReport ?? ((error: unknown) => console.error("[runtime] a close failed", error));
 	try {
+		// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
+		// commits there from the same machine the log is written on.
+		await ensureRepository(house.agentDir);
+		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
+		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
+
+		// The hooks manager exists before the harness opens, because a trigger that fires a hook no build defines has to
+		// refuse the boot before anything can run: the door names one hook, so a name that is not a hook is a door that would
+		// accept a delivery and drop it. This is config, not health — a missing hook is fatal whatever the container's own
+		// `required` says.
+		const hooks = new HooksManager({
+			conversation: () => harness.root(BACKGROUND_CONTEXT),
+			statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
+			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
+		});
+		opened.push(() => hooks.close());
+		for (const hook of builtinHooks()) hooks.define(hook);
+		assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
+
+		const storage =
+			options.storageOverride ??
+			(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
+
+		const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options));
+
+		const extensionList: readonly Extension[] = [
+			...BASE_EXTENSIONS,
+			...(options.extensions ?? []),
+			...(mcp.extension === undefined ? [] : [mcp.extension]),
+			codemode.extension,
+		];
+		const unconditional = unconditionalExtensionNames([
+			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
+			codemode.extension.name,
+		]);
+		const registry: Registry = createRegistry();
+		for (const extension of extensionList) registry.install(extension);
+
+		const envManager =
+			options.env ??
+			createRuntimeEnvManager({
+				workspaceDir,
+				...(sshTargetFromEnv() === undefined ? {} : { ssh: sshTargetFromEnv() }),
+			});
+		opened.push(() => envManager.close());
+
+		const settings: HarnessSettings = {
+			...options.settings,
+			// Admission: only the user's steer cuts in, and queued follow-ups drain as one turn — the model prioritises
+			// between them, because nothing here can rank a fired hook against a wish the reader typed.
+			followUpMode: options.settings?.followUpMode ?? "all",
+			steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
+			// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
+			// every wake-up from re-paying for the whole prefix.
+			stream: { ...options.settings?.stream, cacheRetention: options.settings?.stream?.cacheRetention ?? "long" },
+			extensions: options.selection ?? extensionList,
+		};
+
+		const harness = await Harness.open(
+			storage,
+			{
+				models,
+				registry,
+				settings,
+				env: async (target) => envManager.envFor({ conversationId: String(target.conversationId), cwd: target.cwd }),
+				...(options.onReport === undefined ? {} : { onReport: options.onReport }),
+			},
+			context,
+		);
+		// From here the boot has a harness to close too: a throw in the root, in the extension repair or in `resume` unwinds
+		// past an open harness, and leaving it to the process's exit would keep its storage and its timers for the life of a
+		// process that never served.
+		opened.push(() => harness.close(BACKGROUND_CONTEXT));
+
+		const root = await harness.root(context, {
+			agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
+		});
+		// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
+		// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
+		// had connected. A failed repair is a failed guarantee, so the server does not start with it.
 		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
+		hooks.start();
+		// Picks up a run the last process left unfinished.
+		harness.resume();
+
+		return {
+			harness,
+			rootId: root.id,
+			dataDir,
+			hooks,
+			env: envManager,
+			workspaceDir,
+			model: ref,
+			modelIsFaux: faux,
+			conversation: () => Promise.resolve(root),
+			viewState: (viewContext) => watchConversation(root, viewContext),
+			viewSnapshot: (viewContext) => readConversation(root, viewContext),
+			async close() {
+				// The same list the refused boot walks, in the same order, so the two cannot drift.
+				await closeOpened(opened, reportClose);
+			},
+		};
 	} catch (error) {
-		await hooks.close();
-		// Everything the boot opened closes with it: a refused start must not leave a sandbox or a socket behind.
-		await codemode.close();
-		await mcp.close();
-		await envManager.close();
+		// In the reverse of the order they were opened — the harness, the execution daemon, the hooks, the sandbox, the MCP
+		// clients — so a refused boot leaves nothing running behind the throw it unwinds from, and that throw is the one the
+		// operator sees: a close that fails is reported, never thrown in its place.
+		await closeOpened(opened, reportClose);
 		throw error;
 	}
-	hooks.start();
-	// Picks up a run the last process left unfinished.
-	harness.resume();
+}
 
-	return {
-		harness,
-		rootId: root.id,
-		dataDir,
-		hooks,
-		env: envManager,
-		workspaceDir,
-		model: ref,
-		modelIsFaux: faux,
-		conversation: () => Promise.resolve(root),
-		viewState: (viewContext) => watchConversation(root, viewContext),
-		viewSnapshot: (viewContext) => readConversation(root, viewContext),
-		async close() {
-			await hooks.close();
-			await harness.close(BACKGROUND_CONTEXT);
-			// After the harness, so nothing can start a script in a sandbox that is closing or call a tool whose client is
-			// already gone; both are the process's, and both die with it.
-			await codemode.close();
-			await mcp.close();
-			await envManager.close();
-		},
-	};
+/**
+ * Closes every opener on `opened`, newest first.
+ *
+ * Every opener runs even when an earlier one failed, and a closer's error is reported through `report` rather than thrown:
+ * on a refused boot the reason is the boot's own error, and a close error thrown here would replace it with a story about
+ * tidying up, while on shutdown a throw would be the last thing the caller heard about a process already going quiet.
+ * `report` is `options.onReport` when the caller has one — the channel its harness and hooks already report on — and
+ * `console.error` otherwise, so a failed close is reported, not silenced.
+ */
+async function closeOpened(opened: readonly (() => Promise<void>)[], report: (error: unknown) => void): Promise<void> {
+	for (const close of [...opened].reverse()) {
+		try {
+			await close();
+		} catch (error) {
+			report(error);
+		}
+	}
 }
 
 /**
@@ -398,4 +429,27 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 		// No modes on this filesystem; nothing to set.
 	}
 	return storage;
+}
+
+/**
+ * A trigger's hook is a name in a file, so a build that does not define it must refuse rather than start.
+ *
+ * Only enabled integrations are checked: a disabled one's door answers `404`, and a name is not a reason to keep an
+ * integration the operator switched off from ever being switched on again. The message names the file, the integration
+ * and the hook, because all three are what a person has to change.
+ */
+function assertTriggersHaveHooks(
+	integrations: Record<string, Integration>,
+	hooks: HooksManager,
+	path: string,
+): void {
+	for (const [name, integration] of Object.entries(integrations)) {
+		if (!integration.enabled) continue;
+		const hook = integration.trigger?.hook;
+		if (hook === undefined || hooks.has(hook)) continue;
+		throw new Error(
+			`${path}: integration "${name}" has a trigger that fires "${hook}", which is not a hook. A delivery there ` +
+				"would fire nothing, so the server does not start with one.",
+		);
+	}
 }
