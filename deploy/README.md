@@ -64,6 +64,8 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_UID=1000                         # optional: must match on both images (see below)
    MASON_GID=1000
    MASON_MODEL_REQUIRED=1                 # 0 starts a stack with no model at all
+   MASON_STACK=mason                      # optional: the compose project and the volume prefix — one per bot
+   MASON_BOT_DIR=./soul                   # optional: a directory holding this bot's soul.md and skills/
    TZ=Europe/Moscow                       # optional: decides the date in log/YYYY-MM-DD.md
    MASON_ENV_HOST=mason-env               # optional: the env container's name on the compose network
    MASON_ENV_USER=mason                   # optional: the login account; the images create it, so changing it is a rebuild
@@ -118,6 +120,38 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    which makes uid 1000 the same person on both sides and gives both a single ownership on the shared `mason-agent`
    volume. The two explicit builds are there because podman-compose 1.6 tries to *pull* an `image:` name that only ever
    exists locally (`short-name "mason-env:local" did not resolve to an alias`) before it considers building it.
+
+## Two bots on one host
+
+mason defines one bot (`docs/adr/0001-mason-defines-one-bot.md`), so a second bot is a second stack: its own home, its
+own database, its own port, its own Telegram bot. `MASON_STACK` is what makes that possible without a second copy of
+this directory — it names the compose project, the volumes and the images, all of which are `${MASON_STACK:-mason}`
+prefixed, so the defaults are exactly what a single-bot host already has.
+
+What a second stack needs, and nothing else:
+
+```sh
+# one directory per bot, outside the checkout, holding what is the operator's and not the repo's
+mkdir -p ~/mason-tanya && cd ~/mason-tanya
+#   .env     — same names as deploy/.env, with MASON_STACK=tanya, its own MASON_PORT, TELEGRAM_* and MASON_BOT_DIR=$PWD
+#   soul.md  — the bot's job and voice
+#   skills/  — optional starter skills
+#   files/   — a directory the agent works in, if REPO_DIR points here
+
+cd ~/dev/mason/deploy
+export MASON_STACK=tanya
+podman compose -p tanya --env-file ~/mason-tanya/.env \
+  -f compose.yaml -f compose.podman.yaml -f compose.telegram.yaml up -d --build
+```
+
+The two stacks share the mason **images** only when their tags are the same, and `MASON_STACK` also prefixes those
+(`tanya:local`, `tanya-env:local`), so building one never repoints the other's tag. They share no volume, no network,
+no `service/` and no `agent/`: two bots are two homes, and the isolation between them is the same mount boundary that
+separates a home from its tool machine. `MASON_ENV_ALIAS` is per-home state (a `known_hosts` entry), so it does not
+collide either.
+
+The one thing they do share is the host port range (`MASON_PORT`) and the provider credential directory
+(`MASON_PI_AGENT_DIR`), which is read-only input and copied into each home.
 
 ## First boot, and the pairing link
 

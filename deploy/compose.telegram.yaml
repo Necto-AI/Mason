@@ -103,4 +103,4 @@ volumes:
   # is a credential.
   #
   mason-telegram-data:
-    name: mason-telegram-data
+    name: ${MASON_STACK:-mason}-telegram-data
