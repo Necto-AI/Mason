@@ -332,6 +332,12 @@ request("https://api.telegram.org", {dispatcher: new ProxyAgent("http://vpn:1080
 A `302` is the tunnel working. A `200` on `/api/health` says nothing about it: mason is healthy while its integrations are
 not, which is why `deploy.sh` counts `its tools are absent` instead of trusting the probe.
 
+It can also flap, and that is the server rather than the stack: the same request through the same proxy answered in
+5.7 s, then 1.8 s, then timed out, then timed out again, within one minute, with the host's own path to the server
+showing no loss. When the answers come back interleaved, a restart is not the fix — a different server in the
+subscription is, because the retries are already right: the relay backs off, says so once a minute, and resumes on the
+first successful poll.
+
 **A command in the chat is ignored.** The vocabulary is declared per integration and read once at boot. `npm run
 integration -- list` shows what this deployment allows; `commands <name> <a,b,c>` sets it and the restart is what applies
 it. An undeclared word is not an error — it arrives as an ordinary message — so silence about `/stop` is either the
