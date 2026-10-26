@@ -1,0 +1,18 @@
+# Rootless podman, which is how this deploys on a host with no docker daemon.
+#
+# `keep-id` is the whole point of this file. Rootless podman maps the container's root to the host user and every other
+# uid to a subuid, so the `mason` account inside the container (uid 1000) is not the host's uid 1000 and cannot read a
+# bind mount the host user owns. The symptom is `install: cannot open '/run/pi-agent/settings.json': Permission denied`
+# at boot, on a file the operator can read from the host: the entrypoint copies those two files in as `mason`. With
+# `keep-id`, uid 1000 on both sides is the same person, and `mason` and `mason-env` see one ownership on the shared
+# `mason-agent` volume instead of one subuid each.
+#
+# It is an override rather than lines in `compose.yaml` because `userns_mode` is not part of the compose spec that a
+# docker host reads: a docker user gets the same stack from the same file. Use both:
+#
+#   podman compose -f compose.yaml -f compose.podman.yaml up -d
+services:
+  mason-env:
+    userns_mode: keep-id
+  mason:
+    userns_mode: keep-id

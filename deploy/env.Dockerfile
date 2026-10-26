@@ -8,7 +8,8 @@
 # The image is the machine, not the agent: no secrets, no provider key. What a tool can reach is what is mounted here —
 # the agent's half of the home, and nothing else. The server's half does not exist in this container, so `bash` cannot
 # read the token hashes, the trigger secrets, the database, the SSH key or the provider credential even if it tries.
-FROM ubuntu:24.04
+# Qualified for the same reason as the node image in mason.Dockerfile: no short-name resolution on a NixOS podman host.
+FROM docker.io/library/ubuntu:24.04
 
 ARG MASON_UID=1000
 ARG MASON_GID=1000

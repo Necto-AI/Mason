@@ -231,7 +231,11 @@ services:
   # only real route to the internet, and mason and mason-env are not on that network at all.
   #
   # vpn:
-  #   image: ghcr.io/sagernet/sing-box:latest
+  #   # A pinned tag, not `latest`: the config file beside this is written once by an operator against one schema, and
+  #   # sing-box moves its own (`domain_strategy` out of the outbounds, the resolver keys under `route`, the DNS section
+  #   # rewritten) between minor versions. `latest` would one day refuse a file that was correct yesterday, at whichever
+  #   # boot pulled it. v1.14.4 is what this template's config.example.json is written for.
+  #   image: ghcr.io/sagernet/sing-box:v1.14.4
   #   restart: unless-stopped
   #   command: ["run", "-c", "/etc/sing-box/config.json"]
   #   volumes:

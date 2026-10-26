@@ -98,6 +98,23 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    The build is slow the first time (`npm install` repairs `vendor/pi`'s nested dependencies), and it re-runs whenever a
    file the root `.dockerignore` does not exclude changes: the checkout is the image.
 
+5. **On a rootless podman host instead of docker**, add the stack's own file to the command:
+
+   ```sh
+   cd deploy
+   podman build -t mason:local -f mason.Dockerfile --build-arg MASON_UID=1000 --build-arg MASON_GID=100 ..
+   podman build -t mason-env:local .
+   podman compose -f compose.yaml -f compose.podman.yaml up -d
+   ```
+
+   `compose.podman.yaml` exists because of uid mapping, not taste: rootless podman maps the container's root to the host
+   user and every other uid to a subuid, so `mason` inside the container is *not* host uid 1000 and cannot read the
+   `.pi/agent` directory that the host user owns. It fails as `install: cannot open '/run/pi-agent/settings.json'`
+   while the file is plainly readable on the host. The override passes `userns_mode: keep-id` to the two mason services,
+   which makes uid 1000 the same person on both sides and gives both a single ownership on the shared `mason-agent`
+   volume. The two explicit builds are there because podman-compose 1.6 tries to *pull* an `image:` name that only ever
+   exists locally (`short-name "mason-env:local" did not resolve to an alias`) before it considers building it.
+
 ## First boot, and the pairing link
 
 `docker compose logs mason` on a fresh home prints, once:
