@@ -5,11 +5,14 @@
  * would change what the agent thinks a chat message says, and nobody would notice until it answered the wrong thing.
  * The signature test checks the one thing a sender can get wrong that the door cannot forgive — signing bytes it did not
  * send — by rebuilding the header with mason's own idiom from `src/server/events.ts` and comparing bytes.
+ *
+ * The file clause is pinned the same way: a caption long enough to be cut loses its own words and never the path, or the
+ * event would say a file arrived and leave the agent nothing it could open.
  */
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
-import { envelopeFor, PAYLOAD_MAX, renderPayload, signBody, type ChatEvent } from "../src/envelope.ts";
+import { envelopeFor, PAYLOAD_MAX, renderPayload, signBody, type ChatEvent, type EventFile } from "../src/envelope.ts";
 
 function event(overrides: Partial<ChatEvent> = {}): ChatEvent {
 	return {
@@ -23,6 +26,14 @@ function event(overrides: Partial<ChatEvent> = {}): ChatEvent {
 		...overrides,
 	};
 }
+
+/** A file on the volume, as the inbox reports it: the path is the one string in this file that is not optional. */
+const FILE: EventFile = {
+	path: "/home/mason/.mason/agent/workspace/inbox/448860480-report.pdf",
+	name: "448860480-report.pdf",
+	size: 4_096,
+	kind: "document",
+};
 
 describe("the event payload", () => {
 	it("renders a plain message with the sender, the handle, the chat and the id", () => {
@@ -52,6 +63,22 @@ describe("the event payload", () => {
 		const payload = renderPayload(event({ text: "x".repeat(PAYLOAD_MAX * 2) }));
 		assert.equal(payload.length, PAYLOAD_MAX);
 		assert.ok(payload.endsWith("… [truncated]"), payload.slice(-25));
+	});
+
+	it("ends the payload at the file, so the path is the last thing the agent reads", () => {
+		assert.equal(
+			renderPayload(event({ file: FILE })),
+			"Ilya (@ilya) in chat -1001234 (Team chat): ship it?, " +
+				"with a file at /home/mason/.mason/agent/workspace/inbox/448860480-report.pdf",
+		);
+	});
+
+	it("cuts the caption and keeps the path, because a message about a file must name one", () => {
+		const payload = renderPayload(event({ text: "x".repeat(PAYLOAD_MAX * 2), file: FILE }));
+
+		assert.equal(payload.length, PAYLOAD_MAX);
+		assert.ok(payload.endsWith(`, with a file at ${FILE.path}`), payload.slice(-160));
+		assert.ok(payload.includes("… [truncated], with a file at "), "the cut is visible, and the clause follows it");
 	});
 
 	it("keys the event by the update id, so a redelivery is the same fire", () => {
