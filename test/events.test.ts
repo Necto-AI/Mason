@@ -4,8 +4,7 @@
  * Two layers are pinned separately. The pure half — the signature and the envelope — is tested without a server, so a
  * version mason does not know, a field over its cap and a body that is not an object each have a verdict of their own.
  * The door itself is tested against a started server, because what matters there is only what a sender sees: the status,
- * the answer, and the one `app.hook` entry the delivery left behind. GitHub's route is tested in `github.test.ts`; this
- * file is the door that replaces the shape, not the path that predates it.
+ * the answer, and the one `app.hook` entry the delivery left behind.
  *
  * The identity tests read the durable transcript rather than a counter, because that is where the dedupe lives: the same
  * `id` is the same request id, and pi-durable never admits one twice — including after a restart, which is the only
