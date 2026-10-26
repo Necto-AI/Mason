@@ -21,12 +21,15 @@ import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi
 import {
 	bodyRequestId,
 	explicitRequestId,
+	formatPrompt,
 	gestureRequestId,
 	HooksManager,
 	IDENTITY_WINDOW_MS,
 	scheduledRequestId,
 } from "../src/server/hooks.ts";
-import { openAgentRuntime, type AgentRuntime } from "../src/server/runtime.ts";
+import type { AgentRuntime } from "../src/server/runtime.ts";
+import { openAgentRuntime } from "../src/server/runtime.ts";
+import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 
 /** A clock the test moves by hand: fire identity is about time, so time is an input here, not a wait. */
 interface TestClock {
@@ -72,6 +75,7 @@ const digest = {
 	description: "A digest an external sender fires.",
 	enabled: false,
 	promptTemplate: "digest: {{payload}}",
+	fireCount: 0,
 };
 
 /** The same hook on an hourly schedule, for the slot key. */
@@ -106,10 +110,28 @@ async function withFiringManager(
 	}
 }
 
-async function hookEntryCount(runtime: AgentRuntime): Promise<number> {
+async function hookEntries(
+	runtime: AgentRuntime,
+): Promise<{ readonly text: string; readonly data: Record<string, unknown> }[]> {
 	const conversation = await runtime.conversation();
 	const page = await conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT);
-	return page.items.filter((entry) => entry.kind === "app.hook").length;
+	return page.items
+		.filter((entry) => entry.kind === HOOK_ENTRY_KIND)
+		.map((entry) => {
+			const content = entry.model?.[0]?.content;
+			const data = entry.data;
+			return {
+				text: typeof content === "string" ? content : "",
+				data:
+					typeof data === "object" && data !== null && !Array.isArray(data)
+						? (data as Record<string, unknown>)
+						: {},
+			};
+		});
+}
+
+async function hookEntryCount(runtime: AgentRuntime): Promise<number> {
+	return (await hookEntries(runtime)).length;
 }
 
 async function withRuntime(run: (runtime: AgentRuntime) => Promise<void>): Promise<void> {
@@ -225,6 +247,58 @@ describe("a fire's identity", () => {
 			"array order is part of the body",
 		);
 		assert.notEqual(bodyRequestId("digest", { a: 1 }, nowMs), bodyRequestId("other", { a: 1 }, nowMs), "per hook");
+	});
+});
+
+describe("a fire's kind", () => {
+	/** A template the payload starts a line of: what every built-in that takes a payload looks like. */
+	const labelled = { ...digest, promptTemplate: "A digest arrived. Read it and report.\n{{payload}}" };
+
+	it("is one line of the prompt immediately above the payload", () => {
+		const text = formatPrompt(labelled, "Ilya opened #1421", ALIGNED_START, "issue.opened");
+		assert.match(
+			text,
+			/Read it and report\.\nEvent: issue\.opened\n\[begin untrusted payload/,
+			"the label sits between the instruction and the data, never inside the fence",
+		);
+		assert.match(text, /\[end untrusted payload\]$/);
+	});
+
+	it("is appended after the template text when the template has no payload placeholder", () => {
+		const text = formatPrompt({ ...digest, promptTemplate: "Check the workspace." }, "3 pushes to main", ALIGNED_START, "push");
+		assert.match(text, /^Check the workspace\.\n\nEvent: push\n\nPayload:\n\[begin untrusted payload/);
+	});
+
+	it("changes nothing for a fire whose sender named no kind", () => {
+		// The GitHub route and a scheduled fire pass none, and their prompt must be the one they always had.
+		const text = formatPrompt(labelled, "Ilya opened #1421", ALIGNED_START);
+		assert.doesNotMatch(text, /Event:/);
+		assert.match(text, /^A digest arrived\. Read it and report\.\n\[begin untrusted payload/);
+	});
+
+	it("rides in the entry as well, and is absent from one that named none", async () => {
+		await withFiringManager(async (hooks, runtime) => {
+			const named = await hooks.fire("digest", {
+				payload: "Ilya opened #1421",
+				kind: "issue.opened",
+				requestId: explicitRequestId("digest", "named"),
+			});
+			await named.wait(BACKGROUND_CONTEXT);
+			const plain = await hooks.fire("digest", {
+				payload: "3 pushes to main",
+				requestId: explicitRequestId("digest", "plain"),
+			});
+			await plain.wait(BACKGROUND_CONTEXT);
+
+			const entries = await hookEntries(runtime);
+			assert.equal(entries.length, 2);
+			const labelledEntry = entries.find((entry) => entry.data.payload === "Ilya opened #1421");
+			const plainEntry = entries.find((entry) => entry.data.payload === "3 pushes to main");
+			assert.equal(labelledEntry?.data.kind, "issue.opened", "the transcript carries what the sender said happened");
+			assert.match(labelledEntry?.text ?? "", /Event: issue\.opened/);
+			assert.equal("kind" in (plainEntry?.data ?? {}), false, "a kindless fire's entry has no kind at all");
+			assert.doesNotMatch(plainEntry?.text ?? "", /Event:/);
+		});
 	});
 });
 

@@ -209,14 +209,23 @@ export interface EventHookConfig {
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - `github-activity` (an issue or pull request event from a connector; enabled, because a delivery is its only caller and a hook with no hook to fire would drop one)
+  - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though an integration's trigger may name it, and a hook nothing calls costs nothing.
+  - `team-chat` (a message in the team chat, as the Telegram integration's trigger renders one): enabled, no interval — a chat message is not a schedule. It names the sender, the chat and the message a reply answers, and asks the agent to decide whether to answer there with `mcp__telegram__send_message` or stay quiet, because every answer is a message a person reads.
   - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
-- **Connectors: another system's events, one verb each** (`src/server/connectors.ts`, GitHub first). A connector is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It delivers an event, and the event becomes a hook fire — a prompt with the event fenced as untrusted data, exactly like a webhook's payload.
-  - **Route and credential.** `POST /api/connectors/github` is the one path in `/api` that answers a signature instead of a token (§4.1b): GitHub sends `X-Hub-Signature-256`, an HMAC-SHA256 of the **raw body bytes** with the connector's secret, compared in constant time. No secret, no `sha256=` prefix, a wrong length or a tampered byte is `401` before a single field is parsed. The secret lives in `<data>/connectors.json` (`0600`), not `config.json`, because the two answer different questions — who may speak as the owner, and which sender may wake the agent about an event — and a leak of one is not a leak of the other. `npm run connector -- set github` mints one and prints it once; `remove` deletes it; the server reads the file per delivery, so a rotation lands without a restart.
-  - **Trigger-first filter.** A repository emits an event for every label, comment, edit and assignment, and each one forwarded is a model turn. The allowlist is an allowed `(event, action)` set — `issues` `opened|reopened|closed`, `pull_request` `opened|reopened|closed|ready_for_review|review_requested`, `pull_request_review` `submitted` — and everything else is acknowledged with `202 { ignored: true }` rather than refused, because a sender that gets an error for a comment event retries forever. A payload the reader cannot make sense of (no repository, no number) is dropped the same way: half an event is worse than none.
-  - **Identity and limits.** A delivery carries `X-GitHub-Delivery`, a unique id per attempt, which becomes the fire's `requestId` through `explicitRequestId()` — GitHub's own redelivery collapses, permanently. A delivery without one falls back to `bodyRequestId()`. The shared fire limiter applies per connector (`6` a minute), and the body is capped at **256 KiB** (`GITHUB_BODY_MAX_BYTES`): a PR event is tens of kilobytes, and the cap bounds what can be buffered rather than describing a format. Over the cap is `413`, never a truncated signature.
-  - **What the model sees.** The event compacted to what a reader needs to judge it — source, event, action, repo, number, kind, title, url, actor, state, draft, merged, labels, and up to 2,000 characters of body (or a review's state and body). The raw delivery is not forwarded: the prompt receives JSON, and the fence plus `proactive_guidelines` say what a payload means.
-  - **Trying it without GitHub.** `npm run connector -- sample github issues.opened` signs a realistic payload with the stored secret and posts it to a running server, so the filter, the signature, the hook and the turn can all be exercised on a laptop. Replaying a real delivery is the same `curl` with the same two headers.
+- **`integration.trigger`: the generic event door** (`src/server/events.ts`, `src/server/main.ts`). An integration's trigger is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It has one verb — deliver an event — and that verb becomes one fire of the hook its config names, which is a prompt with the payload fenced as untrusted data (above). `POST /api/events/<integration>` is the path; `<integration>` is a configured name, and the secret that verifies the body is that integration's own. The route is outside the token gate because the HMAC is the door.
+  - **Envelope v1.** `{ "v": 1, "id": "issue-1421-opened", "kind": "issue.opened", "payload": "Ilya opened issue #1421 …" }`. `v` must be the integer `1`: a version mason does not know is a bug in the sender, refused `400` rather than guessed at. `id` is the delivery's identity — non-empty, at most 200 characters, and one line: a control character in it is refused, because the accept log prints it as-is and a newline would forge the rest of the line — unique within that integration — and it becomes ``explicitRequestId(hook.id, `${name}:${id}`)``, the integration's name inside the key because a sender only promises uniqueness inside its own stream: two integrations on one hook that both call a delivery `1` are two events, and each fires. A duplicate from the same integration is the same fire however much later it arrives: the durable log never forgets a request id, so no table of seen ids exists, and a redelivery after a restart is still one event. `kind` is a short token labelling what happened — letters, digits and `.` `_` `:` `-`, the first character a letter or a digit, at most 64 — never free text: it becomes one line of the accept log and the prompt's label, so a newline or a space in it is refused, and `issue.opened`, `push` or `chat.message` are the shapes it names. It is never a dispatch key — one trigger, one hook — and mason makes no decision from it. `payload` is **a string** (at most 2 000 characters) written by the sender for a person to read; mason never parses structure, and an over-long payload is refused rather than truncated, because a truncated event is a lie about what happened. Unknown keys are ignored (a sender may add fields before mason knows them), and a body that is not a JSON object is a `400` naming the field.
+  - **Signature, limits, identity.** `X-Mason-Signature: sha256=<hex hmac-sha256(secret, raw body)>`, compared in constant time over the bytes that arrived, before JSON parsing; missing or wrong is `401` with no detail, no hint which half failed. The secret is 32 bytes hex, stored `0600` through the same atomic write as the rest of the file, and minted by `npm run integration -- secret <name> [--hook <hook-id>]`, which prints it exactly once. Limits are per integration: a 256 KiB body cap (`413`) and 6 deliveries a minute (`429` with `retry-after`), so one chatty sender cannot spend another's budget. Boot refuses an **enabled** integration whose trigger names a hook this build does not define, naming the integration and the hook: a door that fires nothing is a silent black hole, and it is a config error, not a missing optional container. A disabled integration is not checked — its door is `404`, and a name is no reason to keep an integration the operator switched off from ever being switched on again. The switch is read at boot, so enabling it is the restart that runs the same check.
+  - **A delivery by hand.** The door's one prerequisite is an HMAC over the exact bytes that are sent, and there is no wrapper script for it: any sender that can run `openssl` is a sender. The secret is the one `npm run integration -- secret <name>` printed once; the name in the path is the integration's.
+
+    ```sh
+    SECRET=…                     # the integration's trigger secret, printed once
+    BODY='{"v":1,"id":"issue-1421-opened","kind":"issue.opened","payload":"Ilya opened issue #1421"}'
+    SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
+    curl -sS -X POST http://127.0.0.1:8787/api/events/github \
+      -H 'content-type: application/json' -H "x-mason-signature: sha256=$SIG" --data-binary "$BODY"
+    ```
+
+    `id` is what makes a redelivery the same event: `--data-binary` sends those bytes unaltered, so signing them is signing what arrives.
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -253,11 +262,11 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
     ├── integrations.json   # The services mason reaches: each entry's MCP endpoint and trigger, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
-    └── data/               # agent.sqlite, hooks.json and connectors.json (§4.1c)
+    └── data/               # agent.sqlite, hooks.json and seeded-skills.json (§4.1c)
 ```
 
 **The boundary is a mount until writable roots lands.** In the deployment `service/` does not exist in the tool
-machine's filesystem, so `bash` cannot reach the token hashes, the connector secret, the database, the SSH key or the
+machine's filesystem, so `bash` cannot reach the token hashes, the trigger secrets, the database, the SSH key or the
 provider credential — the split holds for every tool, not only the ones that honour a policy. In the dev stack there
 are no containers: both halves are sibling directories on one filesystem and a tool can see `service/`, so the
 writable-roots policy is what makes the split meaningful for a developer. `service/` is unversioned. `agent/.git` is the memory repo, created when the home is first
@@ -465,11 +474,11 @@ exchange in `handleRequest`, the gate at the top of `handleRequest` that `/api/*
 that gate applies to a claimed name, and the same refusal at the socket handshake, which a removed person's live socket
 survives only until it reconnects.
 
-Two paths in `/api` are deliberately outside that gate, and both are narrower than a token. `/api/health` is a liveness
-probe that answers one word and needs no credential at all. `POST /api/connectors/github` (§3.3) is authenticated by
-the sender's HMAC against `connectors.json`, and can do exactly one thing: fire the one hook that connector names. A
-connector's secret is not a token — it cannot read, claim, or call — so the door it opens is a door into `hooks.fire`
-and nothing else.
+Two paths in `/api` are deliberately outside that gate, and both are narrower than a token. `/api/health` is a
+liveness probe that answers one word and needs no credential at all, and `POST /api/events/<integration>` (§3.3) is
+authenticated by that integration's trigger secret. The door it opens can do exactly one thing: fire the one hook its
+trigger names. That secret is not a token — it cannot read, claim, or call — so the door it opens is a door into
+`hooks.fire` and nothing else.
 
 **The credential.** `service/config.json` holds `tokens: [{ id, label, sha256, createdAt }]` and one `sessionKey` —
 mode 0600, home 0700. Only hashes are stored: that file is exactly the kind of thing that gets pasted into a bug report
@@ -581,6 +590,9 @@ so instead of starting a second, empty-looking agent:
 [data] /home/user/.mason/service/data
 [data] ignoring ./.data (an older home): move it with `mv .data /home/user/.mason/service/data`
 ```
+
+A home upgraded from a build that still had the GitHub connector also carries a `connectors.json` there: the migration
+moved `data/` wholesale, and nothing reads that file now — its secrets open nothing — so it is safe to delete.
 
 **What this does not do.** It does not sandbox the process: a tool still runs as the server's user, with that user's
 files. That is what the machine boundary is for (§`docs/EXECUTION-TARGETS.md`), and it is why the microVM is the last
