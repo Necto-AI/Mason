@@ -2,7 +2,7 @@
 
 The bot's files must be editable with ordinary tools — `read`, `write`, `bash`, and later its own skills and
 extensions — which means they have to live on the machine those tools run on, not in the process that thinks. But the
-same directory today also holds the pairing-token hashes, the connector secrets, the SQLite database, the SSH key and a
+same directory today also holds the pairing-token hashes, the integration secrets, the SQLite database, the SSH key and a
 copy of the provider credential, so moving the home wholesale would hand the bot its own door and its own model key.
 The home is therefore split into `agent/` (mounted into the tool machine, read and written by the bot) and `service/`
 (never mounted, never a path inside the tool machine), and the split is a volume boundary rather than a permission
