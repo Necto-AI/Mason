@@ -148,7 +148,7 @@ async function main(): Promise<void> {
 
 	log(
 		"info",
-		`relaying ${config.allowedChats.length} allowed chat(s) as @${bot.username ?? "<no username>"}; ` +
+		`relaying ${config.allowedChats.length} allowlisted chat(s) or handle(s) as @${bot.username ?? "<no username>"}; ` +
 			`events go to ${config.eventUrl}`,
 	);
 	await poller.run(controller.signal);
