@@ -94,10 +94,22 @@ wait_for_health
 # so the server is restarted after the stack is up and the log is checked for what a restart was supposed to fix.
 say "restarting mason, so every integration is already listening"
 absent_before="$(remote "podman logs mason_mason_1 2>&1 | grep -c 'its tools are absent' || true")"
-remote "podman restart mason_mason_1 >/dev/null"
-wait_for_health
-absent_after="$(remote "podman logs mason_mason_1 2>&1 | grep -c 'its tools are absent' || true")"
-[ "$absent_after" = "$absent_before" ] || fail "an integration was unreachable at boot: $(remote "podman logs --tail 40 mason_mason_1 2>&1 | grep 'its tools are absent' | tail -1")"
+# One restart is a guess about timing, not a wait. Measured on this host: mason answers `/api/health` in about three
+# seconds, and the relay's MCP face appears two to seven seconds after `up` because it calls `getMe` through the proxy it
+# was started beside — so a restart that follows the health check can land 283 ms too early and cost the integration its
+# tools for a whole boot. Retry the restart while the count of unreachable boots keeps growing, and only then fail.
+attempts=4
+for attempt in $(seq 1 "$attempts"); do
+	remote "podman restart mason_mason_1 >/dev/null"
+	wait_for_health
+	absent_after="$(remote "podman logs mason_mason_1 2>&1 | grep -c 'its tools are absent' || true")"
+	[ "$absent_after" = "$absent_before" ] && break
+	if [ "$attempt" = "$attempts" ]; then
+		fail "an integration was unreachable at boot: $(remote "podman logs --tail 40 mason_mason_1 2>&1 | grep 'its tools are absent' | tail -1")"
+	fi
+	note "an integration was still starting; restarting again in 5 s (attempt $attempt/$attempts)"
+	sleep 5
+done
 
 say "checking that what is running is what was just built"
 # Two facts from podman, compared here rather than on the host: what each container runs, and what each tag points at
