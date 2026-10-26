@@ -29,6 +29,7 @@ describe("the configuration", () => {
 		assert.equal(config.triggerSecret, SECRET);
 		assert.deepEqual(config.allowedChats, ["-1001234"]);
 		assert.equal(config.httpsProxy, undefined);
+		assert.equal(config.asrUrl, undefined, "transcription is off until an operator names a service");
 		assert.equal(config.dataDir, "/data");
 		assert.equal(config.port, 8082);
 	});
@@ -112,6 +113,27 @@ describe("the configuration", () => {
 					error instanceof ConfigError &&
 					error.message.includes(`names ${entry}`) &&
 					error.message.includes("5-32 letters, digits or underscores"),
+			);
+		}
+	});
+
+	it("takes an optional transcription URL, and refuses one that is not http(s)", () => {
+		assert.equal(
+			readConfig(environment({ TELEGRAM_ASR_URL: " http://asr.local:9000/transcribe " })).asrUrl,
+			"http://asr.local:9000/transcribe",
+			"trimmed like every other value, and kept whole so the endpoint the operator named is the one called",
+		);
+		assert.equal(
+			readConfig(environment({ TELEGRAM_ASR_URL: "   " })).asrUrl,
+			undefined,
+			"a blank is unset, which is how a comment-out looks in a .env",
+		);
+		for (const value of ["asr.local:9000/transcribe", "ftp://asr.local/transcribe", "http://"]) {
+			assert.throws(
+				() => readConfig(environment({ TELEGRAM_ASR_URL: value })),
+				(error: unknown) =>
+					error instanceof ConfigError && error.message.includes("TELEGRAM_ASR_URL is not an http(s) URL"),
+				`${value} is not an endpoint`,
 			);
 		}
 	});

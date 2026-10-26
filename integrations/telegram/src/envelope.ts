@@ -18,6 +18,11 @@
  * **The file clause is the last thing in the payload, and the last thing to give way.** A message that carried a file ends
  * with where it is, so a caption long enough to be cut loses its own words and never the path: the path is the whole
  * reason the attachment reached the agent at all.
+ *
+ * **A transcript is labelled, fenced, and never mistaken for the sender's typing.** `src/asr.ts` hears a voice note, and
+ * what it heard arrives between a line that names it and a line that closes it, so neither the model nor a reader can
+ * read the words as something the person wrote. It is fitted like the rest of the message — a long transcript is cut and
+ * says so — and it sits before the file clause, because the path is the one thing that must survive any cut.
  */
 import { createHmac } from "node:crypto";
 import type { FileKind } from "./telegram.ts";
@@ -42,7 +47,26 @@ export interface ChatEvent {
 	readonly text: string;
 	/** The file the message carried, once `src/inbox.ts` has fetched it. Absent when it carried none, or could not be got. */
 	readonly file?: EventFile;
+	/**
+	 * What a transcription service heard in that file, whether it heard nothing, or why it could not be asked. Absent when
+	 * the message carried no speech, when no service is configured, or when the file never landed — the three cases where
+	 * nothing was attempted.
+	 */
+	readonly transcript?: Transcript;
 }
+
+/**
+ * A voice note's words, as the payload states them.
+ *
+ * The three states are three different things and the payload says each one: `text` is what the service heard, `silent`
+ * is a clip that was transcribed and had no words in it, and `unavailable` is a service was asked and could not answer.
+ * Neither of the last two is the absence of the field — that is "nobody asked" — and a person who sent a voice note
+ * deserves to know which of them it was.
+ */
+export type Transcript =
+	| { readonly kind: "text"; readonly text: string }
+	| { readonly kind: "silent" }
+	| { readonly kind: "unavailable" };
 
 /**
  * A file that is on disk, as the payload names it. The path is the point: it is the same string in this container and in
@@ -71,18 +95,42 @@ export interface EventEnvelope {
 const TRUNCATED = "… [truncated]";
 
 /**
- * The one-line rendering:
+ * The line a transcript starts under, and the one it ends on. Both are English prose rather than punctuation, because the
+ * reader is a model and a person: `"""` or a backtick fence can be forged by the words inside it, and a marker line that
+ * says what it is has nothing to guess at. The block is closed explicitly so a long transcript cannot look like the
+ * sender's own words running on past the label.
+ */
+const TRANSCRIPT_OPEN = "[transcript of the voice message, spoken and not typed by the sender]";
+const TRANSCRIPT_CLOSE = "[end of transcript]";
+
+/** What the payload says when a service was asked and could not answer: one parenthetical on the sentence, never silence. */
+const TRANSCRIPT_UNAVAILABLE = " (the voice message could not be transcribed)";
+
+/**
+ * And what it says when the service did answer and there were no words in the clip. Said out loud rather than rendered as
+ * an empty block, because an empty block reads as a failure: a cough, a room with nobody talking and a note recorded by
+ * accident are all messages somebody sent, and the service heard exactly that.
+ */
+const TRANSCRIPT_SILENT = " (the voice message was transcribed and says nothing)";
+
+/**
+ * The rendering:
  *
  * ```text
  * Ilya (@ilya) in chat -1001234 (Team chat), replying to 8811: ship it?
  * Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at /home/mason/.mason/agent/workspace/inbox/448860480-report.pdf
+ * Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note
+ * [transcript of the voice message, spoken and not typed by the sender]
+ * can you check the pricing sheet before Thursday
+ * [end of transcript], with a file at /home/mason/.mason/agent/workspace/inbox/8811-voice-u1.ogg
  * ```
  *
  * Each of the three optional parts disappears cleanly rather than leaving an empty bracket: a private chat has no title,
  * a sender may have no username, and most messages are not replies. The file clause is the exception — it is appended
  * rather than folded in, because the path is what makes the attachment readable and the text is what can be spared when
- * the two do not both fit. The rendering is stable either way — the same message always produces the same string,
- * because it is what the agent reads and the door's dedupe is on the id, not on this.
+ * the two do not both fit. A transcript is the other exception: it starts a line of its own, so the block is unmistakably
+ * not the sentence the sender wrote. The rendering is stable either way — the same message always produces the same
+ * string, because it is what the agent reads and the door's dedupe is on the id, not on this.
  */
 export function renderPayload(event: ChatEvent): string {
 	const handle = event.username === undefined ? "" : ` (@${event.username})`;
@@ -90,6 +138,10 @@ export function renderPayload(event: ChatEvent): string {
 	const reply = event.replyToMessageId === undefined ? "" : `, replying to ${event.replyToMessageId}`;
 	const prefix = `${event.sender}${handle} in chat ${event.chatId}${title}${reply}: `;
 	const file = event.file === undefined ? "" : `, with a file at ${event.file.path}`;
+	// The transcript joins the text before the one fitting, so the cap holds without a second budget and a cut transcript
+	// is as visibly cut as a cut caption. It comes before the file clause for the same reason the caption does: the path is
+	// what must survive, and a block appended after it could not be shortened without shortening the path too.
+	const body = `${event.text}${transcriptBlock(event.transcript)}`;
 	// The clause is never cut and the text always is, which works while the clause itself fits. A path long enough to leave
 	// no room at all (a misconfigured `TELEGRAM_INBOX`) would otherwise produce a payload over the cap that the door
 	// refuses, and a refused delivery is a message nobody reads: the prefix gives way instead, from the left.
@@ -97,7 +149,30 @@ export function renderPayload(event: ChatEvent): string {
 	// open and not find, which is worse than a payload that says a file exists and cannot be named. `TELEGRAM_INBOX` is
 	// checked at startup for this, so reaching it is a bug rather than a setting.
 	const named = PAYLOAD_MAX - prefix.length - file.length >= 0 ? file : ", with a file this payload has no room to name";
-	return `${prefix}${fitText(event.text, PAYLOAD_MAX - prefix.length - named.length)}${named}`;
+	return `${prefix}${fitText(body, PAYLOAD_MAX - prefix.length - named.length)}${named}`;
+}
+
+/**
+ * The transcript as it sits in the payload: a labelled block after the sentence, between its own opening and closing
+ * lines, or the parenthetical that says the words are missing — or that there were none to miss.
+ *
+ * The markers inside the transcript are defused the way mason's own fence defuses its own (`src/server/untrusted.ts`): a
+ * transcript line that reads as the close of the block could otherwise end it early and continue in the sender's voice,
+ * which is the one thing the label is here to prevent.
+ */
+function transcriptBlock(transcript: Transcript | undefined): string {
+	if (transcript === undefined) return "";
+	if (transcript.kind === "unavailable") return TRANSCRIPT_UNAVAILABLE;
+	if (transcript.kind === "silent") return TRANSCRIPT_SILENT;
+	const defused = transcript.text
+		.split("\n")
+		.map((line) =>
+			line.trim() === TRANSCRIPT_OPEN || line.trim() === TRANSCRIPT_CLOSE
+				? `(marker in transcript) ${line.trim()}`
+				: line,
+		)
+		.join("\n");
+	return `\n${TRANSCRIPT_OPEN}\n${defused}\n${TRANSCRIPT_CLOSE}`;
 }
 
 /**
