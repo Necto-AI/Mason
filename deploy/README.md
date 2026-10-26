@@ -73,7 +73,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
    TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
    TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids the bot may relay, comma-separated
-   COMPOSE_PROFILES=telegram               # optional: turns on the services behind a profile (the telegram pair)
+   COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/home/user/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
    ```
@@ -175,7 +175,7 @@ What it does not do: touch `deploy/.env` (an update changes code, never credenti
 checkout is left on the ref you asked for, so the way back is the previous tag and the same script.
 
 `DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_PORT` and `COMPOSE_CMD` override the defaults; the podman override file is always
-applied, and `COMPOSE_PROFILES` comes from `deploy/.env` on the host like every other setting.
+applied, and `COMPOSE_EXTRA_FILES` comes from `deploy/.env` on the host like every other setting.
 
 ## A person, and a device
 
@@ -225,11 +225,13 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
    (`http://mason-github:8082/mcp`), and `mason-edge`, the only way out to the third party's API. Its credential is an
    environment variable read from `deploy/.env` — the container owns it, mason does not.
 
-   A service that is not part of every mason stack goes behind a **profile** rather than behind a comment — `vpn` and
-   `mason-telegram` are, and `COMPOSE_PROFILES=telegram` in `deploy/.env` turns them on. The comment was the first
-   version of this and it does not survive a deployment that is a checkout: `deploy.sh` runs `git checkout`, the
-   uncommented services are replaced by the commented template, and the containers stay up with no compose entry behind
-   them — running old code, invisible to `down`, and skipped by every later `up`.
+   A service that is not part of every mason stack goes in a **separate compose file**, not in a comment — `vpn` and
+   `mason-telegram` live in `compose.telegram.yaml`, and `COMPOSE_EXTRA_FILES=compose.telegram.yaml` in `deploy/.env`
+   adds it. The comment was the first version of this and it does not survive a deployment that is a checkout:
+   `deploy.sh` runs `git checkout`, the uncommented services are replaced by the commented template, and the containers
+   stay up with no compose entry behind them — running old code, invisible to `down`, and skipped by every later `up`.
+   A compose `profile` would be the natural way to do it, and podman-compose 1.6.0 drops a profiled service from the
+   model even with `--profile` passed, which is the same failure with a quieter symptom.
 
 2. **A line.** `deploy/integrations.json`. Create it beside the compose file before the first `up` — an empty
    `{"integrations": {}}` is a stack with no integration at all — because a bind source that does not exist is a
@@ -278,9 +280,9 @@ leave the mount out; the copy on the volume is then the whole truth.
 [`integrations/telegram/`](../integrations/telegram/README.md) is the first integration built in this repository rather
 than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
 `integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
-It is still just the two services in `compose.yaml` — `mason-telegram` on `mason-mcp` with a
-`/data` volume for its offset and no `ports`, plus a `vpn` sidecar, both behind the `telegram` profile
-(`COMPOSE_PROFILES=telegram` in `deploy/.env`) — and the only thing mason knows about it is one entry
+It is still just the two services in `compose.telegram.yaml` — `mason-telegram` on `mason-mcp` with a `/data` volume
+for its offset and no `ports`, plus a `vpn` sidecar, both pulled in by `COMPOSE_EXTRA_FILES=compose.telegram.yaml` in
+`deploy/.env` — and the only thing mason knows about it is one entry
 in `integrations.json` and a trigger secret. Mint that secret on the mason side
 (`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
 `secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
