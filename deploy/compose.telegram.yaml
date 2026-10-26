@@ -46,9 +46,10 @@ services:
       # ProxyAgent from this (Node 22's fetch does not read it by itself); its README says so.
       HTTPS_PROXY: http://vpn:1080
       # Where a voice note becomes words: mason's own ASR service, by name on mason-mcp and never through the proxy.
-      # Unset — the default — leaves the payload exactly as it was before the setting existed: a file and a sentence,
-      # no transcript. This is the whole of what joins the relay to `mason-asr`; no credential crosses either way.
-      TELEGRAM_ASR_URL: ${TELEGRAM_ASR_URL:-}
+      # On by default, because transcription is a capability of the bot and not a setting a deployment opts into: every
+      # stack defines `mason-asr` (compose.yaml), so every relay can reach it, and a stack that means to run without it
+      # sets this to an empty string. No credential crosses either way.
+      TELEGRAM_ASR_URL: ${TELEGRAM_ASR_URL:-http://mason-asr:8100/transcribe}
     networks:
       # In: mason reaches the tools face by name — the `tools.url` in integrations.json. Nothing on mason-internal is
       # here, so a tool cannot reach it.
