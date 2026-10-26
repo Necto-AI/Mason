@@ -10,7 +10,8 @@ integration" below); those are other people's images, not this repo's.
 ```
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
                           │
-                          ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge)
+                          ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
+                          │                                           mason-egress with the vpn sidecar)
                           └── volumes: mason-agent (both containers), mason-service, env-keys
 ```
 
@@ -227,19 +228,26 @@ leave the mount out; the copy on the volume is then the whole truth.
 ## The first integration: `mason-telegram`, and the sidecar it needs
 
 [`integrations/telegram/`](../integrations/telegram/README.md) is the first integration built in this repository rather
-than by somebody else: one package, one image, both faces of ADR-0003. It is still just the two containers in the
-templates at the end of `compose.yaml` — `mason-telegram` on `mason-mcp` and `mason-edge` with a `/data` volume for its
-offset and no `ports`, plus a `vpn` sidecar on `mason-edge` alone — and the only thing mason knows about it is one entry
+than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
+`integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
+It is still just the two containers in the templates at the end of `compose.yaml` — `mason-telegram` on `mason-mcp` with a
+`/data` volume for its offset and no `ports`, plus a `vpn` sidecar — and the only thing mason knows about it is one entry
 in `integrations.json` and a trigger secret. Mint that secret on the mason side
 (`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
 `secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
 bot token and the chat allowlist, and the boot refuses — naming the hook — until the `team-chat` hook this build defines
-is the one the trigger names. **The sidecar is not optional here:** Telegram is unreachable from most hosts this runs on,
-so the integration is given `HTTPS_PROXY=http://vpn:1080` and reaches its upstream through it. The proxy's config is a
-real server's address and key, so it is a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json`
-(gitignored) and fill in the TODOs; it is mounted read-only, never baked into an image, and the sidecar publishes no port,
-because a published SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the
-integrations that name it use it.
+is the one the trigger names.
+
+**The sidecar is not optional here, and neither is the network that carries it.** Telegram is unreachable from most hosts
+this runs on, so the integration is given `HTTPS_PROXY=http://vpn:1080` and reaches its upstream through it. The
+`mason-telegram` container therefore joins `mason-mcp` and `mason-egress`, and not `mason-edge`: `mason-egress` is
+`internal: true`, so the proxy is the only address the container can reach, and — since `mason-edge` is an ordinary
+bridge with a gateway — being on it would have given the container its own way out and made the proxy decoration. The
+sidecar is the one member that has both (`mason-egress` in, `mason-edge` out), and no other container joins
+`mason-egress`, so mason cannot reach the proxy at all. The proxy's config is a real server's address and key, so it is
+a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json` (gitignored) and fill in the TODOs; it is
+mounted read-only, never baked into an image, and the sidecar publishes no port, because a published SOCKS port is an
+open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use it.
 
 ## What to back up
 
@@ -276,6 +284,9 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
 - `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
   publishes a port, and `mason-env` is not a member (see "An integration" above).
+- `mason-egress` is the third, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
+  integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`; mason and
+  `mason-env` are not on it, so neither can reach that proxy.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send

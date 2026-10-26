@@ -65,7 +65,9 @@ services:
         # whether the env host is answering — it retries, then refuses, with a message naming this container.
         condition: service_started
     networks:
-      # Out: the model provider. The server is the only thing here that talks to the internet.
+      # Out: the model provider. mason-edge is the network with a gateway, so it is also where the `vpn` sidecar goes out
+      # from and where an integration with a reachable upstream joins — but mason is the only mason-side member, and it is
+      # not on `mason-egress`, so the proxy an integration uses over there is not a route mason can take.
       - mason-edge
       # In: the env machine. Nothing on mason-edge can reach mason-env.
       - mason-internal
@@ -183,8 +185,11 @@ services:
   # deploy/.env — and after adding the same four variables there. Nothing here reaches into the home.
   #
   # mason-telegram:
-  #   # An image this repository builds (integrations/telegram/Dockerfile) and publishes on its own release cycle: an
-  #   # integration is not part of mason's image, and a mason upgrade must not require an integration rebuild.
+  #   # Built by compose from the package in this repository (`integrations/telegram`), and published on its own release
+  #   # cycle: an integration is not part of mason's image, and a mason upgrade must not require an integration rebuild.
+  #   # `docker build integrations/telegram` produces the same image without the stack around it.
+  #   build:
+  #     context: ../integrations/telegram
   #   image: ghcr.io/denissud/mason-telegram:latest
   #   restart: unless-stopped
   #   environment:
@@ -205,8 +210,10 @@ services:
   #     # In: mason reaches the tools face by name — the `tools.url` in integrations.json. Nothing on mason-internal is
   #     # here, so a tool cannot reach it.
   #     - mason-mcp
-  #     # Out: to the proxy below, and through it to Telegram. No other route exists from this container.
-  #     - mason-edge
+  #     # Out: `mason-egress` only, and it is `internal: true`: the one address this container can reach is the proxy
+  #     # below, at http://vpn:1080, and Telegram is reached through it. No direct route to anything else exists, and
+  #     # because mason and mason-env are not on mason-egress, neither of them can reach this container's proxy either.
+  #     - mason-egress
   #   volumes:
   #     # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service` and no
   #     # `mason-agent`: the bot token is Telegram's credential, not mason's, and the home is not this container's to read.
@@ -218,6 +225,10 @@ services:
   # mixed inbound on 1080 — SOCKS and HTTP on the same port, so either kind of client works — and one outbound, defined
   # in the config file below. Nothing else in the stack uses it.
   #
+  # The inbound is exposed on `mason-egress`, which is `internal: true`, and its own way out is `mason-edge`. So the only
+  # containers that can see this proxy are the ones whose compose entry joins mason-egress, the proxy keeps the stack's
+  # only real route to the internet, and mason and mason-env are not on that network at all.
+  #
   # vpn:
   #   image: ghcr.io/sagernet/sing-box:latest
   #   restart: unless-stopped
@@ -227,9 +238,13 @@ services:
   #     # credential belongs in a file the operator owns, not in the repository and not in an image.
   #     - ./vpn/config.json:/etc/sing-box/config.json:ro
   #   networks:
-  #     # Only mason-edge: the integrations that need it reach it by name (`http://vpn:1080`), and nothing published.
-  #     # mason-mcp is deliberately absent — a proxy is not a capability any integration should be able to offer another.
+  #     # Out: mason-edge is this sidecar's own route to the internet, and the only one in the stack.
   #     - mason-edge
+  #     # In: the proxy's mixed inbound, on a network with no gateway that only the integrations which name the proxy
+  #     # join. mason-mcp is deliberately absent — a proxy is not a capability any integration should be able to offer
+  #     # another — and so are mason and mason-env: nothing of mason's reaches this proxy, and nothing here reaches the
+  #     # home.
+  #     - mason-egress
   #   # No `ports`, on purpose: a published SOCKS port is an open proxy for anyone who can reach the host.
 
 volumes:
@@ -254,6 +269,9 @@ volumes:
 
 networks:
   # Default bridge: outbound only in practice, since the server is the only member and it is a server.
+  #
+  # It carries a gateway, so being on it is a route out — which is why an integration that must reach the internet
+  # through a proxy does not join it, and joins mason-egress instead.
   mason-edge:
   # `internal: true` is the env machine's whole network policy: no gateway, no DNS beyond the compose network, no
   # route out. A tool cannot exfiltrate what it reads, and nothing outside can reach the sshd.
@@ -267,4 +285,13 @@ networks:
   # never approved — the tool surface is decided in mason, at boot, out of integrations.json, and a `bash` that could
   # curl the same endpoint would make that decision advisory. The missing membership is what makes it a decision.
   mason-mcp:
+    internal: true
+  # The proxy's own network, and the whole of one integration's route out: `internal: true`, so there is no gateway and
+  # no direct route to anything, and the only reachable address on it is the `vpn` sidecar's mixed inbound at
+  # `http://vpn:1080`. An integration that needs a proxy joins this instead of mason-edge; nothing else joins it, so
+  # mason cannot reach that proxy and mason-env is not there to try.
+  #
+  # A direct `mason-edge` membership beside this one would defeat it: mason-edge is an ordinary bridge with a gateway, so
+  # the container would have its own way out to the internet and the proxy would be decoration.
+  mason-egress:
     internal: true

@@ -1,8 +1,8 @@
 /**
  * How this container reaches the network, and the one reason it needs a proxy to do it.
  *
- * Telegram is blocked where this runs, so the deployment puts a `vpn` sidecar on `mason-edge` and hands this container
- * `HTTPS_PROXY=http://vpn:1080`. Node's own `fetch` does not read that variable on Node 22 (it became an option in 24 via
+ * Telegram is blocked where this runs, so the deployment puts a `vpn` sidecar on a private `mason-egress` network and
+ * hands this container `HTTPS_PROXY=http://vpn:1080`. Node's own `fetch` does not read that variable on Node 22 (it became an option in 24 via
  * `NODE_USE_ENV_PROXY`), and it has no way to take a proxy without a dispatcher, so this file builds one: `undici`'s
  * `ProxyAgent`, which is the same client `fetch` is made of, configured with the proxy's address. Saying so is the point
  * — a reader who expects `HTTPS_PROXY` to work by itself deserves to know why it does not here.
