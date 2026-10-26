@@ -13,7 +13,7 @@
 #     provider fell back to CPU anyway. Measured on CPU: rtf 0.07, so a 15 s voice note is about a second.
 #   * **No model in the image.** The weights are ~1.3 GB and they are a download, not code: `ASR_MODEL_DIR` is a
 #     volume, `docker-entrypoint.sh` fills it once on first boot, and refuses to serve if it cannot.
-FROM python:3.12-slim
+FROM docker.io/library/python:3.12-slim
 
 # One apt package, and the one binary this image exists for. `slim` is enough for everything else: numpy and
 # onnxruntime are wheels, so there is no toolchain to install and nothing to compile.
