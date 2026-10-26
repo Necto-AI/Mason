@@ -9,7 +9,7 @@ is Telegram's business.
 It never speaks as the owner: no transcript, no roster, no `send_to_user`. Its whole vocabulary is one event out and one
 message back.
 
-## The tool face — MCP over Streamable HTTP on `:8082/mcp`
+## The tools face — MCP over Streamable HTTP on `:8082/mcp`
 
 | Tool | What it does |
 |---|---|

@@ -76,6 +76,8 @@ async function main(): Promise<void> {
 		filter: { allowedChats: new Set(config.allowedChats), botUsername: bot.username },
 	});
 	const queue = new SendQueue({
+		// A failed send is a tool result the model reads, so the queue redacts with the same two secrets the log does.
+		secrets: [config.botToken, config.triggerSecret],
 		onWait: (chatId, waitMs, reason) =>
 			log("info", `waiting ${Math.round(waitMs / 1_000)}s on chat ${chatId} (${reason})`),
 	});

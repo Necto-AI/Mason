@@ -158,4 +158,18 @@ describe("a 429 from Telegram", () => {
 		assert.deepEqual(outcome, { kind: "failed", error: "fetch exploded" });
 		assert.deepEqual(await queue.enqueue("-1001234", async () => sent(9)), sent(9));
 	});
+
+	it("takes the bot token out of a thrown error before it becomes a tool result", async () => {
+		const token = "123456789:AAHk9_" + "x".repeat(30);
+		const withSecrets = new SendQueue({ secrets: [token] });
+
+		const outcome = await withSecrets.enqueue("-1001234", async () => {
+			throw new Error(`request to https://api.telegram.org/bot${token}/sendMessage failed`);
+		});
+
+		assert.equal(outcome.kind, "failed");
+		const error = outcome.kind === "failed" ? outcome.error : "";
+		assert.doesNotMatch(error, new RegExp(token));
+		assert.match(error, /\/bot<redacted>\/sendMessage/);
+	});
 });
