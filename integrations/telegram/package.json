@@ -1,0 +1,24 @@
+{
+  "name": "mason-telegram",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Telegram integration for mason: one MCP tools face and one signed trigger face, in one container.",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "start": "node --conditions=source --experimental-strip-types src/main.ts",
+    "test": "node --conditions=source --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "undici": "7.16.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
+  }
+}
