@@ -59,7 +59,7 @@ import { projectQueued, projectTranscript } from "./projection.ts";
 import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
-import { createCacheReporter, deriveAgentStatus, statusLine } from "./status.ts";
+import { createCacheReporter, deriveAgentStatus, isBusy, queuedSubmissions, statusLine } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -326,10 +326,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
 /**
  * What a command acts on, apart from the door: the three conversation methods the console already calls, the claim that
- * makes an envelope id an identity, and the line `status` answers.
+ * makes an envelope id an identity, whether the conversation is busy, and the line `status` answers.
  *
  * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
- * without a provider, a turn or a second of waiting. The five methods are the whole of what a command may do, so a new
+ * without a provider, a turn or a second of waiting. The six methods are the whole of what a command may do, so a new
  * command means changing this interface as well as the vocabulary in `events.ts`.
  */
 export interface CommandTarget {
@@ -338,8 +338,14 @@ export interface CommandTarget {
 	compact(instructions: string | undefined): Promise<void>;
 	status(): Promise<string>;
 	/**
+	 * Whether the conversation is working or has anything waiting — the same two facts `/status` reads out of the view.
+	 * `/clear` asks because a reset is not display-only: it queues behind a running turn, so this is the difference
+	 * between "cleared" and "the answer you just cleared is still coming".
+	 */
+	busy(): Promise<boolean>;
+	/**
 	 * Claims this command's id in the durable log, and answers whether the claim is new. A redelivery finds the claim and
-	 * is answered with what the command answers, so nothing runs twice.
+	 * is answered with nothing at all, so nothing runs twice.
 	 */
 	claim(requestId: string, command: CommandName, argument: string | undefined): Promise<boolean>;
 }
@@ -350,6 +356,9 @@ const ONE_WORD: Record<"stop" | "compact" | "clear", string> = {
 	compact: "compacted",
 	clear: "cleared",
 };
+
+/** What `/clear` answers when the reset is queued behind a turn: the person is told what is going to happen, not asked. */
+const CLEARING_AFTER_TURN = "clearing after this turn";
 
 /**
  * One declared command, run once per envelope id, and the line the chat gets back — or nothing at all when the log
@@ -362,8 +371,10 @@ const ONE_WORD: Record<"stop" | "compact" | "clear", string> = {
  * changes nothing and a claim would be a record of something that did not happen: a retried question is still a
  * question.
  *
- * Nothing here is queued behind a running turn. `abort`, `reset` and `compact` are the conversation's own methods, and
- * the claim is a display-only entry, which the log appends at once even mid-run: `/stop` is the whole point of that.
+ * Nothing here waits for a running turn: `abort`, `reset` and `compact` are the conversation's own methods, and the claim
+ * is a display-only entry, which the log appends at once even mid-run — `/stop` is the whole point of that. `clear` is the
+ * one that is not display-only: the reset is a write the log queues behind the turn, which is why the answer says it is
+ * queueing rather than pretending the conversation is already empty.
  */
 export async function runCommand(
 	target: CommandTarget,
@@ -379,9 +390,15 @@ export async function runCommand(
 		case "compact":
 			await target.compact(argument);
 			break;
-		case "clear":
+		case "clear": {
+			// Asked before the act, because the question is "will the reset land now, or behind the turn?" — a reset submits a
+			// write with `head: "self"`, which is not display-only, so on a busy conversation it queues in the inbox and returns
+			// at once. Either way the reset happens; only the answer differs, and "cleared" over a conversation that is still
+			// delivering the answer it was told to forget is a lie the person watches come true.
+			const busy = await target.busy();
 			await target.clear();
-			break;
+			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
+		}
 		case "status":
 			return target.status();
 	}
@@ -403,6 +420,10 @@ async function commandTarget(runtime: AgentRuntime): Promise<CommandTarget> {
 		},
 		status: async () =>
 			statusLine(await runtime.viewSnapshot(BACKGROUND_CONTEXT), integrationSummaries(currentIntegrations())),
+		busy: async () => {
+			const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+			return isBusy(view) || queuedSubmissions(view) > 0;
+		},
 		// One commit: the lookup, the entry and the submission that names it are the claim, so two deliveries of one id
 		// cannot both find it absent. The entry carries no model content, which is what makes it display-only — the log
 		// appends it at once instead of queueing it behind the turn the command is about.
