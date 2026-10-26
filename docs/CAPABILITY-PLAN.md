@@ -18,7 +18,7 @@ The three questions that decide the design are the same for every capability bel
 | Layer | What it is | Fits |
 |---|---|---|
 | **pi's own tools** | the tool machine: `bash`, `read`, `write`, `edit`, plus pi's web tools when enabled | anything that is a process on a machine: counting a table, converting a file, reading a page |
-| **MCP integration** | a service with an endpoint, declared in `service/integrations.json`: one line of description, tools under `mcp__<name>__*` | models: ASR, OCR, embeddings; anything with weights, GPU or state |
+| **MCP integration** | a service with an endpoint, declared in `service/integrations.json`: one line of description, tools under `mcp__<name>__*` | models the tool machine cannot hold, or state one bot must not see: a GPU ASR, an index, a mailbox |
 | **Skill** | `agent/skills/<name>/SKILL.md`, read on demand | know-how: how a курсовая is built, how a кафедра wants citations, how to phrase a refusal |
 | **Hook** | a signed trigger or a schedule that starts a turn | proactivity: a morning brief, a deadline reminder |
 
@@ -51,17 +51,29 @@ payload**; today that is the open question. Then a Parakeet ASR service turns it
   transcript as if she had written it.
 - Done when she sends a 40-second voice note about a курсовая and gets an answer to its content.
 
-### Phase 3 — OCR, and the vision question
+### Phase 3 — OCR: Indra, in the tool machine
 
 Photographs of конспекты, scans of методичек, screenshots of заданий, PDFs of articles.
 
-- Two different problems wear one name: **printed text** (PDF, screenshots — a text layer or a cheap OCR pass) and
-  **handwriting** (her notes, a photographed page). The second is where tesseract fails and a vision model wins.
-- Decide once: a vision-capable model as the default reader (fewer moving parts, one tool), or an OCR service for
-  documents plus a vision model only for handwriting. The answer depends on what the provider actually accepts as an
-  image and what the host can run.
-- Done when a photograph of a handwritten page comes back as structured text with the uncertain words marked, not
-  silently guessed.
+**Decided: Indra OCR** (`datalab-to/indra`), the same tool `~/dev/pi-setup` already wraps (`nix/indra-ocr.nix`,
+`extensions/ocr/index.ts`): a small ONNX graph (det 0.4 MB, rec 5 MB) on CPU, with the OpenCV/PDFium post-processing that
+makes reading order, headings, lists and tables come out as markdown. ~76 MB of weights on first run, cached after, no
+network at all once cached.
+
+It runs **in the tool machine**, not as an MCP service, and that is the whole argument: the file is already there. A
+photo of her конспект is on the inbox volume, the tool machine has it at the same path, and `indra-ocr <path> --format
+md` is one process away — no upload, no second copy, no service to reach over a network. An MCP hop would buy nothing
+and cost a container.
+
+- Install: `pip install indra-ocr` in `deploy/env.Dockerfile` (Ubuntu wheels exist; the Nix packaging exists because
+  NixOS has no usable `opencv-python-headless`, which is not true here), with the weights fetched at build time so the
+  first request is not the slow one and the image works with the network down.
+- Reaching for it is a **skill**, not new code: «PDF, скан или фото страницы — сначала `indra-ocr <path> --format md`,
+  потом работай с текстом; если это рукопись — проверь по картинке слова, в которых OCR уверен плохо».
+- Handwriting stays the honest limit: an OCR line model misreads cursive, and the answer to that is not a bigger model
+  but saying which fragments are uncertain instead of inventing a sentence.
+- Done when a photographed page of her handwriting yields text with the doubtful words marked, and a 20-page PDF of an
+  article yields markdown in one call.
 
 ### Phase 4 — voice out, and the calendar
 
