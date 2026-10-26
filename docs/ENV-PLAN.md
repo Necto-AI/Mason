@@ -1,9 +1,10 @@
 # The agent's computer — real machine, snapshots, spin down and up
 
 > Written 2026-10-26, from a research run over Firecracker, Cloud Hypervisor, Kata, gVisor, libkrun/microsandbox, QEMU
-> microvm, Lima, nspawn and the managed sandbox products (`docs/research/` has no copy of that run yet; the numbers below
-> are cited inline). The question: what would it take for every mason agent to have a computer that is really a computer,
-> and to be switched off when idle and back on in a fraction of a second.
+> microvm, Lima, nspawn and the managed sandbox products; the run itself is
+> [`research/agent-computers.md`](research/agent-computers.md), with versions, the snapshot API and the latency figures
+> with their provenance. The question: what would it take for every mason agent to have a computer that is really a
+> computer, and to be switched off when idle and back on in a fraction of a second.
 
 ## What the tool machine is today
 
