@@ -23,6 +23,7 @@
  * between batches rather than mid-write, and the offset that is not written is a batch that will be read again — as the
  * same fire, because its id never changes.
  */
+import { Transcriber } from "./asr.ts";
 import { ChatDirectory } from "./chats.ts";
 import { COMMANDS } from "./commands.ts";
 import { EventDoor } from "./door.ts";
@@ -51,7 +52,14 @@ async function main(): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
-	const log = createLog([config.botToken, config.triggerSecret]);
+	// The transcription endpoint is a third thing this process knows that a log line must never quote: an ASR URL is often a
+	// LAN address with a token in its path or query. It is redacted like the two credentials, and the lines about it name
+	// only its host.
+	const log = createLog([
+		config.botToken,
+		config.triggerSecret,
+		...(config.asrUrl === undefined ? [] : [config.asrUrl]),
+	]);
 
 	const proxy = config.httpsProxy === undefined ? undefined : proxiedFetch(config.httpsProxy, log);
 	const api = new TelegramApi({ token: config.botToken, fetch: proxy?.fetch ?? directFetch() });
@@ -69,6 +77,11 @@ async function main(): Promise<void> {
 	// watcher: what a message left behind is swept at startup and again on every write (`src/inbox.ts`).
 	const inbox = new Inbox({ api, dir: config.inboxDir, log });
 	await inbox.sweep();
+	// Voice notes, when an operator has named a service. It goes out through `directFetch` and not the proxy: the sidecar
+	// is Telegram's route, and a transcription endpoint on the LAN has nothing to do with it.
+	const asr =
+		config.asrUrl === undefined ? undefined : new Transcriber({ url: config.asrUrl, fetch: directFetch() });
+	if (asr !== undefined) log("info", `voice notes are transcribed by ${asr.host}`);
 	// Built before the poller and the tools face, because both edges of the indicator live in this process: the poller
 	// starts it when a message becomes a fire, and `send_message` stops it when the answer lands.
 	const typing = new TypingIndicator({
@@ -96,6 +109,7 @@ async function main(): Promise<void> {
 		filter: { allowedChats: new Set(config.allowedChats), botUsername: bot.username },
 		typing,
 		inbox,
+		...(asr === undefined ? {} : { asr }),
 		// A command's answer goes through the same per-chat queue as a tool's message, so the rate limit and the 429 belong
 		// to one file. A send that failed is one line: the command was answered, and a chat that did not read it is not a
 		// reason to hold the batch.

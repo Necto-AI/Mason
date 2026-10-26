@@ -35,14 +35,27 @@
  * fetched and named, because a message that arrives as text with no mention of the file the person sent is a message
  * about something else.
  *
+ * **A transcript is asked for once, after the file lands, before the envelope exists.** `src/asr.ts` is optional and the
+ * poller treats it as it treats the inbox: a dependency a test can leave out. The request happens in the same preparation
+ * the download does, so a door that holds the batch does not post the same voice note to the service again, and a
+ * service that is down costs one sentence on the payload rather than the message.
+ *
  * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
  * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away. The
  * chat's own send queue is not waited on either: an answer posted into a chat that has spent its minute is one warning.
  */
+import { isSpeech, type Transcription } from "./asr.ts";
 import type { ChatDirectory } from "./chats.ts";
 import { commandIn, HELP_TEXT, isHelp } from "./commands.ts";
 import type { DoorResult } from "./door.ts";
-import { commandEnvelopeFor, envelopeFor, type EventEnvelope, type EventFile } from "./envelope.ts";
+import {
+	commandEnvelopeFor,
+	envelopeFor,
+	type ChatEvent,
+	type EventEnvelope,
+	type EventFile,
+	type Transcript,
+} from "./envelope.ts";
 import { readMessage, type Attachment, type FilterContext } from "./filter.ts";
 import type { SaveOutcome } from "./inbox.ts";
 import { describeError, formatDuration, type Log } from "./log.ts";
@@ -82,6 +95,13 @@ export interface PollerOptions {
 	 */
 	readonly inbox?: {
 		save(attachment: Attachment, options: { readonly updateId: number }): Promise<SaveOutcome>;
+	};
+	/**
+	 * Where a voice note is turned into words. Optional and structural for the same reason as the inbox: a test without a
+	 * service says so by leaving it out, and `src/asr.ts` stays the file that knows what a transcription endpoint looks like.
+	 */
+	readonly asr?: {
+		transcribe(file: EventFile): Promise<Transcription>;
 	};
 	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
 	readonly now?: () => number;
@@ -316,18 +336,29 @@ export class Poller {
 				kind: "ready",
 				chatId: reading.chat.id,
 				envelope: commandEnvelopeFor(reading.event.updateId, command),
-				message: async () => {
-					const file = await this.#save(update.update_id, reading.attachment);
-					return envelopeFor(file === undefined ? reading.event : { ...reading.event, file });
-				},
+				message: async () => envelopeFor(await this.#message(reading.event, reading.attachment)),
 			};
 		}
-		const file = await this.#save(update.update_id, reading.attachment);
 		return {
 			kind: "ready",
 			chatId: reading.chat.id,
-			envelope: envelopeFor(file === undefined ? reading.event : { ...reading.event, file }),
+			envelope: envelopeFor(await this.#message(reading.event, reading.attachment)),
 		};
+	}
+
+	/**
+	 * The message as the door will see it: the file it carried, on the volume, and — when this container is configured with
+	 * one — what a transcription service heard in it.
+	 *
+	 * Both the file and its transcript are fetched here rather than in `src/envelope.ts`, which has no network and no
+	 * volume: a rendering function that posted a request would be a rendering function that could fail. Neither is fetched
+	 * per delivery attempt, which is what keeps a held batch from downloading or transcribing the same note twice.
+	 */
+	async #message(event: ChatEvent, attachment: Attachment | undefined): Promise<ChatEvent> {
+		const file = await this.#save(event.updateId, attachment);
+		if (file === undefined) return event;
+		const transcript = await this.#transcribe(event.updateId, file);
+		return { ...event, file, ...(transcript === undefined ? {} : { transcript }) };
 	}
 
 	/**
@@ -369,6 +400,39 @@ export class Poller {
 			`could not fetch the ${attachment.kind} in update ${updateId} (${failure}); delivering the message without it`,
 		);
 		return undefined;
+	}
+
+	/**
+	 * What the transcription service heard, whether it heard nothing, or why it could not be asked — never undefined when
+	 * the question was worth asking.
+	 *
+	 * A failure is never fatal and never silent: the message goes out with the file exactly as it would have without a
+	 * service, plus a parenthetical saying the voice note could not be transcribed, because a person's spoken message that
+	 * arrives with no mention of its words is a message the agent answers as if it were empty. One log line, keyed by the
+	 * update id, names the reason and not the endpoint: `src/asr.ts` reduces the URL to its host before this ever sees it.
+	 *
+	 * Silence is not that case. It is a service that answered, about a clip that had no words in it, and it earns no
+	 * warning: the payload says `(the voice message was transcribed and says nothing)`, which is true, instead of the
+	 * failure sentence, which would not be.
+	 */
+	async #transcribe(updateId: number, file: EventFile): Promise<Transcript | undefined> {
+		const asr = this.#options.asr;
+		if (asr === undefined || !isSpeech(file.kind)) return undefined;
+		let outcome: Transcription;
+		try {
+			outcome = await asr.transcribe(file);
+		} catch (error) {
+			// `transcribe` answers its expected failures; this is the one it did not foresee, and it must not cost a message.
+			outcome = { kind: "failed", reason: describeError(error) };
+		}
+		if (outcome.kind === "text") return { kind: "text", text: outcome.text };
+		if (outcome.kind === "silent") return { kind: "silent" };
+		this.#options.log(
+			"warn",
+			`could not transcribe the ${file.kind} in update ${updateId} (${outcome.reason}); ` +
+				"delivering the message with the file and without a transcript",
+		);
+		return { kind: "unavailable" };
 	}
 
 	/** The offset and, when it grew, the chat list — in that order, so a crash between the two loses a chat, not a place. */

@@ -11,6 +11,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import type { Transcription } from "../src/asr.ts";
 import { ChatDirectory } from "../src/chats.ts";
 import { HELP_TEXT } from "../src/commands.ts";
 import type { DoorAnswer, DoorResult } from "../src/door.ts";
@@ -89,6 +90,11 @@ function documentUpdate(updateId: number): TelegramUpdate {
 	});
 }
 
+/** The same message, carrying a voice note and no words: Telegram gives one no name and no size at all. */
+function voiceUpdate(updateId: number): TelegramUpdate {
+	return update(updateId, { text: undefined, voice: { file_id: "v1", file_unique_id: "vu1" } });
+}
+
 /** What the door is told, from an inbox that answered the same thing every time: saving is `src/inbox.ts`'s test. */
 class StubInbox {
 	readonly saved: { attachment: Attachment; updateId: number }[] = [];
@@ -100,6 +106,22 @@ class StubInbox {
 
 	async save(attachment: Attachment, options: { readonly updateId: number }): Promise<SaveOutcome> {
 		this.saved.push({ attachment, updateId: options.updateId });
+		if (this.#answer instanceof Error) throw this.#answer;
+		return this.#answer;
+	}
+}
+
+/** What a transcription service heard, and which files it was asked about: what it does with them is `src/asr.ts`'s test. */
+class StubAsr {
+	readonly asked: EventFile[] = [];
+	readonly #answer: Transcription | Error;
+
+	constructor(answer: Transcription | Error) {
+		this.#answer = answer;
+	}
+
+	async transcribe(file: EventFile): Promise<Transcription> {
+		this.asked.push(file);
 		if (this.#answer instanceof Error) throw this.#answer;
 		return this.#answer;
 	}
@@ -126,6 +148,8 @@ async function rig(
 		readonly script?: readonly DoorResult[];
 		readonly chats?: ChatDirectory;
 		readonly inbox?: StubInbox;
+		/** A voice note's transcription, when the test wants one; absent is a container with no service configured. */
+		readonly asr?: StubAsr;
 		/** Appended after the recording, so a test can make an answer wait the way a spent chat window does. */
 		readonly reply?: (chatId: string, text: string) => Promise<void>;
 	} = {},
@@ -153,6 +177,7 @@ async function rig(
 		},
 		typing: { start: (chatId) => started.push(chatId) },
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
+		...(options.asr === undefined ? {} : { asr: options.asr }),
 	});
 	return { state, poller, api, door, chats, lines, said, started, directory };
 }
@@ -201,6 +226,7 @@ async function pollAgainstDoor(
 		readonly offset?: number;
 		readonly stopAfter?: number;
 		readonly inbox?: StubInbox;
+		readonly asr?: StubAsr;
 	} = {},
 ): Promise<DownRig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -222,6 +248,7 @@ async function pollAgainstDoor(
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
 		now: () => clock,
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
+		...(options.asr === undefined ? {} : { asr: options.asr }),
 		sleep: async (ms) => {
 			waits.push(ms);
 			clock += ms;
@@ -446,6 +473,129 @@ describe("a message with a file", () => {
 
 		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
 		assert.equal(inbox.saved.length, 1, "a 20 MiB download is not repeated for every retry");
+	});
+});
+
+describe("a voice note", () => {
+	const NOTE: EventFile = {
+		path: "/home/mason/.mason/agent/workspace/inbox/100-voice-vu1.ogg",
+		name: "100-voice-vu1.ogg",
+		size: 40_960,
+		kind: "voice",
+	};
+
+	it("fires exactly the payload it fired before, when no transcription service is configured", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			`Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note, with a file at ${NOTE.path}`,
+			"no service, no transcript, no parenthetical: byte for byte what this container always sent",
+		);
+		assert.doesNotMatch(lines.join("\n"), /transcri/);
+	});
+
+	it("carries what the service heard, labelled, and still names the file", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "text", text: "can you check the pricing sheet before Thursday" });
+		const { poller, door } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note\n" +
+				"[transcript of the voice message, spoken and not typed by the sender]\n" +
+				"can you check the pricing sheet before Thursday\n" +
+				`[end of transcript], with a file at ${NOTE.path}`,
+			"the words and the bytes, in one event: the transcript does not replace the path",
+		);
+		assert.deepEqual(asr.asked, [NOTE], "asked once, about the file the inbox had just written");
+	});
+
+	it("delivers the message with a parenthetical and one log line when the service failed", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "failed", reason: "asr.local:9000 answered 500" });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), " +
+				`with a file at ${NOTE.path}`,
+			"the message arrives as it would have without a service, and says what is missing",
+		);
+		const complaints = lines.filter((line) => line.includes("could not transcribe the voice in update 100"));
+		assert.equal(complaints.length, 1, "one line per update, keyed by the id");
+		assert.match(complaints[0] ?? "", /asr\.local:9000 answered 500/);
+		assert.doesNotMatch(complaints[0] ?? "", /http/, "the endpoint is named by its host, never by a URL that may carry a token");
+	});
+
+	it("passes a silent transcript through as silence, with no warning to an operator", async () => {
+		// The service answered: there were no words in the clip. That is not the failure sentence, and it is not the empty
+		// payload a reader would take for a bug either.
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "silent" });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message was transcribed and says " +
+				`nothing), with a file at ${NOTE.path}`,
+		);
+		assert.doesNotMatch(lines.join("\n"), /could not transcribe/, "a service that answered is not a service to complain about");
+	});
+
+	it("is the same parenthetical when the transcriber throws, because a bug there is not a lost message", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr(new Error("ENOTFOUND asr.local"));
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), " +
+				`with a file at ${NOTE.path}`,
+		);
+		assert.match(lines.join("\n"), /could not transcribe the voice in update 100 \(ENOTFOUND asr\.local\)/);
+	});
+
+	it("is not asked about a file nobody spoke into", async () => {
+		const file: EventFile = { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 4_096, kind: "document" };
+		const inbox = new StubInbox({ kind: "saved", file });
+		const asr = new StubAsr({ kind: "text", text: "never read" });
+		const { poller, door } = await rig([[documentUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(asr.asked.length, 0, "a document is not speech, and a round trip for it is spent for nothing");
+		assert.equal(
+			door.envelopes[0]?.payload,
+			`Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at ${file.path}`,
+		);
+	});
+
+	it("is asked once even when the door holds the batch and the envelope is posted again", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "text", text: "ship it" });
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				ACCEPTED,
+			],
+			{ batches: [[voiceUpdate(100)]], offset: 100, inbox, asr },
+		);
+
+		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
+		assert.equal(asr.asked.length, 1, "a held batch does not post the same voice note to the service three times");
 	});
 });
 

@@ -80,7 +80,10 @@ sanitised by the same rule the inbox writes a name under, so a name is never a p
   ```
 
   A photo with no caption reads `…: sent a photo, with a file at …`, a voice note `…: sent a voice note, with a file at …`:
-  the sentence says what arrived, and the clause says where it is.
+  the sentence says what arrived, and the clause says where it is. A voice note that was transcribed carries the words in
+  a labelled block just before that clause, one transcribed as silence says `(the voice message was transcribed and says
+  nothing)`, and one that could not be transcribed carries `(the voice message could not be transcribed)` — the section
+  below is the whole of it.
 - A message longer than the door's 2 000-character payload cap is cut here with `… [truncated]`, because the door refuses
   an over-long payload rather than truncating it and a refusal advances the offset — the event would be lost. The cut is
   on the text, never on the file clause: a caption loses its own words before a payload loses the path.
@@ -118,6 +121,60 @@ mount it at the same path (`mason-inbox`, declared in `deploy/compose.yaml`), wh
 file `read` opens on the other side — and the mount is a directory of its own, so the rest of the agent's home (the
 profile, the log, the skills, the memory repository) stays out of this container. The other direction costs nothing extra:
 a file the agent writes into that same directory is one `send_file` may name, so the volume is the bridge both ways.
+
+**A voice note arrives as words as well, when there is a service to ask.** The agent has no tool that reads Ogg/Opus, so
+with `TELEGRAM_ASR_URL` set, the file that just landed in the inbox is posted to it — `multipart/form-data`, one `file`
+part holding **the bytes exactly as they landed**, the inbox name as the filename — and the answer, `{"text": "…"}`, goes
+into the payload as a labelled block, with the path still the last thing in it:
+
+```text
+Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note
+[transcript of the voice message, spoken and not typed by the sender]
+can you check the pricing sheet before Thursday
+[end of transcript], with a file at /home/mason/.mason/agent/workspace/inbox/8811-voice-u1.ogg
+```
+
+The label and the closing line are the point: the words are what a service heard, not what the person typed, and neither
+the model nor a reader should have to infer that. **Nothing is re-encoded, resampled or rewrapped on the way out**: the
+inbox file is posted as it is, and decoding audio is the service's side of the contract, so a voice note's Ogg, an
+`audio`'s MP3 and a round video's MP4 all travel as they landed. The service takes one `file` part and may take an
+optional `model` field; this container sends no model and leaves the choice to the service. It is attempted for the three
+kinds somebody spoke into — a voice note, an audio file and a round video note — and for nothing else.
+
+**The endpoint this is written for is mason's own Parakeet service (`asr/`), not a general-purpose phonon box.** On a
+5.3 s Russian clip a phonon container on the host answered English gibberish, while `asr/transcribe.py` on the same clip
+gave the right Russian at rtf 0.07 on CPU — and this bot is Russian-first, so the model is the setting that decides
+whether a transcript is worth carrying at all. A plain-text body is still read as the transcript, the other shape this
+setting accepted from the start, but `{"text": "…"}` is the contract: extra fields (`words`, timings, the model's name)
+are the service's business and are ignored here. The contract has two ends — this container posts the file exactly as it
+landed and reads `text`; the service decodes whatever audio it is given and answers what was said.
+
+**What it costs is one HTTP round trip per voice message, and the message waits for it**: the request is made while the
+batch is being prepared, so a voice note being transcribed holds the messages behind it for up to the timeout (20 s) — and
+it is made once, so a door that holds the batch does not post the same note again on every retry. A file over 4 MiB is
+not posted at all — a voice note is a few hundred kilobytes a minute, and a 20 MiB podcast is not one — and with the
+variable unset nothing is asked and the payload is byte for byte what this container sent before the setting existed.
+The endpoint is called directly rather than through `HTTPS_PROXY` — the sidecar is Telegram's route — so the address has
+to be one this container can reach as it stands, such as a service on the compose network.
+
+**Silence is a success, and the payload says which.** `{"text": ""}` means the clip was transcribed and there were no
+words in it — a cough, a room with nobody talking, a note recorded by accident — and the sentence then reads `…: sent a
+voice note (the voice message was transcribed and says nothing), with a file at …`. That is deliberately not the failure
+sentence: a service that answered has told the agent something true about the message, and calling it a failure would
+tell it something false.
+
+**Its failure mode is a sentence on the event, never a lost message.** A service that is down, a timeout, a non-`200`, a
+body that is not the promised shape — half a document, a `text` that is not a string, an array — or a file too large:
+the event goes out exactly as it would have without a service, with a parenthetical on the sentence —
+
+```text
+Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), with a file at /home/mason/.mason/agent/workspace/inbox/8811-voice-u1.ogg
+```
+
+— so the agent knows the voice message's words are missing, rather than answering a message that looks empty. One log line
+per update names the update id and the reason, and names the endpoint by its host and never by its URL, which is where a
+token would be. The transcript is fitted like a caption: an over-long one is cut with `… [truncated]`, and the file path
+is still the thing that never gives way.
 
 **The offset.** `offset.json` on the container's own volume (`/data`), written whole — temporary file, rename, `0600` —
 once per batch, not once per message: a crash mid-batch replays at most one batch, and the id makes the replay the same
@@ -182,6 +239,7 @@ command was answered, and a chat that did not read the answer must not block the
 | `HTTPS_PROXY` | no | The VPN sidecar, `http://vpn:1080`, where Telegram is blocked. |
 | `DATA_DIR` | no | Defaults to `/data`, the volume. |
 | `TELEGRAM_INBOX` | no | Where an incoming file is written. Defaults to `/home/mason/.mason/agent/workspace/inbox`, the path both compose files mount `mason-inbox` at: moving it means moving both mounts, or the payload names a file nothing can open. |
+| `TELEGRAM_ASR_URL` | no | A transcription endpoint for voice notes: `http(s)`, `multipart/form-data` with one `file` part (an optional `model` field is the service's), `{"text": "…"}` back. Point it at mason's own Parakeet service (`asr/`) — a phonon box answered a Russian clip in English gibberish. Unset, a voice note is a path and a sentence, as it always was. One round trip per voice message, made before the event is posted; an empty transcript is a valid "nothing said", and a failure costs a parenthetical on the payload, not the message. |
 | `PORT` | no | Defaults to `8082`. Moving it means moving `tools.url` in `integrations.json` too. |
 
 A missing or malformed variable is a refusal at startup that names it: an instance without its allowlist would relay
@@ -189,8 +247,9 @@ every chat the bot is in, and one without its secret would deliver events nothin
 
 **The proxy is for Telegram, not for mason.** Node 22's `fetch` does not read `HTTPS_PROXY` by itself, so the API calls
 go through `undici`'s `ProxyAgent` configured from it (`src/fetch.ts`). The event POST does not: the door is a name that
-only exists inside the compose network, and the sidecar has no route to it. One variable, one route — and a VPN outage
-never looks like a delivery made.
+only exists inside the compose network, and the sidecar has no route to it. Nor does the transcription request: an ASR
+service is on this container's own network, not behind the VPN. One variable, one route — and a VPN outage never looks
+like a delivery made or a voice note nobody could hear.
 
 ## Privacy mode, and why a group is quiet
 
@@ -222,6 +281,7 @@ npm install
 npm test        # node:test, injected fetch — no sockets, no network, no token
 npm run typecheck
 TELEGRAM_BOT_TOKEN=… MASON_EVENT_URL=… MASON_TRIGGER_SECRET=… TELEGRAM_ALLOWED_CHATS=… npm start
+# add TELEGRAM_ASR_URL=http://asr:8788/transcribe (mason's Parakeet service) to deliver a voice note's words too
 ```
 
 Node 22, TypeScript run from source with `--experimental-strip-types`: there is no build step, and the image (`Dockerfile`
