@@ -29,7 +29,8 @@
  * describing itself, and `src/commands.ts` owns the words.
  *
  * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
- * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away.
+ * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away. The
+ * chat's own send queue is not waited on either: an answer posted into a chat that has spent its minute is one warning.
  */
 import type { ChatDirectory } from "./chats.ts";
 import { commandIn, HELP_TEXT, isHelp } from "./commands.ts";
@@ -217,7 +218,7 @@ export class Poller {
 				continue;
 			}
 			if (prepared.kind === "answered") {
-				await this.#say(prepared.chatId, prepared.text);
+				this.#say(prepared.chatId, prepared.text);
 				this.#offset = update.update_id + 1;
 				continue;
 			}
@@ -244,7 +245,7 @@ export class Poller {
 							continue;
 						}
 						const reply = delivery.answer.reply;
-						if (delivery.answer.handled && reply !== undefined) await this.#say(prepared.chatId, reply);
+						if (delivery.answer.handled && reply !== undefined) this.#say(prepared.chatId, reply);
 					} else if (delivery.kind === "accepted") {
 						// Only an accepted fire is work in progress. A command is not a turn, and dots for one would be the interface
 						// lying about what is running.
@@ -308,15 +309,18 @@ export class Poller {
 	/**
 	 * One line into the chat, through the queue the caller owns. A reply that could not be sent is one warning: the command
 	 * itself was answered, and a chat that did not read it must not cost the batch.
+	 *
+	 * Deliberately not awaited. The queue waits out a chat's twenty-a-minute window (`src/queue.ts`, a minute at its longest),
+	 * and this is one loop for every chat — a chat that did not read its answer must not hold the messages behind it, which
+	 * is the promise the README makes and the reason a `/stop` typed elsewhere is not stuck behind a `/status` reply. There
+	 * is nothing to wait for either way: an answer is posted, or it is logged.
 	 */
-	async #say(chatId: string, text: string): Promise<void> {
+	#say(chatId: string, text: string): void {
 		const reply = this.#options.reply;
 		if (reply === undefined) return;
-		try {
-			await reply(chatId, text);
-		} catch (error) {
+		void reply(chatId, text).catch((error: unknown) => {
 			this.#options.log("warn", `could not answer a command in chat ${chatId}: ${describeError(error)}`);
-		}
+		});
 	}
 
 	/**
