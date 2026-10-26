@@ -122,6 +122,8 @@ async function rig(
 	options: {
 		readonly offset?: number;
 		readonly door?: DoorResult;
+		/** One answer per fire, for the tests where the first delivery is not the answer the second one gets. */
+		readonly script?: readonly DoorResult[];
 		readonly chats?: ChatDirectory;
 		readonly inbox?: StubInbox;
 		/** Appended after the recording, so a test can make an answer wait the way a spent chat window does. */
@@ -133,7 +135,7 @@ async function rig(
 	const state = new StateFiles(directory);
 	if (options.offset !== undefined) await state.writeOffset(options.offset);
 	const api = new ScriptedUpdates(batches);
-	const door = new RecordingDoor(options.door);
+	const door = new RecordingDoor(options.door, options.script);
 	const chats = options.chats ?? new ChatDirectory(await state.readChats());
 	const lines: string[] = [];
 	const said: { chatId: string; text: string }[] = [];
@@ -511,6 +513,35 @@ describe("a command in the chat", () => {
 			"both were handed to the queue; the batch did not wait for either",
 		);
 		release();
+	});
+
+	it("falls back to the message when the door refuses the command, and posts the rule it broke", async () => {
+		const reason = '"stop" takes no argument: a command is one word, and only "compact" reads what follows it';
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stop now" })]], {
+			offset: 100,
+			script: [{ kind: "refused", status: 400, reason }, ACCEPTED],
+		});
+
+		await poller.pollOnce();
+
+		// A refused command is not a refused message: the offset still advances, and the person's words still arrive — but
+		// the door's own sentence about the rule goes into the chat first, because a silent chat was the worst answer of the
+		// three the design had.
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stop now"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stop now"],
+			],
+		);
+		assert.deepEqual(said, [
+			{
+				chatId: "-1001234",
+				text: `mason could not run that command: ${reason}; it is being delivered as a message`,
+			},
+		]);
+		assert.deepEqual(started, ["-1001234"], "the message is the thing a turn is started for");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
 	});
 
 	it("answers /help itself, without posting anything to mason", async () => {
