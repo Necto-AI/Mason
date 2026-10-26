@@ -99,12 +99,13 @@ sanitised by the same rule the inbox writes a name under, so a name is never a p
     backoff that starts at a second and doubles to half a minute, with one log line a minute while it is down and one
     when it answers again. Redelivery is free because a batch's ids are the update ids, and the door dedupes on them.
 
-**What is dropped, and where.** A message from a bot, an edit, a chat that is not in `TELEGRAM_ALLOWED_CHATS`, and
-anything that is neither words nor a file (a sticker, a location, a poll, a service notice) never becomes an event, and a
-chat we did not choose never enters `list_chats` either. A word that starts with `/` takes the command path below and is
-never dropped for being one: `/help` is answered here, and every other word is posted to mason, which answers whether it
-acted. The bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup), and everything else in the
-message is kept verbatim, which is also how a group sends `/stop@mason_bot`.
+**What is dropped, and where.** A message from a bot, an edit, a message whose chat id and sender's @username are both
+absent from `TELEGRAM_ALLOWED_CHATS`, and anything that is neither words nor a file (a sticker, a location, a poll, a
+service notice) never becomes an event, and no chat enters `list_chats` unless a message in it was admitted. A word that
+starts with `/` takes the command path below and is never dropped for being one: `/help` is answered here, and every
+other word is posted to mason, which answers whether it acted. The bot's own `@mention` is stripped (case-insensitively,
+via `getMe` at startup), and everything else in the message is kept verbatim, which is also how a group sends
+`/stop@mason_bot`.
 
 **Files arrive as a path, because the agent reads one.** A photo, a document, a voice note, an audio file or a video is
 written to `TELEGRAM_INBOX` as `<update_id>-<the sender's name, sanitised>` with mode `0600`, and the payload ends with
@@ -177,7 +178,7 @@ command was answered, and a chat that did not read the answer must not block the
 | `TELEGRAM_BOT_TOKEN` | yes | The bot's credential, from BotFather. Never logged, never written, never inside a payload. |
 | `MASON_EVENT_URL` | yes | Where events go: `http://mason:8787/api/events/telegram` on the compose network. |
 | `MASON_TRIGGER_SECRET` | yes | The HMAC key the door verifies with, at least 32 characters. Minted by `npm run integration -- secret telegram --hook team-chat` on the mason side, printed once. |
-| `TELEGRAM_ALLOWED_CHATS` | yes | Comma-separated chat ids this bot may relay. Anything else is dropped before it becomes an event. |
+| `TELEGRAM_ALLOWED_CHATS` | yes | Comma-separated chat ids or `@usernames` this bot may relay. A username admits that person in any chat the bot receives; anything else is dropped before it becomes an event. |
 | `HTTPS_PROXY` | no | The VPN sidecar, `http://vpn:1080`, where Telegram is blocked. |
 | `DATA_DIR` | no | Defaults to `/data`, the volume. |
 | `TELEGRAM_INBOX` | no | Where an incoming file is written. Defaults to `/home/mason/.mason/agent/workspace/inbox`, the path both compose files mount `mason-inbox` at: moving it means moving both mounts, or the payload names a file nothing can open. |

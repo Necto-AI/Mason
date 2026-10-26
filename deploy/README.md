@@ -78,7 +78,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    EXAMPLE_TOKEN=…                          # optional: an integration container's own credential (see "An integration")
    TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
    TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
-   TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids the bot may relay, comma-separated
+   TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids or @usernames the bot may relay, comma-separated
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/home/user/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write

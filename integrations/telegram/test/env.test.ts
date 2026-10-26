@@ -76,6 +76,46 @@ describe("the configuration", () => {
 		);
 	});
 
+	it("takes an @username beside a chat id, folded to lower case because Telegram usernames are case-insensitive", () => {
+		assert.deepEqual(
+			readConfig(environment({ TELEGRAM_ALLOWED_CHATS: " -1001234 , @Kareva_Tanya " })).allowedChats,
+			["-1001234", "@kareva_tanya"],
+		);
+	});
+
+	it("takes the shortest and longest usernames Telegram issues", () => {
+		const shortest = `@${"a".repeat(5)}`;
+		const longest = `@${"a".repeat(32)}`;
+		assert.deepEqual(
+			readConfig(environment({ TELEGRAM_ALLOWED_CHATS: `${shortest},${longest}` })).allowedChats,
+			[shortest, longest],
+		);
+	});
+
+	it("refuses an entry that is neither a chat id nor a username, naming the entry", () => {
+		for (const entry of ["kareva_tanya", "chat:-1001234", "+4711"]) {
+			assert.throws(
+				() => readConfig(environment({ TELEGRAM_ALLOWED_CHATS: entry })),
+				(error: unknown) =>
+					error instanceof ConfigError &&
+					error.message.includes(`names ${entry}`) &&
+					error.message.includes("has no leading @"),
+			);
+		}
+	});
+
+	it("refuses a username outside Telegram's shape, naming the entry", () => {
+		for (const entry of ["@kare", "@kareva-tanya", `@${"a".repeat(33)}`]) {
+			assert.throws(
+				() => readConfig(environment({ TELEGRAM_ALLOWED_CHATS: entry })),
+				(error: unknown) =>
+					error instanceof ConfigError &&
+					error.message.includes(`names ${entry}`) &&
+					error.message.includes("5-32 letters, digits or underscores"),
+			);
+		}
+	});
+
 	it("keeps the proxy and the data directory when they are set, and moves the port when asked", () => {
 		const config = readConfig(
 			environment({ HTTPS_PROXY: "http://vpn:1080", DATA_DIR: "/tmp/telegram", PORT: "9000" }),

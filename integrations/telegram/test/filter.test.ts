@@ -15,6 +15,7 @@ import { readMessage, senderName, stripMention, type FilterContext } from "../sr
 import type { TelegramUpdate } from "../src/telegram.ts";
 
 const allowed = new Set(["-1001234"]);
+const allowedHandles = new Set(["@kareva_tanya"]);
 
 function context(overrides: Partial<FilterContext> = {}): FilterContext {
 	return { allowedChats: allowed, botUsername: "mason_bot", ...overrides };
@@ -79,10 +80,54 @@ describe("which updates become events", () => {
 		assert.deepEqual(readMessage(edited, context()), { skip: "not a message" });
 	});
 
+	it("admits a message because its sender is allowlisted by @username, before anybody knows the chat id", () => {
+		const reading = readMessage(
+			update({
+				from: { id: 11, first_name: "Tanya", username: "kareva_tanya" },
+				chat: { id: 4711, type: "private", first_name: "Tanya" },
+			}),
+			context({ allowedChats: allowedHandles }),
+		);
+		assert.ok("event" in reading);
+		assert.equal(reading.event.chatId, "4711");
+		assert.equal(reading.event.username, "kareva_tanya");
+	});
+
+	it("matches a username in any case, because Telegram usernames are case-insensitive", () => {
+		const reading = readMessage(
+			update({ from: { id: 11, first_name: "Tanya", username: "Kareva_Tanya" } }),
+			context({ allowedChats: allowedHandles }),
+		);
+		assert.ok("event" in reading);
+		assert.equal(reading.event.username, "Kareva_Tanya", "the payload keeps the spelling Telegram sent");
+	});
+
+	it("drops a sender with no username when the allowlist names only handles", () => {
+		const anonymous = update({
+			from: { id: 11, first_name: "Ilya" },
+			chat: { id: 4711, type: "private" },
+		});
+		assert.deepEqual(readMessage(anonymous, context({ allowedChats: allowedHandles })), {
+			skip: "chat 4711 is not in TELEGRAM_ALLOWED_CHATS",
+		});
+	});
+
+	it("never matches an entry on an empty username, which is not a wildcard", () => {
+		const empty = update({
+			from: { id: 11, first_name: "Ilya", username: "" },
+			chat: { id: 4711, type: "private" },
+		});
+		assert.deepEqual(readMessage(empty, context({ allowedChats: new Set(["@"]) })), {
+			skip: "chat 4711 is not in TELEGRAM_ALLOWED_CHATS",
+		});
+	});
+
 	it("drops a chat that is not in the allowlist, and does not add it to the chat list", () => {
 		const other = update({ chat: { id: -5_555, type: "group", title: "Somewhere else" } });
 		const reading = readMessage(other, context());
-		assert.deepEqual(reading, { skip: "chat -5555 is not in TELEGRAM_ALLOWED_CHATS" });
+		assert.deepEqual(reading, {
+			skip: "chat -5555 is not in TELEGRAM_ALLOWED_CHATS, and @ilya is not either",
+		});
 		assert.ok(!("chat" in reading));
 	});
 
