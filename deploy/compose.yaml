@@ -37,14 +37,20 @@ services:
       # `GH_TOKEN` from the environment before it reads any config, so the value lives in `deploy/.env` and here, never
       # in a file a command could rewrite. Absent means no `gh` at all, which is the pre-existing state and not an error.
       GH_TOKEN: ${GH_TOKEN:-}
-    # Two networks, and the second one is a decision rather than a default: `mason-edge` is an ordinary bridge with a
+    # Two networks, and the second one is a decision rather than a default: `mason-out` is an ordinary bridge with a
     # gateway, so this container has a route to the internet, and a tool can `curl`, `gh` and clone. That is what a
     # worker on a repository needs and what a fence against exfiltration forbids — the tool machine can send out what
     # it can read, and it can read the agent's half of the home. The fence is intact for everything that does not need
-    # the internet (a deployment that leaves this line out keeps it); here it is opened on purpose.
+    # the internet (a deployment that leaves `mason-out` out keeps it); here it is opened on purpose.
+    #
+    # `mason-out` and not `mason-edge`: both are bridges with a gateway and the address is the same, but a bridge is
+    # also a channel, and `mason-edge` carries the proxy sidecar and any integration with a reachable upstream. The tool
+    # machine is not something other people's images should be able to open a socket to, so it gets a bridge of its own
+    # — one shared with nothing but mason's other outbound-only services — and the fence around `mason-env` means what
+    # the comment on mason's networks below says it means.
     networks:
       - mason-internal
-      - mason-edge
+      - mason-out
     volumes:
       # Read-only here: mason writes the public half of the key it generated, sshd reads it at login.
       - env-keys:/run/env-keys:ro
@@ -215,9 +221,11 @@ services:
       # to a transcriber is a tool with a capability its operator never registered.
       - mason-mcp
       # Out: the first boot's model fetch, and the only request this container ever makes — a public read from Hugging
-      # Face, on the one network with a gateway. A deployment that seeds the volume by hand (deploy/README.md, "The
-      # transcription service") can drop this line and keep the service with no route out at all.
-      - mason-edge
+      # Face, on a bridge with a gateway. `mason-out` rather than `mason-edge`, for the reason written on `mason-env`
+      # above: a transcriber holds what a person said, and an integration with a reachable upstream shares `mason-edge`.
+      # A deployment that seeds the volume by hand (deploy/README.md, "The transcription service") can drop this line and
+      # keep the service with no route out at all.
+      - mason-out
     volumes:
       # The weights: fetched once, read on every boot, and not worth backing up.
       - asr-models:/models
@@ -273,8 +281,13 @@ volumes:
   mason-service:
     name: ${MASON_STACK:-mason}-service
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
+  #
+  # Named from MASON_STACK like every other volume, because two stacks sharing this one do not merely share a file: the
+  # second boot overwrites the key the first one's sshd is holding, and the first stack's tool machine starts refusing
+  # logins. `MASON_ENV_KEYS_VOLUME` is the escape hatch for a host that predates the prefix — the first stack here ran
+  # as `env-keys`, so its own `deploy/.env` pins that name and nothing has to migrate.
   env-keys:
-    name: ${MASON_ENV_KEYS_VOLUME:-env-keys}
+    name: ${MASON_ENV_KEYS_VOLUME:-${MASON_STACK:-mason}-env-keys}
   # The ASR weights (~1.3 GB of ONNX graphs): fetched once by the container, read back on every boot, and re-fetchable
   # from Hugging Face, which is why it is not in "What to back up". Prefixed by MASON_STACK like every other volume, so
   # a second bot on the same host gets its own copy from this file unchanged — one shared volume would tie two stacks'
@@ -310,6 +323,11 @@ networks:
   # curl the same endpoint would make that decision advisory. The missing membership is what makes it a decision.
   mason-mcp:
     internal: true
+  # The outbound half of mason's own containers, and the only bridge an integration is never on: `mason-env` and
+  # `mason-asr` each need the internet, and neither is a thing somebody else's image should be able to reach. An
+  # ordinary bridge, so it carries a gateway; a network of its own, so a member of `mason-edge` cannot open a socket to
+  # the sshd or the transcriber just by being in the same project.
+  mason-out:
   # The proxy's own network, and the whole of one integration's route out: `internal: true`, so there is no gateway and
   # no direct route to anything, and the only reachable address on it is the `vpn` sidecar's mixed inbound at
   # `http://vpn:1080`. An integration that needs a proxy joins this instead of mason-edge, and only that proxy's own
