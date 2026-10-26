@@ -17,7 +17,7 @@ import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import { daemonCommand } from "../src/server/env.ts";
-import { discoverSkills } from "../src/server/extensions/skills.ts";
+import { discoverSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import {
 	HOUSE_ENTRIES,
 	appendFact,
@@ -922,7 +922,9 @@ test("ensureHouse() seeds the skills mason ships into the agent's half, and reco
 	assert.ok(record.startsWith(paths.serviceDir), "the record is in the half the agent cannot see");
 	assert.ok(!record.startsWith(paths.agentDir), "and never in the half the tool machine mounts");
 	const recorded = JSON.parse(await readFile(record, "utf8")) as Record<string, string>;
-	assert.deepEqual(Object.keys(recorded), ["generative-ui"], "one entry per shipped skill");
+	// One entry per skill the repository ships, whatever that set is today: this test is about the record, not a
+	// catalogue of the manuals.
+	assert.deepEqual(Object.keys(recorded).sort(), (await readdir(SHIPPED_SKILLS_DIR)).sort(), "one entry per shipped skill");
 	assert.equal(
 		recorded["generative-ui"],
 		createHash("sha256").update(await readFile(seeded)).digest("hex"),
