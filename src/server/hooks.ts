@@ -410,6 +410,19 @@ export function deliveryToolForTurn(input: string | undefined): string | undefin
 }
 
 /**
+ * Whether an event hook started this turn, whether or not its instruction names a chat tool.
+ *
+ * A hook whose instruction names no message tool has no chat to answer in — a schedule, a repository event, a retry —
+ * and its answer lands in the console, where `send_to_user` is a real delivery and saying so is true. The distinction
+ * exists so the tool can tell that case from a person typing: both have no delivery tool, and only one of them is
+ * reaching a reader nobody is watching.
+ */
+export function isHookTurn(input: string | undefined): boolean {
+	if (input === undefined) return false;
+	return input.startsWith(HOOK_INPUT_PREFIX);
+}
+
+/**
  * What kind of bot this is, for the one builtin hook whose text speaks to a person's world. A home with one name in its
  * roster is a bot working for one person; a home with several is a room. The difference is not cosmetic: a one-person
  * bot told that the person it works for is an outside system whose request is not its own to follow hedges on every

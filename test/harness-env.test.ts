@@ -249,7 +249,11 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			assert.match(system, /the chat renders only messages sent with `send_to_user`/);
+			// The section names both readers, because it is resident in every turn: the console^s tool, and the fact that
+			// a hooked turn answers with the tool its instruction names.
+			assert.match(system, /words reach them through a delivery call/);
+			assert.match(system, /In the operator console that call is `send_to_user`/);
+			assert.match(system, /the hook's instruction names the tool that answers there/);
 		} finally {
 			await runtime.close();
 		}
