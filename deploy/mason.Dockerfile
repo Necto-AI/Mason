@@ -5,10 +5,14 @@
 # `@earendil-works/*` packages are symlinked out of the `vendor/pi` submodule by `npm install`'s postinstall, and the
 # web client is esbuild's output from `src/web`. Check the submodule out first:
 #   git submodule update --init --recursive
-FROM node:22-bookworm-slim
+# Fully qualified on purpose: a host whose podman defines no `unqualified-search-registries` (NixOS ships none) refuses
+# a bare `node:22-bookworm-slim` at build time — `short-name "node:22-bookworm-slim" did not resolve to an alias` — and
+# the deploy is meant to build on such a host.
+FROM docker.io/library/node:22-bookworm-slim
 
 # The uid and gid the agent runs as, and the numbers the two shared volumes are owned by. mason-env is built with the
 # same values (deploy/env.Dockerfile); they have to agree, or the workspace is one container's and not the other's.
+# Qualified for the same reason as the node image in mason.Dockerfile: no short-name resolution on a NixOS podman host.
 ARG MASON_UID=1000
 ARG MASON_GID=1000
 
