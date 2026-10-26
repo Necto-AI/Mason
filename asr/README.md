@@ -1,11 +1,14 @@
 # asr/ — Parakeet TDT v3 dictation service
 
-A standalone speech-to-text mini-service for the web client's dictation button. Its own process, port
-(`8788`), virtualenv and dependency tree — it imports nothing from the agent stack, and the agent stack
-imports nothing from it. The only contract is JSON over HTTP.
+A standalone speech-to-text mini-service: for the web client's dictation button, and for the Telegram relay's voice
+notes. Its own process, port (`8788` on a workstation, `8100` in the container), virtualenv and dependency tree — it
+imports nothing from the agent stack, and the agent stack imports nothing from it. The only contract is JSON over HTTP.
 
 ```
-browser mic ──(16 kHz PCM16 WAV)──▶ POST /transcribe ──▶ text ──▶ composer textarea
+browser mic ──(16 kHz mono WAV)───┐
+phone voice ──(Ogg/Opus 48 kHz)───┴──▶ POST /transcribe ──▶ text ──▶ composer textarea / a chat message
+                                       WAV and declared PCM16 in-process;
+                                       everything else through ffmpeg → 16 kHz mono
 ```
 
 Model: `nvidia/parakeet-tdt-0.6b-v3` (multilingual, 25 European languages), run as three ONNX graphs
@@ -17,11 +20,13 @@ Model: `nvidia/parakeet-tdt-0.6b-v3` (multilingual, 25 European languages), run 
 | file | what |
 | --- | --- |
 | `model.py` | ONNX inference pipeline + greedy TDT decoder. The docstring is the tensor contract. |
-| `audio.py` | request body → float32 mono @ 16 kHz. Rejects anything else loudly. |
+| `audio.py` | request body → float32 mono @ 16 kHz. WAV and declared PCM16 in-process, everything else through `ffmpeg`; a body nothing can decode is an `AudioError` naming it, never a zero-sample decode. |
 | `server.py` | the HTTP service (`/health`, `/transcribe`) and its CLI entrypoint. |
-| `transcribe.py` | command-line transcription of WAV files (same code path as the service). |
+| `transcribe.py` | command-line transcription of audio files (same code path as the service). |
 | `fetch_models.py` | downloads the ONNX export from Hugging Face into `models/`. |
-| `tests/` | `unittest` suite: decode loop, audio decoding, endpoint contract. |
+| `Dockerfile` | the CPU image: slim Python, `ffmpeg` from apt, `onnxruntime` (not `-gpu`), and no model inside it. |
+| `docker-entrypoint.sh` | fills the model volume on the first boot (once), then serves on `0.0.0.0:8100 --cpu`. |
+| `tests/` | `unittest` suite: decode loop, audio decoding (WAV, Ogg/Opus, multipart, junk), endpoint contract. |
 
 ## Setup
 
@@ -55,9 +60,27 @@ binds after that, so a client that connects early simply fails to reach it, noth
 CLI:
 
 ```sh
-ffmpeg -i recording.mp3 -ar 16000 -ac 1 recording.wav     # the service only takes 16 kHz mono
-asr/run.sh asr/.venv/bin/python asr/transcribe.py recording.wav --json
+asr/run.sh asr/.venv/bin/python asr/transcribe.py voice.ogg recording.mp3 --json   # any format ffmpeg reads
+asr/run.sh asr/.venv/bin/python asr/transcribe.py recording.pcm                    # headerless PCM16 at 16 kHz
 ```
+
+## In the stack
+
+`asr/Dockerfile` packages this directory as `mason-asr`, and `deploy/compose.yaml` runs it on the stack's internal
+network, with the weights on a named volume (`${MASON_STACK:-mason}-asr-models`) and no published port:
+
+```
+relay ──▶ http://mason-asr:8100/transcribe ──▶ {text, words, durationMs, elapsedMs, rtf, model}
+```
+
+The image carries no model. `ASR_MODEL_DIR` (default `/models`) is the volume; if it holds no
+`encoder-model.<precision>.onnx` the entrypoint runs `fetch_models.py` once and says so, and a fetch that fails names
+the URL it could not reach and exits non-zero — a service that answers `200` with no model behind it is worse than one
+that is down. Seeding the volume from an existing `asr/models/` is the offline route (`deploy/README.md`, "The
+transcription service").
+
+`ASR_ENCODER` / `ASR_DECODER` pick the precision (default `fp16` / `int8`), and `ASR_MODEL_BASE_URL` points the fetch at
+a mirror. Whatever those name has to be in the volume: the entrypoint fetches the pair the environment asks for.
 
 ## API
 
@@ -68,7 +91,10 @@ asr/run.sh asr/.venv/bin/python asr/transcribe.py recording.wav --json
  "provider":"CUDAExecutionProvider","sampleRate":16000,"uptimeMs":1234}
 ```
 
-`POST /transcribe` — body: WAV (PCM16 or float32, 16 kHz mono) or headerless PCM16; response:
+`POST /transcribe` — body: anything ffmpeg reads (Ogg/Opus, MP3, M4A/MP4, WebM, FLAC, AMR, ...), WAV (PCM16 or
+float32, 16 kHz mono), or headerless PCM16 declared as `application/octet-stream` / `audio/pcm`. A
+`multipart/form-data` body with one `file` part is unwrapped, so a relay that posts a form is the same contract.
+Response:
 
 ```json
 {"text":"hello world","words":[{"text":"hello","startMs":0,"endMs":160}],
@@ -76,8 +102,12 @@ asr/run.sh asr/.venv/bin/python asr/transcribe.py recording.wav --json
 ```
 
 Errors are `{"error": "..."}` with 400 (undecodable/wrong rate/too short), 413 (over the upload cap) or 500.
+A 400 for a body nothing could decode names the container it looked like (`could not decode the Ogg: ...`) — an
+undecodable request is never answered with an empty transcript. The ffmpeg path is bounded by the request's upload cap
+(64 MB by default, checked before the body is read), a 30 s decode timeout, and a 15-minute cut on the decoded output,
+so a compressed file cannot expand into a gigabyte of samples.
 CORS is open (`Access-Control-Allow-Origin: *`): the client is served from another port. No auth — bind to
-`127.0.0.1` unless you mean to serve the LAN.
+`127.0.0.1` unless you mean to serve the LAN; in the stack the network is the authentication and nothing is published.
 
 ## Tests
 
@@ -89,6 +119,9 @@ ASR_TEST_WAV=recording.wav ASR_MODELS=asr/models npm run test:asr   # + a fixtur
 
 `test:asr` goes through `asr/run.sh` so the venv is usable on NixOS; add `ASR_NO_CUDA=1` to skip the CUDA
 libs when testing on a CPU-only box.
+
+The decode tests are half in-process and half against `ffmpeg`: the Ogg/Opus fixture is encoded while the suite runs
+(no binary blob in git) and those tests skip with a message when `ffmpeg` is not on `PATH`. The image installs it.
 
 ## Notes
 

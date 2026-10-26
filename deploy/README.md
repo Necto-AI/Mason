@@ -1,18 +1,20 @@
 # Deploying mason
 
-Two containers. `mason` is the server: the repo run from source, the built web client, the agent's home on a volume,
-the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu 24.04 and
-an sshd, reached only by mason, with no route out. The split is not packaging taste — every `read`, `write`, `edit`,
-`bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the boundary between thinking and doing
-was in the code before it was in a compose file. A deployment may add a third container per integration (see "An
-integration" below); those are other people's images, not this repo's.
+Three containers of our own. `mason` is the server: the repo run from source, the built web client, the agent's home on
+a volume, the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu
+24.04 and an sshd, reached only by mason, with no route out. `mason-asr` is mason's own speech-to-text, which is what
+turns a voice note from a phone into words (see "The transcription service" below). The split is not packaging taste —
+every `read`, `write`, `edit`, `bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the
+boundary between thinking and doing was in the code before it was in a compose file. A deployment may add one more
+container per integration (see "An integration" below); those are other people's images, not this repo's.
 
 ```
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
                           │
                           ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
-                          │                                           mason-egress with the vpn sidecar)
-                          └── volumes: mason-agent (both containers), mason-service, env-keys,
+                          │        │                                  mason-egress with the vpn sidecar)
+                          │        └────► mason-asr                  (no ports; Ogg/Opus in, words out)
+                          └── volumes: mason-agent (both containers), mason-service, env-keys, asr-models,
                                       mason-inbox (mason-env and the telegram relay)
 ```
 
@@ -80,6 +82,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
    TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids or @usernames the bot may relay, comma-separated
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
+   TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: where the relay sends a voice note (see below)
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/home/denis/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
    ```
@@ -352,6 +355,56 @@ the TODOs; it is mounted read-only, never baked into an image, and the sidecar p
 SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use
 it.
 
+## The transcription service: `mason-asr`
+
+A voice note from a phone is Ogg/Opus at 48 kHz, and for a long time that was a container nobody in this stack could
+read: posted to a WAV-only endpoint it came back as an empty transcript, which is worse than an error because the agent
+then answered a sentence nobody had said. So the stack runs mason's own speech-to-text beside the relay — `asr/` in
+this repository, one container, one POST, one JSON body. It is in `compose.yaml` and not in an extra file because every
+stack may want a voice note read, and a stack that runs no relay simply never calls it.
+
+**What it costs.** CPU only: no GPU, no CUDA runtime in the image, one core busy while a note is transcribed and nothing
+between notes. ~1.3 GB of ONNX weights in the `${MASON_STACK:-mason}-asr-models` volume, fetched once on the first boot
+(or copied in, below) and never backed up, because weights are a download rather than state. At the measured rtf 0.07 a
+15 s voice note is about a second of it, and a five-second one about a third.
+
+**What it accepts.** Anything ffmpeg reads: Ogg/Opus (what a phone records), MP3, M4A/MP4, WebM, FLAC, AMR, and WAV.
+Internally there is one format — 16 kHz mono float32 — and ffmpeg resamples and downmixes into it, so the container a
+phone produces is a container this service takes. A WAV is the exception that keeps its fast path: it is parsed
+in-process and must already be 16 kHz mono (the browser client resamples before it posts), so a 44.1 kHz stereo WAV is
+refused by a message that says to resample first rather than quietly resampled here. Headerless PCM16 is still read, but
+it has to be declared (`Content-Type: application/octet-stream` or `audio/pcm`) — bytes that say nothing about
+themselves go to ffmpeg instead of being guessed at, which is the rule that closed this bug. A body nothing can decode
+is a `400` naming the format it looked like, never a `200` with an empty transcript.
+
+**How a relay reaches it.** By name, on `mason-mcp`: `http://mason-asr:8100/transcribe`, which is what
+`TELEGRAM_ASR_URL` names in `deploy/.env`. POST the file's bytes — or the same bytes as one `multipart/form-data` part
+named `file`, which is what the Telegram relay sends — and read `{"text": "…"}`. No token and no published port: the
+network is the authentication here, exactly as it is for an MCP endpoint, and the only containers that can resolve the
+name are mason and the integrations. `mason-env` is not one of them.
+
+```sh
+TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe   # the relay's route to it; unset means no transcript at all
+```
+
+**Seeding the volume instead of downloading.** The first boot with an empty volume fetches the weights and says so
+(`[asr] /models holds no encoder-model.fp16.onnx: fetching the ONNX export from Hugging Face once`). A fetch that fails
+names the URL that failed, logs a line about seeding the volume, and exits non-zero — the container stays down rather
+than answering `200` with no model behind it. Where Hugging Face is unreachable from the host — this deployment proxies
+Telegram's API for much the same reason — copy an existing model directory in once and the fetch never happens:
+
+```sh
+cd deploy
+podman volume create "${MASON_STACK:-mason}-asr-models"     # or let the first `up` create it
+podman run --rm --entrypoint sh -v "${MASON_STACK:-mason}-asr-models":/models \
+  -v "$PWD/../asr/models":/seed:ro "${MASON_STACK:-mason}-asr:local" -c 'cp -a /seed/. /models/'
+podman compose -f compose.yaml -f compose.podman.yaml up -d mason-asr
+```
+
+The image is `${MASON_STACK:-mason}-asr:local`, so `up -d --build` has to have built it once. `ASR_MODEL_BASE_URL`
+points the fetch at a mirror instead, and `ASR_ENCODER`/`ASR_DECODER` choose the precision — the volume has to hold the
+pair those name, and `fp16`/`int8` is what `asr/fetch_models.py` downloads by default.
+
 ## When it looks broken but is not
 
 Three failures this stack has produced, each of which reads like a bug in the code and is not.
@@ -391,8 +444,10 @@ declaration or a missing restart, never the door.
 
 ## What to back up
 
-**Two volumes, and both of them.** `mason-inbox` is deliberately not one of them: it holds the files a chat sent, which
-are somebody else's documents and which the sweep deletes after a week anyway. `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
+**Two volumes, and both of them.** `mason-inbox` is deliberately not one of them, and neither is `asr-models`: the inbox
+holds the files a chat sent, which are somebody else's documents and which the sweep deletes after a week anyway, and
+the model volume holds weights that one command refills (see "The transcription service"). `mason-agent` is the agent:
+`profile.md`, the dated log, `journal/`, `skills/` (the
 shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
 history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
 home root, which is not a volume. `mason-service` is the server: `soul.md`,

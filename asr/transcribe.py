@@ -1,11 +1,9 @@
-"""Transcribe WAV files from the command line — same model code the service serves.
+"""Transcribe audio files from the command line — the same decoder the service uses.
 
-    python asr/transcribe.py recording.wav [more.wav ...]
+    python asr/transcribe.py voice.ogg recording.mp3 more.wav ...
 
-Input must be 16 kHz mono; convert first if needed:
-
-    ffmpeg -i recording.mp3 -ar 16000 -ac 1 recording.wav
-
+Any format ffmpeg reads is accepted (Ogg/Opus, MP3, M4A, WebM, FLAC, ...), because this is the same code path as
+`POST /transcribe`. A WAV must still be 16 kHz mono; a headerless `.pcm`/`.raw` file is read as PCM16 at 16 kHz.
 Text goes to stdout (one line per file, or one JSON object with --json); timings and RTF go to stderr.
 """
 
@@ -21,11 +19,13 @@ from audio import AudioError, decode_audio
 from model import ParakeetTdt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+#: The extensions that mean "headerless PCM16" — the one thing a file name can declare and a decoder cannot see.
+RAW_EXTENSIONS = (".pcm", ".raw", ".s16", ".s16le", ".sw")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Transcribe 16 kHz mono WAV files with Parakeet TDT v3")
-    parser.add_argument("files", nargs="+", help="WAV files (see the module docstring for conversion)")
+    parser = argparse.ArgumentParser(description="Transcribe audio files with Parakeet TDT v3 (16 kHz mono internally)")
+    parser.add_argument("files", nargs="+", help="audio files (any format ffmpeg reads; see the module docstring)")
     parser.add_argument("--model-dir", default=os.path.join(HERE, "models"))
     parser.add_argument("--encoder", choices=("fp32", "fp16", "int8"), default="fp16")
     parser.add_argument("--decoder", choices=("fp32", "fp16", "int8"), default="int8")
@@ -43,7 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     for path in args.files:
         try:
             with open(path, "rb") as handle:
-                wav = decode_audio(handle.read())
+                # Nothing declares a file's type on a command line, so the extension is the declaration: a `.pcm`/`.raw`
+                # name is the only way to say "these bytes are samples", and everything else is sniffed and, if it is a
+                # container, decoded by ffmpeg.
+                content_type = "application/octet-stream" if path.lower().endswith(RAW_EXTENSIONS) else None
+                wav = decode_audio(handle.read(), content_type=content_type)
         except OSError as error:
             print(f"{path}: {error}", file=sys.stderr)
             status = 1
