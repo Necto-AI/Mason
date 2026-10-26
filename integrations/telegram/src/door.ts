@@ -1,15 +1,24 @@
 /**
- * The trigger face's one delivery: sign the envelope, post it to the door, and never retry something the door refused.
+ * The trigger face's one delivery: sign the envelope, post it to the door, and never advance past something that could
+ * still be delivered.
  *
- * mason's door answers `202` and nothing else is a delivery (`src/server/events.ts`). The three answers below it are
- * each a different thing, and this file keeps them apart:
+ * mason's door answers `202` and nothing else is a delivery (`src/server/events.ts`). The four answers below it are each
+ * a different thing, and this file keeps them apart:
  *
- * - **A refusal** — `400` a bad envelope, `401` a bad signature, `404` a path that names no integration, `429` over the
- *   budget — is final. The offset advances past it, because a message the door will never accept must not be retried
- *   forever: it would block the chat behind it, and every retry would make the same refusal again. It is logged with the
- *   body's own `error` rather than swallowed, so the operator can fix the config and know what was lost.
+ * - **A refusal** — `400` a bad envelope, `401` a bad signature, `404` a path that names no integration — is final. The
+ *   offset advances past it, because a message the door will never accept must not be retried forever: it would block
+ *   the chat behind it, and every retry would make the same refusal again. It is logged with the body's own `error`
+ *   rather than swallowed, so the operator can fix the config and know what was lost.
+ * - **`429` over the budget is a wait, not a verdict.** The door answers six deliveries a minute and says in
+ *   `retry-after` when it has room; the same bytes are posted again after exactly that, which is one fire either way
+ *   because the envelope's id never changes. One line names the wait — not one a second — and a wait longer than
+ *   `MAX_THROTTLE_WAIT_MS` is not sat through: the delivery is reported as unreachable so the batch is retried rather
+ *   than advanced past. That loop ends when the door takes the envelope, which its own number is the promise of: the
+ *   delivery that was refused for budget was never counted against it.
  * - **A network failure** is retried three times with exponential backoff. A container that restarts with the mason
- *   container is the ordinary case, and the second attempt usually lands after the other end has bound its port.
+ *   container is the ordinary case, and the second attempt usually lands after the other end has bound its port. Past
+ *   that it is reported as unreachable and `src/poller.ts` holds the batch, because an id that was never delivered is
+ *   never seen again.
  * - **Anything else** — a proxy's HTML page, a `500` — is logged as one line and treated as a refusal: the door is not
  *   going to be made to work by this container, and the offset must not stall on it.
  *
@@ -24,10 +33,23 @@ import type { Fetch, FetchResponse } from "./telegram.ts";
 /** Three retries after the first try, and 250 ms doubling: a container pair restarting together is the case this is for. */
 export const RETRY_ATTEMPTS = 3;
 export const RETRY_BACKOFF_MS = 250;
+/**
+ * The longest `retry-after` this will sit through. The door's window is a minute, so a real answer is far below it; this
+ * is the cap that keeps a wrong one — a proxy quoting an hour — from parking the poller on a single message.
+ */
+export const MAX_THROTTLE_WAIT_MS = 5 * 60_000;
+
 export type DoorResult =
 	| { readonly kind: "accepted" }
 	| { readonly kind: "refused"; readonly status: number }
 	| { readonly kind: "unreachable"; readonly error: string };
+
+/** What one POST came to. `throttled` is a `429` whose wait this will not honour, and it is not final. */
+type PostResult =
+	| { readonly kind: "accepted" }
+	| { readonly kind: "refused"; readonly status: number }
+	| { readonly kind: "throttled"; readonly waitMs: number | undefined }
+	| { readonly kind: "failed"; readonly error: string };
 
 export interface EventDoorOptions {
 	readonly url: string;
@@ -38,6 +60,7 @@ export interface EventDoorOptions {
 	readonly integration: string;
 	readonly retries?: number;
 	readonly backoffMs?: number;
+	readonly maxWaitMs?: number;
 	readonly sleep?: (ms: number) => Promise<void>;
 }
 
@@ -45,12 +68,14 @@ export class EventDoor {
 	readonly #options: EventDoorOptions;
 	readonly #retries: number;
 	readonly #backoffMs: number;
+	readonly #maxWaitMs: number;
 	readonly #sleep: (ms: number) => Promise<void>;
 
 	constructor(options: EventDoorOptions) {
 		this.#options = options;
 		this.#retries = options.retries ?? RETRY_ATTEMPTS;
 		this.#backoffMs = options.backoffMs ?? RETRY_BACKOFF_MS;
+		this.#maxWaitMs = options.maxWaitMs ?? MAX_THROTTLE_WAIT_MS;
 		this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 	}
 
@@ -59,6 +84,36 @@ export class EventDoor {
 		let failure = "";
 		for (let attempt = 0; attempt <= this.#retries; attempt += 1) {
 			if (attempt > 0) await this.#sleep(this.#backoffMs * 2 ** (attempt - 1));
+			const outcome = await this.#post(body, envelope);
+			if (outcome.kind === "accepted") return { kind: "accepted" };
+			if (outcome.kind === "refused") return { kind: "refused", status: outcome.status };
+			if (outcome.kind === "throttled") {
+				// Not final, and not a network failure either: the message is good and the door is full. `src/poller.ts`
+				// holds the batch, which is the same message tried again later.
+				const asked = outcome.waitMs === undefined ? "no wait it could read" : `a ${outcome.waitMs / 1_000} s wait`;
+				this.#options.log(
+					"error",
+					`${this.#options.integration}: the door is over its budget and named ${asked} for ${envelope.id};` +
+						" holding it rather than advancing past it",
+				);
+				return { kind: "unreachable", error: `the door answered 429 with ${asked}` };
+			}
+			failure = outcome.error;
+		}
+		this.#options.log(
+			"error",
+			`${this.#options.integration}: could not deliver ${envelope.id} after ${this.#retries + 1} attempts ` +
+				`(${failure}); the batch will be retried`,
+		);
+		return { kind: "unreachable", error: failure };
+	}
+
+	/**
+	 * One delivery's worth of POSTs: the first, then one more after each `429` whose wait it will honour. The body is
+	 * signed and sent as the same string every time, so a redelivery is byte-identical to the delivery it repeats.
+	 */
+	async #post(body: string, envelope: EventEnvelope): Promise<PostResult> {
+		for (;;) {
 			let answer: FetchResponse;
 			try {
 				answer = await this.#options.fetch(this.#options.url, {
@@ -70,8 +125,7 @@ export class EventDoor {
 					body,
 				});
 			} catch (error) {
-				failure = describeError(error);
-				continue;
+				return { kind: "failed", error: describeError(error) };
 			}
 			if (answer.ok) {
 				this.#options.log(
@@ -80,26 +134,30 @@ export class EventDoor {
 				);
 				return { kind: "accepted" };
 			}
-			const reason = await refusalReason(answer);
+			const text = await answer.text().catch(() => "");
+			if (answer.status !== 429) {
+				const reason = refusalReason(text);
+				this.#options.log(
+					"warn",
+					`${this.#options.integration}: the door refused ${envelope.id} with ${answer.status}` +
+						`${reason === undefined ? "" : `: ${reason}`}; the offset advances past it`,
+				);
+				return { kind: "refused", status: answer.status };
+			}
+			const waitMs = retryAfterMs(answer, text);
+			if (waitMs === undefined || waitMs > this.#maxWaitMs) return { kind: "throttled", waitMs };
 			this.#options.log(
 				"warn",
-				`${this.#options.integration}: the door refused ${envelope.id} with ${answer.status}` +
-					`${reason === undefined ? "" : `: ${reason}`}; the offset advances past it`,
+				`${this.#options.integration}: the door is over its budget; waiting ${Math.round(waitMs / 1_000)}s` +
+					` and posting ${envelope.id} again`,
 			);
-			return { kind: "refused", status: answer.status };
+			await this.#sleep(waitMs);
 		}
-		this.#options.log(
-			"error",
-			`${this.#options.integration}: could not deliver ${envelope.id} after ${this.#retries + 1} attempts ` +
-				`(${failure}); the offset advances past it`,
-		);
-		return { kind: "unreachable", error: failure };
 	}
 }
 
 /** The door's own sentence about a refusal: `{ "error": "…" }`, which is what its `400` answers carry. */
-async function refusalReason(answer: FetchResponse): Promise<string | undefined> {
-	const text = await answer.text().catch(() => "");
+function refusalReason(text: string): string | undefined {
 	if (text === "") return undefined;
 	try {
 		const parsed = JSON.parse(text) as unknown;
@@ -112,4 +170,29 @@ async function refusalReason(answer: FetchResponse): Promise<string | undefined>
 	}
 	const line = text.split("\n", 1)[0]?.trim();
 	return line === "" ? undefined : line;
+}
+
+/**
+ * How long the door asked for, in milliseconds: the `retry-after` header (seconds) first, then mason's own
+ * `retryAfterSeconds` in the body, which it sends beside the header. `undefined` when the answer named no wait this can
+ * use — a `429` without a number is not an instruction.
+ */
+function retryAfterMs(answer: FetchResponse, text: string): number | undefined {
+	const header = answer.headers?.get("retry-after")?.trim() ?? "";
+	const seconds = header === "" ? bodyRetryAfter(text) : Number(header);
+	if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return undefined;
+	return Math.round(seconds * 1_000);
+}
+
+/** mason's `429` body: `{ "error": "too many deliveries", "retryAfterSeconds": 42 }`. */
+function bodyRetryAfter(text: string): number | undefined {
+	if (text === "") return undefined;
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		const seconds = (parsed as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+		return typeof seconds === "number" ? seconds : undefined;
+	} catch {
+		return undefined;
+	}
 }

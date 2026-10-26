@@ -1,5 +1,6 @@
 /**
- * The trigger face's memory: first boot starts from now, a restart resumes, and a refused delivery moves on.
+ * The trigger face's memory: first boot starts from now, a restart resumes, a refused delivery moves on, and a door
+ * that could not be reached leaves the batch exactly where it was.
  *
  * The state here is a real directory — `StateFiles` is half of what is being tested — while Telegram and the door are
  * scripted, so each test is one sequence of answers rather than a mock of the process.
@@ -39,15 +40,17 @@ class ScriptedUpdates implements UpdateSource {
 
 class RecordingDoor implements EventSink {
 	readonly envelopes: EventEnvelope[] = [];
-	readonly #result: DoorResult;
+	readonly #script: DoorResult[];
+	readonly #answer: DoorResult;
 
-	constructor(result: DoorResult = { kind: "accepted" }) {
-		this.#result = result;
+	constructor(answer: DoorResult = { kind: "accepted" }, script: readonly DoorResult[] = []) {
+		this.#answer = answer;
+		this.#script = [...script];
 	}
 
 	async fire(envelope: EventEnvelope): Promise<DoorResult> {
 		this.envelopes.push(envelope);
-		return this.#result;
+		return this.#script.shift() ?? this.#answer;
 	}
 }
 
@@ -106,6 +109,57 @@ async function readOffset(state: StateFiles, directory: string): Promise<unknown
 	return JSON.parse(await readFile(join(directory, "offset.json"), "utf8")) as unknown;
 }
 
+interface DownRig {
+	readonly waits: number[];
+	readonly lines: string[];
+	readonly door: RecordingDoor;
+	readonly state: StateFiles;
+	readonly directory: string;
+}
+
+/**
+ * One batch delivered to a door with a scripted sequence of answers, and a clock the sleeps advance — so a minute of a
+ * door being down costs a test nothing, and every wait is asserted as the number it was.
+ *
+ * `stopAfter` aborts the poll the way `SIGTERM` does, after that many sleeps: the poller holds a batch until the door
+ * answers, so a test that never lets the door answer has to say when the container stops.
+ */
+async function pollAgainstDoor(
+	script: readonly DoorResult[],
+	options: {
+		readonly batches?: TelegramUpdate[][];
+		readonly offset?: number;
+		readonly stopAfter?: number;
+	} = {},
+): Promise<DownRig> {
+	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
+	directories.add(directory);
+	const state = new StateFiles(directory);
+	await state.writeOffset(options.offset ?? 100);
+	const waits: number[] = [];
+	const lines: string[] = [];
+	const door = new RecordingDoor(script.at(-1) ?? { kind: "accepted" }, script);
+	const controller = new AbortController();
+	let clock = 0;
+	const stopAfter = options.stopAfter ?? Number.POSITIVE_INFINITY;
+	const poller = new Poller({
+		api: new ScriptedUpdates(options.batches ?? [[update(100)]]),
+		state,
+		door,
+		chats: new ChatDirectory(),
+		log: createLog([], (line) => lines.push(line)),
+		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
+		now: () => clock,
+		sleep: async (ms) => {
+			waits.push(ms);
+			clock += ms;
+			if (waits.length >= stopAfter) controller.abort();
+		},
+	});
+	await poller.pollOnce(controller.signal);
+	return { waits, lines, door, state, directory };
+}
+
 describe("the offset on a first boot", () => {
 	it("asks without an offset, discards the backlog, and remembers where it ended", async () => {
 		const { poller, api, door, state, directory, lines } = await rig([[update(5), update(6)]]);
@@ -162,15 +216,49 @@ describe("the offset on a restart", () => {
 		assert.doesNotMatch(lines.join("\n"), /poll failed/);
 	});
 
-	it("advances past a door it could not reach, after the door's own retries gave up", async () => {
-		const { poller, state, directory } = await rig([[update(100)]], {
-			offset: 100,
-			door: { kind: "unreachable", error: "connect ECONNREFUSED" },
-		});
+	it("does not advance past a door it could not reach, and holds the same batch", async () => {
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "accepted" },
+			],
+		);
 
-		await poller.pollOnce();
+		assert.deepEqual(await readOffset(down.state, down.directory), { offset: 101 });
+		// Three posts of one message, because an update id that never reached the door is never seen again.
+		assert.deepEqual(
+			down.door.envelopes.map((envelope) => envelope.id),
+			["tg-100", "tg-100", "tg-100"],
+		);
+		assert.deepEqual(down.waits, [1_000, 2_000]);
+		assert.match(down.lines.join("\n"), /the door is answering again after 2 attempt\(s\); resuming at update 100/);
+	});
 
-		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	it("keeps the whole batch when the door is down, so the update after it is not skipped either", async () => {
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "accepted" },
+				{ kind: "unreachable", error: "the door answered 429 with a 3600 s wait" },
+				{ kind: "accepted" },
+				{ kind: "accepted" },
+			],
+			{ batches: [[update(100), update(101)]], offset: 100 },
+		);
+
+		assert.deepEqual(down.door.envelopes.map((envelope) => envelope.id), ["tg-100", "tg-101", "tg-101"]);
+		assert.deepEqual(await readOffset(down.state, down.directory), { offset: 102 });
+	});
+
+	it("logs at most once a minute while the door is down, and never once a second", async () => {
+		const down = await pollAgainstDoor([{ kind: "unreachable", error: "connect ECONNREFUSED" }], { stopAfter: 7 });
+
+		const complaints = down.lines.filter((line) => line.includes("the door is unreachable"));
+		assert.equal(complaints.length, 2);
+		assert.equal(down.door.envelopes.length, 7);
+		// 1 s doubling to a half-minute ceiling: the seventh wait already crosses the minute the log is kept to.
+		assert.deepEqual(down.waits, [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+		assert.deepEqual(await readOffset(down.state, down.directory), { offset: 100 });
 	});
 
 	it("advances past a message the filter dropped", async () => {

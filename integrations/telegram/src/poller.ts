@@ -11,9 +11,12 @@
  * admit twice. Writing per message would be a file write per chat line, for a stronger guarantee the dedupe already
  * gives for free.
  *
- * **A refused delivery still advances the offset.** The door's answer is not this container's to argue with: a `400`
- * envelope bug, a `401` wrong secret and a `404` missing integration are all final, and stalling on one would block the
- * chat behind it forever. `src/door.ts` logs each one with the body's own error; this file moves on.
+ * **The offset advances only past an answer.** A refused delivery (`400`, `401`, `404`) advances: the door's answer is
+ * not this container's to argue with, and stalling on a body it will never accept would block the chat behind it
+ * forever. `src/door.ts` logs each one with the body's own error. A door that could not be reached at all — refused
+ * connection, timeout, a `429` whose wait was longer than the door's own budget allows — advances nothing: the batch is
+ * held and retried after a bounded backoff, because an update id that was never delivered is never seen again, and
+ * nothing downstream could dedupe what never arrived.
  *
  * **A failed long poll is not a failed container.** A proxy reconnecting, a VPN dropping, a `429` from Telegram — each is
  * one logged line and a wait, because the alternative is a restart loop that loses its place less gracefully.
@@ -30,6 +33,12 @@ import { TelegramError, type TelegramUpdate } from "./telegram.ts";
 export const LONG_POLL_SECONDS = 30;
 /** How long to wait after a poll that failed for a reason Telegram did not put a number on. */
 export const POLL_RETRY_MS = 5_000;
+/** The first wait after a delivery the door could not take, doubling from there. */
+export const RECONNECT_BACKOFF_MS = 1_000;
+/** The ceiling on that wait: a door that comes back is picked up within half a minute of it. */
+export const RECONNECT_BACKOFF_MAX_MS = 30_000;
+/** How often a door that is still down gets a line. A down door must not fill the log it is being diagnosed from. */
+export const RECONNECT_LOG_MS = 60_000;
 
 export interface PollerOptions {
 	readonly api: UpdateSource;
@@ -40,6 +49,8 @@ export interface PollerOptions {
 	readonly filter: FilterContext;
 	readonly pollTimeoutSeconds?: number;
 	readonly sleep?: (ms: number) => Promise<void>;
+	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
+	readonly now?: () => number;
 }
 
 /**
@@ -62,14 +73,18 @@ export interface EventSink {
 export interface PollSummary {
 	/** Updates read in this batch, including the ones the filter skipped. */
 	readonly read: number;
-	/** Envelopes posted to the door. */
+	/** Envelopes posted to the door and answered. A message the door never took is not counted: the batch is still held. */
 	readonly fired: number;
 }
+
+/** What one update came to, as the batch loop cares: the door's own answer, or a skip that never reached it. */
+type Delivery = { readonly kind: "skipped" } | DoorResult;
 
 export class Poller {
 	readonly #options: PollerOptions;
 	readonly #timeout: number;
 	readonly #sleep: (ms: number) => Promise<void>;
+	readonly #now: () => number;
 	/** The next update to ask for. Undefined only until the first poll has decided where "now" is. */
 	#offset: number | undefined;
 
@@ -77,6 +92,7 @@ export class Poller {
 		this.#options = options;
 		this.#timeout = options.pollTimeoutSeconds ?? LONG_POLL_SECONDS;
 		this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+		this.#now = options.now ?? (() => Date.now());
 	}
 
 	/** Poll until the signal aborts. Never resolves on its own: the container is an always-on reader. */
@@ -112,15 +128,10 @@ export class Poller {
 			timeout: this.#timeout,
 			...(signal === undefined ? {} : { signal }),
 		});
-		let fired = 0;
-		for (const update of updates) {
-			// Advance before delivering: an event that is already understood must not be read twice if the door is
-			// slow, and the id makes a re-read harmless anyway.
-			this.#offset = update.update_id + 1;
-			if (await this.#deliver(update)) fired += 1;
-		}
-		if (updates.length > 0) await this.#persist();
-		return { read: updates.length, fired };
+		if (updates.length === 0) return { read: 0, fired: 0 };
+		const summary = await this.#deliverBatch(updates, signal);
+		await this.#persist();
+		return summary;
 	}
 
 	/** The offset this instance will ask for next; exposed so the boot log can say where it started. */
@@ -144,17 +155,61 @@ export class Poller {
 		return { read: backlog.length, fired: 0 };
 	}
 
-	async #deliver(update: TelegramUpdate): Promise<boolean> {
+	/**
+	 * One batch, in order, holding on the update the door could not take.
+	 *
+	 * The offset moves only after a message has an answer, so a door that is down leaves the batch exactly where it was:
+	 * the same envelopes are posted again after each wait, and the id makes every one of those one fire. Only the signal
+	 * ends the holding, which is how a container asked to stop stops — what it did deliver is persisted, and the update
+	 * it did not is where the next batch starts.
+	 */
+	async #deliverBatch(updates: readonly TelegramUpdate[], signal?: AbortSignal): Promise<PollSummary> {
+		let fired = 0;
+		let down = 0;
+		let announcedAt: number | undefined;
+		for (const update of updates) {
+			for (;;) {
+				const delivery = await this.#deliver(update);
+				if (delivery.kind !== "unreachable") {
+					if (down > 0) {
+						this.#options.log(
+							"info",
+							`the door is answering again after ${down} attempt(s); resuming at update ${update.update_id}`,
+						);
+						down = 0;
+						announcedAt = undefined;
+					}
+					if (delivery.kind !== "skipped") fired += 1;
+					this.#offset = update.update_id + 1;
+					break;
+				}
+				down += 1;
+				const at = this.#now();
+				if (announcedAt === undefined || at - announcedAt >= RECONNECT_LOG_MS) {
+					announcedAt = at;
+					this.#options.log(
+						"warn",
+						`the door is unreachable (${delivery.error}); holding update ${update.update_id} and retrying the batch`,
+					);
+				}
+				const waitMs = reconnectWaitMs(down);
+				await this.#sleep(waitMs);
+				if (signal?.aborted === true) return { read: updates.length, fired };
+			}
+		}
+		return { read: updates.length, fired };
+	}
+
+	async #deliver(update: TelegramUpdate): Promise<Delivery> {
 		const reading = readMessage(update, this.#options.filter);
 		if ("skip" in reading) {
 			this.#options.log("info", `skipped update ${update.update_id}: ${reading.skip}`);
-			return false;
+			return { kind: "skipped" };
 		}
 		// Recorded before the door answers, because the chat is real whether or not this particular message got through:
 		// `list_chats` is where the agent may write, not a log of successful deliveries.
 		this.#options.chats.add(reading.chat);
-		await this.#options.door.fire(envelopeFor(reading.event));
-		return true;
+		return this.#options.door.fire(envelopeFor(reading.event));
 	}
 
 	/** The offset and, when it grew, the chat list — in that order, so a crash between the two loses a chat, not a place. */
@@ -165,4 +220,9 @@ export class Poller {
 			this.#options.chats.clean();
 		}
 	}
+}
+
+/** The wait before a batch the door could not take is tried again: 1 s, doubling, and no longer than half a minute. */
+export function reconnectWaitMs(failures: number): number {
+	return Math.min(RECONNECT_BACKOFF_MS * 2 ** Math.max(0, failures - 1), RECONNECT_BACKOFF_MAX_MS);
 }
