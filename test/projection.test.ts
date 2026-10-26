@@ -103,6 +103,23 @@ describe("the transcript the client is sent", () => {
 		}
 	});
 
+	it("leaves no row for a command a chat asked for, or for a compaction", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "app.command", [], { data: { command: "stop", requestId: "telegram:42" } }),
+				entry(2, "pi.compaction", [{ role: "user", content: "Summary so far: the deadline moved." }]),
+				assistant(3, [call(MESSAGE_TOOL, { message: "Stopped." }, "m1")]),
+				result(4, "m1", "delivered"),
+			]),
+		);
+		assert.deepEqual(transcript, [{ kind: "delivered", id: "m1", text: "Stopped." }]);
+		// The command that started it, who asked, and the summary that replaced older turns stay on the server.
+		const wire = JSON.stringify(transcript);
+		for (const leak of ["app.command", "telegram:42", "compaction", "deadline moved"]) {
+			assert.ok(!wire.includes(leak), `${leak} does not reach the reader`);
+		}
+	});
+
 	it("sends a widget as the artifact it is, never as the call that built it", () => {
 		const transcript = projectTranscript(
 			viewOf([
