@@ -1,7 +1,7 @@
 /**
  * The tools face over a real socket, on the path mason actually uses.
  *
- * `test/mcp.test.ts` drives the two tools over an in-memory transport, which is a client that has already initialized
+ * `test/mcp.test.ts` drives the three tools over an in-memory transport, which is a client that has already initialized
  * the server it is talking to. Production is not that: `src/http.ts` builds one `McpServer` and one transport per
  * request and keeps no session, so mason's `tools/list` and `tools/call` arrive on a transport that never saw an
  * `initialize` and carry no `Mcp-Session-Id`. That is the only shape a request takes in production, and it is what this
@@ -48,7 +48,11 @@ async function rig(): Promise<HttpRig> {
 				sent.push({ chatId: options.chatId, text: options.text });
 				return { kind: "sent", messageId: 4_242 };
 			},
+			// A file is the other tool this rig does not exercise: the endpoint is what is under test here, and `send_file`
+			// has its own tests in `test/mcp.test.ts` and `test/telegram.test.ts`.
+			sendFile: async (): Promise<SendOutcome> => ({ kind: "sent", messageId: 4_242 }),
 			chats: () => CHATS,
+			inboxDir: "/home/mason/.mason/agent/workspace/inbox",
 		},
 		log: createLog([]),
 		host: "127.0.0.1",
@@ -127,7 +131,7 @@ describe("the tools face on a real socket", () => {
 				toolsOf(listed.result)
 					.map((tool) => tool.name)
 					.sort(),
-				["list_chats", "send_message"],
+				["list_chats", "send_file", "send_message"],
 			);
 
 			// The production shape exactly: stateless, no Mcp-Session-Id, on a transport that never saw an initialize.

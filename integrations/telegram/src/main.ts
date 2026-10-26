@@ -1,10 +1,11 @@
 /**
- * The container: one long poll reading Telegram, one MCP endpoint lending mason two tools, one process.
+ * The container: one long poll reading Telegram, one MCP endpoint lending mason three tools, one process.
  *
- * The two faces never share a path. Nothing the poller reads is reachable through the tools face, and nothing the tools
- * face sends is fed back into the poller: an inbound message becomes a signed envelope and leaves; an outbound message is
- * a tool call and an API request. What they do share is the chat list, because `list_chats` is how the agent answers the
- * message it was just woken by.
+ * The two faces meet in two places and nowhere else. Nothing the poller reads is reachable through the tools face, and
+ * nothing the tools face sends is fed back into the poller: an inbound message becomes a signed envelope and leaves; an
+ * outbound message or file is a tool call and an API request. What they do share is the chat list, because `list_chats` is
+ * how the agent answers the message it was just woken by, and the inbox, the one directory a file crosses in either
+ * direction.
  *
  * Boot order is deliberate:
  *
@@ -117,7 +118,13 @@ async function main(): Promise<void> {
 		log,
 		tools: {
 			send: (options) => queue.enqueue(options.chatId, () => api.sendMessage(options)),
+			// A file is a message a person receives, so it takes the same queue: Telegram's twenty a minute do not care
+			// whether the bytes or the words were more, and a 429 on an upload is the queue's to honour like any other.
+			sendFile: (options) => queue.enqueue(options.chatId, () => api.sendFile(options)),
 			chats: () => chats.list(),
+			// Where a file must be to leave: the one volume the relay and the tool machine share, and the only part of the
+			// agent's home this container can read.
+			inboxDir: config.inboxDir,
 			typing,
 		},
 	});

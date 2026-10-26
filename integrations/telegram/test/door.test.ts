@@ -94,7 +94,8 @@ describe("a delivery the door accepts", () => {
 		assert.equal(rig.sent.length, 1);
 		assert.equal(rig.sent[0]?.url, "http://mason:8787/api/events/telegram");
 		assert.equal(rig.sent[0]?.request.method, "POST");
-		const body = rig.sent[0]?.request.body ?? "";
+		const body = rig.sent[0]?.request.body;
+		assert.ok(typeof body === "string", "the door posts an envelope as JSON");
 		assert.deepEqual(JSON.parse(body), ENVELOPE);
 		assert.equal(rig.sent[0]?.request.headers["x-mason-signature"], signBody(SECRET, body));
 		assert.match(rig.lines.join("\n"), /delivered tg-8811 \(chat\.message\)/);

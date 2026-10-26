@@ -4,11 +4,14 @@
  * Time is a number this test owns, so a minute of throttling costs nothing and every wait is asserted exactly. What is
  * being pinned is the shape of the promise the agent gets: twenty a minute per chat, in order, and an outcome that says
  * what happened instead of a hang.
+ *
+ * A file is the same promise: `send_file` is enqueued like a message (`src/main.ts`), so an upload spends the chat's
+ * minute and a 429 on one is waited out here rather than by the model.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SendQueue } from "../src/queue.ts";
-import type { SendOutcome } from "../src/telegram.ts";
+import { TelegramApi, type FetchResponse, type SendOutcome } from "../src/telegram.ts";
 
 interface Rig {
 	readonly queue: SendQueue;
@@ -36,6 +39,17 @@ function rig(options: { limit?: number; maxWaitMs?: number } = {}): Rig {
 
 function sent(messageId: number): SendOutcome {
 	return { kind: "sent", messageId };
+}
+
+/** What a fake Telegram answered, in the shape the client reads. */
+function answered(status: number, body: unknown): FetchResponse {
+	return {
+		ok: status >= 200 && status < 300,
+		status,
+		statusText: "",
+		text: async () => JSON.stringify(body),
+		arrayBuffer: async () => new ArrayBuffer(0),
+	};
 }
 
 describe("the per-chat window", () => {
@@ -171,5 +185,43 @@ describe("a 429 from Telegram", () => {
 		const error = outcome.kind === "failed" ? outcome.error : "";
 		assert.doesNotMatch(error, new RegExp(token));
 		assert.match(error, /\/bot<redacted>\/sendMessage/);
+	});
+});
+
+describe("a file send", () => {
+	/** The bot this test drives, at the URL the client builds around it. */
+	const TOKEN = "123456789:AAF-abcdefghijklmnopqrstuvwxyz012345";
+
+	it("goes through the same per-chat window as a message, and a 429 on the upload is the queue's to honour", async () => {
+		const { queue, sleeps } = rig({ limit: 1 });
+		const throttled = answered(429, {
+			ok: false,
+			error_code: 429,
+			description: "Too Many Requests",
+			parameters: { retry_after: 3 },
+		});
+		const landed = answered(200, { ok: true, result: { message_id: 7 } });
+		let attempts = 0;
+		const api = new TelegramApi({
+			token: TOKEN,
+			fetch: async () => {
+				attempts += 1;
+				return attempts === 1 ? throttled : landed;
+			},
+		});
+
+		const outcome = await queue.enqueue("-1001234", () =>
+			api.sendFile({ chatId: "-1001234", bytes: new Uint8Array([1]), name: "report.pdf", kind: "document" }),
+		);
+
+		// The 429 came from an upload and not from a message, so the retry is the queue's proof that a file is one
+		// attempt like any other rather than a call that goes around it.
+		assert.deepEqual(outcome, sent(7));
+		assert.equal(attempts, 2);
+		assert.deepEqual(sleeps, [3_000]);
+
+		// And the upload spent the chat's one slot: a file and a message are one budget, not two.
+		await queue.enqueue("-1001234", () => api.sendMessage({ chatId: "-1001234", text: "after" }));
+		assert.deepEqual(sleeps, [3_000, 60_000]);
 	});
 });
