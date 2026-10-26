@@ -24,8 +24,9 @@
  */
 import type { ChatDirectory } from "./chats.ts";
 import type { DoorResult } from "./door.ts";
-import { envelopeFor, type EventEnvelope } from "./envelope.ts";
-import { readMessage, type FilterContext } from "./filter.ts";
+import { envelopeFor, type EventEnvelope, type EventFile } from "./envelope.ts";
+import { readMessage, type Attachment, type FilterContext } from "./filter.ts";
+import type { SaveOutcome } from "./inbox.ts";
 import { describeError, formatDuration, type Log } from "./log.ts";
 import type { StateFiles } from "./state.ts";
 import { TelegramError, type TelegramUpdate } from "./telegram.ts";
@@ -56,6 +57,14 @@ export interface PollerOptions {
 	 * `src/typing.ts` knows how long a chat may look busy.
 	 */
 	readonly typing?: { start(chatId: string): void };
+	/**
+	 * Where an attachment is fetched to. Optional and structural for the same reason as the indicator: a test without a
+	 * volume says so by leaving it out, and the poller stays the file that knows *that* a message carried a file while
+	 * `src/inbox.ts` is the one that knows where it lands.
+	 */
+	readonly inbox?: {
+		save(attachment: Attachment, options: { readonly updateId: number }): Promise<SaveOutcome>;
+	};
 	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
 	readonly now?: () => number;
 }
@@ -84,8 +93,10 @@ export interface PollSummary {
 	readonly fired: number;
 }
 
-/** What one update came to, as the batch loop cares: the door's own answer, or a skip that never reached it. */
-type Delivery = { readonly kind: "skipped" } | DoorResult;
+/** What one update is worth posting, once the filter has answered and the attachment — if any — is on the volume. */
+type Prepared =
+	| { readonly kind: "skipped"; readonly reason: string }
+	| { readonly kind: "ready"; readonly chatId: string; readonly envelope: EventEnvelope };
 
 export class Poller {
 	readonly #options: PollerOptions;
@@ -175,8 +186,14 @@ export class Poller {
 		let down = 0;
 		let announcedAt: number | undefined;
 		for (const update of updates) {
+			const prepared = await this.#prepare(update);
+			if (prepared.kind === "skipped") {
+				this.#options.log("info", `skipped update ${update.update_id}: ${prepared.reason}`);
+				this.#offset = update.update_id + 1;
+				continue;
+			}
 			for (;;) {
-				const delivery = await this.#deliver(update);
+				const delivery = await this.#options.door.fire(prepared.envelope);
 				if (delivery.kind !== "unreachable") {
 					if (down > 0) {
 						this.#options.log(
@@ -186,7 +203,11 @@ export class Poller {
 						down = 0;
 						announcedAt = undefined;
 					}
-					if (delivery.kind !== "skipped") fired += 1;
+					fired += 1;
+					// Only an accepted fire is work in progress. A refusal (a disabled trigger face, a bad signature) means
+					// nobody is thinking about this message, and dots that stay up for a turn that never started are the
+					// interface lying.
+					if (delivery.kind === "accepted") this.#options.typing?.start(prepared.chatId);
 					this.#offset = update.update_id + 1;
 					break;
 				}
@@ -208,20 +229,49 @@ export class Poller {
 		return { read: updates.length, fired };
 	}
 
-	async #deliver(update: TelegramUpdate): Promise<Delivery> {
+	/**
+	 * One update as the door will see it: the filter's verdict, the chat recorded, and — when the message carried a file —
+	 * the file fetched and the envelope naming where it landed.
+	 *
+	 * Prepared once per update rather than once per delivery attempt. A door that is down holds the batch and posts the
+	 * same envelope again every half minute, and a 20 MiB photo must not be downloaded again each time it does.
+	 */
+	async #prepare(update: TelegramUpdate): Promise<Prepared> {
 		const reading = readMessage(update, this.#options.filter);
-		if ("skip" in reading) {
-			this.#options.log("info", `skipped update ${update.update_id}: ${reading.skip}`);
-			return { kind: "skipped" };
-		}
+		if ("skip" in reading) return { kind: "skipped", reason: reading.skip };
 		// Recorded before the door answers, because the chat is real whether or not this particular message got through:
 		// `list_chats` is where the agent may write, not a log of successful deliveries.
 		this.#options.chats.add(reading.chat);
-		const answer = await this.#options.door.fire(envelopeFor(reading.event));
-		// Only an accepted fire is work in progress. A refusal (a disabled trigger face, a bad signature) means nobody is
-		// thinking about this message, and dots that stay up for a turn that never started are the interface lying.
-		if (answer.kind === "accepted") this.#options.typing?.start(reading.chat.id);
-		return answer;
+		const file = await this.#save(update.update_id, reading.attachment);
+		return {
+			kind: "ready",
+			chatId: reading.chat.id,
+			envelope: envelopeFor(file === undefined ? reading.event : { ...reading.event, file }),
+		};
+	}
+
+	/**
+	 * The file this message carried, on the volume — or nothing, with one line saying why. A file that could not be fetched
+	 * is not a message that could not be delivered: the text still says "sent a photo", and a message about a file with no
+	 * path is exactly what tells the agent the photo exists and could not be got.
+	 */
+	async #save(updateId: number, attachment: Attachment | undefined): Promise<EventFile | undefined> {
+		const inbox = this.#options.inbox;
+		if (attachment === undefined || inbox === undefined) return undefined;
+		let failure: string;
+		try {
+			const outcome = await inbox.save(attachment, { updateId });
+			if (outcome.kind === "saved") return outcome.file;
+			failure = outcome.reason;
+		} catch (error) {
+			// `save` answers its expected failures; this is for the ones it did not foresee, and it must not cost a message.
+			failure = describeError(error);
+		}
+		this.#options.log(
+			"warn",
+			`could not fetch the ${attachment.kind} in update ${updateId} (${failure}); delivering the message without it`,
+		);
+		return undefined;
 	}
 
 	/** The offset and, when it grew, the chat list — in that order, so a crash between the two loses a chat, not a place. */

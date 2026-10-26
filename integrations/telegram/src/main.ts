@@ -26,6 +26,7 @@ import { EventDoor } from "./door.ts";
 import { readConfig, ConfigError, type Config } from "./env.ts";
 import { directFetch, proxiedFetch } from "./fetch.ts";
 import { startMcpHttp } from "./http.ts";
+import { Inbox } from "./inbox.ts";
 import { createLog, describeError, formatDuration, type Log } from "./log.ts";
 import { Poller } from "./poller.ts";
 import { SendQueue } from "./queue.ts";
@@ -61,6 +62,10 @@ async function main(): Promise<void> {
 
 	const state = new StateFiles(config.dataDir);
 	const chats = new ChatDirectory(await state.readChats());
+	// The inbox is a directory of the agent's home rather than of this container's state, and the volume has no other
+	// watcher: what a message left behind is swept at startup and again on every write (`src/inbox.ts`).
+	const inbox = new Inbox({ api, dir: config.inboxDir, log });
+	await inbox.sweep();
 	// Built before the poller and the tools face, because both edges of the indicator live in this process: the poller
 	// starts it when a message becomes a fire, and `send_message` stops it when the answer lands.
 	const typing = new TypingIndicator({
@@ -82,6 +87,7 @@ async function main(): Promise<void> {
 		chats,
 		filter: { allowedChats: new Set(config.allowedChats), botUsername: bot.username },
 		typing,
+		inbox,
 	});
 	const queue = new SendQueue({
 		// A failed send is a tool result the model reads, so the queue redacts with the same two secrets the log does.
