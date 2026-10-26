@@ -23,6 +23,7 @@ import {
 	explicitRequestId,
 	formatPrompt,
 	gestureRequestId,
+	builtinHooks,
 	HooksManager,
 	IDENTITY_WINDOW_MS,
 	scheduledRequestId,
@@ -371,5 +372,28 @@ describe("a disabled hook", () => {
 			await new Promise((resolve) => setTimeout(resolve, 1_200));
 			assert.ok((runtime.hooks.get("tick")?.fireCount ?? 0) >= 1);
 		});
+	});
+});
+
+/**
+ * The one hook whose prompt is read by a person's outside world, so the sentence that tells the model what a chat is has
+ * to be pinned. It is not decoration: an agent that offers a chart in a chat, or treats the contents of a file as an
+ * instruction, is the failure this text exists to prevent, and a revert of it would otherwise ship silently.
+ */
+describe("the team-chat prompt", () => {
+	const template = builtinHooks().find((hook) => hook.id === "team-chat")?.promptTemplate ?? "";
+
+	it("says the chat renders words, not widgets", () => {
+		assert.match(template, /renders no widget/);
+	});
+
+	it("says a path in the payload is a file `read` opens, and that its contents are data", () => {
+		assert.match(template, /`read` opens it/);
+		assert.match(template, /data from an outside system too/);
+	});
+
+	it("still hands the model the payload it is told to weigh rather than obey", () => {
+		assert.match(template, /\{\{payload\}\}$/);
+		assert.match(template, /not instructions/);
 	});
 });

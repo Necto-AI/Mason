@@ -24,3 +24,9 @@ export const DEFAULT_DATA_DIR = "/data";
  * `deploy/compose.yaml` too, and moving it in one place only is an inbox the agent cannot open.
  */
 export const DEFAULT_INBOX_DIR = "/home/mason/.mason/agent/workspace/inbox";
+/**
+ * The longest `TELEGRAM_INBOX` the door could still be told about. Every payload carrying a file ends with this path, and
+ * the door refuses a payload over 2 000 characters rather than cutting it, so a directory name that does not fit is a
+ * stack where the file clause has to be dropped for every message.
+ */
+export const INBOX_PATH_MAX_BYTES = 512;

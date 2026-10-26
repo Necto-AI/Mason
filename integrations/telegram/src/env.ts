@@ -11,7 +11,7 @@
  * would deliver events that nothing accepts, and advance its offset past every one of them. Refusing to start is also
  * what a container supervisor understands: `restart: unless-stopped` retries, and the log says what to set.
  */
-import { DEFAULT_DATA_DIR, DEFAULT_INBOX_DIR, DEFAULT_MCP_PORT } from "./constants.ts";
+import { DEFAULT_DATA_DIR, DEFAULT_INBOX_DIR, DEFAULT_MCP_PORT, INBOX_PATH_MAX_BYTES } from "./constants.ts";
 
 /** Every variable the trigger face cannot run without. A name here is a name the refusal prints. */
 export const REQUIRED_VARIABLES = [
@@ -110,6 +110,19 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 
 	const httpsProxy = (environment.HTTPS_PROXY ?? "").trim();
 	const inboxDir = value("TELEGRAM_INBOX");
+	// The path is a promise to two machines: the payload names it, and the tool machine resolves it against a mount. A
+	// relative one would be written under this container's working directory and read nowhere.
+	if (inboxDir !== "" && !inboxDir.startsWith("/")) {
+		throw new ConfigError(`refusing to start: TELEGRAM_INBOX is not an absolute path: ${inboxDir}`);
+	}
+	// And short enough to be printed: every payload that carries a file ends with this path, and the door refuses a
+	// payload over `PAYLOAD_MAX`. A directory whose name cannot fit is a stack where every attachment reads as one that
+	// could not be named, which is a setting nobody would diagnose from the message.
+	if (Buffer.byteLength(inboxDir, "utf8") > INBOX_PATH_MAX_BYTES) {
+		throw new ConfigError(
+			`refusing to start: TELEGRAM_INBOX is longer than ${INBOX_PATH_MAX_BYTES} bytes, so a payload could not carry a path in it`,
+		);
+	}
 	return {
 		botToken: value("TELEGRAM_BOT_TOKEN"),
 		eventUrl,

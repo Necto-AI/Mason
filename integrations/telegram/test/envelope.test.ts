@@ -81,6 +81,20 @@ describe("the event payload", () => {
 		assert.ok(payload.includes("… [truncated], with a file at "), "the cut is visible, and the clause follows it");
 	});
 
+	it("gives way in the prefix when the path alone leaves no room, so the door still takes it", () => {
+		// A misconfigured TELEGRAM_INBOX: the path is longer than the cap minus the prefix. Unreachable with the default,
+		// and the alternative is a payload the door refuses, which is a message nobody reads.
+		const huge: EventFile = { ...FILE, path: `/srv/${"d".repeat(PAYLOAD_MAX)}/report.pdf` };
+
+		const payload = renderPayload(event({ file: huge }));
+
+		// A path that cannot fit is not cut: a truncated path is one the agent would try to open and not find. The payload
+		// says a file exists and could not be named, and stays under the cap the door enforces.
+		assert.ok(payload.length <= PAYLOAD_MAX, `${payload.length} > ${PAYLOAD_MAX}`);
+		assert.ok(payload.endsWith(", with a file this payload has no room to name"), payload.slice(-80));
+		assert.ok(!payload.includes("report.pdf"));
+	});
+
 	it("keys the event by the update id, so a redelivery is the same fire", () => {
 		assert.deepEqual(envelopeFor(event()), {
 			v: 1,

@@ -25,6 +25,7 @@
  *   volume has no other watcher, and an inbox nothing claims would otherwise fill with files whose only reader was a
  *   message from a week ago.
  */
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EventFile } from "./envelope.ts";
@@ -39,9 +40,20 @@ export const MAX_FILE_BYTES = MAX_FILE_MIB * 1024 * 1024;
 /** How long a file stays on the volume before a sweep takes it. */
 export const RETENTION_DAYS = 7;
 export const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1_000;
+/**
+ * How much the whole inbox may hold, and the ceiling that age alone cannot give. A week is not a bound on space: one
+ * allowlisted chat can send twenty 20 MiB files a minute, which is 24 GiB an hour and 4 TiB a week. Age keeps the
+ * directory tidy; this keeps it from filling the host's disk while it waits.
+ */
+export const INBOX_MAX_MIB = 512;
+export const INBOX_MAX_BYTES = INBOX_MAX_MIB * 1024 * 1024;
 
-/** The longest name this writes, and therefore the longest one the payload prints. */
-const NAME_MAX = 100;
+/**
+ * The longest name this writes, in **bytes**. A filesystem limit is a byte limit: 100 `slice`d characters of Cyrillic or
+ * CJK is 200 to 300 bytes and `writeFile` refuses it with ENAMETOOLONG, so a perfectly ordinary name from a Russian
+ * phone would have been an attachment that never arrived.
+ */
+const NAME_MAX_BYTES = 200;
 /** What a name that sanitises to nothing at all is called. A name is never the whole of a path here. */
 const FALLBACK_NAME = "file";
 
@@ -61,6 +73,8 @@ export interface InboxOptions {
 	readonly log: Log;
 	/** The clock the retention is kept to, in milliseconds. Injected so a test can age a file without waiting a week. */
 	readonly now?: () => number;
+	/** The size ceiling, in bytes. Injected for the same reason: a test of a 512 MiB ceiling would write 512 MiB. */
+	readonly maxBytes?: number;
 }
 
 /**
@@ -76,12 +90,14 @@ export class Inbox {
 	readonly #dir: string;
 	readonly #log: Log;
 	readonly #now: () => number;
+	readonly #maxBytes: number;
 
 	constructor(options: InboxOptions) {
 		this.#api = options.api;
 		this.#dir = options.dir;
 		this.#log = options.log;
 		this.#now = options.now ?? (() => Date.now());
+		this.#maxBytes = options.maxBytes ?? INBOX_MAX_BYTES;
 	}
 
 	/**
@@ -128,29 +144,62 @@ export class Inbox {
 			return [];
 		});
 		let removed = 0;
+		let reclaimed = 0;
 		let problem: string | undefined;
+		const survivors: { path: string; mtimeMs: number; size: number }[] = [];
 		for (const entry of entries) {
+			// A directory or a symlink somebody else put here is not this sweep's business, and following one is how a
+			// delete becomes a delete somewhere else.
 			if (!entry.isFile()) continue;
 			const path = join(this.#dir, entry.name);
 			try {
-				if ((await stat(path)).mtimeMs > cutoff) continue;
+				const info = await stat(path);
+				if (info.mtimeMs > cutoff) {
+					survivors.push({ path, mtimeMs: info.mtimeMs, size: info.size });
+					continue;
+				}
 				await unlink(path);
 				removed += 1;
+				reclaimed += info.size;
 			} catch (error) {
 				problem ??= `${path}: ${describeError(error)}`;
+			}
+		}
+		// Then the size ceiling, oldest first: what the retention promises is that a file is gone after a week, and this
+		// promises that the volume is not full before then. The newest file is kept even when it alone is over the ceiling,
+		// because a sweep that deletes what was just written is a message that arrives and is gone.
+		let total = survivors.reduce((sum, entry) => sum + entry.size, 0);
+		if (total > this.#maxBytes) {
+			survivors.sort((left, right) => left.mtimeMs - right.mtimeMs);
+			for (const entry of survivors) {
+				if (total <= this.#maxBytes) break;
+				try {
+					await unlink(entry.path);
+					total -= entry.size;
+					reclaimed += entry.size;
+					removed += 1;
+				} catch (error) {
+					problem ??= `${entry.path}: ${describeError(error)}`;
+				}
 			}
 		}
 		if (problem !== undefined) {
 			this.#log("warn", `the inbox sweep could not delete everything in ${this.#dir} (${problem})`);
 		}
 		if (removed > 0) {
-			this.#log("info", `the inbox sweep deleted ${removed} file(s) older than ${RETENTION_DAYS} days`);
+			this.#log(
+				"info",
+				`the inbox sweep deleted ${removed} file(s) and ${Math.ceil(reclaimed / (1024 * 1024))} MiB from ${this.#dir}`,
+			);
 		}
 	}
 
 	/** The bytes at `path`, or why they are not: the failure a caller turns into a refusal. */
 	async #write(path: string, bytes: Uint8Array): Promise<string | undefined> {
-		const temporary = `${path}.part`;
+		// A random suffix, not `<name>.part`: the tool machine can write into this directory too, so a name it could
+		// predict is a file it could pre-plant as a symlink for this write to follow somewhere else. `rename` does not
+		// follow, and nothing but this call ever names the temporary.
+		const temporary = `${path}.${randomUUID()}.part`;
 		try {
 			await mkdir(this.#dir, { recursive: true, mode: 0o700 });
 			// `mode` applies to the file this creates, and 0600 has no bit a umask could add: only this container's user
@@ -176,14 +225,21 @@ function tooLarge(bytes: number): SaveOutcome {
 /**
  * The sender's name as a name on this volume: the last path segment of it, without control characters, without a leading
  * dot, without a trailing `.part` — which is what a write that never finished looks like — and no longer than
- * `NAME_MAX`. A name that sanitises to nothing is `file`: a path is never allowed to end in a bare hyphen.
+ * `NAME_MAX_BYTES`. A name that sanitises to nothing is `file`: a path is never allowed to end in a bare hyphen.
  */
 function safeName(raw: string): string {
 	const cleaned = (raw.split(/[/\\]/).at(-1) ?? "")
 		.replace(/[\u0000-\u001f\u007f]/g, "")
 		.replace(/^\.+/, "")
-		.trim()
-		.slice(0, NAME_MAX)
-		.replace(/\.part$/i, "");
-	return cleaned === "" ? FALLBACK_NAME : cleaned;
+		.trim();
+	// Cut by code point and by byte together: `slice` counts UTF-16 units, so it can end a name in half a surrogate pair
+	// — which is a path in the payload that no file on disk has — and it counts characters where the filesystem counts
+	// bytes.
+	let cut = "";
+	for (const character of cleaned) {
+		if (Buffer.byteLength(cut + character, "utf8") > NAME_MAX_BYTES) break;
+		cut += character;
+	}
+	const name = cut.replace(/\.part$/i, "").trim();
+	return name === "" ? FALLBACK_NAME : name;
 }

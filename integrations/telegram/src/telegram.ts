@@ -87,6 +87,10 @@ export interface TelegramMessage {
 	readonly voice?: TelegramFileish;
 	readonly audio?: TelegramFileish & { readonly file_name?: string; readonly title?: string };
 	readonly video?: TelegramFileish & { readonly file_name?: string };
+	/** A GIF sent from the picker. Telegram sends an `mp4` and calls it an animation. */
+	readonly animation?: TelegramFileish & { readonly file_name?: string };
+	/** A round video message: always an `mp4`, never named. */
+	readonly video_note?: TelegramFileish;
 }
 
 /**
@@ -110,7 +114,7 @@ export interface TelegramFileish {
  * uses to say what arrived. Telegram's own, rather than a taxonomy of ours — a PDF is a document and a voice note is not
  * an audio file, and only Telegram decides which field it used.
  */
-export type FileKind = "document" | "photo" | "voice" | "audio" | "video";
+export type FileKind = "document" | "photo" | "voice" | "audio" | "video" | "animation" | "video_note";
 
 /** One `getUpdates` entry. `allowed_updates: ["message"]` is what keeps the other kinds away. */
 export interface TelegramUpdate {
@@ -328,7 +332,9 @@ export class TelegramApi {
 		} catch (error) {
 			throw new TelegramError("downloadFile", 0, `request failed: ${this.#clean(error)}`);
 		}
-		if (!answer.ok) throw new TelegramError("downloadFile", answer.status, answer.statusText);
+		// `statusText` can carry whatever the far end put there, and the proxy in front of this container is the one party
+		// that could splice the URL it was asked for into it. Cleaned for the same reason every other failure is.
+		if (!answer.ok) throw new TelegramError("downloadFile", answer.status, this.#clean(answer.statusText));
 		return new Uint8Array(await answer.arrayBuffer());
 	}
 

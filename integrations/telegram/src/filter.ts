@@ -132,6 +132,14 @@ function attachmentIn(message: TelegramMessage): Attachment | undefined {
 	}
 	const video = message.video;
 	if (video !== undefined) return described(video, "video", video.file_name ?? `video-${fileKey(video)}`);
+	// A GIF from the picker and a round video note are files a person sent. Telegram gives neither a name, and a video
+	// note is always an `mp4`, which is what the extension says.
+	const animation = message.animation;
+	if (animation !== undefined) {
+		return described(animation, "animation", animation.file_name ?? `animation-${fileKey(animation)}.mp4`);
+	}
+	const note = message.video_note;
+	if (note !== undefined) return described(note, "video_note", `video-note-${fileKey(note)}.mp4`);
 	return undefined;
 }
 
@@ -168,6 +176,10 @@ function describeAttachment(attachment: Attachment): string {
 			return `sent an audio file: ${attachment.name}`;
 		case "video":
 			return `sent a video: ${attachment.name}`;
+		case "animation":
+			return `sent a GIF: ${attachment.name}`;
+		case "video_note":
+			return "sent a round video message";
 	}
 }
 

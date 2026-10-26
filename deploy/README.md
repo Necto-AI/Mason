@@ -12,7 +12,8 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
                           │
                           ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
                           │                                           mason-egress with the vpn sidecar)
-                          └── volumes: mason-agent (both containers), mason-service, env-keys
+                          └── volumes: mason-agent (both containers), mason-service, env-keys,
+                                      mason-inbox (mason-env and the telegram relay)
 ```
 
 ## The two halves of the home
@@ -21,7 +22,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 
 | Half | What is in it | Where it is mounted |
 |---|---|---|
-| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
+| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
 | `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
@@ -281,8 +282,8 @@ leave the mount out; the copy on the volume is then the whole truth.
 than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
 `integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
 It is still just the two services in `compose.telegram.yaml` — `mason-telegram` on `mason-mcp` with a `/data` volume
-for its offset and no `ports`, plus a `vpn` sidecar, both pulled in by `COMPOSE_EXTRA_FILES=compose.telegram.yaml` in
-`deploy/.env` — and the only thing mason knows about it is one entry
+for its offset, an `inbox` volume for the files people send it, and no `ports`, plus a `vpn` sidecar, both pulled in by
+`COMPOSE_EXTRA_FILES=compose.telegram.yaml` in `deploy/.env` — and the only thing mason knows about it is one entry
 in `integrations.json` and a trigger secret. Mint that secret on the mason side
 (`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
 `secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
@@ -307,7 +308,8 @@ it.
 
 ## What to back up
 
-**Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
+**Two volumes, and both of them.** `mason-inbox` is deliberately not one of them: it holds the files a chat sent, which
+are somebody else's documents and which the sweep deletes after a week anyway. `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
 shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
 history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
 home root, which is not a volume. `mason-service` is the server: `soul.md`,
@@ -323,7 +325,7 @@ reads it (the migration moved `data/` wholesale, so it came along), every secret
 delete before you take the archive.
 
 ```sh
-for volume in mason-agent mason-service; do
+for volume in mason-agent mason-service; do  # not mason-inbox: see above
   docker run --rm -v "$volume":/data:ro -v "$PWD":/backup alpine \
     tar -czf "/backup/$volume-$(date +%F).tar.gz" -C /data .
 done
@@ -370,6 +372,11 @@ write rather than as a mount that was never prepared. Changing either mount by h
 failure: every tool call lands in a directory that does not exist, which measured against a real SSH target is a bare
 `spawn_error` with no text at all.
 
+One path that is deliberately *not* shared through `mason-agent`: `workspace/inbox` is a volume of its own
+(`mason-inbox`), mounted at the same path in `mason-env` and in the telegram relay. Inside the `mason-agent` volume the
+directory is empty, and only the tool machine and the relay see those bytes — which is what lets a chat message's file be
+read by the agent without the relay being handed the profile, the log, the skills and the memory repository as well.
+
 The limitation is that coupling. The remote cwd is not its own name — it is the mason container's path, borrowed by
 another machine — so anyone who moves the workspace in one image has to remember the other. Giving the remote cwd its
 own name (a `cwd` mapping, or a workspace that is a mount point rather than a directory inside the home) is the
@@ -389,6 +396,10 @@ Two smaller honest notes:
   login that fails with a message about a directory rather than about a key. If you change the uid/gid, wipe the volumes
   (`docker compose down && docker volume rm mason-agent mason-service env-keys`) and start again; a half-migrated
   volume is a workspace nobody can write to.
+- **`mason-inbox` is the exception, and it is fixed at 1000.** The relay image runs as its own `node` account, which is
+  uid 1000 whatever `MASON_UID` says, and an inbox written `0600` by one number and read by another is a file the agent
+  cannot open. Leave `MASON_UID`/`MASON_GID` at their defaults if the relay is part of the stack; changing them is a
+  rebuild of `integrations/telegram/Dockerfile` too, not a variable.
 
 ## What is in the env image, and why nothing else is
 
