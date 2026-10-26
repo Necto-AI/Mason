@@ -139,11 +139,6 @@ operator door, or a hook that names no chat tool at all (a schedule, a retry), w
 it. `send_to_user` is the console's delivery, and a turn that has a chat refuses it (`reader`).
 _Avoid_: message, reply, notification (each names one shape of it)
 
-**voice**:
-What an integration's entry declares about whose words travel through it — `person` or `service` — and what the medium can
-carry (`render`, `interact`, `live`). The hook prompt is built from it, so no prompt names a vendor.
-_Avoid_: interface type, capability kind, channel
-
 **reader**:
 Whoever a turn's words are for: the call that reaches them is what decides. The console's reader holds an operator token
 and reads the projection — the frozen console today, apiary next. A turn an event hook started answers a person in a
