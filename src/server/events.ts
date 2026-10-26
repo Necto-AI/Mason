@@ -8,11 +8,11 @@
  * tested without a server or a secret.
  *
  * The envelope is a public contract before the first third-party integration ships. `v` names the version being spoken,
- * and one mason does not know is a sender's bug, refused rather than guessed at. `id` is the delivery's identity, which
- * is why no table of seen ids exists: it becomes the fire's request id, and the durable log never forgets one, so a
- * redelivery after a restart — or days later — is the same fire. `kind` is a label for the log, never a dispatch key:
- * one trigger, one hook. `payload` is text, refused when it is over the cap rather than truncated, because a truncated
- * event is a lie about what happened.
+ * and one mason does not know is a sender's bug, refused rather than guessed at. `id` is the envelope id and the fire's
+ * identity, which is why no table of seen ids exists: it becomes the fire's request id, and the durable log never
+ * forgets one, so a redelivery after a restart — or days later — is the same fire. `kind` is a label for the log, never
+ * a dispatch key: one trigger, one hook. `payload` is text, refused when it is over the cap rather than truncated,
+ * because a truncated event is a lie about what happened.
  *
  * Two of these reach the accept log, so both are held to one line: `kind` is a token, and `id`, which is whatever opaque
  * key a provider chose, may not carry a control character — a newline in it would forge the rest of that line.
