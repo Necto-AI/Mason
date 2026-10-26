@@ -133,16 +133,28 @@ A hook that fires on a schedule.
 _Avoid_: cron job, schedule, timer
 
 **delivery**:
-An outbound act committed before it is sent and sent once: today `send_to_user` writes it to the transcript, and an
-integration's tool sends it to a chat.
+An outbound act committed before it is sent and sent once. It goes to the integration the turn came from, through that
+integration's reply tool, or to the transcript when the turn came from the operator door.
 _Avoid_: message, reply, notification (each names one shape of it)
+
+**voice**:
+What an integration's entry declares about whose words travel through it — `person` or `service` — and what the medium can
+carry (`render`, `interact`, `live`). The hook prompt is built from it, so no prompt names a vendor.
+_Avoid_: interface type, capability kind, channel
+
+**reader**:
+Whatever holds an operator token and reads the projection: the frozen console today, sibling next. A reader is not an
+integration and never wakes the agent on a vendor's behalf.
+_Avoid_: client, user, frontend
 
 ## Integrations
 
 **integration**:
-Another system mason is connected to. It has two halves, either of which may be absent: tools it lends the bot, and
-a trigger that wakes the bot with its events.
-_Avoid_: connector, plugin, client, app
+Another system mason is connected to, and the only kind of thing that talks to it from outside. It has two halves, either
+of which may be absent: tools it lends the bot, and a trigger that wakes the bot with its events. An integration that
+carries a person's words is also the place a reply goes — there is no separate interface type
+(`docs/adr/0005-there-is-no-interface-type.md`).
+_Avoid_: connector, plugin, client, app, interface (that is a role an integration plays, not a kind of thing)
 
 **trigger**:
 The half of an integration that wakes the bot: one authenticated event becomes one fire.
