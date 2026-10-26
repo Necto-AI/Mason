@@ -30,6 +30,11 @@
  * because the person typing `/stop now` must be told something rather than watching a silent chat. `/help` never goes
  * anywhere — it is the relay describing itself, and `src/commands.ts` owns the words.
  *
+ * **The fallback takes the file with it.** A caption that is a command is not a message about a file, so nothing is
+ * fetched while the word is still a word — but the moment the update turns out to be a message after all, its photo is
+ * fetched and named, because a message that arrives as text with no mention of the file the person sent is a message
+ * about something else.
+ *
  * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
  * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away. The
  * chat's own send queue is not waited on either: an answer posted into a chat that has spent its minute is one warning.
@@ -121,8 +126,13 @@ type Prepared =
 			readonly chatId: string;
 			/** What is posted first: a command when the message is one, otherwise the message. */
 			readonly envelope: EventEnvelope;
-			/** The same update as an ordinary message, which a command falls back to when mason does not handle it. */
-			readonly message?: EventEnvelope;
+			/**
+			 * The same update as an ordinary message, which a command falls back to when mason does not handle the word or
+			 * refuses it. A function rather than an envelope because the file it carried is fetched here — when, and only when,
+			 * the update turns out to be a message after all: a download spent on `/stop` is spent for nothing, and the photo
+			 * behind a mistyped `/stopp` is the thing the agent is being told about.
+			 */
+			readonly message?: () => Promise<EventEnvelope>;
 	  };
 
 export class Poller {
@@ -245,14 +255,14 @@ export class Poller {
 						// silent refusal is the one outcome worse than either. No loop risk: the fallback is a `chat.message`, and a
 						// refused message advances the offset.
 						this.#say(prepared.chatId, refusedLine(delivery.reason));
-						envelope = prepared.message;
+						envelope = await prepared.message();
 						continue;
 					}
 					if (delivery.kind === "accepted" && envelope.kind === "command") {
 						if (!delivery.answer.handled && prepared.message !== undefined) {
 							// The word means nothing there, so the update is the message it always was. Nothing was fired, and the
 							// typing indicator is the message's to start.
-							envelope = prepared.message;
+							envelope = await prepared.message();
 							continue;
 						}
 						const reply = delivery.answer.reply;
@@ -299,14 +309,17 @@ export class Poller {
 		const command = commandIn(reading.event.text);
 		if (command !== undefined) {
 			if (isHelp(command)) return { kind: "answered", chatId: reading.chat.id, text: HELP_TEXT };
-			// The message envelope is built beside the command because a word mason does not handle is still a message, and
-			// the file is not fetched for either: a caption that is a command is not a message about a file, and a download
-			// spent on `/stop` is spent for nothing.
+			// The message envelope is built beside the command because a word mason does not handle is still a message. It is
+			// built lazily because the file is fetched there: a caption that is a command is not a message about a file, so a
+			// download is spent only once the word turns out to be a message after all.
 			return {
 				kind: "ready",
 				chatId: reading.chat.id,
 				envelope: commandEnvelopeFor(reading.event.updateId, command),
-				message: envelopeFor(reading.event),
+				message: async () => {
+					const file = await this.#save(update.update_id, reading.attachment);
+					return envelopeFor(file === undefined ? reading.event : { ...reading.event, file });
+				},
 			};
 		}
 		const file = await this.#save(update.update_id, reading.attachment);

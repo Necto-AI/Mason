@@ -120,6 +120,11 @@ offset advances over both, because neither is something a retry would get a diff
 The command envelope carries the id its message would have had, so a redelivery is one claim at the door and the command
 does not run twice. `/help` answers with what this relay forwards, because it cannot read `integrations.json`:
 
+A file is fetched for the message, never for the command: a caption that is a command is not a message about a file, so a
+20 MiB download is not spent on a word mason may act on. The exception is the fallback — a word mason did not handle, or
+refused — because then the update *is* a message, and the file is fetched and named in it at that point, once, however
+many times the door has to be told.
+
 ```text
 mason understands these commands in this chat, when the integration declares them:
 /stop: stop the turn that is running
