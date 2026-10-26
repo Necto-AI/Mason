@@ -24,7 +24,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { writeFileAtomic } from "./atomic.ts";
-import { COMMAND_NAMES, isCommandName } from "./events.ts";
+import { COMMAND_NAMES, type CommandName, isCommandName } from "./events.ts";
 import { clearIntegrationStatus } from "./integration-status.ts";
 import type { HousePaths } from "./house.ts";
 
@@ -66,7 +66,7 @@ export interface Integration {
 	 * What the trigger's secret may ask for beyond a fire, out of the closed set in `events.ts`. Absent or empty means
 	 * none, so an existing trigger secret gains no vocabulary by being read.
 	 */
-	readonly commands?: readonly string[];
+	readonly commands?: readonly CommandName[];
 	readonly [key: string]: unknown;
 }
 
@@ -262,12 +262,12 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
  * that never ran is the quiet loss this module is shaped against, and the refusal names the whole set so the fix is one
  * line away.
  */
-function readCommands(where: string, name: string, value: unknown): readonly string[] | undefined {
+function readCommands(where: string, name: string, value: unknown): readonly CommandName[] | undefined {
 	if (value === undefined) return undefined;
 	if (!Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "commands" that is not a list: the command names this trigger may issue'));
 	}
-	const commands: string[] = [];
+	const commands: CommandName[] = [];
 	for (const entry of value) {
 		if (typeof entry !== "string" || !isCommandName(entry)) {
 			throw new Error(

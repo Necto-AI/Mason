@@ -23,6 +23,15 @@ export const EVENT_BODY_MAX_BYTES = 256 * 1024;
 /** Fires one hook may start per window, counted per hook id. */
 export const HOOK_FIRE_LIMIT = 6;
 
+/**
+ * Commands one integration may ask for per window — a budget of its own, keyed `command:<integration>` where a fire is
+ * `integration:<integration>`, so a sender that spent its minute on messages can still stop the turn they started.
+ *
+ * The same number as `HOOK_FIRE_LIMIT` on purpose, defined once: they bound the same kind of spend, and a second literal
+ * is a number that drifts. Charged only for a command mason will act on.
+ */
+export const COMMAND_LIMIT = HOOK_FIRE_LIMIT;
+
 /** The window fires are counted in. */
 export const HOOK_FIRE_WINDOW_MS = 60_000;
 
