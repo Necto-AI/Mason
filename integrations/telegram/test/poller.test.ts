@@ -515,6 +515,38 @@ describe("a command in the chat", () => {
 		release();
 	});
 
+	it("fetches the file a caption carried once the command turns out to be a message", async () => {
+		// The command fetches nothing, because a caption that is a command is not a message about a file. The fallback
+		// fetches it, because the update has become a message and a photo nobody mentions is a message about something
+		// else. It is fetched once however many times the door has to be told.
+		const file: EventFile = { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 1, kind: "document" };
+		const inbox = new StubInbox({ kind: "saved", file });
+		const { poller, door } = await rig(
+			[
+				[
+					update(100, {
+						text: undefined,
+						caption: "/stopp",
+						document: { file_id: "f1", file_unique_id: "u1", file_name: "report.pdf" },
+					}),
+				],
+			],
+			{ offset: 100, door: ACCEPTED, inbox },
+		);
+
+		await poller.pollOnce();
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stopp"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stopp, with a file at /inbox/100-report.pdf"],
+			],
+			"the photo the caption carried is named in the message the agent actually reads",
+		);
+		assert.deepEqual(inbox.saved.map((saved) => saved.updateId), [100], "fetched once, and only for the message");
+	});
+
 	it("falls back to the message when the door refuses the command, and posts the rule it broke", async () => {
 		const reason = '"stop" takes no argument: a command is one word, and only "compact" reads what follows it';
 		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stop now" })]], {
