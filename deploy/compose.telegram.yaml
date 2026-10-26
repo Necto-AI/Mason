@@ -66,7 +66,7 @@ services:
       # no profile, no log, no skills, no memory repository.
       - mason-inbox:/home/mason/.mason/agent/workspace/inbox
     # No `ports`. The container is reached by name on mason-mcp, and a published port would be a second door into a
-  #   # service that holds a bot token.
+    # service that holds a bot token.
 
   # A proxy sidecar for an integration whose upstream is not reachable from this host (Telegram, here). sing-box with a
   # mixed inbound on 1080 — SOCKS and HTTP on the same port, so either kind of client works — and one outbound, defined

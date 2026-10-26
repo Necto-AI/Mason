@@ -66,6 +66,9 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_MODEL_REQUIRED=1                 # 0 starts a stack with no model at all
    MASON_STACK=mason                      # optional: the compose project and the volume prefix — one per bot
    MASON_BOT_DIR=./soul                   # optional: a directory holding this bot's soul.md and skills/
+   MASON_BOT_FORCE=1                      # optional: install that soul.md over an existing one, once
+   MASON_INTEGRATIONS_FILE=./integrations.json  # optional: the services this bot reaches (a second stack points this at its own file)
+   MASON_ENV_KEYS_VOLUME=env-keys         # optional: the volume holding the env public key; a second stack needs its own
    TZ=Europe/Moscow                       # optional: decides the date in log/YYYY-MM-DD.md
    MASON_ENV_HOST=mason-env               # optional: the env container's name on the compose network
    MASON_ENV_USER=mason                   # optional: the login account; the images create it, so changing it is a rebuild
@@ -133,7 +136,8 @@ What a second stack needs, and nothing else:
 ```sh
 # one directory per bot, outside the checkout, holding what is the operator's and not the repo's
 mkdir -p ~/mason-tanya && cd ~/mason-tanya
-#   .env     — same names as deploy/.env, with MASON_STACK=tanya, its own MASON_PORT, TELEGRAM_* and MASON_BOT_DIR=$PWD
+#   .env     — same names as deploy/.env, with MASON_STACK=tanya, its own MASON_PORT, TELEGRAM_*, MASON_BOT_DIR=$PWD,
+#              MASON_INTEGRATIONS_FILE=$PWD/integrations.json and MASON_ENV_KEYS_VOLUME=tanya-env-keys
 #   soul.md  — the bot's job and voice
 #   skills/  — optional starter skills
 #   files/   — a directory the agent works in, if REPO_DIR points here
@@ -144,11 +148,19 @@ podman compose -p tanya --env-file ~/mason-tanya/.env \
   -f compose.yaml -f compose.podman.yaml -f compose.telegram.yaml up -d --build
 ```
 
-The two stacks share the mason **images** only when their tags are the same, and `MASON_STACK` also prefixes those
-(`tanya:local`, `tanya-env:local`), so building one never repoints the other's tag. They share no volume, no network,
-no `service/` and no `agent/`: two bots are two homes, and the isolation between them is the same mount boundary that
-separates a home from its tool machine. `MASON_ENV_ALIAS` is per-home state (a `known_hosts` entry), so it does not
-collide either.
+`MASON_STACK` prefixes the two images this repository builds (`tanya:local`, `tanya-env:local`), so building one never
+repoints the other's tag. The integration images are not prefixed — `ghcr.io/denissud/mason-telegram:latest`,
+`sing-box` — so both stacks run whatever that tag last pointed at.
+
+They share no volume, no `service/` and no `agent/`: two bots are two homes, and the isolation between them is the same
+mount boundary that separates a home from its tool machine. `MASON_ENV_ALIAS` is per-home state (a `known_hosts`
+entry), so it does not collide either.
+
+The networks are per project (`tanya_mason-internal`, `tanya_mason-edge`, …), and DNS inside one cannot resolve a name
+in the other. What they do share is the rootless network namespace: podman accepts traffic between two non-internal
+bridges, so the two `*-edge` networks can reach each other. No credential crosses — each stack's sshd accepts only its
+own key and each `/api/*` wants its own token — but it is reachability, not isolation, and the paragraph above should
+not be read as saying otherwise.
 
 The one thing they do share is the host port range (`MASON_PORT`) and the provider credential directory
 (`MASON_PI_AGENT_DIR`), which is read-only input and copied into each home.
