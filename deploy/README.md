@@ -73,6 +73,9 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
    TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
    TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids the bot may relay, comma-separated
+   COMPOSE_PROFILES=telegram               # optional: turns on the services behind a profile (the telegram pair)
+   GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
+   REPO_DIR=/home/denis/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
    ```
 
 3. **Provider credentials**, in the directory `MASON_PI_AGENT_DIR` names. This is pi's own layout, unchanged — two
@@ -153,6 +156,27 @@ Before the server starts, the boot prints what it prepared:
 If the env host never answers, mason refuses to start rather than run an agent with nowhere to put a tool, and says so
 with the name of the container to look at (`docker compose logs mason-env`).
 
+## Updating a running deployment
+
+`deploy/deploy.sh` is the whole of it, from the machine that holds the checkout's git remote:
+
+```bash
+deploy/deploy.sh                 # main, on the host named by DEPLOY_HOST (default: pc)
+DEPLOY_HOST=rpi deploy/deploy.sh v0.1.0
+```
+
+It checks out the ref on the host, builds, brings the stack up, waits for `/api/health`, and then checks that the
+containers it is looking at were created after the build started. That last check is the point. `podman compose up -d
+--build` has finished a build and left the old process running — an image that exists, a container that never restarted,
+and a failure that surfaces later as an integration the agent cannot reach. A container older than the build is a
+deployment that did not happen, and the script fails on it instead of printing "done".
+
+What it does not do: touch `deploy/.env` (an update changes code, never credentials), run a migration, or roll back. The
+checkout is left on the ref you asked for, so the way back is the previous tag and the same script.
+
+`DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_PORT` and `COMPOSE_CMD` override the defaults; the podman override file is always
+applied, and `COMPOSE_PROFILES` comes from `deploy/.env` on the host like every other setting.
+
 ## A person, and a device
 
 Two different things, and two different commands — a person is a name the transcript can carry, a device is something
@@ -196,10 +220,16 @@ A capability mason should have that nobody wrote a tool for — GitHub, a docs s
 an **integration**: one container and one entry in a file (docs/adr/0003-integrations-are-services.md). No image in this
 repo, no TypeScript, no extension, nothing in `src/` to change.
 
-1. **A container.** Copy the commented template at the end of `compose.yaml`, uncomment it, name it after the
-   integration and give it that integration's own image. It joins two networks: `mason-mcp`, where mason reaches its MCP
-   endpoint by name (`http://mason-github:8082/mcp`), and `mason-edge`, the only way out to the third party's API. Its
-   credential is an environment variable read from `deploy/.env` — the container owns it, mason does not.
+1. **A container.** Add it to `compose.yaml` beside the ones already there, name it after the integration and give it that
+   integration's own image. It joins two networks: `mason-mcp`, where mason reaches its MCP endpoint by name
+   (`http://mason-github:8082/mcp`), and `mason-edge`, the only way out to the third party's API. Its credential is an
+   environment variable read from `deploy/.env` — the container owns it, mason does not.
+
+   A service that is not part of every mason stack goes behind a **profile** rather than behind a comment — `vpn` and
+   `mason-telegram` are, and `COMPOSE_PROFILES=telegram` in `deploy/.env` turns them on. The comment was the first
+   version of this and it does not survive a deployment that is a checkout: `deploy.sh` runs `git checkout`, the
+   uncommented services are replaced by the commented template, and the containers stay up with no compose entry behind
+   them — running old code, invisible to `down`, and skipped by every later `up`.
 
 2. **A line.** `deploy/integrations.json`. Create it beside the compose file before the first `up` — an empty
    `{"integrations": {}}` is a stack with no integration at all — because a bind source that does not exist is a
@@ -248,8 +278,9 @@ leave the mount out; the copy on the volume is then the whole truth.
 [`integrations/telegram/`](../integrations/telegram/README.md) is the first integration built in this repository rather
 than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
 `integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
-It is still just the two containers in the templates at the end of `compose.yaml` — `mason-telegram` on `mason-mcp` with a
-`/data` volume for its offset and no `ports`, plus a `vpn` sidecar — and the only thing mason knows about it is one entry
+It is still just the two services in `compose.yaml` — `mason-telegram` on `mason-mcp` with a
+`/data` volume for its offset and no `ports`, plus a `vpn` sidecar, both behind the `telegram` profile
+(`COMPOSE_PROFILES=telegram` in `deploy/.env`) — and the only thing mason knows about it is one entry
 in `integrations.json` and a trigger secret. Mint that secret on the mason side
 (`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
 `secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
@@ -302,15 +333,17 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 ## What is exposed, and what is not
 
 - `mason`: port 8787 published on the host's **loopback only**. Nothing else is published.
-- `mason-env`: no ports, and it is attached only to `mason-internal`, which is `internal: true` — no gateway, no route
-  out, no DNS beyond the compose network. A tool cannot reach the internet or the host from there.
+- `mason-env`: no ports ever. Its inbound is `mason-internal` only, which is `internal: true` — no gateway, no DNS
+  beyond the compose network, so nothing outside can open a connection to the sshd. Its outbound is a separate network
+  and a separate decision: `mason-edge` is in the `mason-env` service because a tool that can work on a repository needs
+  to clone, `gh` and `curl`. Delete that line to put the fence back; with it, a tool can also send out what it can read.
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
 - `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
   publishes a port, and `mason-env` is not a member (see "An integration" above).
 - `mason-egress` is the third, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
   integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`. Neither mason nor
-  `mason-env` joins it: mason reaches the proxy from `mason-edge` — it has egress of its own there, so the proxy gains it
-  nothing — while `mason-env` joins neither network, so the tool machine has no route to the proxy at all.
+  `mason-env` joins it: both already have a route out on `mason-edge`, so the proxy gains them nothing, and the tool
+  machine cannot reach the proxy even though it has the internet of its own.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
@@ -357,12 +390,30 @@ Two smaller honest notes:
 
 ## What is in the env image, and why nothing else is
 
-ubuntu 24.04 plus `openssh-server` and `git`. The `git` is not for the upload: `remember` appends a fact and commits it
-on that machine, in `agent/.git`. No `pi-env` daemon: `sshConnection()` uploads the binary over the connection, checks
-its SHA-256 on the far side, renames it into place and deletes older ones. An image that carried a daemon would freeze a
-protocol version inside the deployment and then disagree with the mason image that replaced it — silently, because the
-upload is designed never to fail loudly about a version it did not ship.
+ubuntu 24.04 plus `openssh-server`, `git`, `curl`, `jq` and `gh`. The `git` is not for the upload: `remember` appends a
+fact and commits it on that machine, in `agent/.git`. `gh` and `curl` are there because the tools of a machine with a
+route out can work on a repository — `gh issue list`, `gh pr create`, a clone, a build. No `pi-env` daemon:
+`sshConnection()` uploads the binary over the connection, checks its SHA-256 on the far side, renames it into place and
+deletes older ones. An image that carried a daemon would freeze a protocol version inside the deployment and then
+disagree with the mason image that replaced it — silently, because the upload is designed never to fail loudly about a
+version it did not ship.
 
 A tool runs as `mason` inside that container, with `env -i` and a nine-variable allowlist from the server side, so it
 cannot read the server's environment or the provider key. It can read and write `agent/` — the profile, the log,
-the skills, the workspace and the repository — and that is the whole of what it has. `service/` is not mounted there.
+the skills, the workspace and the repository — and that is the whole of what home it has. `service/` is not mounted
+there.
+
+Two things are a deployment's decision and not the image's:
+
+- **`GH_TOKEN`.** `gh` reads it from the environment before any config file, so the credential lives in `deploy/.env` and
+  in the service's `environment:` block and never in a file a command could rewrite. Absent, `gh` is simply logged out.
+  A user token sees every repository its scopes allow; a fine-grained token scoped to the one project is the better
+  answer and is a decision about which repositories the agent should be able to push to.
+- **`REPO_DIR`.** A checkout bound read-write at its host path, so a path in a report, an issue and a prompt means the
+  same thing on the host and inside the container. Default `/home/denis/dev/clinical-compass`; the bind source must
+  exist or the container will not start.
+
+The image is no longer a fence by default. `mason-env` joins `mason-edge` in `compose.yaml`, which is an ordinary bridge
+with a gateway: a tool has the internet, and the same network is the one a tool could exfiltrate over. That is the trade a
+worker on a repository makes. Deleting that one network line from the service restores the fence, and with it a machine
+where `curl`, `gh` and a clone all fail — which is also a legitimate deployment.

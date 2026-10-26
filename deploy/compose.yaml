@@ -197,42 +197,48 @@ services:
   # --description "The team chat"`, then `secret telegram --hook team-chat`, then paste what it printed once into
   # deploy/.env — and after adding the same four variables there. Nothing here reaches into the home.
   #
-  # mason-telegram:
-  #   # Built by compose from the package in this repository (`integrations/telegram`), and published on its own release
-  #   # cycle: an integration is not part of mason's image, and a mason upgrade must not require an integration rebuild.
-  #   # `docker build integrations/telegram` produces the same image without the stack around it.
-  #   build:
-  #     context: ../integrations/telegram
-  #   image: ghcr.io/denissud/mason-telegram:latest
-  #   restart: unless-stopped
-  #   environment:
-  #     # The bot's own credential, in this container's environment and nowhere else: not in `service/`, not in an image,
-  #     # never written to the volume.
-  #     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in deploy/.env}
-  #     # The door, by its compose name. The event path is never proxied, even with HTTPS_PROXY set below.
-  #     MASON_EVENT_URL: http://mason:8787/api/events/telegram
-  #     # Minted by `npm run integration -- secret telegram --hook team-chat`. It buys exactly one verb: one hook fire.
-  #     MASON_TRIGGER_SECRET: ${TELEGRAM_TRIGGER_SECRET:?set TELEGRAM_TRIGGER_SECRET in deploy/.env}
-  #     # The chats this bot may relay, comma-separated ids. A chat that is not here does not become an event, and does
-  #     # not appear in list_chats either.
-  #     TELEGRAM_ALLOWED_CHATS: ${TELEGRAM_ALLOWED_CHATS:?set TELEGRAM_ALLOWED_CHATS in deploy/.env}
-  #     # Telegram is blocked where this runs, so the API goes through the sidecar below. The container builds an undici
-  #     # ProxyAgent from this (Node 22's fetch does not read it by itself); its README says so.
-  #     HTTPS_PROXY: http://vpn:1080
-  #   networks:
-  #     # In: mason reaches the tools face by name — the `tools.url` in integrations.json. Nothing on mason-internal is
-  #     # here, so a tool cannot reach it.
-  #     - mason-mcp
-  #     # Out: `mason-egress` only, and it is `internal: true`: the one address this container can reach is the proxy
-  #     # below, at http://vpn:1080, and Telegram is reached through it. No direct route to anything else exists. mason
-  #     # shares `mason-edge` with that proxy and could open it — it has egress of its own there, so it changes nothing —
-  #     # while mason-env joins neither network and has no route to the proxy at all.
-  #     - mason-egress
-  #   volumes:
-  #     # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service` and no
-  #     # `mason-agent`: the bot token is Telegram's credential, not mason's, and the home is not this container's to read.
-  #     - mason-telegram-data:/data
-  #   # No `ports`. The container is reached by name on mason-mcp, and a published port would be a second door into a
+  mason-telegram:
+    # Off unless a deployment asks for it: `COMPOSE_PROFILES=telegram` in deploy/.env. An integration is not part of a
+    # plain mason stack, and a stack without this one must still come up without editing a tracked file. The alternative
+    # is the template someone uncomments in their own copy, which is a checkout that no longer matches git: the next
+    # `git checkout` puts the comments back and leaves these containers running as orphans that compose no longer knows.
+    profiles: ["telegram"]
+    # Built by compose from the package in this repository (`integrations/telegram`), and published on its own release
+    # cycle: an integration is not part of mason's image, and a mason upgrade must not require an integration rebuild.
+    # `docker build integrations/telegram` produces the same image without the stack around it.
+    build:
+      context: ../integrations/telegram
+    image: ghcr.io/denissud/mason-telegram:latest
+    restart: unless-stopped
+    environment:
+      # The bot's own credential, in this container's environment and nowhere else: not in `service/`, not in an image,
+      # never written to the volume.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in deploy/.env}
+      # The door, by its compose name. The event path is never proxied, even with HTTPS_PROXY set below.
+      MASON_EVENT_URL: http://mason:8787/api/events/telegram
+      # Minted by `npm run integration -- secret telegram --hook team-chat`. It buys exactly one verb: one hook fire.
+      MASON_TRIGGER_SECRET: ${TELEGRAM_TRIGGER_SECRET:?set TELEGRAM_TRIGGER_SECRET in deploy/.env}
+      # The chats this bot may relay, comma-separated ids. A chat that is not here does not become an event, and does
+      # not appear in list_chats either.
+      TELEGRAM_ALLOWED_CHATS: ${TELEGRAM_ALLOWED_CHATS:?set TELEGRAM_ALLOWED_CHATS in deploy/.env}
+      # Telegram is blocked where this runs, so the API goes through the sidecar below. The container builds an undici
+      # ProxyAgent from this (Node 22's fetch does not read it by itself); its README says so.
+      HTTPS_PROXY: http://vpn:1080
+    networks:
+      # In: mason reaches the tools face by name — the `tools.url` in integrations.json. Nothing on mason-internal is
+      # here, so a tool cannot reach it.
+      - mason-mcp
+      # Out: `mason-egress` only, and it is `internal: true`: the one address this container can reach is the proxy
+      # below, at http://vpn:1080, and Telegram is reached through it. No direct route to anything else exists. mason
+      # shares `mason-edge` with that proxy and could open it — it has egress of its own there, so it changes nothing —
+      # while mason-env is on no network that carries the proxy: its own egress is mason-edge, and mason-egress is not
+      # one of its networks.
+      - mason-egress
+    volumes:
+      # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service` and no
+      # `mason-agent`: the bot token is Telegram's credential, not mason's, and the home is not this container's to read.
+      - mason-telegram-data:/data
+    # No `ports`. The container is reached by name on mason-mcp, and a published port would be a second door into a
   #   # service that holds a bot token.
 
   # A proxy sidecar for an integration whose upstream is not reachable from this host (Telegram, here). sing-box with a
@@ -243,28 +249,30 @@ services:
   # containers that can see this proxy are the ones whose compose entry joins mason-egress, the proxy keeps the stack's
   # only real route to the internet, and mason and mason-env are not on that network at all.
   #
-  # vpn:
-  #   # A pinned tag, not `latest`: the config file beside this is written once by an operator against one schema, and
-  #   # sing-box moves its own (`domain_strategy` out of the outbounds, the resolver keys under `route`, the DNS section
-  #   # rewritten) between minor versions. `latest` would one day refuse a file that was correct yesterday, at whichever
-  #   # boot pulled it. v1.14.4 is what this template's config.example.json is written for.
-  #   image: ghcr.io/sagernet/sing-box:v1.14.4
-  #   restart: unless-stopped
-  #   command: ["run", "-c", "/etc/sing-box/config.json"]
-  #   volumes:
-  #     # A real server's address, port, key and password. Copied from ./vpn/config.example.json once, and gitignored: a
-  #     # credential belongs in a file the operator owns, not in the repository and not in an image.
-  #     - ./vpn/config.json:/etc/sing-box/config.json:ro
-  #   networks:
-  #     # Out: mason-edge is this sidecar's own route to the internet, and the only one in the stack.
-  #     - mason-edge
-  #     # In: the proxy's mixed inbound, on a network with no gateway that only the integrations which name the proxy
-  #     # join. mason-mcp is deliberately absent — a proxy is not a capability any integration should be able to offer
-  #     # another. mason and mason-env are absent too, and for two different reasons: mason already has egress of its own
-  #     # one network over on mason-edge, and mason-env is on no egress network at all, so the tool machine cannot reach
-  #     # this proxy and nothing here reaches the home.
-  #     - mason-egress
-  #   # No `ports`, on purpose: a published SOCKS port is an open proxy for anyone who can reach the host.
+  vpn:
+    # Off unless `COMPOSE_PROFILES=telegram`. The sidecar exists for that integration; a stack without it has no proxy
+    # and no reason to have one.
+    profiles: ["telegram"]
+    # A pinned tag, not `latest`: the config file beside this is written once by an operator against one schema, and
+    # sing-box moves its own (`domain_strategy` out of the outbounds, the resolver keys under `route`, the DNS section
+    # rewritten) between minor versions. `latest` would one day refuse a file that was correct yesterday, at whichever
+    # boot pulled it. v1.14.4 is what this template's config.example.json is written for.
+    image: ghcr.io/sagernet/sing-box:v1.14.4
+    restart: unless-stopped
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    volumes:
+      # A real server's address, port, key and password. Copied from ./vpn/config.example.json once, and gitignored: a
+      # credential belongs in a file the operator owns, not in the repository and not in an image.
+      - ./vpn/config.json:/etc/sing-box/config.json:ro
+    networks:
+      # Out: mason-edge is this sidecar's own route to the internet, and the only one in the stack.
+      - mason-edge
+      # In: the proxy's mixed inbound, on a network with no gateway that only the integrations which name the proxy
+      # join. mason-mcp is deliberately absent — a proxy is not a capability any integration should be able to offer
+      # another. mason and mason-env are absent too, and for the same reason: both already have a route out on
+      # mason-edge, so neither needs the proxy, and whatever else the tool machine can reach it cannot reach from here.
+      - mason-egress
+    # No `ports`, on purpose: a published SOCKS port is an open proxy for anyone who can reach the host.
 
 volumes:
   # The agent: profile.md, log/, journal/, skills/, agents/, workspace/ and the repository that holds its memory.
@@ -283,8 +291,8 @@ volumes:
   # which on the next boot means "start from now" rather than a replay: nothing here needs backing up, and nothing here
   # is a credential.
   #
-  # mason-telegram-data:
-  #   name: mason-telegram-data
+  mason-telegram-data:
+    name: mason-telegram-data
 
 networks:
   # Default bridge: outbound only in practice, since the server is the only member and it is a server.
@@ -292,8 +300,10 @@ networks:
   # It carries a gateway, so being on it is a route out — which is why an integration that must reach the internet
   # through a proxy does not join it, and joins mason-egress instead.
   mason-edge:
-  # `internal: true` is the env machine's whole network policy: no gateway, no DNS beyond the compose network, no
-  # route out. A tool cannot exfiltrate what it reads, and nothing outside can reach the sshd.
+  # `internal: true` is the inbound half of the env machine's network policy: no gateway of its own, no DNS beyond the
+  # compose network, so nothing outside can reach the sshd and the tool session cannot answer a call it never got. The
+  # outbound half is a second network, `mason-edge` on the `mason-env` service above: a fence a deployment leaves on for
+  # a stack that runs no untrusted command, and turns off for a worker on a repository.
   mason-internal:
     internal: true
   # The integration containers, and mason. `internal: true` plus no published port is the whole access policy: an MCP
