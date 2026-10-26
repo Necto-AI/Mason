@@ -24,7 +24,7 @@ interface Ran {
 }
 
 /** A target that records what it was asked to do, and a claim that answers the same thing every time. */
-function stub(options: { readonly claimed?: boolean; readonly status?: string } = {}): {
+function stub(options: { readonly claimed?: boolean; readonly status?: string; readonly busy?: boolean } = {}): {
 	readonly target: CommandTarget;
 	readonly ran: Ran;
 	readonly claims: { requestId: string; command: CommandName; argument: string | undefined }[];
@@ -46,6 +46,7 @@ function stub(options: { readonly claimed?: boolean; readonly status?: string } 
 			ran.status += 1;
 			return options.status ?? IDLE;
 		},
+		busy: async () => options.busy ?? false,
 		claim: async (requestId, command, argument) => {
 			claims.push({ requestId, command, argument });
 			return claimed;
@@ -84,6 +85,17 @@ describe("a command, dispatched", () => {
 		assert.equal(await runCommand(again.target, "command:telegram:compact-1", "compact", "the pricing thread"), undefined);
 		assert.equal(await runCommand(again.target, "command:telegram:clear-1", "clear", undefined), undefined);
 		assert.deepEqual(again.ran, { abort: 0, clear: 0, compact: [], status: 0 });
+	});
+
+	it("says a clear is queued behind the turn instead of claiming it is done", async () => {
+		// A reset is not display-only, so on a busy conversation it queues in the inbox and returns at once. A person told
+		// "cleared" there watches the answer they cleared arrive next.
+		const busy = stub({ busy: true });
+		assert.equal(await runCommand(busy.target, "command:telegram:clear-2", "clear", undefined), "clearing after this turn");
+		assert.deepEqual(busy.ran, { abort: 0, clear: 1, compact: [], status: 0 }, "the reset is submitted either way");
+
+		const idle = stub();
+		assert.equal(await runCommand(idle.target, "command:telegram:clear-3", "clear", undefined), "cleared");
 	});
 
 	it("does not claim a status, because it changes nothing", async () => {
