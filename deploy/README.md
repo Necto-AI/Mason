@@ -412,7 +412,9 @@ failure: every tool call lands in a directory that does not exist, which measure
 One path that is deliberately *not* shared through `mason-agent`: `workspace/inbox` is a volume of its own
 (`mason-inbox`), mounted at the same path in `mason-env` and in the telegram relay. Inside the `mason-agent` volume the
 directory is empty, and only the tool machine and the relay see those bytes — which is what lets a chat message's file be
-read by the agent without the relay being handed the profile, the log, the skills and the memory repository as well.
+read by the agent without the relay being handed the profile, the log, the skills and the memory repository as well. It
+carries files both ways: a file the agent writes there is one the relay may send into a chat, so this one directory is the
+whole of what crosses in either direction.
 
 The limitation is that coupling. The remote cwd is not its own name — it is the mason container's path, borrowed by
 another machine — so anyone who moves the workspace in one image has to remember the other. Giving the remote cwd its

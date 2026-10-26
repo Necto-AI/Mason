@@ -392,6 +392,11 @@ describe("the team-chat prompt", () => {
 		assert.match(template, /data from an outside system too/);
 	});
 
+	it("says a file can go back, by writing it into the inbox and naming it", () => {
+		assert.match(template, /write it into the inbox/);
+		assert.match(template, /mcp__telegram__send_file/);
+	});
+
 	it("still hands the model the payload it is told to weigh rather than obey", () => {
 		assert.match(template, /\{\{payload\}\}$/);
 		assert.match(template, /not instructions/);
