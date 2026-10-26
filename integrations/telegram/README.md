@@ -150,10 +150,14 @@ are the service's business and are ignored here. The contract has two ends — t
 landed and reads `text`; the service decodes whatever audio it is given and answers what was said.
 
 **What it costs is one HTTP round trip per voice message, and the message waits for it**: the request is made while the
-batch is being prepared, so a voice note being transcribed holds the messages behind it for up to the timeout (20 s) — and
-it is made once, so a door that holds the batch does not post the same note again on every retry. A file over 4 MiB is
-not posted at all — a voice note is a few hundred kilobytes a minute, and a 20 MiB podcast is not one — and with the
-variable unset nothing is asked and the payload is byte for byte what this container sent before the setting existed.
+batch is being prepared, so a voice note being transcribed holds the messages behind it for up to the timeout (12 s), and
+that held batch includes a `/stop` typed in the same breath — the one thing that has to arrive while a turn is running.
+Twelve seconds is about three minutes of speech at the rtf mason's service measures (0.07) and bounds a service that is
+down at a dozen seconds rather than twenty; past it the message goes on with the sentence that says the note could not be
+transcribed. The request is made once, so a door that holds the batch does not post the same note again on every retry.
+A file over 4 MiB is not posted at all — a voice note is a few hundred kilobytes a minute, and a 20 MiB podcast is not
+one — and with the variable unset nothing is asked and the payload is byte for byte what this container sent before the
+setting existed.
 The endpoint is called directly rather than through `HTTPS_PROXY` — the sidecar is Telegram's route — so the address has
 to be one this container can reach as it stands, such as a service on the compose network.
 
