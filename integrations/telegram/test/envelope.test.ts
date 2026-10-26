@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
-import { envelopeFor, PAYLOAD_MAX, renderPayload, signBody, type ChatEvent, type EventFile } from "../src/envelope.ts";
+import { commandEnvelopeFor, envelopeFor, PAYLOAD_MAX, renderPayload, signBody, type ChatEvent, type EventFile } from "../src/envelope.ts";
 
 function event(overrides: Partial<ChatEvent> = {}): ChatEvent {
 	return {
@@ -102,6 +102,20 @@ describe("the event payload", () => {
 			kind: "chat.message",
 			payload: "Ilya (@ilya) in chat -1001234 (Team chat): ship it?",
 		});
+	});
+});
+
+describe("the command envelope", () => {
+	it("carries the word after the slash, under the id its message would have had", () => {
+		assert.deepEqual(commandEnvelopeFor(8_811, "stop"), { v: 1, id: "tg-8811", kind: "command", payload: "stop" });
+		assert.deepEqual(commandEnvelopeFor(8_811, "compact keep the pricing thread"), {
+			v: 1,
+			id: "tg-8811",
+			kind: "command",
+			payload: "compact keep the pricing thread",
+		});
+		// The same update, the same id: a redelivery is one envelope whichever kind it was sent as.
+		assert.equal(commandEnvelopeFor(8_811, "stop").id, envelopeFor(event()).id);
 	});
 });
 
