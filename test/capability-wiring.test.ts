@@ -50,7 +50,8 @@ test("the transcription service is part of the stack, heard by the relay and by 
 	assert.ok(!/ports:/.test(asr), "nothing published");
 
 	const telegram = await read("deploy/compose.telegram.yaml");
-	assert.match(telegram, /TELEGRAM_ASR_URL: \$\{TELEGRAM_ASR_URL:-http:\/\/mason-asr:8100\/transcribe\}/, "on by default");
+	// `-` and not `:-`: an explicit empty value has to mean off, or the sentence saying so is a cheque nothing honours.
+	assert.match(telegram, /TELEGRAM_ASR_URL: \$\{TELEGRAM_ASR_URL-http:\/\/mason-asr:8100\/transcribe\}/, "on by default");
 });
 
 test("the tool machine is reachable only from mason: its own outbound bridge carries nothing else", async () => {

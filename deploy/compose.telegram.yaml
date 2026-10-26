@@ -49,7 +49,7 @@ services:
       # On by default, because transcription is a capability of the bot and not a setting a deployment opts into: every
       # stack defines `mason-asr` (compose.yaml), so every relay can reach it, and a stack that means to run without it
       # sets this to an empty string. No credential crosses either way.
-      TELEGRAM_ASR_URL: ${TELEGRAM_ASR_URL:-http://mason-asr:8100/transcribe}
+      TELEGRAM_ASR_URL: ${TELEGRAM_ASR_URL-http://mason-asr:8100/transcribe}
     networks:
       # In: mason reaches the tools face by name — the `tools.url` in integrations.json. Nothing on mason-internal is
       # here, so a tool cannot reach it.
@@ -93,12 +93,14 @@ services:
       # credential belongs in a file the operator owns, not in the repository and not in an image.
       - ./vpn/config.json:/etc/sing-box/config.json:ro
     networks:
-      # Out: mason-edge is this sidecar's own route to the internet, and the only one in the stack.
+      # Out: mason-edge is this sidecar's own route to the internet. mason-env and mason-asr have one of their own on
+      # mason-out, which this container is not on.
       - mason-edge
       # In: the proxy's mixed inbound, on a network with no gateway that only the integrations which name the proxy
       # join. mason-mcp is deliberately absent — a proxy is not a capability any integration should be able to offer
-      # another. mason and mason-env are absent too, and for the same reason: both already have a route out on
-      # mason-edge, so neither needs the proxy, and whatever else the tool machine can reach it cannot reach from here.
+      # another. mason and mason-env are absent too, and for the same reason: mason has a route out on mason-edge and the
+      # tool machine on mason-out, so neither needs the proxy, and whatever else the tool machine can reach it cannot
+      # reach from here.
       - mason-egress
     # No `ports`, on purpose: a published SOCKS port is an open proxy for anyone who can reach the host.
 
