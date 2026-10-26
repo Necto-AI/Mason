@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mason's boot: the five things the server cannot do for itself, then the server.
+# mason's boot: the six things the server cannot do for itself, then the server.
 #
 # Runs as the unprivileged `mason` user, from the repo root (the image's WORKDIR, /app), on first boot and on every boot
 # after it. Each step is idempotent and prints one `[deploy]` line saying what it did, in the shape the server's own
@@ -98,7 +98,7 @@ chmod 0600 "$ssh_dir/id_ed25519"
 if ! install -m 0600 "$ssh_dir/id_ed25519.pub" /run/env-keys/authorized_keys 2>/dev/null; then
   echo "[deploy] cannot write /run/env-keys/authorized_keys as uid $(id -u): the env-keys volume is not writable." >&2
   echo "[deploy] the volume was created before the image owned that directory; recreate it with:" >&2
-  echo "[deploy]   docker compose down && docker volume rm env-keys" >&2
+  echo "[deploy]   docker compose down && docker volume rm ${MASON_ENV_KEYS_VOLUME:-env-keys}" >&2
   exit 1
 fi
 echo "[deploy] published $ssh_dir/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys"
@@ -173,8 +173,12 @@ bot_dir="${MASON_BOT_SRC:-/run/bot}"
 soul_target="$service_dir/soul.md"
 if [ ! -f "$bot_dir/soul.md" ]; then
   echo "[deploy] no soul.md in $bot_dir: the home keeps its own, or DEFAULT_SOUL on a fresh one"
-elif [ -f "$soul_target" ]; then
-  echo "[deploy] soul.md present: not overwriting it from $bot_dir"
+elif [ -f "$soul_target" ] && [ "${MASON_BOT_FORCE:-0}" != "1" ]; then
+  # A home that has booted once always has a soul.md, because the server writes DEFAULT_SOUL into a fresh one. That is not
+  # a person's file in that case, and the message has to say how to replace it, or a deployment that was given a soul
+  # months after it started runs the default one forever and never learns why.
+  echo "[deploy] soul.md present: not overwriting it from $bot_dir (remove $soul_target, or boot once with" \
+    "MASON_BOT_FORCE=1, if you meant to install this one)"
 else
   install -m 0600 "$bot_dir/soul.md" "$soul_target"
   echo "[deploy] installed soul.md from $bot_dir"
@@ -188,13 +192,22 @@ seed_skills() {
     [ -d "$candidate" ] || continue
     local name
     name="$(basename "$candidate")"
+    # A directory with no SKILL.md is not a skill the index can see. Seeding it would be worse than skipping it: the copy
+    # takes the name, and the next boot refuses the operator's corrected directory because something is already there.
+    if [ ! -f "$candidate/SKILL.md" ]; then
+      echo "[deploy] $source/$name has no SKILL.md: skipped" >&2
+      continue
+    fi
     # A skill of the same name is the bot's own (or mason's shipped one, already seeded): leave it alone.
     if [ -e "$agent_dir/skills/$name" ]; then
       echo "[deploy] skill \"$name\" present: not overwriting it"
       continue
     fi
-    install -d -m 0700 "$agent_dir/skills"
-    cp -R "$candidate" "$agent_dir/skills/$name"
+    # A starter kit is optional, so a failure to copy one is not a reason to refuse the boot: say so and keep going.
+    if ! install -d -m 0700 "$agent_dir/skills" || ! cp -R "$candidate" "$agent_dir/skills/$name"; then
+      echo "[deploy] could not seed skill \"$name\" into $agent_dir/skills" >&2
+      continue
+    fi
     seeded=$((seeded + 1))
     echo "[deploy] seeded skill \"$name\" from $source"
   done

@@ -57,7 +57,11 @@ say "checkout"
 remote "git fetch --quiet --tags --force origin '$ref' && git checkout --quiet --force --detach \$(git rev-parse FETCH_HEAD) && git log -1 --format='    %h %s'"
 commit="$(remote "git rev-parse --short HEAD" | tr -d '[:space:]')"
 
-project="$(remote "grep -m1 '^name:' deploy/compose.yaml | cut -d: -f2" | tr -d '[:space:]')"
+# The project name comes from the deployment's own .env, not from the compose file: `name:` there is `${MASON_STACK:-mason}`,
+# and a substitution read with `cut -d: -f2` is the string `${MASON_STACK`, which matches no container and turns the
+# verification below into a loop that checks nothing. The .env is the same value the compose provider resolves, since
+# the stack is started from this directory without `-p`.
+project="$(remote "sed -n 's/^MASON_STACK=//p' deploy/.env 2>/dev/null | tail -1" | tr -d '[:space:]')"
 project="${project:-mason}"
 
 say "build"

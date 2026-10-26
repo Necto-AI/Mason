@@ -117,6 +117,10 @@ services:
       MASON_INTEGRATIONS_SRC: /run/integrations.json
       # The bot's own files (`soul.md`, `skills/`), installed into the home on first boot when they are there.
       MASON_BOT_SRC: /run/bot
+      # The stack this container belongs to, and the volume its env key lands in: the entrypoint names both in the one
+      # message an operator reads while a boot is failing, and a name that points at the wrong stack is worse than none.
+      MASON_STACK: ${MASON_STACK:-mason}
+      MASON_ENV_KEYS_VOLUME: ${MASON_ENV_KEYS_VOLUME:-env-keys}
       # 1: refuse to start when there is no provider credential, naming the path. 0: a stack deliberately without a
       # model (the UI loads, no turn can run).
       MASON_MODEL_REQUIRED: ${MASON_MODEL_REQUIRED:-1}
@@ -220,7 +224,7 @@ volumes:
     name: ${MASON_STACK:-mason}-service
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
   env-keys:
-    name: ${MASON_STACK:-mason}-env-keys
+    name: ${MASON_ENV_KEYS_VOLUME:-env-keys}
   # The files chat messages carried: written by an integration (`mason-telegram`), read by the tool machine at the same
   # path. A volume of its own rather than a corner of `mason-agent`, because what an integration may write is exactly one
   # directory of the agent's home — the profile, the log, the skills and the memory repository are not a relay's to read
