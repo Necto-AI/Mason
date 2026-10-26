@@ -14,7 +14,7 @@ A process, not a page. It speaks at most four channels to mason, and it declares
 | **events** | connector → mason | signed `POST /api/events/<name>` | `trigger: { hook, secret }` |
 | **tools** | mason → connector | MCP over Streamable HTTP at `<url>/mcp` | `tools: { url, description }` |
 | **state** | mason → connector | subscription (WebSocket, Chord-compatible) | `state: ["status", "projection", "presence", "tools"]` |
-| **reply** | mason → connector | a tool the connector exposes, named in its entry | `reply: "<tool name>"` |
+| **reply** | mason → connector | a tool the connector exposes, named in its entry | `reply: "<tool name>"`, optional `also: ["<connector>"]` |
 
 A connector with none of them is a file that does nothing; a connector with only `tools` is a source of abilities (a
 calculator, a search); a connector with only `events` is a one-way alarm. A chat has all four.
@@ -24,7 +24,10 @@ calculator, a search); a connector with only `events` is a one-way alarm. A chat
 1. **A turn knows where it came from.** Every fire carries its origin connector's name into the turn, and the model is told
    it in the prompt section rather than in prose written for one vendor.
 2. **A reply goes to the origin, once.** `reply` is mason's tool and the connector's tool is where it lands; a redelivery
-   after a restart is refused rather than repeated.
+   after a restart is refused rather than repeated. A connector that declares `state: ["projection"]` sees the same reply
+   as a transcript entry — that is how a second surface displays a conversation it did not carry. A connector named in the
+   origin's `also` list receives the reply as a delivery of its own, and a private message is never fanned out into a space
+   that speaks to more than one person without an entry that says so.
 3. **State is what was declared and nothing more.** `status` is cheap and always available; `projection` is the whitelisted
    transcript; `tools` is names without arguments or output; the conversation itself never crosses.
 4. **A credential per connector, revocable per connector.** Revoking one does not unpair the others, and the server reads
