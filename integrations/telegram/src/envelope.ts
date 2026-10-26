@@ -14,8 +14,13 @@
  * **A too-long message is cut here, visibly.** The door refuses a `payload` over 2 000 characters rather than truncating
  * it, and a refusal advances the offset: the event would be lost with nothing but a log line. This sender therefore says
  * what it could not include, which is the honest half of that trade.
+ *
+ * **The file clause is the last thing in the payload, and the last thing to give way.** A message that carried a file ends
+ * with where it is, so a caption long enough to be cut loses its own words and never the path: the path is the whole
+ * reason the attachment reached the agent at all.
  */
 import { createHmac } from "node:crypto";
+import type { FileKind } from "./telegram.ts";
 
 /**
  * The door's cap on a `payload`, kept equal to `PAYLOAD_MAX` in mason's `src/server/events.ts`. Copied rather than
@@ -35,6 +40,22 @@ export interface ChatEvent {
 	readonly replyToMessageId: number | undefined;
 	/** The message text, with this bot's own `@mention` removed and everything else as it was typed. */
 	readonly text: string;
+	/** The file the message carried, once `src/inbox.ts` has fetched it. Absent when it carried none, or could not be got. */
+	readonly file?: EventFile;
+}
+
+/**
+ * A file that is on disk, as the payload names it. The path is the point: it is the same string in this container and in
+ * the tool machine, because the inbox directory is mounted at one path in both, so `read` opens exactly the bytes this
+ * container wrote — and a photo comes back as an image rather than as a path nothing could open.
+ */
+export interface EventFile {
+	/** Where the file is, at the path both containers know it by. */
+	readonly path: string;
+	/** Its name on the volume: the update id, a hyphen, and the sender's sanitised name. */
+	readonly name: string;
+	readonly size: number;
+	readonly kind: FileKind;
 }
 
 /** The v1 envelope, as `src/server/events.ts` reads it. */
@@ -53,22 +74,41 @@ const TRUNCATED = "… [truncated]";
  *
  * ```text
  * Ilya (@ilya) in chat -1001234 (Team chat), replying to 8811: ship it?
+ * Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at /home/mason/.mason/agent/workspace/inbox/448860480-report.pdf
  * ```
  *
  * Each of the three optional parts disappears cleanly rather than leaving an empty bracket: a private chat has no title,
- * a sender may have no username, and most messages are not replies. The rendering is stable either way — the same
- * message always produces the same string, because it is what the agent reads and the door's dedupe is on the id, not
- * on this.
+ * a sender may have no username, and most messages are not replies. The file clause is the exception — it is appended
+ * rather than folded in, because the path is what makes the attachment readable and the text is what can be spared when
+ * the two do not both fit. The rendering is stable either way — the same message always produces the same string,
+ * because it is what the agent reads and the door's dedupe is on the id, not on this.
  */
 export function renderPayload(event: ChatEvent): string {
 	const handle = event.username === undefined ? "" : ` (@${event.username})`;
 	const title = event.chatTitle === undefined ? "" : ` (${event.chatTitle})`;
 	const reply = event.replyToMessageId === undefined ? "" : `, replying to ${event.replyToMessageId}`;
 	const prefix = `${event.sender}${handle} in chat ${event.chatId}${title}${reply}: `;
-	const room = PAYLOAD_MAX - prefix.length;
-	if (event.text.length <= room) return `${prefix}${event.text}`;
-	if (room <= TRUNCATED.length) return `${prefix}${event.text}`.slice(0, PAYLOAD_MAX);
-	return `${prefix}${event.text.slice(0, room - TRUNCATED.length)}${TRUNCATED}`;
+	const file = event.file === undefined ? "" : `, with a file at ${event.file.path}`;
+	// The clause is never cut and the text always is, which works while the clause itself fits. A path long enough to leave
+	// no room at all (a misconfigured `TELEGRAM_INBOX`) would otherwise produce a payload over the cap that the door
+	// refuses, and a refused delivery is a message nobody reads: the prefix gives way instead, from the left.
+	// When even that does not fit, the path is dropped rather than cut: a truncated path is one the agent would try to
+	// open and not find, which is worse than a payload that says a file exists and cannot be named. `TELEGRAM_INBOX` is
+	// checked at startup for this, so reaching it is a bug rather than a setting.
+	const named = PAYLOAD_MAX - prefix.length - file.length >= 0 ? file : ", with a file this payload has no room to name";
+	return `${prefix}${fitText(event.text, PAYLOAD_MAX - prefix.length - named.length)}${named}`;
+}
+
+/**
+ * The message text cut to the room it has, visibly cut when there is room to say so. `room` is what is left after the
+ * prefix and the file clause, and it is the file clause that is never cut: a payload that named no path would be a
+ * message about a file the agent cannot open.
+ */
+function fitText(text: string, room: number): string {
+	if (text.length <= room) return text;
+	if (room <= 0) return "";
+	if (room <= TRUNCATED.length) return text.slice(0, room);
+	return `${text.slice(0, room - TRUNCATED.length)}${TRUNCATED}`;
 }
 
 export function envelopeFor(event: ChatEvent): EventEnvelope {

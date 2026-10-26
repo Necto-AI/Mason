@@ -40,8 +40,19 @@ longer than a minute ends the tool call with a message the model can act on inst
   chat has one — a private chat has none, and a stable rendering beats empty brackets.
 - The three optional parts vanish rather than leaving placeholders: `Ilya in chat 4711: ship it?` is what a private chat
   with no username renders as.
+- A message with a file ends with where the file is, because the path is what makes the attachment something the agent can
+  open:
+
+  ```json
+  {"v":1,"id":"tg-448860480","kind":"chat.message",
+   "payload":"Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at /home/mason/.mason/agent/workspace/inbox/448860480-report.pdf"}
+  ```
+
+  A photo with no caption reads `…: sent a photo, with a file at …`, a voice note `…: sent a voice note, with a file at …`:
+  the sentence says what arrived, and the clause says where it is.
 - A message longer than the door's 2 000-character payload cap is cut here with `… [truncated]`, because the door refuses
-  an over-long payload rather than truncating it and a refusal advances the offset — the event would be lost.
+  an over-long payload rather than truncating it and a refusal advances the offset — the event would be lost. The cut is
+  on the text, never on the file clause: a caption loses its own words before a payload loses the path.
 - `202` is expected. What each other answer means, and what the offset does about it:
   - **A refusal advances past it.** `400` (a bad envelope), `401` (a bad signature), `404` (a path that names no
     integration), `405` (not a POST), `413` (over the body cap): logged with the integration's name and the body's own
@@ -58,11 +69,22 @@ longer than a minute ends the tool call with a message the model can act on inst
     when it answers again. Redelivery is free because a batch's ids are the update ids, and the door dedupes on them.
 
 **What is dropped, and where.** A message from a bot, an edit, a chat that is not in `TELEGRAM_ALLOWED_CHATS`, and
-anything without text (media, a service notice) never becomes an event, and a chat we did not choose never enters
-`list_chats` either. Commands are delivered: `/start` and `/command@this_bot` are what a person typed in a chat we chose,
-and deciding here which commands mean something would be this container guessing at what the agent should hear. The
-bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup) and everything else in the message is kept
-verbatim.
+anything that is neither words nor a file (a sticker, a location, a poll, a service notice) never becomes an event, and a
+chat we did not choose never enters `list_chats` either. Commands are delivered: `/start` and `/command@this_bot` are what
+a person typed in a chat we chose, and deciding here which commands mean something would be this container guessing at
+what the agent should hear. The bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup) and
+everything else in the message is kept verbatim.
+
+**Files arrive as a path, because the agent reads one.** A photo, a document, a voice note, an audio file or a video is
+written to `TELEGRAM_INBOX` as `<update_id>-<the sender's name, sanitised>` with mode `0600`, and the payload ends with
+where it landed: `<update_id>-` is what makes two files called `report.pdf` two paths, and the id is unique per bot, so a
+replayed batch writes the same bytes under the same name. The cap is Telegram's own — a bot may download 20 MiB — and a
+file over it is refused with a sentence rather than an exception; the message is still delivered, with no path, which is
+how the agent tells a file that arrived from one that could not be fetched. Anything older than seven days is deleted by
+a sweep on every write and once at startup, because nobody else watches that volume. `mason-telegram` and `mason-env`
+mount it at the same path (`mason-inbox`, declared in `deploy/compose.yaml`), which is what makes a path in a payload a
+file `read` opens on the other side — and the mount is a directory of its own, so the rest of the agent's home (the
+profile, the log, the skills, the memory repository) stays out of this container.
 
 **The offset.** `offset.json` on the container's own volume (`/data`), written whole — temporary file, rename, `0600` —
 once per batch, not once per message: a crash mid-batch replays at most one batch, and the id makes the replay the same
@@ -79,6 +101,7 @@ starts from now, because a restart must never replay yesterday's chat into the a
 | `TELEGRAM_ALLOWED_CHATS` | yes | Comma-separated chat ids this bot may relay. Anything else is dropped before it becomes an event. |
 | `HTTPS_PROXY` | no | The VPN sidecar, `http://vpn:1080`, where Telegram is blocked. |
 | `DATA_DIR` | no | Defaults to `/data`, the volume. |
+| `TELEGRAM_INBOX` | no | Where an incoming file is written. Defaults to `/home/mason/.mason/agent/workspace/inbox`, the path both compose files mount `mason-inbox` at: moving it means moving both mounts, or the payload names a file nothing can open. |
 | `PORT` | no | Defaults to `8082`. Moving it means moving `tools.url` in `integrations.json` too. |
 
 A missing or malformed variable is a refusal at startup that names it: an instance without its allowlist would relay
@@ -131,6 +154,6 @@ integration's trigger therefore requires mason to be up to date before the conta
 
 ## What is not here
 
-Webhooks (they need public HTTPS), media, reactions, threads as first-class, multi-bot, and identity mapping beyond the
-sender's name and username in the payload. Each is a face of Telegram this container does not show the agent, and none
-of them is needed to answer a message.
+Webhooks (they need public HTTPS), outbound media — the agent sends words, not files — reactions, threads as
+first-class, multi-bot, and identity mapping beyond the sender's name and username in the payload. Each is a face of
+Telegram this container does not show the agent, and none of them is needed to answer a message.

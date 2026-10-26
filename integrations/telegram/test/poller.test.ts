@@ -3,8 +3,8 @@
  * that could not take a message — unreachable, or answering something that is no verdict — leaves the batch exactly where
  * it was.
  *
- * The state here is a real directory — `StateFiles` is half of what is being tested — while Telegram and the door are
- * scripted, so each test is one sequence of answers rather than a mock of the process.
+ * The state here is a real directory — `StateFiles` is half of what is being tested — while Telegram, the door and the
+ * inbox are scripted, so each test is one sequence of answers rather than a mock of the process.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -13,7 +13,9 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { ChatDirectory } from "../src/chats.ts";
 import type { DoorResult } from "../src/door.ts";
-import type { EventEnvelope } from "../src/envelope.ts";
+import type { EventEnvelope, EventFile } from "../src/envelope.ts";
+import type { Attachment } from "../src/filter.ts";
+import type { SaveOutcome } from "../src/inbox.ts";
 import { createLog } from "../src/log.ts";
 import { Poller, type EventSink, type UpdateSource } from "../src/poller.ts";
 import { StateFiles } from "../src/state.ts";
@@ -69,6 +71,30 @@ function update(updateId: number, overrides: Record<string, unknown> = {}): Tele
 	};
 }
 
+/** The same message, carrying a PDF and no words. */
+function documentUpdate(updateId: number): TelegramUpdate {
+	return update(updateId, {
+		text: undefined,
+		document: { file_id: "f1", file_unique_id: "u1", file_name: "report.pdf", file_size: 4_096 },
+	});
+}
+
+/** What the door is told, from an inbox that answered the same thing every time: saving is `src/inbox.ts`'s test. */
+class StubInbox {
+	readonly saved: { attachment: Attachment; updateId: number }[] = [];
+	readonly #answer: SaveOutcome | Error;
+
+	constructor(answer: SaveOutcome | Error) {
+		this.#answer = answer;
+	}
+
+	async save(attachment: Attachment, options: { readonly updateId: number }): Promise<SaveOutcome> {
+		this.saved.push({ attachment, updateId: options.updateId });
+		if (this.#answer instanceof Error) throw this.#answer;
+		return this.#answer;
+	}
+}
+
 interface Rig {
 	readonly state: StateFiles;
 	readonly poller: Poller;
@@ -85,6 +111,7 @@ async function rig(
 		readonly offset?: number;
 		readonly door?: DoorResult;
 		readonly chats?: ChatDirectory;
+		readonly inbox?: StubInbox;
 	} = {},
 ): Promise<Rig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -102,6 +129,7 @@ async function rig(
 		chats,
 		log: createLog([], (line) => lines.push(line)),
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
+		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
 	});
 	return { state, poller, api, door, chats, lines, directory };
 }
@@ -131,6 +159,7 @@ async function pollAgainstDoor(
 		readonly batches?: TelegramUpdate[][];
 		readonly offset?: number;
 		readonly stopAfter?: number;
+		readonly inbox?: StubInbox;
 	} = {},
 ): Promise<DownRig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -151,6 +180,7 @@ async function pollAgainstDoor(
 		log: createLog([], (line) => lines.push(line)),
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
 		now: () => clock,
+		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
 		sleep: async (ms) => {
 			waits.push(ms);
 			clock += ms;
@@ -308,6 +338,73 @@ describe("the chat list", () => {
 
 		assert.equal(chats.list().length, 1);
 		assert.equal(chats.dirty, false);
+	});
+});
+
+describe("a message with a file", () => {
+	const FILE: EventFile = {
+		path: "/home/mason/.mason/agent/workspace/inbox/100-report.pdf",
+		name: "100-report.pdf",
+		size: 4_096,
+		kind: "document",
+	};
+
+	it("fires the sentence that says a file arrived and where it landed", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: FILE });
+		const { poller, door } = await rig([[documentUpdate(100)]], { offset: 100, inbox });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			`Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at ${FILE.path}`,
+		);
+		assert.deepEqual(
+			inbox.saved.map((saved) => [saved.attachment.name, saved.updateId]),
+			[["report.pdf", 100]],
+		);
+	});
+
+	it("fires it without a path when the fetch was refused, and says why in one line", async () => {
+		const inbox = new StubInbox({ kind: "refused", reason: "it is 21 MiB, and a bot may download 20 MiB" });
+		const { poller, door, lines } = await rig([[documentUpdate(100)]], { offset: 100, inbox });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf",
+			"the text still says a file was meant, and nothing names a path that is not there",
+		);
+		const warnings = lines.filter((line) => line.includes("could not fetch the document in update 100"));
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0] ?? "", /21 MiB/);
+	});
+
+	it("fires it without a path when saving threw, because a message is not lost to a bug in the file path", async () => {
+		const inbox = new StubInbox(new Error("EACCES: permission denied"));
+		const { poller, door, lines } = await rig([[documentUpdate(100)]], { offset: 100, inbox });
+
+		await poller.pollOnce();
+
+		assert.equal(door.envelopes.length, 1);
+		assert.equal(door.envelopes[0]?.payload, "Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf");
+		assert.match(lines.join("\n"), /EACCES: permission denied\); delivering the message without it/);
+	});
+
+	it("fetches the file once, even when the door holds the batch and the envelope is posted again", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: FILE });
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "accepted" },
+			],
+			{ batches: [[documentUpdate(100)]], offset: 100, inbox },
+		);
+
+		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
+		assert.equal(inbox.saved.length, 1, "a 20 MiB download is not repeated for every retry");
 	});
 });
 
