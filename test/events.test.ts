@@ -25,7 +25,7 @@ import { readCommand, readEnvelope, verifySignature } from "../src/server/events
 import { housePaths, type HousePaths } from "../src/server/house.ts";
 import { EVENT_BODY_MAX_BYTES } from "../src/server/limits.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
-import { isBusy } from "../src/server/status.ts";
+import { isBusy, queuedSubmissions } from "../src/server/status.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
@@ -602,6 +602,46 @@ describe("the event door", () => {
 	});
 });
 
+/**
+ * A running server whose first turn cannot finish until `release()`, with the turn already started. A command posted now
+ * is genuinely posted into a running conversation, which is the only way to see whether it waits for the turn or acts on
+ * it while the turn is still running.
+ */
+async function heldTurn(paths: HousePaths): Promise<{ server: RunningServer; base: string; release: () => void }> {
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const faux = fauxProvider();
+	const models = createModels();
+	models.setProvider(faux.provider);
+	faux.setResponses([
+		async () => {
+			await held;
+			return fauxAssistantMessage(fauxText("the answer to the message you wrote"));
+		},
+	]);
+	const directory = dirname(paths.home);
+	const server = await startServer({
+		port: 0,
+		hostname: "127.0.0.1",
+		storage: "memory",
+		dataDir: join(directory, "data"),
+		workspaceDir: join(directory, "workspace"),
+		houseHome: paths.home,
+		modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
+		onReport: () => {},
+	});
+	const conversation = await server.runtime.conversation();
+	await conversation.submit({ type: "input", content: "think about it for a while" }, BACKGROUND_CONTEXT);
+	const deadline = Date.now() + 5_000;
+	while (!isBusy(await server.runtime.viewSnapshot(BACKGROUND_CONTEXT))) {
+		assert.ok(Date.now() < deadline, "the turn started, so the command has something to act on");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return { server, base: `http://127.0.0.1:${server.port}`, release };
+}
+
 describe("a command at the door", () => {
 	it("runs a declared command and answers the one line a chat reads", async () => {
 		const paths = await temporaryHome();
@@ -755,57 +795,48 @@ describe("a command at the door", () => {
 		const paths = await temporaryHome();
 		await writeIntegrations(paths);
 		// A turn that cannot finish until the test says so: `/stop` is then genuinely posted into a running conversation.
-		let release!: () => void;
-		const held = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		const faux = fauxProvider();
-		const models = createModels();
-		models.setProvider(faux.provider);
-		faux.setResponses([
-			async () => {
-				await held;
-				return fauxAssistantMessage(fauxText("the turn that was stopped"));
-			},
-		]);
-		const directory = dirname(paths.home);
-		const server = await startServer({
-			port: 0,
-			hostname: "127.0.0.1",
-			storage: "memory",
-			dataDir: join(directory, "data"),
-			workspaceDir: join(directory, "workspace"),
-			houseHome: paths.home,
-			modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
-			onReport: () => {},
-		});
+		const turn = await heldTurn(paths);
 		try {
-			const token = server.pairingToken;
-			assert.ok(token, "a fresh home mints one token, which is what pairs this test");
-			const base = `http://127.0.0.1:${server.port}`;
-			const conversation = await server.runtime.conversation();
-			await conversation.submit({ type: "input", content: "think about it for a while" }, BACKGROUND_CONTEXT);
-
-			const deadline = Date.now() + 5_000;
-			while (!isBusy(await server.runtime.viewSnapshot(BACKGROUND_CONTEXT))) {
-				assert.ok(Date.now() < deadline, "the turn started, so `/stop` has something to stop");
-				await new Promise((resolve) => setTimeout(resolve, 10));
-			}
-
 			const body = JSON.stringify(command("stop", "while-running"));
-			const stopped = fetch(`${base}/api/events/telegram`, {
+			const stopped = fetch(`${turn.base}/api/events/telegram`, {
 				method: "POST",
 				headers: { "content-type": "application/json", "x-mason-signature": signature(telegramSecret, body) },
 				body,
 			});
 			// The door waits for the conversation to be idle again, so the turn is let go once the abort is in flight.
-			release();
+			// (Removed in the next commit: the abort is the thing being measured.)
+			turn.release();
 			const answer = await stopped;
 			assert.equal(answer.status, 200);
 			assert.deepEqual(await answer.json(), { handled: true, reply: "stopped" });
-			assert.equal(isBusy(await server.runtime.viewSnapshot(BACKGROUND_CONTEXT)), false, "the turn is over");
+			assert.equal(isBusy(await turn.server.runtime.viewSnapshot(BACKGROUND_CONTEXT)), false, "the turn is over");
 		} finally {
-			await server.close();
+			turn.release();
+			await turn.server.close();
+		}
+	});
+
+	it("says a clear is queued behind the running turn, rather than that it happened", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const turn = await heldTurn(paths);
+		try {
+			const body = JSON.stringify(command("clear", "clear-while-running"));
+			const cleared = await fetch(`${turn.base}/api/events/telegram`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-mason-signature": signature(telegramSecret, body) },
+				body,
+			});
+			// A reset is a write the log queues behind the turn, so on a busy conversation it lands later. The answer says
+			// that, and the view says it too: the turn is still the one running, and the reset is the one thing waiting.
+			assert.equal(cleared.status, 200);
+			assert.deepEqual(await cleared.json(), { handled: true, reply: "clearing after this turn" });
+			const view = await turn.server.runtime.viewSnapshot(BACKGROUND_CONTEXT);
+			assert.equal(isBusy(view), true, "the turn the clear is queued behind is still running");
+			assert.equal(queuedSubmissions(view), 1, "and the reset is what is waiting behind it");
+		} finally {
+			turn.release();
+			await turn.server.close();
 		}
 	});
 
