@@ -75,6 +75,10 @@ function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean 
  * The round in flight contributes the same two shapes, streaming: a message appears as the model writes it, a widget
  * as its markup arrives, exactly as they will stand once committed. A half-written message is the one thing the reader
  * is meant to watch.
+ *
+ * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
+ * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
+ * cross the wire.
  */
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
