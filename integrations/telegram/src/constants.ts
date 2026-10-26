@@ -34,11 +34,13 @@ export const INBOX_PATH_MAX_BYTES = 512;
 /**
  * How long a voice note may wait for its transcript before the message goes on without one.
  *
- * The poller prepares a message before it posts it, so a transcription holds the rest of the batch behind it. Twenty
- * seconds is longer than a minute of speech takes on a CPU and short enough that a service which is down costs one
- * message's delay rather than the chat's morning — the long poll itself is half a minute.
+ * The poller prepares a message before it posts it, so a transcription holds the rest of the batch behind it — including
+ * a `/stop` typed in the same breath, which is the one thing that has to arrive while a turn is running. A minute of
+ * speech is about four seconds on this CPU (rtf 0.07, measured), so twelve seconds covers a three-minute note and bounds
+ * a hung service at a dozen seconds rather than twenty. A service that takes longer than that is down, and the message
+ * goes on with the sentence that says the note could not be transcribed.
  */
-export const ASR_TIMEOUT_MS = 20_000;
+export const ASR_TIMEOUT_MS = 12_000;
 
 /**
  * The largest file worth posting, in MiB. Telegram lets a bot download 20 MiB, but a voice note is speech, and speech is
