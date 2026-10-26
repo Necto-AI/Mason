@@ -21,10 +21,20 @@
  *
  * **A failed long poll is not a failed container.** A proxy reconnecting, a VPN dropping, a `429` from Telegram — each is
  * one logged line and a wait, because the alternative is a restart loop that loses its place less gracefully.
+ *
+ * **A command is an envelope of its own kind, and the message it came from is kept beside it.** Text that starts with a
+ * slash is posted as `kind: "command"`, and mason answers whether it acted. `handled: false` means the word means
+ * nothing there, so the same update goes to the door again as the message it always was: `/start`, `/foo` and a mistaken
+ * `/stopp` reach the agent as text rather than disappearing or failing. `/help` never goes anywhere — it is the relay
+ * describing itself, and `src/commands.ts` owns the words.
+ *
+ * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
+ * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away.
  */
 import type { ChatDirectory } from "./chats.ts";
+import { commandIn, HELP_TEXT, isHelp } from "./commands.ts";
 import type { DoorResult } from "./door.ts";
-import { envelopeFor, type EventEnvelope, type EventFile } from "./envelope.ts";
+import { commandEnvelopeFor, envelopeFor, type EventEnvelope, type EventFile } from "./envelope.ts";
 import { readMessage, type Attachment, type FilterContext } from "./filter.ts";
 import type { SaveOutcome } from "./inbox.ts";
 import { describeError, formatDuration, type Log } from "./log.ts";
@@ -67,6 +77,11 @@ export interface PollerOptions {
 	};
 	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
 	readonly now?: () => number;
+	/**
+	 * Posting a command's answer into the chat. Optional and structural, like the indicator: a test without a queue simply
+	 * records what was said, and `src/queue.ts` stays the file that knows one chat's minute.
+	 */
+	readonly reply?: (chatId: string, text: string) => Promise<void>;
 }
 
 /**
@@ -96,7 +111,16 @@ export interface PollSummary {
 /** What one update is worth posting, once the filter has answered and the attachment — if any — is on the volume. */
 type Prepared =
 	| { readonly kind: "skipped"; readonly reason: string }
-	| { readonly kind: "ready"; readonly chatId: string; readonly envelope: EventEnvelope };
+	/** `/help`: the relay describing itself, answered here and never posted to the door. */
+	| { readonly kind: "answered"; readonly chatId: string; readonly text: string }
+	| {
+			readonly kind: "ready";
+			readonly chatId: string;
+			/** What is posted first: a command when the message is one, otherwise the message. */
+			readonly envelope: EventEnvelope;
+			/** The same update as an ordinary message, which a command falls back to when mason does not handle it. */
+			readonly message?: EventEnvelope;
+	  };
 
 export class Poller {
 	readonly #options: PollerOptions;
@@ -192,8 +216,16 @@ export class Poller {
 				this.#offset = update.update_id + 1;
 				continue;
 			}
+			if (prepared.kind === "answered") {
+				await this.#say(prepared.chatId, prepared.text);
+				this.#offset = update.update_id + 1;
+				continue;
+			}
+			// The envelope being delivered. A command starts here and is replaced by the message when mason says it did not
+			// handle it, so the retry after a door that was down re-posts whichever one is still owed.
+			let envelope = prepared.envelope;
 			for (;;) {
-				const delivery = await this.#options.door.fire(prepared.envelope);
+				const delivery = await this.#options.door.fire(envelope);
 				if (delivery.kind !== "unreachable") {
 					if (down > 0) {
 						this.#options.log(
@@ -204,10 +236,20 @@ export class Poller {
 						announcedAt = undefined;
 					}
 					fired += 1;
-					// Only an accepted fire is work in progress. A refusal (a disabled trigger face, a bad signature) means
-					// nobody is thinking about this message, and dots that stay up for a turn that never started are the
-					// interface lying.
-					if (delivery.kind === "accepted") this.#options.typing?.start(prepared.chatId);
+					if (delivery.kind === "accepted" && envelope.kind === "command") {
+						if (!delivery.answer.handled && prepared.message !== undefined) {
+							// The word means nothing there, so the update is the message it always was. Nothing was fired, and the
+							// typing indicator is the message's to start.
+							envelope = prepared.message;
+							continue;
+						}
+						const reply = delivery.answer.reply;
+						if (delivery.answer.handled && reply !== undefined) await this.#say(prepared.chatId, reply);
+					} else if (delivery.kind === "accepted") {
+						// Only an accepted fire is work in progress. A command is not a turn, and dots for one would be the interface
+						// lying about what is running.
+						this.#options.typing?.start(prepared.chatId);
+					}
 					this.#offset = update.update_id + 1;
 					break;
 				}
@@ -242,12 +284,39 @@ export class Poller {
 		// Recorded before the door answers, because the chat is real whether or not this particular message got through:
 		// `list_chats` is where the agent may write, not a log of successful deliveries.
 		this.#options.chats.add(reading.chat);
+		const command = commandIn(reading.event.text);
+		if (command !== undefined) {
+			if (isHelp(command)) return { kind: "answered", chatId: reading.chat.id, text: HELP_TEXT };
+			// The message envelope is built beside the command because a word mason does not handle is still a message, and
+			// the file is not fetched for either: a caption that is a command is not a message about a file, and a download
+			// spent on `/stop` is spent for nothing.
+			return {
+				kind: "ready",
+				chatId: reading.chat.id,
+				envelope: commandEnvelopeFor(reading.event.updateId, command),
+				message: envelopeFor(reading.event),
+			};
+		}
 		const file = await this.#save(update.update_id, reading.attachment);
 		return {
 			kind: "ready",
 			chatId: reading.chat.id,
 			envelope: envelopeFor(file === undefined ? reading.event : { ...reading.event, file }),
 		};
+	}
+
+	/**
+	 * One line into the chat, through the queue the caller owns. A reply that could not be sent is one warning: the command
+	 * itself was answered, and a chat that did not read it must not cost the batch.
+	 */
+	async #say(chatId: string, text: string): Promise<void> {
+		const reply = this.#options.reply;
+		if (reply === undefined) return;
+		try {
+			await reply(chatId, text);
+		} catch (error) {
+			this.#options.log("warn", `could not answer a command in chat ${chatId}: ${describeError(error)}`);
+		}
 	}
 
 	/**

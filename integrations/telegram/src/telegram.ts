@@ -232,6 +232,15 @@ export class TelegramApi {
 		});
 	}
 
+	/**
+	 * Telegram's own bot command menu: the list a person sees when they type `/` in any chat. Set once at startup from
+	 * the same vocabulary `/help` answers with (`src/commands.ts`), so the menu and the paragraph cannot disagree about
+	 * what this relay knows.
+	 */
+	async setMyCommands(commands: readonly { readonly command: string; readonly description: string }[]): Promise<void> {
+		await this.#call("setMyCommands", { commands });
+	}
+
 	async sendMessage(options: SendMessageOptions): Promise<SendOutcome> {
 		let answer: FetchResponse;
 		try {

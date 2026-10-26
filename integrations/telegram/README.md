@@ -35,6 +35,9 @@ longer than a minute ends the tool call with a message the model can act on inst
 
 - `id` is `tg-<update_id>`, and an update id is unique per bot and monotonic, so the door's permanent dedupe turns a
   redelivery after a crash into the same event rather than a second one.
+- A message whose text starts with `/` is posted as
+  `{"v":1,"id":"tg-8811","kind":"command","payload":"stop"}` instead, and does not fire a turn. Mason decides what the
+  word means; the section below is what this container does with the answer.
 - The chat id is inside the payload on purpose: the reply needs it, and `payload` is a string.
 - The reply clause appears only when it is a reply, the handle only when the sender has one, and the title only when the
   chat has one — a private chat has none, and a stable rendering beats empty brackets.
@@ -70,10 +73,10 @@ longer than a minute ends the tool call with a message the model can act on inst
 
 **What is dropped, and where.** A message from a bot, an edit, a chat that is not in `TELEGRAM_ALLOWED_CHATS`, and
 anything that is neither words nor a file (a sticker, a location, a poll, a service notice) never becomes an event, and a
-chat we did not choose never enters `list_chats` either. Commands are delivered: `/start` and `/command@this_bot` are what
-a person typed in a chat we chose, and deciding here which commands mean something would be this container guessing at
-what the agent should hear. The bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup) and
-everything else in the message is kept verbatim.
+chat we did not choose never enters `list_chats` either. A word that starts with `/` takes the command path below and is
+never dropped for being one: `/help` is answered here, and every other word is posted to mason, which answers whether it
+acted. The bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup), and everything else in the
+message is kept verbatim, which is also how a group sends `/stop@mason_bot`.
 
 **Files arrive as a path, because the agent reads one.** A photo, a document, a voice note, an audio file or a video is
 written to `TELEGRAM_INBOX` as `<update_id>-<the sender's name, sanitised>` with mode `0600`, and the payload ends with
@@ -90,6 +93,46 @@ profile, the log, the skills, the memory repository) stays out of this container
 once per batch, not once per message: a crash mid-batch replays at most one batch, and the id makes the replay the same
 fire. A container whose volume has never held an offset reads `getUpdates` once with no offset, discards the backlog and
 starts from now, because a restart must never replay yesterday's chat into the agent. `chats.json` sits beside it.
+
+## Commands: what a chat can ask for
+
+A message whose text starts with `/` is a command candidate: it is posted to the same door as `kind: "command"`, with
+the word after the slash as the payload, and it does not fire a turn. Mason decides what the word means, because the
+vocabulary is mason's (`src/server/events.ts`), and this container relays the answer.
+
+| What a person types | What happens |
+|---|---|
+| `/stop` | The running turn is stopped, and the chat reads `stopped`. |
+| `/compact` | The conversation is summarised, and the chat reads `compacted`. Words after the command are the instructions mason passes on. |
+| `/clear` | The conversation is forgotten and started again, and the chat reads `cleared`. |
+| `/status` | One line: what the agent is doing, what is queued, which integrations answered at boot, and how many did not. |
+| `/help` | The paragraph below, answered here and never sent to mason. |
+
+An integration declares which of those its secret may issue (`npm run integration -- commands telegram
+stop,compact,clear,status` on the mason side); with none declared, every one of them is a message. **A word mason does
+not act on is not an error**: the door answers `{"handled":false}`, and this container posts the message it kept beside
+the command, so `/start`, `/foo` and a mistyped `/stopp` reach the agent as the text they were. A declared command that is
+malformed (an argument where mason takes none, more than 200 characters of instructions to `/compact`) is refused with a
+`400` and one line saying which rule it broke; the offset advances, because the person typed something mason will not do.
+
+The command envelope carries the id its message would have had, so a redelivery is one claim at the door and the command
+does not run twice. `/help` answers with what this relay forwards, because it cannot read `integrations.json`:
+
+```text
+mason understands these commands in this chat, when the integration declares them:
+/stop: stop the turn that is running
+/compact: summarise the conversation so far, with optional instructions
+/clear: forget the conversation and start again
+/status: what the agent is doing, and what is connected
+Anything else you type, including any other /word, arrives as a message.
+```
+
+The same four names are set as Telegram's own bot command menu (`setMyCommands`) before the first poll, so typing `/` in
+the chat shows them; a menu Telegram refuses is one warning and nothing else. A command is posted in the batch it arrived
+in, immediately, because a turn that is running is not something the poller waits on: `/stop` reaches mason while the turn
+it stops is still running. The answer is posted through the same per-chat send queue as `send_message`, so Telegram's
+twenty-a-minute limit stays one file's problem, and a failed answer is a logged warning rather than a held batch: the
+command was answered, and a chat that did not read the answer must not block the messages behind it.
 
 ## Configuration — the environment, and nothing else
 

@@ -12,7 +12,8 @@
  * 2. **`getMe`, because the mention stripper needs the bot's own username.** Without it a group message arrives with
  *    `@this_bot` still in the text, and the agent reads its own name as part of what somebody said. It is retried a few
  *    times and then refused: a bot that cannot identify itself cannot relay a group properly, and a restart loop is the
- *    supervisor's business, not a degraded mode.
+ *    supervisor's business, not a degraded mode. The command menu Telegram shows on `/` is set from there too, and a
+ *    refusal there is one warning: a menu nobody sees is not a reason to stay down.
  * 3. **The tools face bound**, before the first poll: mason connects at its own boot and a container that answers
  *    `tools/list` late is one whose tools are missing for that whole run.
  * 4. **The poll**, which starts from now if this volume has never held an offset.
@@ -22,6 +23,7 @@
  * same fire, because its id never changes.
  */
 import { ChatDirectory } from "./chats.ts";
+import { COMMANDS } from "./commands.ts";
 import { EventDoor } from "./door.ts";
 import { readConfig, ConfigError, type Config } from "./env.ts";
 import { directFetch, proxiedFetch } from "./fetch.ts";
@@ -79,6 +81,11 @@ async function main(): Promise<void> {
 		log,
 		integration: "telegram",
 	});
+	const queue = new SendQueue({
+		// A failed send is a tool result the model reads, so the queue redacts with the same two secrets the log does.
+		secrets: [config.botToken, config.triggerSecret],
+		onWait: (chatId, waitMs, reason) => log("info", `waiting ${formatDuration(waitMs)} on chat ${chatId} (${reason})`),
+	});
 	const poller = new Poller({
 		api,
 		state,
@@ -88,12 +95,22 @@ async function main(): Promise<void> {
 		filter: { allowedChats: new Set(config.allowedChats), botUsername: bot.username },
 		typing,
 		inbox,
+		// A command's answer goes through the same per-chat queue as a tool's message, so the rate limit and the 429 belong
+		// to one file. A send that failed is one line: the command was answered, and a chat that did not read it is not a
+		// reason to hold the batch.
+		reply: async (chatId, text) => {
+			const outcome = await queue.enqueue(chatId, () => api.sendMessage({ chatId, text }));
+			if (outcome.kind === "failed") log("warn", `could not answer a command in chat ${chatId}: ${outcome.error}`);
+		},
 	});
-	const queue = new SendQueue({
-		// A failed send is a tool result the model reads, so the queue redacts with the same two secrets the log does.
-		secrets: [config.botToken, config.triggerSecret],
-		onWait: (chatId, waitMs, reason) => log("info", `waiting ${formatDuration(waitMs)} on chat ${chatId} (${reason})`),
-	});
+
+	// The menu a person sees when they type `/`: the same words `/help` answers with, so the two cannot drift. Set before
+	// the first poll and never fatal — Telegram refusing a menu is not a reason to stop relaying messages.
+	try {
+		await api.setMyCommands(COMMANDS.map((command) => ({ command: command.name, description: command.description })));
+	} catch (error) {
+		log("warn", `could not set the bot's command menu: ${describeError(error)}; /help still answers in the chat`);
+	}
 
 	const tools = await startMcpHttp({
 		port: config.port,
