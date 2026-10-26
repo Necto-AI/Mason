@@ -38,6 +38,11 @@ export interface FetchResponse {
 	 */
 	readonly headers?: { get(name: string): string | null };
 	text(): Promise<string>;
+	/**
+	 * The body as bytes. Only a download reads this: every other answer here is JSON, and `text()` is what a Telegram
+	 * reply is parsed from.
+	 */
+	arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 export interface FetchRequest {
@@ -73,8 +78,43 @@ export interface TelegramMessage {
 	readonly chat: TelegramChat;
 	readonly date: number;
 	readonly text?: string;
+	readonly caption?: string;
 	readonly reply_to_message?: { readonly message_id: number };
+	/** A file sent as a file: a PDF, a zip, a photo sent "without compression". */
+	readonly document?: TelegramFileish;
+	/** A photo, as a list of sizes the same picture was rendered at, smallest first. */
+	readonly photo?: readonly TelegramFileish[];
+	readonly voice?: TelegramFileish;
+	readonly audio?: TelegramFileish & { readonly file_name?: string; readonly title?: string };
+	readonly video?: TelegramFileish & { readonly file_name?: string };
+	/** A GIF sent from the picker. Telegram sends an `mp4` and calls it an animation. */
+	readonly animation?: TelegramFileish & { readonly file_name?: string };
+	/** A round video message: always an `mp4`, never named. */
+	readonly video_note?: TelegramFileish;
 }
+
+/**
+ * What Telegram says about a file before it is fetched: an id to ask `getFile` about, and whatever metadata the kind
+ * carries. `file_name`, `mime_type` and `file_size` are absent for a photo or a voice note, which is why every reader of
+ * this type names its own fallback.
+ */
+export interface TelegramFileish {
+	readonly file_id: string;
+	readonly file_unique_id?: string;
+	readonly file_name?: string;
+	readonly mime_type?: string;
+	readonly file_size?: number;
+	/** Photos carry their dimensions instead of a name; unused here, declared so a response is not silently narrowed. */
+	readonly width?: number;
+	readonly height?: number;
+}
+
+/**
+ * The kinds of file a message can carry: one name for each media field of `TelegramMessage`, and the vocabulary an event
+ * uses to say what arrived. Telegram's own, rather than a taxonomy of ours — a PDF is a document and a voice note is not
+ * an audio file, and only Telegram decides which field it used.
+ */
+export type FileKind = "document" | "photo" | "voice" | "audio" | "video" | "animation" | "video_note";
 
 /** One `getUpdates` entry. `allowed_updates: ["message"]` is what keeps the other kinds away. */
 export interface TelegramUpdate {
@@ -126,6 +166,19 @@ export interface SendMessageOptions {
 	readonly chatId: string;
 	readonly text: string;
 	readonly replyToMessageId?: number;
+}
+
+/** What `getFile` says about a file this bot may download: a path valid for an hour, and the size if Telegram knows it. */
+export interface TelegramFile {
+	readonly filePath: string;
+	readonly fileSize?: number;
+}
+
+/** `sendChatAction`: what this bot appears to be doing in a chat, for as long as Telegram cares. */
+export interface ChatActionOptions {
+	readonly chatId: string;
+	/** "typing" by default; the union is Telegram's, and only "typing" is used here. */
+	readonly action?: "typing" | "upload_photo" | "record_voice";
 }
 
 export class TelegramApi {
@@ -212,6 +265,20 @@ export class TelegramApi {
 		return { kind: "sent", messageId: message.message_id };
 	}
 
+	/**
+	 * "typing…" in the chat's header, for about five seconds. The one thing this container can show while the agent is
+	 * working, and the reason `src/typing.ts` exists: one call is a blink, and a turn is minutes.
+	 *
+	 * Returns nothing on success and throws `TelegramError` on refusal — a chat that was deleted, a bot kicked out of a
+	 * group. The caller is a heartbeat and decides for itself that a failed courtesy is not a failed turn.
+	 */
+	async sendChatAction(options: ChatActionOptions): Promise<void> {
+		await this.#call("sendChatAction", {
+			chat_id: options.chatId,
+			action: options.action ?? "typing",
+		});
+	}
+
 	async #call(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
 		let answer: FetchResponse;
 		try {
@@ -235,6 +302,40 @@ export class TelegramApi {
 			);
 		}
 		return parsed.result;
+	}
+
+	/**
+	 * Where a file id actually lives. `getFile` answers a `file_path` that is only valid for an hour and only together with
+	 * this bot's token, and the download itself is a plain GET on `/file/bot<token>/<path>` — not the `/bot<token>/<method>`
+	 * shape every other call uses. That second URL is why this is a method and not a string built at the call site.
+	 */
+	async getFile(options: { readonly fileId: string }): Promise<TelegramFile> {
+		const result = await this.#call("getFile", { file_id: options.fileId });
+		// Telegram's own spelling, read here rather than exposed: `file_path` is a path on Telegram's file server, and
+		// the rest of this package only ever wants the two members below.
+		const file = result as { readonly file_path?: unknown; readonly file_size?: unknown } | null | undefined;
+		if (typeof file !== "object" || file === null || typeof file.file_path !== "string" || file.file_path === "") {
+			throw new TelegramError("getFile", 200, "the answer carried no file_path");
+		}
+		return {
+			filePath: file.file_path,
+			...(typeof file.file_size === "number" ? { fileSize: file.file_size } : {}),
+		};
+	}
+
+	/** The bytes of a file `getFile` named. Refused the same way a JSON call is, with the status in the message. */
+	async downloadFile(options: { readonly filePath: string }): Promise<Uint8Array> {
+		const url = `${this.#baseUrl}/file/bot${this.#token}/${options.filePath}`;
+		let answer: FetchResponse;
+		try {
+			answer = await this.#fetch(url, { method: "GET", headers: {} });
+		} catch (error) {
+			throw new TelegramError("downloadFile", 0, `request failed: ${this.#clean(error)}`);
+		}
+		// `statusText` can carry whatever the far end put there, and the proxy in front of this container is the one party
+		// that could splice the URL it was asked for into it. Cleaned for the same reason every other failure is.
+		if (!answer.ok) throw new TelegramError("downloadFile", answer.status, this.#clean(answer.statusText));
+		return new Uint8Array(await answer.arrayBuffer());
 	}
 
 	#url(method: string): string {

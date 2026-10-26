@@ -16,3 +16,14 @@ services:
     userns_mode: keep-id
   mason:
     userns_mode: keep-id
+  # The relay shares `mason-inbox` with the tool machine and writes the files a chat sends, so it is the third container
+  # that has to agree about what uid 1000 means. Without this line the volume is created by `mason-env` as the host's
+  # 1000:100, the relay's `node` is 1000 *inside* a namespace that maps to a subuid, and every attachment is refused with
+  # EACCES — the feature present in the code, absent in the deployment, and visible only as one warn line per message.
+  #
+  # Its own `mason-telegram-data` volume predates this line, so after switching, `offset.json` and `chats.json` are owned
+  # by the old subuid mapping and the poller cannot read them. That volume is declared disposable (deploy/README.md, "What
+  # to back up"): remove it once and the container recreates it with its own ownership, which costs the poller's place in
+  # the chat ("start from now") and the list of chats it had seen. Nothing else lives there.
+  mason-telegram:
+    userns_mode: keep-id
