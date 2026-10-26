@@ -10,7 +10,8 @@ integration" below); those are other people's images, not this repo's.
 ```
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
                           │
-                          ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge)
+                          ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
+                          │                                           mason-egress with the vpn sidecar)
                           └── volumes: mason-agent (both containers), mason-service, env-keys
 ```
 
@@ -21,7 +22,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 | Half | What is in it | Where it is mounted |
 |---|---|---|
 | `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
-| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
@@ -69,6 +70,9 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_ENV_ALIAS=pi-env-mason-env       # optional: the name its host key is pinned under
    MASON_ENV_WAIT_ATTEMPTS=30             # optional: how long the boot waits for it to answer
    EXAMPLE_TOKEN=…                          # optional: an integration container's own credential (see "An integration")
+   TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
+   TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
+   TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids the bot may relay, comma-separated
    ```
 
 3. **Provider credentials**, in the directory `MASON_PI_AGENT_DIR` names. This is pi's own layout, unchanged — two
@@ -206,9 +210,10 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
 **Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose network,
 joined by mason and the integration containers only. No integration declares `ports:` — mason reaches it by name, so it
 needs none — and a published port would be a second door into a service holding a credential, with no token of mason's in
-front of it. mason keeps `mason-edge` for the model provider and each integration keeps it for its upstream. The network
-is the authentication on the MCP wire: as long as the only peer is mason, a shared secret would be a secret with one
-holder.
+front of it. mason keeps `mason-edge` for the model provider, and an integration keeps it for its upstream — or, where
+the upstream is not reachable from this host, the integration joins `mason-egress` instead and the proxy sidecar beside
+it keeps `mason-edge` (`mason-telegram`, below). The network is the authentication on the MCP wire: as long as the only
+peer is mason, a shared secret would be a secret with one holder.
 
 **`mason-env` is not on `mason-mcp`, and must not be.** The tool machine runs `bash` for a model that can be talked into
 anything. If it could reach an MCP endpoint directly, the tool surface would stop being what `integrations.json` says it
@@ -221,6 +226,35 @@ but it means an integration added inside a running container with `npm run integ
 `deploy/integrations.json` before the next restart, or the boot undoes it. A stack that would rather be edited live can
 leave the mount out; the copy on the volume is then the whole truth.
 
+## The first integration: `mason-telegram`, and the sidecar it needs
+
+[`integrations/telegram/`](../integrations/telegram/README.md) is the first integration built in this repository rather
+than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
+`integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
+It is still just the two containers in the templates at the end of `compose.yaml` — `mason-telegram` on `mason-mcp` with a
+`/data` volume for its offset and no `ports`, plus a `vpn` sidecar — and the only thing mason knows about it is one entry
+in `integrations.json` and a trigger secret. Mint that secret on the mason side
+(`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
+`secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
+bot token and the chat allowlist, and the boot refuses — naming the hook — until the `team-chat` hook this build defines
+is the one the trigger names.
+
+**The sidecar is not optional here, and neither is the network that carries it.** Telegram is unreachable from most hosts
+this runs on, so the integration is given `HTTPS_PROXY=http://vpn:1080` and reaches its upstream through it. The
+`mason-telegram` container therefore joins `mason-mcp` and `mason-egress`, and not `mason-edge`: `mason-egress` is
+`internal: true`, so the proxy is the only address the container can reach, and — since `mason-edge` is an ordinary
+bridge with a gateway — being on it would have given the container its own way out and made the proxy decoration. The
+sidecar is the only container that stands on both (`mason-egress` in, `mason-edge` out), and `mason-telegram` is the only
+other member of `mason-egress`, so that network is that container's single route and the proxy is its only address there.
+The proxy is not a fence between mason and an integration: mason stands on `mason-edge` as the sidecar does, so mason can
+open `vpn:1080` too — and it changes nothing, because `mason-edge` already gives mason egress of its own, which is why
+mason never joins `mason-egress` and has no use for the proxy. What `mason-egress` keeps off it is the tool machine:
+`mason-env` joins neither network, so it has no route to the proxy at all. The proxy's config is a real server's address
+and key, so it is a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json` (gitignored) and fill in
+the TODOs; it is mounted read-only, never baked into an image, and the sidecar publishes no port, because a published
+SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use
+it.
+
 ## What to back up
 
 **Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
@@ -229,10 +263,14 @@ history begins at the migration if the home was migrated, since the pre-split hi
 home root, which is not a volume. `mason-service` is the server: `soul.md`,
 `roster.json`, `config.json` (the token hashes — no plaintext token lives here), `integrations.json` (the integrations
 mason reaches, and each one's trigger secret), `data/agent.sqlite`
-(the transcript and the hooks), `data/connectors.json`, `data/seeded-skills.json` (which shipped skills this home was
+(the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.
+
+A home upgraded from a build that still had the GitHub connector also keeps a `service/data/connectors.json`: no code
+reads it (the migration moved `data/` wholesale, so it came along), every secret in it opens nothing, and it is safe to
+delete before you take the archive.
 
 ```sh
 for volume in mason-agent mason-service; do
@@ -252,12 +290,20 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
 - `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
   publishes a port, and `mason-env` is not a member (see "An integration" above).
+- `mason-egress` is the third, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
+  integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`. Neither mason nor
+  `mason-env` joins it: mason reaches the proxy from `mason-edge` — it has egress of its own there, so the proxy gains it
+  nothing — while `mason-env` joins neither network, so the tool machine has no route to the proxy at all.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
   `X-Forwarded-Proto: https` so the session cookie is issued `Secure`.
-- `/api/health` is unauthenticated by design (a monitor that needs a token is a monitor nobody runs). Everything else
-  goes through `src/server/auth.ts`; there is no route in this deployment that does not.
+- Two paths are outside `src/server/auth.ts` on purpose, and each can do exactly one thing. `/api/health` answers one word
+  and needs no credential at all (a monitor that needs a token is a monitor nobody runs), and
+  `POST /api/events/<integration>` is authenticated by that integration's trigger secret: the HMAC is the door, and the
+  door opens `hooks.fire` and nothing else — it cannot read, claim or call. Everything else under `/api`, and the Chord
+  socket, goes through `src/server/auth.ts`; the shell itself is served publicly because it is a bundle with no secrets in
+  it, and it is where a browser is told it is not paired.
 
 ## The path agreement, and the one honest limitation
 

@@ -301,6 +301,23 @@ function ordered(integrations: Record<string, Integration>): Record<string, Inte
 }
 
 /**
+ * The trigger a door may use: the one an enabled integration with a trigger face has.
+ *
+ * This is the whole of "usable trigger", in one place, so the route does not decide it: a disabled integration's door
+ * and one that never had a trigger face are both `404`, and neither is a shape the request path has an opinion about.
+ * Read from the boot's snapshot (`currentIntegrations()`), never from the file: whether a trigger exists is config, and
+ * config is settled at boot.
+ */
+export function triggerFor(
+	integrations: Record<string, Integration>,
+	name: string,
+): IntegrationTrigger | undefined {
+	const integration = integrations[name];
+	if (integration === undefined || !integration.enabled) return undefined;
+	return integration.trigger;
+}
+
+/**
  * The set this process booted with.
  *
  * The readers that cannot await — the prompt section and the route — take it from here, and it is one snapshot: two
