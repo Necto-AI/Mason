@@ -55,6 +55,12 @@ services:
       # `service/` is deliberately absent: no soul, no roster, no token hashes, no trigger secret, no database, no SSH
       # key, no provider credential. That absence is the boundary — a mount, not a mode bit that `chmod` can undo.
       - mason-agent:/home/mason/.mason/agent
+      # The Telegram integration's inbox, at the path `mason-telegram` writes it to: one volume mounted in two
+      # containers at one path, so a file a chat message carried is the file a `read` here opens — an image comes back as
+      # an image. It sits inside the `mason-agent` mount above on purpose, and the runtime resolves the longer path first:
+      # this directory is the only part of the agent's home that container may write, which is the whole point of the
+      # mount being a directory of its own.
+      - mason-inbox:/home/mason/.mason/agent/workspace/inbox
       # A checkout the agent works in on behalf of a person, at its host path so that every path in a report, an issue
       # and a prompt means the same thing on the host and in the container. Read-write: the worker commits, branches and
       # pushes. Defaults to the clinical-compass checkout on the deploy host; set REPO_DIR in `deploy/.env` to move it,
@@ -204,6 +210,13 @@ volumes:
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
   env-keys:
     name: env-keys
+  # The files chat messages carried: written by an integration (`mason-telegram`), read by the tool machine at the same
+  # path. A volume of its own rather than a corner of `mason-agent`, because what an integration may write is exactly one
+  # directory of the agent's home — the profile, the log, the skills and the memory repository are not a relay's to read
+  # — and because everything here is disposable: a file nothing claimed is swept after a week, while the rest of the home
+  # is the agent's to keep. Nothing here is a credential, and nothing here needs backing up.
+  mason-inbox:
+    name: mason-inbox
 
 networks:
   # Default bridge: outbound only in practice, since the server is the only member and it is a server.

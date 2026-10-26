@@ -58,6 +58,12 @@ services:
       # The offset and the chats it has seen (`offset.json`, `chats.json`) and nothing else. No `mason-service` and no
       # `mason-agent`: the bot token is Telegram's credential, not mason's, and the home is not this container's to read.
       - mason-telegram-data:/data
+      # The one directory of the agent's home this container sees, and the whole of what it shares with it: a file a
+      # message carried is written here, and the event names it by path. `mason-env` mounts the same volume at the same
+      # path, so the agent's `read` opens exactly these bytes. Declared in compose.yaml, beside that mount, because the
+      # volume is the agent's before it is this container's — and `mason-agent` itself stays absent, which is the boundary:
+      # no profile, no log, no skills, no memory repository.
+      - mason-inbox:/home/mason/.mason/agent/workspace/inbox
     # No `ports`. The container is reached by name on mason-mcp, and a published port would be a second door into a
   #   # service that holds a bot token.
 
