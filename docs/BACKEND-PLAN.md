@@ -27,12 +27,16 @@ That is a working single-agent backend with one interface. It is not yet an agen
 Each gap is stated as the thing that is missing, then the smallest design that closes it. The milestones at the end put
 them in order.
 
-### 1. An interface cannot say what it is
+### 1. An integration cannot say what it is
 
-Today the model is told "this chat renders words, not widgets" by a sentence in the `team-chat` hook prompt. That
-sentence is a patch over a structural hole: **capability is a property of the interface, and no interface declares it.**
+Today the model is told "this chat renders words, not widgets" by a sentence in the `team-chat` hook prompt, and the same
+sentence names the vendor's tool. That is a patch over two structural holes: **capability is a property of the medium, and
+no entry declares it**, and **a reply is addressed to a vendor by name** because a turn does not know which integration it
+came from. [ADR-0005](adr/0005-there-is-no-interface-type.md) settles both; this milestone is the work.
 
-Design: `integrations.json` gains a `capabilities` block per integration, and the hook prompt is built from it.
+Design: `integrations.json` gains a voice per entry — `speaks: "person" | "service"` and
+`capabilities: { render, interact, live }` — the hook prompt is built from it, the fire carries its origin integration, and
+`send_to_user` becomes the router that delivers to the origin's reply tool (or to the transcript, for the operator door).
 
 ```json
 { "capabilities": { "render": ["text", "image", "file"], "interact": ["reply"], "live": false, "verbatim": false } }
@@ -47,8 +51,8 @@ Consequences that are worth the work:
 - The projection has a mirrored whitelist (`src/server/projection.ts`), so a capability declared here is also what a new
   surface is allowed to receive. One declaration, two readers.
 
-Exit: a second interface (the console) and the first (Telegram) get different prompts from the same hook, with no
-interface's name in `src/server/`.
+Exit: Telegram, a second chat integration and the console get different prompts from the same hook, with no vendor's name
+in `src/server/`; a reply reaches the place it came from without the model choosing a tool by name.
 
 ### 2. There is no vocabulary for control
 
@@ -141,7 +145,7 @@ Sequenced by what unblocks the most, and by what the MVP in [`MVP-PLAN.md`](MVP-
 
 | # | Milestone | Contents | Exit criteria |
 |---|---|---|---|
-| 1 | **The interface contract** | capabilities in `integrations.json`; prompt built from it; command route with a declared vocabulary; `/stop`, `/compact`, `/clear`, `/status` from Telegram | two interfaces, two prompts, no interface name in the server; `/stop` mid-turn < 1 s |
+| 1 | **The integration contract** | voice and capabilities in `integrations.json`; prompt built from them; the fire's origin; `send_to_user` as the router; command route with a declared vocabulary; `/stop`, `/compact`, `/clear`, `/status` from Telegram | two media, two prompts, no vendor name in the server; a reply lands where it came from; `/stop` mid-turn < 1 s |
 | 2 | **Seeing** | structured event channel; `/api/status`; per-turn cost and latency; a chat `/status` that reports the last hour | one request answers "what happened and what is broken" |
 | 3 | **Memory with recall** | FTS5 index over memory and transcript; `recall` tool; nightly curator hook | a decision from three months ago is quoted with its source |
 | 4 | **Proactive with a reason** | routines + schedules in the durable store; wake rules from integrations; proactive-turn contract (one actionable thing or silence) | a week unattended, every message acted on, none muted |
