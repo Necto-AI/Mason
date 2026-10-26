@@ -25,3 +25,6 @@ room, while an integration does background ingest and must never speak.
   generic adapter.
 - **No extension is written per integration.** The only per-integration artefacts are a container, a config entry and
   a secret.
+- **ADR-0004 extends that list with one hook.** A hook's `promptTemplate` is where interface-specific prompt text
+  belongs, so the suite is a container, a config entry, a secret and a hook — and nothing else in `src/` may know an
+  interface's name (`docs/adr/0004-mason-is-a-headless-backend.md`).
