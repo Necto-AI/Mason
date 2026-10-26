@@ -15,7 +15,7 @@
  *
  * Time is injected (`now`, `sleep`) so a test can hold a whole minute of throttling in no time at all.
  */
-import { describeError } from "./log.ts";
+import { describeError, redact } from "./log.ts";
 import type { SendOutcome } from "./telegram.ts";
 
 /** Telegram's own limit for a bot in a group, per minute. Not a preference. */
@@ -33,6 +33,12 @@ export interface SendQueueOptions {
 	readonly maxWaitMs?: number;
 	readonly now?: () => number;
 	readonly sleep?: (ms: number) => Promise<void>;
+	/**
+	 * What must never appear in a failure the model reads: the bot token, which a thrown client error can quote out of the
+	 * URL it was called at. The queue is the last place a `send_message` error passes through, so it is the last place
+	 * that can redact one.
+	 */
+	readonly secrets?: readonly string[];
 	/** Called before a wait, so the log says why a reply is late. */
 	readonly onWait?: (chatId: string, waitMs: number, reason: "rate" | "throttled") => void;
 }
@@ -44,6 +50,7 @@ export class SendQueue {
 	readonly #maxWaitMs: number;
 	readonly #now: () => number;
 	readonly #sleep: (ms: number) => Promise<void>;
+	readonly #secrets: readonly string[];
 	readonly #onWait: SendQueueOptions["onWait"];
 	/** Successful send times per chat, pruned to the window as it moves. */
 	readonly #sent = new Map<string, number[]>();
@@ -57,6 +64,7 @@ export class SendQueue {
 		this.#maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
 		this.#now = options.now ?? (() => Date.now());
 		this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+		this.#secrets = options.secrets ?? [];
 		this.#onWait = options.onWait;
 	}
 
@@ -79,7 +87,9 @@ export class SendQueue {
 			try {
 				outcome = await attempt();
 			} catch (error) {
-				return { kind: "failed", error: describeError(error) };
+				// The same redactor the log uses: this error becomes a tool result the model reads, and a token in the
+				// transcript is a token in the log, the UI and every backup.
+				return { kind: "failed", error: redact(describeError(error), this.#secrets) };
 			}
 			if (outcome.kind === "sent") {
 				this.#record(chatId);
