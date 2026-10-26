@@ -4,11 +4,13 @@ Two containers. `mason` is the server: the repo run from source, the built web c
 the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu 24.04 and
 an sshd, reached only by mason, with no route out. The split is not packaging taste — every `read`, `write`, `edit`,
 `bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the boundary between thinking and doing
-was in the code before it was in a compose file.
+was in the code before it was in a compose file. A deployment may add a third container per integration (see "An
+integration" below); those are other people's images, not this repo's.
 
 ```
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
                           │
+                          ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge)
                           └── volumes: mason-agent (both containers), mason-service, env-keys
 ```
 
@@ -19,7 +21,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 | Half | What is in it | Where it is mounted |
 |---|---|---|
 | `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent` |
-| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, `connectors.json`, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
@@ -66,6 +68,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_ENV_PORT=22
    MASON_ENV_ALIAS=pi-env-mason-env       # optional: the name its host key is pinned under
    MASON_ENV_WAIT_ATTEMPTS=30             # optional: how long the boot waits for it to answer
+   EXAMPLE_TOKEN=…                          # optional: an integration container's own credential (see "An integration")
    ```
 
 3. **Provider credentials**, in the directory `MASON_PI_AGENT_DIR` names. This is pi's own layout, unchanged — two
@@ -166,13 +169,66 @@ deliberate, and it makes the volume a credential of the same weight as the key i
 paste it into a bug report, and remember that anyone who can read the volume can spend the key. Nothing about it is
 ever baked into an image — the key never exists in a layer, only in a volume you control.
 
+## An integration: a container, a line, a restart
+
+A capability mason should have that nobody wrote a tool for — GitHub, a docs server, somebody's internal API — arrives as
+an **integration**: one container and one entry in a file (docs/adr/0003-integrations-are-services.md). No image in this
+repo, no TypeScript, no extension, nothing in `src/` to change.
+
+1. **A container.** Copy the commented template at the end of `compose.yaml`, uncomment it, name it after the
+   integration and give it that integration's own image. It joins two networks: `mason-mcp`, where mason reaches its MCP
+   endpoint by name (`http://mason-github:8082/mcp`), and `mason-edge`, the only way out to the third party's API. Its
+   credential is an environment variable read from `deploy/.env` — the container owns it, mason does not.
+
+2. **A line.** `deploy/integrations.json`. Create it beside the compose file before the first `up` — an empty
+   `{"integrations": {}}` is a stack with no integration at all — because a bind source that does not exist is a
+   directory to the container runtime, and a directory is no input. The same split as pi's credentials: the mounted file
+   is the input, and `service/integrations.json` is the copy the server reads. Every boot installs it `0600` (it can hold
+   a trigger secret) and prints one line — `copied integrations.json from /run/integrations.json`, or `unchanged`. One
+   integration:
+
+   ```jsonc
+   { "integrations": { "github": {
+       "enabled": true,
+       "description": "Issues and pull requests for the team's repositories",
+       "tools": { "url": "http://mason-github:8082/mcp", "required": false }
+   } } }
+   ```
+
+   `description` is required for an entry whose tools are on: it is the only thing the model is told about it. `required:
+   true` is the opt-in to a boot that refuses while that container is down; without it an unreachable integration removes
+   its tools, logs why, and leaves the boot alone.
+
+3. **A restart.** The file is read once, at boot, because what the model can do must not change between two messages of
+   one conversation. `docker compose restart mason` is how an edit lands. `npm run integration -- list | add | remove |
+   enable | disable` inside the container is the writer that validates the file, and it says the same thing.
+
+**Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose network,
+joined by mason and the integration containers only. No integration declares `ports:` — mason reaches it by name, so it
+needs none — and a published port would be a second door into a service holding a credential, with no token of mason's in
+front of it. mason keeps `mason-edge` for the model provider and each integration keeps it for its upstream. The network
+is the authentication on the MCP wire: as long as the only peer is mason, a shared secret would be a secret with one
+holder.
+
+**`mason-env` is not on `mason-mcp`, and must not be.** The tool machine runs `bash` for a model that can be talked into
+anything. If it could reach an MCP endpoint directly, the tool surface would stop being what `integrations.json` says it
+is: the bot would call a capability without the registration, the naming and the truncation mason applies, and without a
+person having decided it. mason is the only member of that network that decides anything.
+
+**Two writers, one file.** The mount wins: a boot that sees content differing from `service/integrations.json` installs
+the mount's version. That is the right precedence — the file a person keeps beside the compose file survives a recreate —
+but it means an integration added inside a running container with `npm run integration` has to be copied back to
+`deploy/integrations.json` before the next restart, or the boot undoes it. A stack that would rather be edited live can
+leave the mount out; the copy on the volume is then the whole truth.
+
 ## What to back up
 
 **Two volumes, and both of them.** `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
 shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
 history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
 home root, which is not a volume. `mason-service` is the server: `soul.md`,
-`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `data/agent.sqlite`
+`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `integrations.json` (the integrations
+mason reaches, and each one's trigger secret), `data/agent.sqlite`
 (the transcript and the hooks), `data/connectors.json`, `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
@@ -194,6 +250,8 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 - `mason-env`: no ports, and it is attached only to `mason-internal`, which is `internal: true` — no gateway, no route
   out, no DNS beyond the compose network. A tool cannot reach the internet or the host from there.
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
+- `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
+  publishes a port, and `mason-env` is not a member (see "An integration" above).
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send

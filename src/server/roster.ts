@@ -14,9 +14,9 @@
  * The file sits beside `config.json` in the service half of the home — `house.ts` builds the path — is written
  * atomically, and is read per request: removing a person lands on the next one, like revoking a token.
  */
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { NAME_MAX } from "../shared/contract.ts";
+import { writeFileAtomic } from "./atomic.ts";
 import type { HousePaths } from "./house.ts";
 
 /** One person the agent works with. */
@@ -76,12 +76,7 @@ export async function readRoster(paths: HousePaths): Promise<Roster> {
 }
 
 async function writeRoster(paths: HousePaths, roster: Roster): Promise<void> {
-	await mkdir(dirname(paths.roster), { recursive: true, mode: 0o700 });
-	const temporary = `${paths.roster}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(roster, null, 2)}\n`, { mode: 0o600 });
-	await rename(temporary, paths.roster);
-	await chmod(dirname(paths.roster), 0o700).catch(() => {});
-	await chmod(paths.roster, 0o600).catch(() => {});
+	await writeFileAtomic(paths.roster, roster);
 }
 
 /** Case-insensitive: two people may not differ only by a capital letter, or the transcript would lie about who spoke. */

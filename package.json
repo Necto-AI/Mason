@@ -14,6 +14,7 @@
     "token": "node --conditions=source --experimental-strip-types scripts/token.ts",
     "team": "node --conditions=source --experimental-strip-types scripts/team.ts",
     "connector": "node --conditions=source --experimental-strip-types scripts/connector.ts",
+    "integration": "node --conditions=source --experimental-strip-types scripts/integration.ts",
     "doctor": "node --conditions=source --experimental-strip-types scripts/doctor.ts",
     "test:asr": "asr/run.sh asr/.venv/bin/python -m unittest discover -s asr/tests -v"
   },

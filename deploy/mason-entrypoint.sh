@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mason's boot: the four things the server cannot do for itself, then the server.
+# mason's boot: the five things the server cannot do for itself, then the server.
 #
 # Runs as the unprivileged `mason` user, from the repo root (the image's WORKDIR, /app), on first boot and on every boot
 # after it. Each step is idempotent and prints one `[deploy]` line saying what it did, in the shape the server's own
@@ -11,11 +11,15 @@
 #      it cannot use;
 #   2. the env keypair — the key is what makes the rest of the boot possible;
 #   3. the env host key — pinned into the file the server reads at import time (PI_ENV_SSH_KNOWN_HOSTS);
-#   4. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
+#   4. the integrations — the operator's mounted file, copied into the service half, because the copy is what the server
+#      reads and what `npm run integration` writes;
+#   5. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
+#   6. the server, with the SSH target it reads from the environment.
 set -euo pipefail
 
 : "${MASON_HOME:?mason-entrypoint: MASON_HOME is not set (deploy/compose.yaml sets it)}"
 : "${MASON_PI_AGENT_SRC:?mason-entrypoint: MASON_PI_AGENT_SRC is not set (deploy/compose.yaml sets it)}"
+: "${MASON_INTEGRATIONS_SRC:?mason-entrypoint: MASON_INTEGRATIONS_SRC is not set (deploy/compose.yaml sets it)}"
 : "${MASON_ENV_HOST:?mason-entrypoint: MASON_ENV_HOST is not set (deploy/compose.yaml sets it)}"
 : "${MASON_ENV_USER:?mason-entrypoint: MASON_ENV_USER is not set (deploy/compose.yaml sets it)}"
 : "${MASON_ENV_PORT:?mason-entrypoint: MASON_ENV_PORT is not set (deploy/compose.yaml sets it)}"
@@ -132,7 +136,31 @@ mv "$known_hosts.tmp" "$known_hosts"
 chmod 0600 "$known_hosts"
 echo "[deploy] pinned $(wc -l < "$known_hosts") host key(s) for $MASON_ENV_ALIAS from $MASON_ENV_HOST:$MASON_ENV_PORT"
 
-# 4. The roster, from TEAM, only on a home that has none.
+# 4. The integrations, from the read-only mount.
+#
+# The same idiom as pi's credential in step 1, for the same reason: the mounted file is the operator's input, and the
+# server reads a copy it owns. It is service-owned and never a path inside `agent/` — a tool that could rewrite the list
+# of integrations could grant itself a capability a person never approved. Two differences from pi's copy, both
+# deliberate:
+#
+#   * it is not rewritten every boot. `npm run integration` writes this file too, so a missing mount is not an
+#     instruction to delete it: an operator who added an integration inside the container did not ask for a restart to
+#     undo it. Only content that differs is installed.
+#   * it is installed 0600, like everything else in `service/` — it holds each integration's trigger secret.
+integrations_target="$service_dir/integrations.json"
+if [ -f "$MASON_INTEGRATIONS_SRC" ]; then
+  if [ -f "$integrations_target" ] && [ "$(sha256sum "$MASON_INTEGRATIONS_SRC" | cut -d' ' -f1)" = "$(sha256sum "$integrations_target" | cut -d' ' -f1)" ]; then
+    chmod 0600 "$integrations_target"
+    echo "[deploy] integrations.json unchanged"
+  else
+    install -m 0600 "$MASON_INTEGRATIONS_SRC" "$integrations_target"
+    echo "[deploy] copied integrations.json from $MASON_INTEGRATIONS_SRC"
+  fi
+else
+  echo "[deploy] no integrations.json in $MASON_INTEGRATIONS_SRC: $integrations_target left as it is"
+fi
+
+# 5. The roster, from TEAM, only on a home that has none.
 #
 # Names are written by `npm run team -- add`, not by this script: the CLI owns validation and the file's mode, and a
 # second writer would be a second spelling of the rule.
@@ -165,7 +193,7 @@ else
   fi
 fi
 
-# 5. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
+# 6. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
 export PI_ENV_SSH_HOST="$MASON_ENV_HOST"
 export PI_ENV_SSH_USER="$MASON_ENV_USER"
 export PI_ENV_SSH_PORT="$MASON_ENV_PORT"

@@ -126,10 +126,15 @@ you everything the agent is told. A test fails if another base extension grows a
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
+| `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
+| `codemode` | `<codemode>` | the vendor's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
 
-Section text is one of three kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
-`profile.md`), a **computation** over the filesystem (`skills`), or a **constant** in `prompt.ts` (the guidelines, the
-delivery invariant, the widget pointer).
+Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
+`profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the guidelines, the
+delivery invariant, the widget pointer), or a **rendering of something the prompt does not own** — the **boot
+configuration** (`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one
+file are the same bytes) and the **vendor-rendered `codemode` section**, whose text is pi-durable's composition and
+whose position alone is mason's.
 
 There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
 tree so it can change its own extensions, themes and skills; mason's agent is not meant to have that. A test asserts
@@ -220,8 +225,8 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui` — is what every conversation gets. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5).
-- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends the missing base names to a stored list, in base order, in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui`, `tool-search` — is what every conversation gets, and two more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face and the boot reached it, and `codemode`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it is the only way the agent reaches the reader, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5). `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when there is no tool face to reach, so a build with no integration has exactly the surface it had before MCP existed. The per-boot pair belongs to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` the model has no way to reach the reader at all. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when this boot reached a tools face, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: only the user's own steer cuts in, and a trigger source that asks to steer is downgraded to a follow-up. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
@@ -245,6 +250,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # Credentials that may talk to the server: one hashed token per device (§4.1b)
     ├── roster.json         # Who is in the room: the names a browser may claim, read per request (§4.1b)
+    ├── integrations.json   # The services mason reaches: each entry's MCP endpoint and trigger, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
     └── data/               # agent.sqlite, hooks.json and connectors.json (§4.1c)
@@ -259,9 +265,14 @@ opened or when a pre-split home is migrated; `npm run doctor -- migrate` moves a
 shape, freezes the old repository at the home root (both halves leave its index and enter its `.gitignore`) and starts
 the agent's history fresh in `agent/`.
 
-The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json` and `agent.sqlite` are
-`0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither is a thing to
-leave readable by every other account on the machine.
+The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json`, `integrations.json` and
+`agent.sqlite` are `0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither
+is a thing to leave readable by every other account on the machine.
+
+`integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a trigger that wakes
+it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
+there and a list that changed under a running turn would re-price the prefix and change what the model can do between
+two messages of one conversation.
 
 The skills walk is one accepted deviation from the rest of this section: it reads symbolic links as nothing (a link is
 skipped rather than followed) and it does not honour a `.gitignore` inside `agent/skills/`, so a skill kept out of the

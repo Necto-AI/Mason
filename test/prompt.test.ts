@@ -15,11 +15,13 @@ import type { PromptSection } from "@earendil-works/pi-durable";
 import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import { ensureHouse, housePaths } from "../src/server/house.ts";
+import { setIntegrations, type Integration } from "../src/server/integrations.ts";
 import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
 import {
 	DEFAULT_SOUL,
 	Prompt,
 	GENERATIVE_UI_POINTER,
+	INTEGRATIONS_POINTER,
 	PROMPT_SECTIONS,
 	TEAM_GUIDELINES,
 	promptSectionKeys,
@@ -47,7 +49,8 @@ function nextTurn(): void {
 }
 
 /**
- * What a section is handed: the environment of the turn, and the live document it reads the turn's identity from.
+ * What a section is handed: the environment of the turn, the agent whose tools the codemode section declares, and the
+ * live document it reads the turn's identity from.
  *
  * `taskId` is the turn, so a second render can be asked to happen in the next turn — which is the only way a test can
  * see whether the text is stable because the files are, or because the memo handed back the first render's string.
@@ -56,6 +59,9 @@ function promptInput(overrides: Record<string, unknown> = {}, taskId = turn): un
 	return {
 		conversationId: 1,
 		env: toolMachine,
+		// A conversation with nothing to call: the codemode section renders `undefined` for it, like a real one that
+		// had no tools. `codemode.test.ts` renders it against a booted agent, which is where its text is pinned.
+		agent: { callable: [] },
 		read: { snapshot: async () => ({ run: { taskId, inputs: [] } }) },
 		...overrides,
 	};
@@ -566,6 +572,116 @@ test("an empty home renders no skills section at all", async () => {
 });
 
 /**
+ * The integration list is one snapshot filled at boot (`setIntegrations`): a test sets it and puts back the empty one a
+ * process that never configured a home has.
+ */
+async function withIntegrations(
+	integrations: Record<string, Integration>,
+	run: () => Promise<void>,
+): Promise<void> {
+	setIntegrations(integrations);
+	try {
+		await run();
+	} finally {
+		setIntegrations({});
+	}
+}
+
+const GITHUB: Integration = {
+	enabled: true,
+	description: "Issues and pull requests for the team's repositories",
+	tools: { url: "http://mason-github:8082/mcp" },
+};
+const DOCS: Integration = {
+	enabled: true,
+	description: "The team's handbook and runbooks",
+	tools: { url: "http://mason-docs:8080/mcp" },
+};
+
+/**
+ * The section that connects a name the model can read to a tool it was never offered: every MCP tool is deferred, so the
+ * description here is all the model has until `tool_search` finds one. Name and purpose only — no health (it changes
+ * between turns), no tool names, no schemas.
+ */
+test("the integrations section is one sorted name and purpose per enabled tool face, and the way to reach them", async () => {
+	await withIntegrations(
+		{
+			github: GITHUB,
+			docs: DOCS,
+			// A trigger-only face is a door, not a tool: nothing about it belongs in the tool list's section.
+			activity: {
+				enabled: true,
+				description: "Never a tool",
+				trigger: { hook: "github-activity", secret: "s".repeat(32) },
+			},
+			old: { enabled: false, description: "Turned off", tools: { url: "http://mason-old:8080/mcp" } },
+		},
+		async () => {
+			const rendered = await renderSection(sectionOf("integrations"));
+			assert.equal(
+				rendered,
+				`<integrations>\n${INTEGRATIONS_POINTER}\ndocs: The team's handbook and runbooks\ngithub: Issues and pull requests for the team's repositories\n</integrations>`,
+				"sorted by name, and nothing on the line but the name and what the integration is for",
+			);
+			assert.match(rendered ?? "", /tool_search/, "a name here reaches a tool only through tool_search");
+			assert.doesNotMatch(rendered ?? "", /Never a tool|Turned off/, "a disabled or trigger-only integration is absent");
+			assert.doesNotMatch(rendered ?? "", /mcp__|issues_create|8082/, "no tool names, no urls, no schemas");
+		},
+	);
+});
+
+test("the integrations section is absent when no integration is enabled with a tools face", async () => {
+	for (const integrations of [
+		{},
+		{ old: { enabled: false, description: "Off", tools: { url: "http://mason-old:8080/mcp" } } satisfies Integration },
+		{
+			activity: {
+				enabled: true,
+				description: "Trigger only",
+				trigger: { hook: "github-activity", secret: "s".repeat(32) },
+			} satisfies Integration,
+		},
+	] as Record<string, Integration>[]) {
+		await withIntegrations(integrations, async () => {
+			assert.equal(
+				await renderSection(sectionOf("integrations")),
+				undefined,
+				"a section nobody can fill is left out of the prompt, not rendered as an empty header",
+			);
+		});
+	}
+});
+
+test("the integrations section renders the same bytes twice, and equally for a reordered file", async () => {
+	let first: string | undefined;
+	await withIntegrations({ github: GITHUB, docs: DOCS }, async () => {
+		first = await renderSection(sectionOf("integrations"));
+		assert.ok(first !== undefined);
+		assert.equal(await renderSection(sectionOf("integrations")), first, "an unchanged file is the same bytes");
+	});
+	await withIntegrations({ docs: DOCS, github: GITHUB }, async () => {
+		assert.equal(
+			await renderSection(sectionOf("integrations")),
+			first,
+			"the file is read by a person as often as by the server, so its order is not the prompt's",
+		);
+	});
+});
+
+/**
+ * The two ends of the prompt are fixed. The soul is the first thing the model reads and the delivery rule is the last,
+ * because the eval suite measured that position: a fact recalled in a later turn was delivered 0/2 times when the rule
+ * sat fourth. So everything added since — integrations, code mode — sits between them.
+ */
+test("the prompt opens with the soul and closes with the delivery rule", () => {
+	const keys = promptSectionKeys();
+	assert.equal(keys[0], "preamble", "the soul opens the prompt");
+	assert.equal(keys.at(-1), "delivery", "the delivery rule is the closest thing to the turn");
+	assert.ok(keys.indexOf("integrations") < keys.indexOf("codemode"), "what exists, then the tools a script can call");
+	assert.ok(keys.indexOf("codemode") < keys.indexOf("delivery"));
+});
+
+/**
  * The point of `prompt.ts`: nothing else may add a section, so reading one file tells you everything the agent is told.
  * A new extension that quietly contributes prompt text would pass every other test in this file.
  */
@@ -583,6 +699,10 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"skills",
 		"profile",
 		"generative_ui",
+		// What exists beyond the tool list, and then the tools a script can call: a capability and the way to reach it
+		// sit next to each other, and both before the rule about the reader.
+		"integrations",
+		"codemode",
 		// Last because the rule that decides whether the reader hears anything should be closest to the turn. The
 		// eval suite measured the difference: a fact recalled in a later turn was delivered 0/2 times when this
 		// section sat fourth, and once it moved here.
