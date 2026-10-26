@@ -24,9 +24,10 @@
 #   DEPLOY_PORT   the host loopback port mason answers on (default: read from that host's deploy/.env, else 8787)
 #   COMPOSE_CMD   the compose invocation (default: "podman compose"; the podman override is always applied)
 #
-# Profiles come from `COMPOSE_PROFILES` in the host's `deploy/.env`, because the compose provider on this host does not
-# read that variable itself: `--profile telegram` is passed for each name in it. Without that, a service behind a profile
-# is silently not part of the stack, which is exactly the kind of absence this script exists to catch.
+# Extra compose files come from `COMPOSE_EXTRA_FILES` in the host's `deploy/.env`, space-separated and relative to
+# `deploy/` — `COMPOSE_EXTRA_FILES=compose.telegram.yaml` is the stack with the Telegram integration and its proxy. The
+# provider here does not read that variable itself, so each name is passed as another `-f`; without it the services in
+# that file are silently not part of the stack, which is exactly the kind of absence this script exists to catch.
 set -euo pipefail
 
 ref="${1:-main}"
@@ -41,15 +42,19 @@ fail() { printf 'deploy failed: %s\n' "$*" >&2; exit 1; }
 # One ssh call per step rather than one long one, so a failure names the step it happened in instead of the session.
 remote() { ssh "$host" "set -euo pipefail; cd $dir; $*"; }
 
-profiles="$(remote "grep -E '^COMPOSE_PROFILES=' deploy/.env 2>/dev/null | cut -d= -f2-" || true)"
-profile_args=""
-for profile in ${profiles//,/ }; do profile_args="$profile_args --profile $profile"; done
-stack="$compose -f compose.yaml -f compose.podman.yaml $profile_args"
+extra="$(remote "grep -E '^COMPOSE_EXTRA_FILES=' deploy/.env 2>/dev/null | cut -d= -f2-" || true)"
+extra_args=""
+for file in $extra; do extra_args="$extra_args -f $file"; done
+stack="$compose -f compose.yaml -f compose.podman.yaml$extra_args"
 
-say "deploying $ref to $host:$dir${profiles:+ (profiles: $profiles)}"
+say "deploying $ref to $host:$dir${extra:+ (with $extra)}"
 
 say "checkout"
-remote "git fetch --tags --prune --quiet origin && git checkout --quiet '$ref' && git log -1 --format='    %h %s'"
+# `git fetch origin <ref>` sets FETCH_HEAD for a branch and for a tag alike, and the checkout is a detached one on purpose:
+# `git checkout <branch>` lands on the *local* branch of that name, which is whatever the last fetch left there — measured
+# here as a deployment that quietly ran a commit from three pushes ago. A detached checkout is also honest about what a
+# deployment is: a place that runs exactly one commit, not a place somebody edits.
+remote "git fetch --quiet --tags --force origin '$ref' && git checkout --quiet --force --detach \$(git rev-parse FETCH_HEAD) && git log -1 --format='    %h %s'"
 commit="$(remote "git rev-parse --short HEAD" | tr -d '[:space:]')"
 
 project="$(remote "grep -m1 '^name:' deploy/compose.yaml | cut -d: -f2" | tr -d '[:space:]')"
