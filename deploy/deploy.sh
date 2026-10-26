@@ -71,18 +71,33 @@ say "up"
 # deploy restarts every container, including the tool machine; the verification below is what makes that price worth it.
 remote "cd deploy && $stack up -d --force-recreate 2>&1 | tail -20"
 
-say "waiting for mason to answer"
 port="${DEPLOY_PORT:-$(remote "grep -E '^MASON_PORT=' deploy/.env 2>/dev/null | cut -d= -f2" || true)}"
 port="${port:-8787}"
-answered=no
-for _ in $(seq 1 60); do
-	if remote "curl -fsS -o /dev/null http://127.0.0.1:$port/api/health" 2>/dev/null; then
-		answered=yes
-		break
-	fi
-	sleep 2
-done
-[ "$answered" = yes ] || fail "mason did not answer on 127.0.0.1:$port within two minutes"
+wait_for_health() {
+	answered=no
+	for _ in $(seq 1 60); do
+		if remote "curl -fsS -o /dev/null http://127.0.0.1:$port/api/health" 2>/dev/null; then
+			answered=yes
+			break
+		fi
+		sleep 2
+	done
+	[ "$answered" = yes ] || fail "mason did not answer on 127.0.0.1:$port within two minutes"
+}
+
+say "waiting for mason to answer"
+wait_for_health
+
+# mason reads `integrations.json` once, at boot, and an endpoint that is not listening yet costs that integration its tools
+# until the next restart — measured here as `[mcp] telegram: unreachable … its tools are absent from this boot`, because
+# `up` starts mason and the integration container at the same moment. Compose cannot express the order across two files,
+# so the server is restarted after the stack is up and the log is checked for what a restart was supposed to fix.
+say "restarting mason, so every integration is already listening"
+absent_before="$(remote "podman logs mason_mason_1 2>&1 | grep -c 'its tools are absent' || true")"
+remote "podman restart mason_mason_1 >/dev/null"
+wait_for_health
+absent_after="$(remote "podman logs mason_mason_1 2>&1 | grep -c 'its tools are absent' || true")"
+[ "$absent_after" = "$absent_before" ] || fail "an integration was unreachable at boot: $(remote "podman logs --tail 40 mason_mason_1 2>&1 | grep 'its tools are absent' | tail -1")"
 
 say "checking that what is running is what was just built"
 # Two facts from podman, compared here rather than on the host: what each container runs, and what each tag points at
