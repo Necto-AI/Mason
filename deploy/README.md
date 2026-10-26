@@ -306,6 +306,37 @@ the TODOs; it is mounted read-only, never baked into an image, and the sidecar p
 SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use
 it.
 
+## When it looks broken but is not
+
+Three failures this stack has produced, each of which reads like a bug in the code and is not.
+
+**A build dies with `no space left on device`.** The host accumulates one dangling image per rebuild, and 163 of them
+came to 75 GB on the pc. `podman image prune -f` removes the untagged ones and leaves every tagged image alone; it took
+the host from 12 GB free to 125 GB and the build then passed. Do it before blaming the Dockerfile.
+
+**`mason` logs `telegram: unreachable … its tools are absent from this boot`, and stays that way across restarts.** The
+relay could not reach Telegram, so it never opened its MCP face, so mason found nothing at the address. The relay's own
+log says which of the two failed: `ECONNREFUSED` on `vpn:1080` means the proxy was not listening yet, and a connect
+*timeout* means sing-box is up but the tunnel is not carrying traffic. The second one has happened with a live process
+and a good config — `podman restart mason_vpn_1` fixed it, and the way to prove the tunnel rather than the process is a
+request through it from a container that can reach the proxy:
+
+```sh
+podman exec mason_mason-telegram_1 node -e '
+const {ProxyAgent, request} = require("undici");
+request("https://api.telegram.org", {dispatcher: new ProxyAgent("http://vpn:1080"), headersTimeout: 9000})
+  .then(async (r) => { console.log(r.statusCode); await r.body.dump(); })
+  .catch((e) => console.log("FAILED", e.message));'
+```
+
+A `302` is the tunnel working. A `200` on `/api/health` says nothing about it: mason is healthy while its integrations are
+not, which is why `deploy.sh` counts `its tools are absent` instead of trusting the probe.
+
+**A command in the chat is ignored.** The vocabulary is declared per integration and read once at boot. `npm run
+integration -- list` shows what this deployment allows; `commands <name> <a,b,c>` sets it and the restart is what applies
+it. An undeclared word is not an error — it arrives as an ordinary message — so silence about `/stop` is either the
+declaration or a missing restart, never the door.
+
 ## What to back up
 
 **Two volumes, and both of them.** `mason-inbox` is deliberately not one of them: it holds the files a chat sent, which
