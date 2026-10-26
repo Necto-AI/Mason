@@ -32,3 +32,7 @@ __pycache__/
 
 # The `vpn` sidecar's real server address and key. `deploy/vpn/config.example.json` is the template.
 deploy/vpn/config.json
+
+# Operator credentials: the deploy env and the VPN link/config they produce.
+deploy/.env
+deploy/vpn/happ.url
