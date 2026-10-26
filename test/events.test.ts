@@ -798,15 +798,13 @@ describe("a command at the door", () => {
 		const turn = await heldTurn(paths);
 		try {
 			const body = JSON.stringify(command("stop", "while-running"));
-			const stopped = fetch(`${turn.base}/api/events/telegram`, {
+			// No release before the await below: the provider is still holding its answer, so a `/stop` that waited for the turn
+			// to finish, or one that was queued behind it, would never come back from here.
+			const answer = await fetch(`${turn.base}/api/events/telegram`, {
 				method: "POST",
 				headers: { "content-type": "application/json", "x-mason-signature": signature(telegramSecret, body) },
 				body,
 			});
-			// The door waits for the conversation to be idle again, so the turn is let go once the abort is in flight.
-			// (Removed in the next commit: the abort is the thing being measured.)
-			turn.release();
-			const answer = await stopped;
 			assert.equal(answer.status, 200);
 			assert.deepEqual(await answer.json(), { handled: true, reply: "stopped" });
 			assert.equal(isBusy(await turn.server.runtime.viewSnapshot(BACKGROUND_CONTEXT)), false, "the turn is over");

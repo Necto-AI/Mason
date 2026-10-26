@@ -366,10 +366,16 @@ const CLEARING_AFTER_TURN = "clearing after this turn";
  *
  * The dedupe is the durable log's own: a command's request id is admitted like a fire's, and the log never forgets one,
  * so a redelivery after a restart answers what it answered instead of stopping a second turn or clearing a conversation
- * that has moved on. The claim is taken before the command runs, because a crash between the two loses one command
- * rather than repeating it, and a repeated `/clear` is the worse of those two. `status` is not claimed, because it
- * changes nothing and a claim would be a record of something that did not happen: a retried question is still a
- * question.
+ * that has moved on. `status` is not claimed, because it changes nothing and a claim would be a record of something that
+ * did not happen: a retried question is still a question.
+ *
+ * **Where the claim sits is a trade, and it differs per command — deliberately.** `stop` aborts first and claims second:
+ * `abort` is idempotent, so stopping a turn that is already stopped costs nothing, where claiming first would turn a
+ * *failed* abort into a permanent "stopped" — the log would hold a stop that never happened, and no redelivery could
+ * retry it because the id was already spent. `clear` and `compact` claim first: a repeated clear throws away a
+ * conversation that has moved on and a repeated compact spends a second model call, so a redelivery that does nothing is
+ * the better half of that trade. The abort is not gated on its claim — only the reply is; tidying the three into one rule
+ * breaks one of them whichever rule you pick.
  *
  * Nothing here waits for a running turn: `abort`, `reset` and `compact` are the conversation's own methods, and the claim
  * is a display-only entry, which the log appends at once even mid-run — `/stop` is the whole point of that. `clear` is the
@@ -382,15 +388,22 @@ export async function runCommand(
 	command: CommandName,
 	argument: string | undefined,
 ): Promise<string | undefined> {
-	if (command !== "status" && !(await target.claim(requestId, command, argument))) return undefined;
 	switch (command) {
-		case "stop":
+		case "status":
+			return target.status();
+		case "stop": {
+			// The act comes first and nothing is gated on the claim, so a redelivery that reached here before its own first
+			// delivery finished did no harm — the turn is stopped either way. The claim's answer decides the reply alone.
 			await target.abort();
-			break;
-		case "compact":
+			return (await target.claim(requestId, command, argument)) ? ONE_WORD.stop : undefined;
+		}
+		case "compact": {
+			if (!(await target.claim(requestId, command, argument))) return undefined;
 			await target.compact(argument);
-			break;
+			return ONE_WORD.compact;
+		}
 		case "clear": {
+			if (!(await target.claim(requestId, command, argument))) return undefined;
 			// Asked before the act, because the question is "will the reset land now, or behind the turn?" — a reset submits a
 			// write with `head: "self"`, which is not display-only, so on a busy conversation it queues in the inbox and returns
 			// at once. Either way the reset happens; only the answer differs, and "cleared" over a conversation that is still
@@ -399,10 +412,7 @@ export async function runCommand(
 			await target.clear();
 			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
 		}
-		case "status":
-			return target.status();
 	}
-	return ONE_WORD[command];
 }
 
 /** The entry a command leaves behind: the record that makes its id an identity, and the trace of what a chat asked for. */
