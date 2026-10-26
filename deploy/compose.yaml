@@ -187,6 +187,52 @@ services:
       start_period: 180s
       retries: 3
 
+  # mason-asr: mason's own speech-to-text (`asr/`). One POST in, one JSON body out; the model is ~1.3 GB of ONNX
+  # graphs and the decoder is ffmpeg. It is a container rather than a thread in mason for the same reason mason-env is:
+  # a gigabyte of weights, a codec library and a restart cycle of its own, and nothing of the agent stack imports it
+  # (`asr/README.md` is the whole contract). Not an integration: an integration is somebody else's image, and this is
+  # ours. A stack that runs no relay never calls it, and pays for one idle container.
+  mason-asr:
+    # Built from `asr/` and tagged with the stack's own name like the other two mason images, so a second stack on the
+    # host builds and runs its own instead of repointing this one's tag.
+    build:
+      context: ../asr
+    image: ${MASON_STACK:-mason}-asr:local
+    restart: unless-stopped
+    environment:
+      # The model volume's mount point. Empty on a fresh stack, and the entrypoint fetches the export from Hugging Face
+      # once before the port opens; a fetch that fails exits non-zero rather than serving with no model behind it.
+      ASR_MODEL_DIR: /models
+      # fp16 encoder + int8 decoder: the pair a workstation's `asr/models/` holds and the pair the measured 0.07 RTF
+      # was taken with. The volume has to hold what these name — set both, and the entrypoint fetches that pair.
+      ASR_ENCODER: ${ASR_ENCODER:-fp16}
+      ASR_DECODER: ${ASR_DECODER:-int8}
+    networks:
+      # In: the containers that transcribe, by name — `http://mason-asr:8100/transcribe`, which is what
+      # TELEGRAM_ASR_URL in deploy/.env names. `internal: true` and no published port is the same access policy every
+      # endpoint on mason-mcp gets: reachable by name from a member, unreachable from the host and from outside.
+      # mason-env is not a member of this network and must not become one — a tool that could post a file it can read
+      # to a transcriber is a tool with a capability its operator never registered.
+      - mason-mcp
+      # Out: the first boot's model fetch, and the only request this container ever makes — a public read from Hugging
+      # Face, on the one network with a gateway. A deployment that seeds the volume by hand (deploy/README.md, "The
+      # transcription service") can drop this line and keep the service with no route out at all.
+      - mason-edge
+    volumes:
+      # The weights: fetched once, read on every boot, and not worth backing up.
+      - asr-models:/models
+    healthcheck:
+      # /health answers with the provider and the model it loaded, and needs no credential. The boot spends 5–15 s
+      # loading the encoder, and the first one fetches 1.3 GB before that, so the start period covers a model load
+      # rather than a listen — a healthcheck that fires during it would turn a slow first boot into a restart loop.
+      test:
+        - CMD-SHELL
+        - python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+
   # An integration: one more container for a system mason should reach without a rebuild — GitHub, a docs server, an
   # internal API (docs/adr/0003-integrations-are-services.md). Nothing in this repo changes for it: no image, no
   # TypeScript, no extension. Copy the block below, uncomment it, and give it the integration's own name and image; the
@@ -229,6 +275,12 @@ volumes:
   # One file, written by mason and read by mason-env's sshd: the public half of the key that lets mason in.
   env-keys:
     name: ${MASON_ENV_KEYS_VOLUME:-env-keys}
+  # The ASR weights (~1.3 GB of ONNX graphs): fetched once by the container, read back on every boot, and re-fetchable
+  # from Hugging Face, which is why it is not in "What to back up". Prefixed by MASON_STACK like every other volume, so
+  # a second bot on the same host gets its own copy from this file unchanged — one shared volume would tie two stacks'
+  # precisions together, and a re-fetch for one would interrupt the other.
+  asr-models:
+    name: ${MASON_STACK:-mason}-asr-models
   # The files chat messages carried: written by an integration (`mason-telegram`), read by the tool machine at the same
   # path. A volume of its own rather than a corner of `mason-agent`, because what an integration may write is exactly one
   # directory of the agent's home — the profile, the log, the skills and the memory repository are not a relay's to read

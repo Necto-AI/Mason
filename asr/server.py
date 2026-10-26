@@ -4,8 +4,13 @@ Deliberately isolated from the durable agent: its own process, port, virtualenv 
 only interface is the JSON-over-HTTP contract below, so the agent stack can be replaced without touching
 this service (and vice versa).
 
-    POST /transcribe   body: WAV or PCM16 (16 kHz mono)   ->  {text, words, durationMs, elapsedMs, rtf, model}
+    POST /transcribe   body: any audio ffmpeg reads, or WAV/PCM16 (16 kHz mono)
+                                                            ->  {text, words, durationMs, elapsedMs, rtf, model}
     GET  /health                                            ->  {status, model, provider, ...}
+
+A body that is not already 16 kHz mono WAV or declared PCM16 is decoded by ffmpeg (`audio.py`), so the service takes
+what a phone records — Ogg/Opus — as readily as what the browser client sends. A body nothing can decode is a 400
+that names the format: a service that answers 200 with an empty transcript is the failure this path exists to refuse.
 
 Built on the standard library's threaded HTTP server: two endpoints, one GPU, no async needed. Streaming
 (v2) will add a WebSocket endpoint in front of the same explicit decoder state, not rewrite this one.
@@ -120,7 +125,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            wav = decode_audio(body)
+            # The declared type decides one thing only: whether a body with no signature of its own is
+            # headerless PCM16. A WAV and a named container are recognised from their bytes instead.
+            wav = decode_audio(body, content_type=self.headers.get("Content-Type"))
             if wav.size < MIN_SAMPLES:
                 raise AudioError(f"audio too short: {wav.size / SAMPLE_RATE:.3f}s < 0.1s")
         except AudioError as error:
@@ -211,7 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Parakeet TDT ASR service")
     parser.add_argument("--host", default=os.environ.get("ASR_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("ASR_PORT", DEFAULT_PORT)))
-    parser.add_argument("--model-dir", default=os.path.join(HERE, "models"))
+    # ASR_MODEL_DIR is the mount point of the model volume in the image (asr/Dockerfile), and the checkout's
+    # own `models/` on a workstation: the flag wins, the environment is what a container sets.
+    parser.add_argument("--model-dir", default=os.environ.get("ASR_MODEL_DIR", os.path.join(HERE, "models")))
     parser.add_argument("--encoder", choices=("fp32", "fp16", "int8"), default="fp16")
     parser.add_argument("--decoder", choices=("fp32", "fp16", "int8"), default="int8")
     parser.add_argument("--cpu", action="store_true", help="force CPUExecutionProvider")

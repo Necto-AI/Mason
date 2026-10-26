@@ -22,7 +22,7 @@ from model import AsrResult  # noqa: E402
 from server import create_server  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_audio import pcm16, wav_body  # noqa: E402
+from test_audio import FORM_TYPE, multipart, ogg_opus, pcm16, requires_ffmpeg, wav_body  # noqa: E402
 
 META = {"encoder": "fp16", "decoder": "int8", "provider": "CPUExecutionProvider"}
 
@@ -106,9 +106,20 @@ class ServerTest(unittest.TestCase):
         status, payload, _ = self.post("/transcribe", b"not audio at all")
         self.assertEqual(status, 400)
         self.assertIn("error", payload)
+        # The failure this whole path exists to refuse: bytes nobody could decode must not come back as a 200 with an
+        # empty transcript. Nothing was transcribed, so the model was never asked.
+        self.assertEqual(self.model.calls, [])
+
+    @requires_ffmpeg
+    def test_transcribe_accepts_a_multipart_ogg_voice_note(self) -> None:
+        # what the Telegram relay posts: a form, one `file` part, Ogg/Opus inside — the format a phone records in
+        status, payload, _ = self.post("/transcribe", multipart(ogg_opus(0.5)), content_type=FORM_TYPE)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["text"], "hello world")
+        self.assertAlmostEqual(self.model.calls[0].size / 16_000, 0.5, delta=0.05)
 
     def test_rejects_audio_below_the_minimum_length(self) -> None:
-        status, payload, _ = self.post("/transcribe", pcm16(1, 2, 3))
+        status, payload, _ = self.post("/transcribe", wav_body(pcm16(1, 2, 3)))
         self.assertEqual(status, 400)
         self.assertIn("too short", payload["error"])
 
@@ -134,11 +145,11 @@ class ServerTest(unittest.TestCase):
 
     def test_a_throwing_model_is_500_and_the_service_survives(self) -> None:
         self.model.fail = True
-        status, payload, _ = self.post("/transcribe", pcm16(*([1] * 2000)))
+        status, payload, _ = self.post("/transcribe", wav_body(pcm16(*([1] * 2000))))
         self.assertEqual(status, 500)
         self.assertIn("internal error", payload["error"])
         self.model.fail = False
-        status, payload, _ = self.post("/transcribe", pcm16(*([1] * 2000)))
+        status, payload, _ = self.post("/transcribe", wav_body(pcm16(*([1] * 2000))))
         self.assertEqual(status, 200)
         self.assertEqual(payload["text"], "hello world")
 
