@@ -196,11 +196,19 @@ describe("the status line a chat reads", () => {
 		);
 	});
 
-	it("does not call a switched-off integration unreachable", () => {
-		// A disabled entry is never attempted, so it has no error to report: the line says what is, not what would be.
+	it("names only what is switched on and answered, and counts the errors it was told about", () => {
+		// This sentence is arithmetic over the list it is handed, and it owns exactly two rules: a name appears when the
+		// integration is enabled *and* connected, and the count is every error the boot recorded. A switched-off entry is
+		// never counted because the boot never reaches one and so never records an error for it (`mcp.ts`) — that guarantee
+		// is the connection's, which is why it is not claimed here, where it could not fail.
 		assert.equal(
-			statusLine(view({}), [integration("off", { enabled: false })]),
-			"idle: nothing queued; no integration connected; nothing unreachable since boot",
+			statusLine(view({}), [
+				integration("on", { connected: true }),
+				integration("off", { enabled: false, connected: true }),
+				integration("quiet"),
+				integration("broken", { error: "no route to mason-docs" }),
+			]),
+			"idle: nothing queued; on connected; 1 unreachable since boot",
 		);
 	});
 });
