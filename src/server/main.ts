@@ -352,7 +352,8 @@ const ONE_WORD: Record<"stop" | "compact" | "clear", string> = {
 };
 
 /**
- * One declared command, run once per envelope id, and the line the chat gets back.
+ * One declared command, run once per envelope id, and the line the chat gets back — or nothing at all when the log
+ * already held this command's id, which is the caller's cue to say `already ran` and answer with an empty reply.
  *
  * The dedupe is the durable log's own: a command's request id is admitted like a fire's, and the log never forgets one,
  * so a redelivery after a restart answers what it answered instead of stopping a second turn or clearing a conversation
@@ -369,8 +370,8 @@ export async function runCommand(
 	requestId: string,
 	command: CommandName,
 	argument: string | undefined,
-): Promise<string> {
-	if (command !== "status" && !(await target.claim(requestId, command, argument))) return ONE_WORD[command];
+): Promise<string | undefined> {
+	if (command !== "status" && !(await target.claim(requestId, command, argument))) return undefined;
 	switch (command) {
 		case "stop":
 			await target.abort();
@@ -548,6 +549,13 @@ async function handleRequest(
 				reading.command,
 				reading.argument,
 			);
+			if (reply === undefined) {
+				// The log held this command's id, so nothing ran this time: the first delivery already answered, and the relay
+				// suppresses an empty reply (`integrations/telegram/src/door.ts`), so a redelivery says nothing in the chat and
+				// the audit line does not claim an act that did not happen.
+				console.log(`[events] ${name} already ran ${reading.command} for ${envelope.id}`);
+				return json(response, 200, { handled: true, reply: "" });
+			}
 			console.log(`[events] ${name} ran ${reading.command} for ${envelope.id}`);
 			return json(response, 200, { handled: true, reply });
 		}
