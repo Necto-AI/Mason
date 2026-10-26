@@ -124,6 +124,8 @@ async function rig(
 		readonly door?: DoorResult;
 		readonly chats?: ChatDirectory;
 		readonly inbox?: StubInbox;
+		/** Appended after the recording, so a test can make an answer wait the way a spent chat window does. */
+		readonly reply?: (chatId: string, text: string) => Promise<void>;
 	} = {},
 ): Promise<Rig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -145,11 +147,30 @@ async function rig(
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
 		reply: async (chatId, text) => {
 			said.push({ chatId, text });
+			await options.reply?.(chatId, text);
 		},
 		typing: { start: (chatId) => started.push(chatId) },
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
 	});
 	return { state, poller, api, door, chats, lines, said, started, directory };
+}
+
+/**
+ * A promise that must settle within `ms`. A poller that waits for a queued answer would otherwise hang the suite rather
+ * than fail it, and a hang says nothing about which line did it.
+ */
+async function within<T>(what: string, work: Promise<T>, ms = 2_000): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(`${what} did not happen within ${ms} ms`)), ms);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 async function readOffset(state: StateFiles, directory: string): Promise<unknown> {
@@ -461,6 +482,35 @@ describe("a command in the chat", () => {
 		assert.deepEqual(said, []);
 		assert.deepEqual(started, ["-1001234"], "the message is the thing a turn is started for");
 		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("does not wait for an answer that is still queued, so one chat cannot hold the batch", async () => {
+		// The send queue waits out a chat's twenty-a-minute window, which can be a minute, and this is one loop for every
+		// chat: an answer parked there would put a `/stop` typed in another chat behind a spent window it has nothing to do
+		// with. Both answers are handed over, and neither is waited for.
+		let release!: () => void;
+		const queued = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { poller, door, state, directory, said } = await rig(
+			[[update(100, { text: "/help" }), update(101, { text: "/stop" }), update(102, { text: "ship it?" })]],
+			{ offset: 100, door: handled("stopped"), reply: () => queued },
+		);
+
+		await within("a batch whose answers are still queueing", poller.pollOnce());
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => envelope.kind),
+			["command", "chat.message"],
+			"the command and the message behind it went out while both answers were still waiting for their window",
+		);
+		assert.deepEqual(await readOffset(state, directory), { offset: 103 });
+		assert.deepEqual(
+			said.map((line) => line.text),
+			[HELP_TEXT, "stopped"],
+			"both were handed to the queue; the batch did not wait for either",
+		);
+		release();
 	});
 
 	it("answers /help itself, without posting anything to mason", async () => {
