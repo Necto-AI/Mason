@@ -267,7 +267,7 @@ describe("durable harness + pi-env", () => {
 		try {
 			assert.deepEqual(
 				runtime.hooks.list().map((hook) => hook.id),
-				["morning-brief", "retry-failed-run", "github-activity", "workspace-check"],
+				["morning-brief", "retry-failed-run", "github-activity", "workspace-check", "team-chat"],
 			);
 			const submission = await runtime.hooks.fire("workspace-check");
 			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
