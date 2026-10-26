@@ -9,7 +9,8 @@
  *   that is not POST, `413` a body over the door's cap — is final, and only those five are. The offset advances past it,
  *   because a message the door will never accept must not be retried forever: it would block the chat behind it, and
  *   every retry would make the same refusal again. It is logged with the body's own `error` rather than swallowed, so the
- *   operator can fix the config and know what was lost.
+ *   operator can fix the config and know what was lost — and the sentence travels with the refusal, because a refused
+ *   command still has the message it came from: `src/poller.ts` falls back to that and tells the chat why.
  * - **`429` over the budget is a wait, not a verdict.** The door answers six deliveries a minute and says in
  *   `retry-after` when it has room; the same bytes are posted again after exactly that, which is one fire either way
  *   because the envelope's id never changes. One line names the wait — not one a second — and a wait longer than
@@ -55,7 +56,12 @@ export const FINAL_REFUSAL_STATUSES: readonly number[] = [400, 401, 404, 405, 41
 
 export type DoorResult =
 	| { readonly kind: "accepted"; readonly answer: DoorAnswer }
-	| { readonly kind: "refused"; readonly status: number }
+	/**
+	 * `reason` is the door's own sentence about the refusal, when its body carried one. It is not decoration: a refused
+	 * *command* still has the message it came from, so the relay falls back to that and posts this sentence into the chat,
+	 * which is the only way the person learns why the word did not happen.
+	 */
+	| { readonly kind: "refused"; readonly status: number; readonly reason?: string }
 	| { readonly kind: "unreachable"; readonly error: string };
 
 /**
@@ -70,7 +76,7 @@ export interface DoorAnswer {
 /** What one POST came to. `throttled` is a `429` whose wait this will not honour, and it is not final. */
 type PostResult =
 	| { readonly kind: "accepted"; readonly answer: DoorAnswer }
-	| { readonly kind: "refused"; readonly status: number }
+	| { readonly kind: "refused"; readonly status: number; readonly reason?: string }
 	| { readonly kind: "throttled"; readonly waitMs: number | undefined }
 	| { readonly kind: "failed"; readonly error: string };
 
@@ -109,7 +115,7 @@ export class EventDoor {
 			if (attempt > 0) await this.#sleep(this.#backoffMs * 2 ** (attempt - 1));
 			const outcome = await this.#post(body, envelope);
 			if (outcome.kind === "accepted") return { kind: "accepted", answer: outcome.answer };
-			if (outcome.kind === "refused") return { kind: "refused", status: outcome.status };
+			if (outcome.kind === "refused") return outcome;
 			if (outcome.kind === "throttled") {
 				// Not final, and not a network failure either: the message is good and the door is full. `src/poller.ts`
 				// holds the batch, which is the same message tried again later.
@@ -172,7 +178,7 @@ export class EventDoor {
 					"warn",
 					`${this.#options.integration}: the door refused ${envelope.id} with ${said}; the offset advances past it`,
 				);
-				return { kind: "refused", status: answer.status };
+				return { kind: "refused", status: answer.status, ...(reason === undefined ? {} : { reason }) };
 			}
 			const waitMs = retryAfterMs(answer, text);
 			if (waitMs === undefined || waitMs > this.#maxWaitMs) return { kind: "throttled", waitMs };
