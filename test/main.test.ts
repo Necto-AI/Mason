@@ -76,16 +76,13 @@ describe("a command, dispatched", () => {
 		assert.deepEqual(status.ran, { abort: 0, clear: 0, compact: [], status: 1 });
 	});
 
-	it("claims the id before it acts, so a redelivery answers and changes nothing", async () => {
-		const first = stub();
-		await runCommand(first.target, "command:telegram:stop-1", "compact", "the pricing thread");
-		assert.deepEqual(first.claims, [
-			{ requestId: "command:telegram:stop-1", command: "compact", argument: "the pricing thread" },
-		]);
-
-		// The log already holds the claim: the same command answers what it answered, and nothing runs a second time.
+	it("answers a redelivery with nothing, because the first delivery already answered", async () => {
+		// The log holds the claim, so the second delivery must not clear or compact again — and must not tell the chat that it
+		// did. An empty reply is no reply: the relay suppresses it, so the person sees one answer for one command, and the
+		// audit line says `already ran` rather than claiming an act that did not happen.
 		const again = stub({ claimed: false });
-		assert.equal(await runCommand(again.target, "command:telegram:stop-1", "clear", undefined), "cleared");
+		assert.equal(await runCommand(again.target, "command:telegram:compact-1", "compact", "the pricing thread"), undefined);
+		assert.equal(await runCommand(again.target, "command:telegram:clear-1", "clear", undefined), undefined);
 		assert.deepEqual(again.ran, { abort: 0, clear: 0, compact: [], status: 0 });
 	});
 
