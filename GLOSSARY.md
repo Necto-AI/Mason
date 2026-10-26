@@ -133,8 +133,10 @@ A hook that fires on a schedule.
 _Avoid_: cron job, schedule, timer
 
 **delivery**:
-An outbound act committed before it is sent and sent once. It goes to the integration the turn came from, through that
-integration's reply tool, or to the transcript when the turn came from the operator door.
+An outbound act committed before it is sent and sent once. It goes to the integration the turn came from, through the
+message tool that integration's hook instruction names, or to the transcript when no chat is on the other end: the
+operator door, or a hook that names no chat tool at all (a schedule, a retry), where the call lands and says nobody read
+it. `send_to_user` is the console's delivery, and a turn that has a chat refuses it (`reader`).
 _Avoid_: message, reply, notification (each names one shape of it)
 
 **voice**:
@@ -143,8 +145,12 @@ carry (`render`, `interact`, `live`). The hook prompt is built from it, so no pr
 _Avoid_: interface type, capability kind, channel
 
 **reader**:
-Whatever holds an operator token and reads the projection: the frozen console today, apiary next. A reader is not an
-integration and never wakes the agent on a vendor's behalf.
+Whoever a turn's words are for: the call that reaches them is what decides. The console's reader holds an operator token
+and reads the projection — the frozen console today, apiary next. A turn an event hook started answers a person in a
+chat instead, who reads only what that hook's own message tool sends, and `send_to_user` is refused there because a
+call the chat cannot see is a message recorded as sent that nobody received. A hook whose instruction names no chat
+tool has no reader at all until somebody opens the console. A reader is not an integration and never wakes the agent on
+a vendor's behalf.
 _Avoid_: client, user, frontend
 
 ## Integrations
