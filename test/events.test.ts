@@ -665,6 +665,27 @@ describe("a command at the door", () => {
 		}
 	});
 
+	it("does not spend the command budget on words mason does nothing with", async () => {
+		const paths = await temporaryHome();
+		await writeIntegrations(paths);
+		const server = await serve(paths);
+		try {
+			// The budget exists so that a spent minute can never refuse `/stop`, and a word mason ignores is not a bill: six
+			// mistyped words and six malformed ones must not add up to the refusal the separate budget was there to prevent.
+			for (let index = 0; index < 6; index += 1) {
+				const undeclared = JSON.stringify(command("stopp", `stopp-${index}`));
+				assert.equal((await deliver(server, "telegram", undeclared)).status, 200, `undeclared word ${index}`);
+				const malformed = JSON.stringify(command("status now", `malformed-${index}`));
+				assert.equal((await deliver(server, "telegram", malformed)).status, 400, `malformed command ${index}`);
+			}
+			const stop = await deliver(server, "telegram", JSON.stringify(command("stop", "after-the-noise")));
+			assert.equal(stop.status, 200, "the minute is still whole for the command that acts");
+			assert.deepEqual(await stop.json(), { handled: true, reply: "stopped" });
+		} finally {
+			await server.close();
+		}
+	});
+
 	it("answers handled:false for a word the integration does not declare, and fires nothing", async () => {
 		const paths = await temporaryHome();
 		await writeIntegrations(paths);
