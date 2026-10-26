@@ -1,5 +1,5 @@
 /**
- * Telegram's HTTP API, as much of it as this container uses: getMe, getUpdates, sendMessage.
+ * Telegram's HTTP API, as much of it as this container uses: getMe, getUpdates, sendMessage, sendFile.
  *
  * Three decisions live here.
  *
@@ -48,7 +48,11 @@ export interface FetchResponse {
 export interface FetchRequest {
 	readonly method: "GET" | "POST";
 	readonly headers: Record<string, string>;
-	readonly body?: string;
+	/**
+	 * JSON as a string, or a `FormData` an upload is written from. There is no content type for the second: the HTTP
+	 * client writes the boundary into one, and a header set here would be a header that disagrees with the body.
+	 */
+	readonly body?: string | FormData;
 	readonly signal?: AbortSignal;
 }
 
@@ -168,6 +172,22 @@ export interface SendMessageOptions {
 	readonly replyToMessageId?: number;
 }
 
+/**
+ * The two things a file can be sent as. Telegram renders a photo in the chat and hands a document over as a download, and
+ * the caller decides from the name: it is the one side that can look at the inbox.
+ */
+export type UploadKind = "photo" | "document";
+
+export interface SendFileOptions {
+	readonly chatId: string;
+	/** The bytes themselves, read from the inbox. This file never touches the filesystem. */
+	readonly bytes: Uint8Array;
+	/** The name the file arrives under, already made safe by the caller: it becomes a header, not a path. */
+	readonly name: string;
+	readonly kind: UploadKind;
+	readonly caption?: string;
+}
+
 /** What `getFile` says about a file this bot may download: a path valid for an hour, and the size if Telegram knows it. */
 export interface TelegramFile {
 	readonly filePath: string;
@@ -260,6 +280,35 @@ export class TelegramApi {
 		} catch (error) {
 			return { kind: "failed", error: `request failed: ${this.#clean(error)}` };
 		}
+		return this.#outcome(answer);
+	}
+
+	/**
+	 * A file into a chat: `sendPhoto` when the caller decided it is a photo, `sendDocument` for everything else. That
+	 * decision is `src/send-file.ts`'s, because the extension is the whole of what either side knows before a read.
+	 *
+	 * The body is a `FormData` with no content type set, so the HTTP client writes the boundary and this file never holds a
+	 * multipart body it built by hand. Telegram's two caps live above this call rather than here, on a photo of 10 MiB and a
+	 * document of 50 MiB, because they are the tool's refusal to make in the model's own words.
+	 */
+	async sendFile(options: SendFileOptions): Promise<SendOutcome> {
+		const method = options.kind === "photo" ? "sendPhoto" : "sendDocument";
+		const form = new FormData();
+		form.append("chat_id", options.chatId);
+		if (options.caption !== undefined) form.append("caption", options.caption);
+		// The third argument names the file inside the part, and that name is all the reader of the chat sees of it.
+		form.append(options.kind, new Blob([options.bytes]), options.name);
+		let answer: FetchResponse;
+		try {
+			answer = await this.#fetch(this.#url(method), { method: "POST", headers: {}, body: form });
+		} catch (error) {
+			return { kind: "failed", error: `request failed: ${this.#clean(error)}` };
+		}
+		return this.#outcome(answer);
+	}
+
+	/** What one send came to, whichever call it was: the same three answers a message and a file both have. */
+	async #outcome(answer: FetchResponse): Promise<SendOutcome> {
 		const parsed = await readBody(answer);
 		if (parsed !== undefined && parsed.parameters?.retry_after !== undefined) {
 			return { kind: "throttled", retryAfter: parsed.parameters.retry_after };

@@ -1,27 +1,55 @@
 # mason-telegram
 
 The first integration built on the two faces of
-[ADR-0003](../../docs/adr/0003-integrations-are-services.md): one container that lends mason two tools and wakes it when
+[ADR-0003](../../docs/adr/0003-integrations-are-services.md): one container that lends mason three tools and wakes it when
 the team chat says something. It is a package of its own — its own `package.json`, its own tests, its own image — and
 nothing in mason's build depends on it: mason knows `http://mason-telegram:8082/mcp` and a trigger secret, and the rest
 is Telegram's business.
 
 It never speaks as the owner: no transcript, no roster, no `send_to_user`. Its whole vocabulary is one event out and one
-message back.
+message or one file back.
 
 ## The tools face — MCP over Streamable HTTP on `:8082/mcp`
 
 | Tool | What it does |
 |---|---|
 | `send_message(chat_id, text, reply_to_message_id?)` | Sends a message to a Telegram chat and returns the id of the message it created. Queued per chat at 20 a minute. |
+| `send_file(chat_id, path, caption?)` | Sends a file that is already in the inbox: a photo renders in the chat and anything else arrives as a download. Queued per chat at 20 a minute. |
 | `list_chats()` | Lists the chats the poller has seen — `{id, title, type}` — so the agent can find an id without a human pasting one. |
 
 Nothing else is offered, and the container answers nothing on any other path. The endpoint is stateless: no session id,
-no per-session state, one `McpServer` and transport per request over the same two tools, so either end restarting is
+no per-session state, one `McpServer` and transport per request over the same three tools, so either end restarting is
 a reconnect rather than a stale session.
 
 A `429` is not retried blindly: Telegram's own `retry_after` is honoured in its place, at most three times, and a wait
 longer than a minute ends the tool call with a message the model can act on instead of holding it open.
+
+### Files go back the same way
+
+`send_file` is the other half of the inbox. The directory an attachment is written to is the only one the relay and the
+tool machine share, so it is also the only place a file may be sent *from*: the agent writes the file there with its own
+`write`, then names that absolute path. A path outside it is refused, because the relay reading the profile, the log, the
+skills and the memory repository is exactly the boundary the deployment exists to keep. So is a symlink that escapes, a
+`..` that lands outside, a directory, and a file that is not there. Every refusal is one sentence the model reads, and it
+says what to do instead: `there is no file at …; write it into the inbox first`.
+
+A photo renders in the chat and a document arrives as a download, decided by the extension and nothing else. The caps are
+Telegram's own, and a file over one is refused with the number rather than cut:
+
+| The file | The call | The cap |
+|---|---|---|
+| `.png` `.jpg` `.jpeg` `.webp` | `sendPhoto` | 10 MiB |
+| anything else | `sendDocument` | 50 MiB |
+
+A caption is optional and capped at 1 024 characters, and a longer one is refused rather than shortened: a caption
+silently cut is a message that says something the agent did not write. The name the file arrives under is its basename,
+sanitised by the same rule the inbox writes a name under, so a name is never a path. On success the answer has the shape
+`send_message` answers with, which is what gives the model one idiom for "this reached a person":
+
+```text
+→ send_file {chat_id: "-1001234", path: "/home/mason/.mason/agent/workspace/inbox/chart.png", caption: "last week"}
+← {"chat_id":"-1001234","message_id":8815}
+```
 
 ## The trigger face — long polling into the event door
 
@@ -87,7 +115,8 @@ how the agent tells a file that arrived from one that could not be fetched. Anyt
 a sweep on every write and once at startup, because nobody else watches that volume. `mason-telegram` and `mason-env`
 mount it at the same path (`mason-inbox`, declared in `deploy/compose.yaml`), which is what makes a path in a payload a
 file `read` opens on the other side — and the mount is a directory of its own, so the rest of the agent's home (the
-profile, the log, the skills, the memory repository) stays out of this container.
+profile, the log, the skills, the memory repository) stays out of this container. The other direction costs nothing extra:
+a file the agent writes into that same directory is one `send_file` may name, so the volume is the bridge both ways.
 
 **The offset.** `offset.json` on the container's own volume (`/data`), written whole — temporary file, rename, `0600` —
 once per batch, not once per message: a crash mid-batch replays at most one batch, and the id makes the replay the same
@@ -204,6 +233,6 @@ integration's trigger therefore requires mason to be up to date before the conta
 
 ## What is not here
 
-Webhooks (they need public HTTPS), outbound media — the agent sends words, not files — reactions, threads as
-first-class, multi-bot, and identity mapping beyond the sender's name and username in the payload. Each is a face of
-Telegram this container does not show the agent, and none of them is needed to answer a message.
+Webhooks (they need public HTTPS), reactions, threads as first-class, multi-bot, and identity mapping beyond the sender's
+name and username in the payload. Each is a face of Telegram this container does not show the agent, and none of them is
+needed to answer a message.
