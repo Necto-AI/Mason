@@ -62,7 +62,8 @@ export interface EventFile {
 export interface EventEnvelope {
 	readonly v: 1;
 	readonly id: string;
-	readonly kind: "chat.message";
+	/** `chat.message` is a person's words; `command` is the same person asking mason to do one of a closed set of things. */
+	readonly kind: "chat.message" | "command";
 	readonly payload: string;
 }
 
@@ -113,6 +114,19 @@ function fitText(text: string, room: number): string {
 
 export function envelopeFor(event: ChatEvent): EventEnvelope {
 	return { v: 1, id: `tg-${event.updateId}`, kind: "chat.message", payload: renderPayload(event) };
+}
+
+/**
+ * A command, as the door's second kind: the text after the slash, and the same `tg-<update_id>` id its message would
+ * have carried.
+ *
+ * The id is shared with the message because it is the same update: a redelivery is one envelope either way, and the
+ * door's dedupe answers a command it has already run instead of running it twice. What the command means is mason's
+ * business — the relay only knows where the slash was, and what to do with an answer that says it was not handled
+ * (`src/poller.ts` sends the message it kept beside this envelope).
+ */
+export function commandEnvelopeFor(updateId: number, command: string): EventEnvelope {
+	return { v: 1, id: `tg-${updateId}`, kind: "command", payload: command };
 }
 
 /**

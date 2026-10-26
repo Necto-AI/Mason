@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { ChatDirectory } from "../src/chats.ts";
-import type { DoorResult } from "../src/door.ts";
+import { HELP_TEXT } from "../src/commands.ts";
+import type { DoorAnswer, DoorResult } from "../src/door.ts";
 import type { EventEnvelope, EventFile } from "../src/envelope.ts";
 import type { Attachment } from "../src/filter.ts";
 import type { SaveOutcome } from "../src/inbox.ts";
@@ -46,7 +47,7 @@ class RecordingDoor implements EventSink {
 	readonly #script: DoorResult[];
 	readonly #answer: DoorResult;
 
-	constructor(answer: DoorResult = { kind: "accepted" }, script: readonly DoorResult[] = []) {
+	constructor(answer: DoorResult = ACCEPTED, script: readonly DoorResult[] = []) {
 		this.#answer = answer;
 		this.#script = [...script];
 	}
@@ -55,6 +56,15 @@ class RecordingDoor implements EventSink {
 		this.envelopes.push(envelope);
 		return this.#script.shift() ?? this.#answer;
 	}
+}
+
+/** An accepted answer, as a message's `202` is: nothing was handled, and there is no line to post. */
+const ACCEPTED: DoorResult = { kind: "accepted", answer: { handled: false, reply: undefined } };
+
+/** An accepted answer to a command mason ran, and the line it wants posted. */
+function handled(reply: string): DoorResult {
+	const answer: DoorAnswer = { handled: true, reply };
+	return { kind: "accepted", answer };
 }
 
 function update(updateId: number, overrides: Record<string, unknown> = {}): TelegramUpdate {
@@ -102,6 +112,8 @@ interface Rig {
 	readonly door: RecordingDoor;
 	readonly chats: ChatDirectory;
 	readonly lines: string[];
+	readonly said: { readonly chatId: string; readonly text: string }[];
+	readonly started: string[];
 	readonly directory: string;
 }
 
@@ -122,6 +134,8 @@ async function rig(
 	const door = new RecordingDoor(options.door);
 	const chats = options.chats ?? new ChatDirectory(await state.readChats());
 	const lines: string[] = [];
+	const said: { chatId: string; text: string }[] = [];
+	const started: string[] = [];
 	const poller = new Poller({
 		api,
 		state,
@@ -129,9 +143,13 @@ async function rig(
 		chats,
 		log: createLog([], (line) => lines.push(line)),
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
+		reply: async (chatId, text) => {
+			said.push({ chatId, text });
+		},
+		typing: { start: (chatId) => started.push(chatId) },
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
 	});
-	return { state, poller, api, door, chats, lines, directory };
+	return { state, poller, api, door, chats, lines, said, started, directory };
 }
 
 async function readOffset(state: StateFiles, directory: string): Promise<unknown> {
@@ -168,7 +186,7 @@ async function pollAgainstDoor(
 	await state.writeOffset(options.offset ?? 100);
 	const waits: number[] = [];
 	const lines: string[] = [];
-	const door = new RecordingDoor(script.at(-1) ?? { kind: "accepted" }, script);
+	const door = new RecordingDoor(script.at(-1) ?? ACCEPTED, script);
 	const controller = new AbortController();
 	let clock = 0;
 	const stopAfter = options.stopAfter ?? Number.POSITIVE_INFINITY;
@@ -252,7 +270,7 @@ describe("the offset on a restart", () => {
 			[
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 		);
 
@@ -269,10 +287,10 @@ describe("the offset on a restart", () => {
 	it("keeps the whole batch when the door is down, so the update after it is not skipped either", async () => {
 		const down = await pollAgainstDoor(
 			[
-				{ kind: "accepted" },
+				ACCEPTED,
 				{ kind: "unreachable", error: "the door answered 429 with a 3600s wait" },
-				{ kind: "accepted" },
-				{ kind: "accepted" },
+				ACCEPTED,
+				ACCEPTED,
 			],
 			{ batches: [[update(100), update(101)]], offset: 100 },
 		);
@@ -296,7 +314,7 @@ describe("the offset on a restart", () => {
 		const down = await pollAgainstDoor(
 			[
 				{ kind: "unreachable", error: "the door answered 500: the integration's hook is not a hook" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 			{ stopAfter: 1 },
 		);
@@ -398,13 +416,104 @@ describe("a message with a file", () => {
 			[
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 			{ batches: [[documentUpdate(100)]], offset: 100, inbox },
 		);
 
 		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
 		assert.equal(inbox.saved.length, 1, "a 20 MiB download is not repeated for every retry");
+	});
+});
+
+describe("a command in the chat", () => {
+	it("posts a slash message as a command, posts the answer, and fires no turn", async () => {
+		// A group sends `/stop@mason_bot`, and the mention stripper has already left `/stop` by the time the filter answers.
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stop@mason_bot" })]], {
+			offset: 100,
+			door: handled("stopped"),
+		});
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [{ v: 1, id: "tg-100", kind: "command", payload: "stop" }]);
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "stopped" }], "the chat reads the one line mason answered");
+		assert.deepEqual(started, [], "a command is not a turn, so nothing is typing");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("sends the message it kept when mason says it did not handle the word", async () => {
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stopp" })]], {
+			offset: 100,
+			door: ACCEPTED,
+		});
+
+		await poller.pollOnce();
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stopp"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stopp"],
+			],
+			"the same update, delivered as the message it always was",
+		);
+		assert.deepEqual(said, []);
+		assert.deepEqual(started, ["-1001234"], "the message is the thing a turn is started for");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("answers /help itself, without posting anything to mason", async () => {
+		const { poller, door, state, directory, said } = await rig([[update(100, { text: "/help" })]], { offset: 100 });
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [], "the relay describing itself is not a request");
+		assert.deepEqual(said, [{ chatId: "-1001234", text: HELP_TEXT }]);
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("is posted in the same batch as the message before it, so /stop does not wait for the turn it stops", async () => {
+		const { poller, door, said } = await rig(
+			[[update(100, { text: "write the report" }), update(101, { text: "/stop" })]],
+			{ offset: 100, door: handled("stopped") },
+		);
+
+		await poller.pollOnce();
+
+		// The poller's only wait is the door's answer, and a running turn is not one: both updates go out in order and the
+		// command is the second envelope before the first turn has reported anything.
+		assert.deepEqual(
+			door.envelopes.map((envelope) => envelope.kind),
+			["chat.message", "command"],
+		);
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "stopped" }]);
+	});
+
+	it("does not fetch the file a command's caption carried", async () => {
+		// A caption that is a command is not a message about a file, and a 20 MiB download spent on `/stop` is spent for
+		// nothing. The words are the whole envelope.
+		const inbox = new StubInbox({ kind: "saved", file: { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 1, kind: "document" } });
+		const { poller, door, said } = await rig(
+			[
+				[
+					update(100, {
+						text: undefined,
+						caption: "/compact keep the pricing thread",
+						document: { file_id: "f1", file_unique_id: "u1", file_name: "report.pdf" },
+					}),
+				],
+			],
+			{ offset: 100, door: handled("compacted"), inbox },
+		);
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [
+			{ v: 1, id: "tg-100", kind: "command", payload: "compact keep the pricing thread" },
+		]);
+		assert.equal(inbox.saved.length, 0, "no download for a command");
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "compacted" }]);
 	});
 });
 
