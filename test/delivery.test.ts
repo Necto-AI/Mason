@@ -198,11 +198,19 @@ test("a selection that is already complete is not written to", async () => {
 	}
 });
 
+/**
+ * The corner of the tool's api those calls need: the call's ID, and the transcript read the turn's reader is decided
+ * from. `input` is the message that started the turn — absent, as a resumed turn's would be, reads as the console.
+ */
+function apiFor(callId: string, input?: string): never {
+	return { callId, conversationId: 1, commit: async () => input } as never;
+}
+
 test("execute only returns: the committed call is the delivery", async () => {
 	// A model-issued call: its own ID, with no `/` in it, so a script's refusal does not apply.
 	const result = await sendToUserTool.execute(
 		{ message: "Standup moved to nine." },
-		{ callId: "call-7" } as never,
+		apiFor("call-7"),
 		{} as never,
 	);
 	assert.deepEqual(result, { output: [{ type: "text", text: "delivered" }], details: { length: 22 } });
@@ -219,10 +227,24 @@ test("a call made from inside a script is refused, and told where the message ha
 	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
 	const result = await sendToUserTool.execute(
 		{ message: "Standup moved to nine." },
-		{ callId: "call-7/1" } as never,
+		apiFor("call-7/1"),
 		{} as never,
 	);
 	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
 	assert.match(outputText(result.output), /cannot deliver from inside a script/);
 	assert.match(outputText(result.output), /send it with send_to_user directly/, "the model is told what to do");
+});
+
+test("in a turn an event hook started, the delivery is refused with the tool that reaches the chat", async () => {
+	// The reader is in a chat, and the turn's input is the one that says so: the tool reads it, not a flag.
+	const result = await sendToUserTool.execute(
+		{ message: "Привет!" },
+		apiFor("call-9", "[EVENT HOOK: Team chat message]\nAnswer it in its chat with mcp__telegram__send_message."),
+		{} as never,
+	);
+	assert.equal(result.isError, true, "nothing was delivered in the console's name");
+	assert.match(outputText(result.output), /cannot reach the reader in this turn/);
+	assert.match(outputText(result.output), /the call rejects/, "code mode reads it as a rejection, and it says so");
+	assert.match(outputText(result.output), /mcp__telegram__send_message/, "it names the tool that does reach them");
+	assert.match(outputText(result.output), /the chat the payload names/, "and the chat to answer in");
 });

@@ -17,11 +17,42 @@ export const HOOK_ENTRY_KIND = "app.hook";
 /**
  * What the delivery gate says to the model when a turn ends with nothing sent.
  *
- * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry whose
- * text is exactly this: the reader never sees the reminder, only the answer it produces.
+ * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry that
+ * reads as one: the reader never sees the reminder, only the answer it produces.
+ *
+ * There are two of them, because a turn has two possible readers. This one is the operator console, where `send_to_user`
+ * is the only channel there is; `hookDeliveryReminder()` is a turn an event hook started, whose reader is a chat reached
+ * by that integration's own tool. Both open with the same sentence up to the name of the tool that was not called —
+ * `isDeliveryReminder()` reads either — so the projection and the gate agree about what is a nudge and what is a person.
  */
-export const DELIVERY_REMINDER = `[delivery] That turn ended without a \`send_to_user\` call, so nothing reached the reader: not your answer, not
-your notes, nothing at all. Send the answer now with \`send_to_user\`, in the words the user should read.`;
+export const DELIVERY_REMINDER = `${deliveryReminderOpening(MESSAGE_TOOL)} Send the answer now with \`${MESSAGE_TOOL}\`, in the words the user should read.`;
+
+/**
+ * What the gate says to a turn whose reader is reached by the hook's own tool rather than `send_to_user`: the same
+ * silence, with the one tool that ends it named. `send_to_user` is named too, because that is the call the model
+ * actually made, and a reminder that did not say why it reached nobody would be read as a retry of it.
+ */
+export function hookDeliveryReminder(tool: string): string {
+	return `${deliveryReminderOpening(tool)} This turn came from an event hook, and the chat it answers is reached by \`${tool}\` alone: \`${MESSAGE_TOOL}\` writes to the operator console, never to that person. Send the answer now with \`${tool}\`, in the chat the payload names, in the words the person should read.`;
+}
+
+/**
+ * Whether a user message is the gate's own nudge rather than something a person typed.
+ *
+ * The opening sentence is the tell, and it is one sentence for both shapes: a person's own line that merely begins with
+ * the marker is not a reminder, so nothing anybody typed is dropped from their transcript.
+ */
+export function isDeliveryReminder(text: string): boolean {
+	return DELIVERY_REMINDER_OPENING.test(text.trim());
+}
+
+const DELIVERY_REMINDER_OPENING = /^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
+
+/** The sentence both reminders open with: what did not happen, in the name of the tool that did not happen with. */
+function deliveryReminderOpening(tool: string): string {
+	return `[delivery] That turn ended without a \`${tool}\` call, so nothing reached the reader: not your answer, not
+your notes, nothing at all.`;
+}
 
 export const HookSummarySchema = Type.Object({
 	id: Type.String(),

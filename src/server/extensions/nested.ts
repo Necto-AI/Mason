@@ -18,6 +18,16 @@ export function isNestedCall(api: Pick<ToolExecutionApi, "callId">): boolean {
 }
 
 /**
+ * What a tool answers a call it must not serve: the text, as an error result the caller has to deal with.
+ *
+ * The shape is one place because its meaning is: an error result reaches a script as a rejection, so every refusal says
+ * what does not happen and what to do instead, and none of them is advice.
+ */
+export function refusal(text: string): { output: [{ type: "text"; text: string }]; isError: true } {
+	return { output: [{ type: "text", text }], isError: true };
+}
+
+/**
  * What a tool answers a nested call with: the refusal, in `text`, as an error result the caller has to deal with.
  *
  * `undefined` for a top-level call, which is the tool's own business to answer: this only decides the nested case, so
@@ -28,5 +38,5 @@ export function nestedRefusal(
 	text: string,
 ): { output: [{ type: "text"; text: string }]; isError: true } | undefined {
 	if (!isNestedCall(api)) return undefined;
-	return { output: [{ type: "text", text }], isError: true };
+	return refusal(text);
 }
