@@ -5,7 +5,7 @@
  * Telegram will happily send an edit. Every one of those is dropped here, before anything is signed or posted, because an
  * event that reaches the door has already been worth a model turn — the door has no second filter and no way to ask.
  *
- * Three decisions worth naming:
+ * Four decisions worth naming:
  *
  * - **A chat we did not choose must not even become a chat.** The allowlist is checked before anything else is read, and
  *   a chat that fails it is not added to `list_chats` either: the list is the agent's map of where it may write, and a
@@ -15,11 +15,15 @@
  *   this container guessing at what the agent should hear. The model sees the text and decides.
  * - **A bare mention is delivered too.** `@bot` with nothing after it is a nudge; dropping it would be a message read and
  *   silently not answered. The payload then ends at the colon, which is what was said.
+ * - **A file is delivered, with or without words.** A photo, a PDF or a voice note is a person sending something, and
+ *   `{ skip: "no text" }` used to drop all of them: the agent never heard about a document somebody needed read. The
+ *   filter only says *which* file it is (`attachment`); fetching it is `src/inbox.ts`, and the path it lands on is what
+ *   the payload names.
  */
 import { chatTitle, seenChat } from "./chats.ts";
 import type { ChatEvent } from "./envelope.ts";
 import type { SeenChat } from "./state.ts";
-import type { TelegramChat, TelegramMessage, TelegramUpdate, TelegramUser } from "./telegram.ts";
+import type { FileKind, TelegramChat, TelegramFileish, TelegramMessage, TelegramUpdate, TelegramUser } from "./telegram.ts";
 
 export interface FilterContext {
 	/** The chats this bot may relay, as the strings a payload carries. */
@@ -28,10 +32,27 @@ export interface FilterContext {
 	readonly botUsername: string | undefined;
 }
 
+/**
+ * The file a message carried, as Telegram described it: the id `getFile` is asked about, the name to write it under, and
+ * what it is. `size` is Telegram's own, which a voice note and sometimes an audio file do not have at all — the inbox
+ * treats a missing size as "learn it from the bytes".
+ */
+export interface Attachment {
+	readonly fileId: string;
+	readonly name: string;
+	readonly kind: FileKind;
+	readonly size?: number;
+}
+
 /** Either what to post, or why this update is not posted. The reason is for the log, one clause long. */
 export type Reading =
 	| { readonly skip: string }
-	| { readonly event: ChatEvent; readonly chat: SeenChat };
+	| {
+			readonly event: ChatEvent;
+			readonly chat: SeenChat;
+			/** The file this message carried, which `src/inbox.ts` fetches once the filter has said yes. */
+			readonly attachment?: Attachment;
+	  };
 
 export function readMessage(update: TelegramUpdate, context: FilterContext): Reading {
 	const message: TelegramMessage | undefined = update.message;
@@ -43,8 +64,15 @@ export function readMessage(update: TelegramUpdate, context: FilterContext): Rea
 	if (from.is_bot === true) return { skip: "sent by a bot" };
 	const chatId = String(message.chat.id);
 	if (!context.allowedChats.has(chatId)) return { skip: `chat ${chatId} is not in TELEGRAM_ALLOWED_CHATS` };
-	const text: string | undefined = message.text;
-	if (text === undefined) return { skip: "no text" };
+	const attachment = attachmentIn(message);
+	let text = written(message, context.botUsername);
+	if (text === undefined) {
+		// A sticker, a location, a poll, a service notice: Telegram sent something and none of it is words or a file.
+		if (attachment === undefined) return { skip: "no text" };
+		// The payload is one line of prose, so a file with no caption still needs a sentence: "sent a photo, with a file
+		// at …" is what happened, and it is what still tells the agent a file was there when the fetch fails.
+		text = describeAttachment(attachment);
+	}
 	const event: ChatEvent = {
 		updateId: update.update_id,
 		sender: senderName(from),
@@ -52,9 +80,13 @@ export function readMessage(update: TelegramUpdate, context: FilterContext): Rea
 		chatId,
 		chatTitle: titleFor(message.chat),
 		replyToMessageId: message.reply_to_message?.message_id,
-		text: stripMention(text, context.botUsername),
+		text,
 	};
-	return { event, chat: seenChat(message.chat) };
+	return {
+		event,
+		chat: seenChat(message.chat),
+		...(attachment === undefined ? {} : { attachment }),
+	};
 }
 
 /** A person's name as it should read in a sentence, with the username as the fallback rather than an empty string. */
@@ -63,6 +95,80 @@ export function senderName(from: TelegramUser): string {
 	if (name.length > 0) return name.join(" ");
 	if (from.username !== undefined && from.username !== "") return `@${from.username}`;
 	return String(from.id);
+}
+
+/**
+ * What the person wrote, or undefined when they wrote nothing. A media message carries its words in `caption`; every
+ * other carries them in `text`, and a caption of "" is Telegram saying there is none.
+ */
+function written(message: TelegramMessage, botUsername: string | undefined): string | undefined {
+	const caption = message.caption;
+	if (caption !== undefined && caption !== "") return stripMention(caption, botUsername);
+	return message.text === undefined ? undefined : stripMention(message.text, botUsername);
+}
+
+/**
+ * The file a message carried, or undefined when it carried none.
+ *
+ * At most one of the fields below is ever set — Telegram puts a photo in `photo`, a PDF in `document`, a voice note in
+ * `voice` — so the order is only here so that a message with two of them is still one attachment.
+ */
+function attachmentIn(message: TelegramMessage): Attachment | undefined {
+	const document = message.document;
+	if (document !== undefined) {
+		return described(document, "document", document.file_name ?? `file-${fileKey(document)}`);
+	}
+	// A photo arrives as the same picture at every size Telegram rendered, smallest first. The last entry is the largest,
+	// and the only one worth reading; it carries no name, so the extension Telegram omits is put back by hand.
+	const photo = message.photo?.at(-1);
+	if (photo !== undefined) return described(photo, "photo", `photo-${fileKey(photo)}.jpg`);
+	const voice = message.voice;
+	if (voice !== undefined) return described(voice, "voice", `voice-${fileKey(voice)}.ogg`);
+	const audio = message.audio;
+	if (audio !== undefined) {
+		// `title` first: it is what the person who sent the recording called it, and `file_name` is often the sender's
+		// own name for the bytes.
+		return described(audio, "audio", audio.title ?? audio.file_name ?? `audio-${fileKey(audio)}`);
+	}
+	const video = message.video;
+	if (video !== undefined) return described(video, "video", video.file_name ?? `video-${fileKey(video)}`);
+	return undefined;
+}
+
+function described(file: TelegramFileish, kind: FileKind, name: string): Attachment {
+	return {
+		fileId: file.file_id,
+		name,
+		kind,
+		...(file.file_size === undefined ? {} : { size: file.file_size }),
+	};
+}
+
+/**
+ * What a file is called when Telegram gave it no name: its own unique id, which — unlike `file_id` — does not change
+ * between two `getFile` calls, so the same message is always written under the same name.
+ */
+function fileKey(file: TelegramFileish): string {
+	return file.file_unique_id ?? file.file_id;
+}
+
+/**
+ * The sentence a caption-less file is delivered as. The kinds whose name is the sender's own say which file it is; a
+ * photo and a voice note have no name of their own, so they say what arrived instead.
+ */
+function describeAttachment(attachment: Attachment): string {
+	switch (attachment.kind) {
+		case "photo":
+			return "sent a photo";
+		case "voice":
+			return "sent a voice note";
+		case "document":
+			return `sent a file: ${attachment.name}`;
+		case "audio":
+			return `sent an audio file: ${attachment.name}`;
+		case "video":
+			return `sent a video: ${attachment.name}`;
+	}
 }
 
 /** A group has a title; a private chat is named after the person in it; either way the payload has one string. */

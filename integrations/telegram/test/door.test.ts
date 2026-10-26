@@ -35,6 +35,8 @@ function answer(status: number, body: string, headers: Record<string, string> = 
 		statusText: "",
 		headers: { get: (name) => headers[name.toLowerCase()] ?? null },
 		text: async () => body,
+		// Every answer the door reads is JSON; the member is here because the type is shared with a file download.
+		arrayBuffer: async () => new TextEncoder().encode(body).buffer as ArrayBuffer,
 	};
 }
 
