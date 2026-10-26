@@ -20,7 +20,7 @@
  *     ├── integrations.json   # the services mason reaches (`integrations.ts`)
  *     ├── ssh/                # the key mason logs into the env machine with
  *     ├── pi/                 # the copy of the provider credential
- *     └── data/               # agent.sqlite, hooks.json, connectors.json, seeded-skills.json
+ *     └── data/               # agent.sqlite, hooks.json, seeded-skills.json
  * ```
  *
  * The split is a mount boundary, not a permission mode: `bash` can talk its way around a mode. `agent/` is one volume
@@ -67,8 +67,8 @@ export interface HousePaths {
 	readonly agentsDir: string;
 	readonly workspaceDir: string;
 	/**
-	 * `agent.sqlite`, `hooks.json`, `connectors.json` and the record of seeded skills: state the server keeps, in the
-	 * half the agent cannot see.
+	 * `agent.sqlite`, `hooks.json` and the record of seeded skills: state the server keeps, in the half the agent cannot
+	 * see.
 	 */
 	readonly dataDir: string;
 	/** The token hashes and the session key (`auth.ts`). */

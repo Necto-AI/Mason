@@ -15,14 +15,6 @@ import type { IncomingMessage } from "node:http";
 export const HOOK_BODY_MAX_BYTES = 32 * 1024;
 
 /**
- * A GitHub delivery is not a summary: it is the event object, with the issue or pull request body and its labels
- * inside it, and a long PR routinely passes 20 KiB. GitHub's own ceiling is 25 MB, so this is a bound on what an
- * attacker (or a misconfigured fork relay) can make the server buffer, not a format rule — a delivery over it is
- * dropped with `413` rather than truncated, because a signature over a truncated body is a signature of nothing.
- */
-export const GITHUB_BODY_MAX_BYTES = 256 * 1024;
-
-/**
  * A generic event delivery: how many bytes a trigger may send. An envelope carries a paragraph, and the cap bounds what
  * a sender can buffer; a delivery over it is dropped with `413` before the signature is read, never truncated.
  */

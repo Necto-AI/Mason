@@ -2,6 +2,8 @@
 # every ignored path here is bytes and layers a deployment does not need. `vendor/` is not ignored: the image is the
 # repo, and `npm install` symlinks the @earendil-works packages out of it.
 node_modules
+# A package inside the repository (`integrations/`) installs its own dependencies; mason's image is not built from them.
+integrations/*/node_modules
 .dev
 .data
 dist
