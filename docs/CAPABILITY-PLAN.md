@@ -13,6 +13,18 @@ The three questions that decide the design are the same for every capability bel
 3. **What does the model see?** One line per integration in the resident prompt, plus the tool schemas. Every capability
    is paid for on every turn of every bot that has it, so a capability nobody uses is a tax on the ones that matter.
 
+## The rule that decides where a capability lives
+
+**mason's own capabilities ship in code, so every bot has them.** A capability nobody has to configure is a capability
+no bot can silently lack. Transcription is a service in `deploy/compose.yaml`, so a second stack gets its own container
+and its own model volume from the same file, and the relay's default endpoint is that service by name; OCR is a binary
+in the tool-machine image plus a skill in `skills/`, which every agent's home receives on first boot; search is a
+first-party tool in `src/server`, on by default.
+
+`service/integrations.json` is for **somebody else's service**: an endpoint and a credential that belong to one person,
+or a tool the operator registers deliberately. Transcription, OCR and search must not be integrations — a new bot would
+be born mute, blind and unable to look anything up, and only a human editing a JSON file could fix it.
+
 ## The four layers, and what goes in each
 
 | Layer | What it is | Fits |
