@@ -128,6 +128,13 @@ export interface SendMessageOptions {
 	readonly replyToMessageId?: number;
 }
 
+/** `sendChatAction`: what this bot appears to be doing in a chat, for as long as Telegram cares. */
+export interface ChatActionOptions {
+	readonly chatId: string;
+	/** "typing" by default; the union is Telegram's, and only "typing" is used here. */
+	readonly action?: "typing" | "upload_photo" | "record_voice";
+}
+
 export class TelegramApi {
 	readonly #token: string;
 	readonly #fetch: Fetch;
@@ -210,6 +217,20 @@ export class TelegramApi {
 			return { kind: "failed", error: `${answer.status} the answer carried no message id` };
 		}
 		return { kind: "sent", messageId: message.message_id };
+	}
+
+	/**
+	 * "typing…" in the chat's header, for about five seconds. The one thing this container can show while the agent is
+	 * working, and the reason `src/typing.ts` exists: one call is a blink, and a turn is minutes.
+	 *
+	 * Returns nothing on success and throws `TelegramError` on refusal — a chat that was deleted, a bot kicked out of a
+	 * group. The caller is a heartbeat and decides for itself that a failed courtesy is not a failed turn.
+	 */
+	async sendChatAction(options: ChatActionOptions): Promise<void> {
+		await this.#call("sendChatAction", {
+			chat_id: options.chatId,
+			action: options.action ?? "typing",
+		});
 	}
 
 	async #call(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
