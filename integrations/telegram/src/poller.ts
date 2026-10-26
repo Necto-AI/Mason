@@ -50,6 +50,12 @@ export interface PollerOptions {
 	readonly filter: FilterContext;
 	readonly pollTimeoutSeconds?: number;
 	readonly sleep?: (ms: number) => Promise<void>;
+	/**
+	 * The typing indicator, started when a message becomes a fire. Optional and structural rather than the class itself, so
+	 * a poller test needs no timer and the two files stay independent: the poller knows "this chat is being worked on", and
+	 * `src/typing.ts` knows how long a chat may look busy.
+	 */
+	readonly typing?: { start(chatId: string): void };
 	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
 	readonly now?: () => number;
 }
@@ -211,7 +217,11 @@ export class Poller {
 		// Recorded before the door answers, because the chat is real whether or not this particular message got through:
 		// `list_chats` is where the agent may write, not a log of successful deliveries.
 		this.#options.chats.add(reading.chat);
-		return this.#options.door.fire(envelopeFor(reading.event));
+		const answer = await this.#options.door.fire(envelopeFor(reading.event));
+		// Only an accepted fire is work in progress. A refusal (a disabled trigger face, a bad signature) means nobody is
+		// thinking about this message, and dots that stay up for a turn that never started are the interface lying.
+		if (answer.kind === "accepted") this.#options.typing?.start(reading.chat.id);
+		return answer;
 	}
 
 	/** The offset and, when it grew, the chat list — in that order, so a crash between the two loses a chat, not a place. */

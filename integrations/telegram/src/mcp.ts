@@ -31,6 +31,12 @@ export interface TelegramTools {
 	}) => Promise<SendOutcome>;
 	/** The chats the poller has seen, newest last. */
 	readonly chats: () => readonly SeenChat[];
+	/**
+	 * The typing indicator, told a chat has an answer on the way. The dots are the poller's to start (it knows a message
+	 * became a fire) and this face's to stop: an answer that has arrived replaces them, and one that failed is not worth
+	 * a chat that keeps saying "typing…".
+	 */
+	readonly typing?: { stop(chatId: string): void };
 }
 
 export function createMcpServer(tools: TelegramTools): McpServer {
@@ -51,6 +57,7 @@ export function createMcpServer(tools: TelegramTools): McpServer {
 			},
 		},
 		async ({ chat_id, text, reply_to_message_id }) => {
+			tools.typing?.stop(chat_id);
 			const outcome = await tools.send({
 				chatId: chat_id,
 				text,

@@ -83,6 +83,23 @@ describe("sendMessage", () => {
 	});
 });
 
+describe("sendChatAction", () => {
+	it("asks for typing in the chat, and sends nothing else", async () => {
+		const { api: client, sent } = api(200, { ok: true, result: true });
+
+		await client.sendChatAction({ chatId: "-1001234" });
+
+		assert.equal(sent[0]?.url, `https://api.telegram.org/bot${TOKEN}/sendChatAction`);
+		assert.deepEqual(JSON.parse(sent[0]?.request.body ?? ""), { chat_id: "-1001234", action: "typing" });
+	});
+
+	it("throws when Telegram refuses, so the heartbeat can count it and move on", async () => {
+		const { api: client } = api(400, { ok: false, error_code: 400, description: "Bad Request: chat not found" });
+
+		await assert.rejects(() => client.sendChatAction({ chatId: "-1001234" }), /chat not found/);
+	});
+});
+
 describe("getUpdates", () => {
 	it("asks for messages only, for the given offset, and holds the request open as long as it was told", async () => {
 		const { api: client, sent } = api(200, { ok: true, result: [] });
