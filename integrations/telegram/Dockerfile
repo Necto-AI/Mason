@@ -6,7 +6,9 @@
 #
 # Published on its own (ghcr.io/denissud/mason-telegram), never as part of mason's image: an integration has its own
 # release cycle, and mason's only knowledge of it is the URL in integrations.json and a trigger secret.
-FROM node:22-bookworm-slim
+# Qualified for the same reason as the node image in deploy/mason.Dockerfile: no short-name resolution on a NixOS
+# podman host, and this image is built by the same compose file.
+FROM docker.io/library/node:22-bookworm-slim
 
 WORKDIR /app
 ENV NODE_ENV=production
