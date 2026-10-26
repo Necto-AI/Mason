@@ -101,8 +101,10 @@ In a private chat there is no privacy mode: every message arrives.
 
 There is no published port, here or on any integration. The container listens on `8082` inside the `mason-mcp` compose
 network, which is `internal: true`, and mason reaches it by name; the host, another machine and the internet cannot. Its
-own way out is `mason-edge` — and through the `vpn` sidecar, because Telegram is blocked where this runs. Mason reaches
-this container and this container reaches the sidecar; nothing else is a route.
+own way out is `mason-egress`, which is also `internal: true` and whose only reachable address is the `vpn` sidecar at
+`http://vpn:1080` — so the sidecar is the route to Telegram, and there is no route to anything else. Mason is not on
+`mason-egress`, which is what keeps the proxy this container's route rather than mason's: mason reaches this container,
+this container reaches the sidecar, and nothing else is a route.
 
 ## Running it
 
