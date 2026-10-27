@@ -194,7 +194,7 @@ export class HooksManager {
 		for (const id of Object.keys(this.#persisted)) {
 			if (this.#hooks.has(id)) continue;
 			this.#warn(
-				`[hooks] the saved state names "${id}", and no hook this boot defines it: if it is a routine, its file in agent/routines/ is the fix — it was skipped when the boot read the directory; if the hook is gone from this build, a trigger still naming it must be repointed, because the boot refuses a trigger naming nothing`,
+				`[hooks] the saved state names "${id}", which no hook this boot defines: if it is a routine, fix its file in agent/routines/ — it was skipped when the boot read the directory; if the hook left this build, a trigger still naming it must be repointed, because the boot refuses a trigger naming nothing`,
 			);
 		}
 		for (const id of this.#hooks.keys()) this.#arm(id);

@@ -246,6 +246,6 @@ export function chatRoutineReports(
 		.filter((definition) => definition.enabled && deliveryToolOf(definition.promptTemplate) === CHAT_DELIVERY_TOOL)
 		.map(
 			(definition) =>
-				`[routines] ${definition.id} answers in a chat, and this boot did not connect ${CHAT_DELIVERY_TOOL}: it comes from an enabled integration named "telegram" with a tools face, and every fire would deliver nowhere`,
+				`[routines] ${definition.id} answers in a chat, and this boot did not connect ${CHAT_DELIVERY_TOOL}: it needs an enabled integration named "telegram" whose tools face answered, and every fire would deliver nowhere`,
 		);
 }

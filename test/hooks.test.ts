@@ -634,7 +634,7 @@ describe("a build that no longer defines a persisted hook", () => {
 
 		const stale = reports.map(String).filter((message) => message.includes("routine-morning-brief"));
 		assert.equal(stale.length, 1, "one line for the id, however many more there are");
-		assert.match(stale[0] ?? "", /no hook this boot defines it/);
+		assert.match(stale[0] ?? "", /which no hook this boot defines/);
 		assert.match(stale[0] ?? "", /must be repointed/, "what an operator with a trigger still naming it has to do");
 		assert.equal(reports.length, 1, "a hook the build does define is not news");
 		// The id that is gone costs nothing else: the hook that is here is defined as it always was, with the switch the
@@ -661,8 +661,8 @@ describe("a build that no longer defines a persisted hook", () => {
 		recordTimers(() => hooks.start());
 
 		const line = reports.map(String).find((message) => message.includes("routine-morning-brief")) ?? "";
-		assert.match(line, /no hook this boot defines it/, "the one thing that is true of both causes");
-		assert.match(line, /its file in agent\/routines\/ is the fix/, "the skipped routine's fix is the file, not the trigger");
+		assert.match(line, /which no hook this boot defines/, "the one thing that is true of both causes");
+		assert.match(line, /fix its file in agent\/routines\//, "the skipped routine's fix is the file, not the trigger");
 		assert.match(line, /must be repointed/, "and a hook the build dropped still moves the trigger's name");
 	});
 });
