@@ -169,11 +169,15 @@ export interface EventHookConfig {
   description: string;
   enabled: boolean;
   intervalMs?: number; // If set, runs periodically when enabled
+  schedule?: HookSchedule; // If set, runs at a wall-clock time when enabled (`schedule.ts`); never both
   identify?: "request" | "body"; // How this hook's senders name a fire, when they all do
   promptTemplate: string;
   lastFiredAt?: string;
   fireCount: number;
+  source?: "code" | "file"; // Where the definition came from; a file's `enabled` is not overridden by the state
 }
+
+type HookSchedule = { kind: "daily"; at: string /* "HH:MM" */; days?: number[] /* 0 = Sunday */; tz: string };
 ```
 
 - **How a hook fires (`fire(id, { payload?, requestId? })`):**
@@ -203,13 +207,14 @@ export interface EventHookConfig {
   4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
      - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Exact, and permanent.
      - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity bucket (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the bucket collapses while tomorrow's identical digest still fires. The bucket is a division of the clock, not a span of time: a redelivery that crosses a bucket boundary is a new event, however close it is.
-     - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
+     - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer on an interval. One fire per interval slot, so re-arming a timer cannot double-fire.
+     - `wallClockRequestId(hook, fireAt)` → `hook:<id>:slot:<YYYY-MM-DD>T<HH:MM>`: a timer on a wall clock. One fire per date and time in the schedule's own zone, so a restart inside the same slot is the same fire while tomorrow is a new one.
      - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
-     `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about.
-  5. A hook trigger never steers: `whenBusyFor("hook")` places it as a follow-up, because only the user may interrupt a running turn (`src/server/admission.ts`).
-  6. **Who hears the answer.** The fired input is the whole of the signal. It opens with `[EVENT HOOK: <name>]` (`HOOK_INPUT_PREFIX`), and the delivery is the first `mcp__<integration>__send_message` the hook's instruction names (`DELIVERY_TOOL_NAME`, matched against everything before the untrusted fence, because a payload that could name a tool would let a sender choose where the agent answers). `deliveryToolForTurn()` in `src/server/hooks.ts` is where both halves are read, and both consumers read it rather than a name of their own: `send_to_user` refuses in a turn whose hook names a chat, and the gate counts the named tool as that turn's delivery (§3.4). A hook whose instruction names no chat tool has no chat to answer in — the morning brief, `github-activity`, a retry — and there `send_to_user` is a real delivery, answered with the sentence that says the console is the reader and nobody was reached.
+     `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about. `define()` throws when a hook carries both `intervalMs` and `schedule`: an interval counts from whenever the process started and a wall clock does not, and a hook with both would fire at whichever the timer happened to use.
+  5. **A wall clock.** `schedule` is `{ kind: "daily", at, days?, tz }`, and `nextFireAt(schedule, now)` (`src/server/schedule.ts`, pure — no timers, no I/O, no cron parser) is the next instant strictly after `now`. The timer is a `setTimeout` to that instant and is re-armed from a fresh `now` after each fire, so a restart or a sleeping host lands on the schedule instead of drifting a day behind it. Daily only, by design: two routines cannot wake each other and a schedule cannot loop. The two days a year that are not 24 hours long: a wall-clock time that does not exist (spring forward) fires at the first instant that does, and one that exists twice (fall back) fires at the first of the two, so a routine runs once either way.
+  6. A hook trigger never steers: `whenBusyFor("hook")` places it as a follow-up, because only the user may interrupt a running turn (`src/server/admission.ts`).
+  7. **Who hears the answer.** The fired input is the whole of the signal. It opens with `[EVENT HOOK: <name>]` (`HOOK_INPUT_PREFIX`), and the delivery is the first `mcp__<integration>__send_message` the hook's instruction names (`DELIVERY_TOOL_NAME`, matched against everything before the untrusted fence, because a payload that could name a tool would let a sender choose where the agent answers). `deliveryToolForTurn()` in `src/server/hooks.ts` is where both halves are read, and both consumers read it rather than a name of their own: `send_to_user` refuses in a turn whose hook names a chat, and the gate counts the named tool as that turn's delivery (§3.4). A hook whose instruction names no chat tool has no chat to answer in — `workspace-check`, `github-activity`, a retry — and there `send_to_user` is a real delivery, answered with the sentence that says the console is the reader and nobody was reached.
 - **Built-in hooks:**
-  - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
   - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though an integration's trigger may name it, and a hook nothing calls costs nothing.
   - `team-chat` (a message in the team chat, as the Telegram integration's trigger renders one): enabled, no interval — a chat message is not a schedule. It names the sender, the chat and the message a reply answers, and asks the agent to decide whether to answer there with `mcp__telegram__send_message` or stay quiet, because every answer is a message a person reads.

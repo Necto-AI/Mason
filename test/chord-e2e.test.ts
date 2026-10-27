@@ -281,7 +281,7 @@ describe("chord client <-> server", () => {
 			assert.equal(status.busy, false);
 			assert.deepEqual(
 				status.hooks.map((hook) => hook.id),
-				["morning-brief", "retry-failed-run", "github-activity", "workspace-check", "team-chat"],
+				["retry-failed-run", "github-activity", "workspace-check", "team-chat"],
 			);
 			assert.deepEqual(status.model, { provider: "faux", modelId: "faux-1" });
 
@@ -670,7 +670,7 @@ describe("chord client <-> server", () => {
 			);
 
 			// An external script or timer wakes the agent through HTTP.
-			const response = await fetch(`http://127.0.0.1:${client.server.port}/api/hooks/morning-brief/fire`, {
+			const response = await fetch(`http://127.0.0.1:${client.server.port}/api/hooks/retry-failed-run/fire`, {
 				method: "POST",
 				headers: {
 					"content-type": "application/json",

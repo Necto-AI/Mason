@@ -53,7 +53,7 @@ const integrationsFile = {
 			trigger: { hook: "workspace-check", secret: telegramSecret },
 			commands: ["stop", "compact", "clear", "status"],
 		},
-		docs: { enabled: true, trigger: { hook: "morning-brief", secret: docsSecret } },
+		docs: { enabled: true, trigger: { hook: "retry-failed-run", secret: docsSecret } },
 		// A second door that declares one command, so the key's integration half is tested as well as the id half.
 		pager: { enabled: true, trigger: { hook: "workspace-check", secret: pagerSecret }, commands: ["stop"] },
 		// Disabled, and its hook deliberately does not exist: a switched-off door is not a reason to refuse the boot.

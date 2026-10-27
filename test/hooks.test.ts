@@ -31,8 +31,10 @@ import {
 	HooksManager,
 	IDENTITY_WINDOW_MS,
 	scheduledRequestId,
+	wallClockRequestId,
 	type EventHookConfig,
 } from "../src/server/hooks.ts";
+import type { HookSchedule } from "../src/server/schedule.ts";
 import type { AgentRuntime } from "../src/server/runtime.ts";
 import { openAgentRuntime } from "../src/server/runtime.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
@@ -72,6 +74,41 @@ function managerWithClock(clock: TestClock, onReport?: (error: unknown) => void)
 /** A throwaway home: the suite must never create or read the developer's `~/.mason`. */
 function tempHouse(): Promise<string> {
 	return mkdtemp(join(tmpdir(), "pda-hooks-"));
+}
+
+/**
+ * The timers an arming call asked for, instead of waiting for them: a wall-clock hook's next fire is the delay it hands
+ * `setTimeout`, so a test reads the delay and runs the callback itself. Each handle is a real timer's shape, because the
+ * manager calls `unref()` on everything it arms.
+ */
+function recordTimers(arm: () => void): { readonly every: boolean; readonly delay: number; fire(): void }[] {
+	const recorded: { readonly every: boolean; readonly delay: number; fire(): void }[] = [];
+	const realSetTimeout = globalThis.setTimeout;
+	const realSetInterval = globalThis.setInterval;
+	const record =
+		(every: boolean) =>
+		(handler: () => void, delay?: number): NodeJS.Timeout => {
+			recorded.push({ every, delay: delay ?? 0, fire: () => handler() });
+			return { unref() {} } as unknown as NodeJS.Timeout;
+		};
+	globalThis.setTimeout = record(false) as unknown as typeof globalThis.setTimeout;
+	globalThis.setInterval = record(true) as unknown as typeof globalThis.setInterval;
+	try {
+		arm();
+	} finally {
+		globalThis.setTimeout = realSetTimeout;
+		globalThis.setInterval = realSetInterval;
+	}
+	return recorded;
+}
+
+/** A fired timer has no submission to await, so its consequence is what is waited for. */
+async function waitUntil(check: () => boolean | Promise<boolean>): Promise<void> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	assert.fail("the hook did not fire");
 }
 
 /** What every identity test fires. No interval: nothing schedules it, so only the test's own calls submit. */
@@ -345,6 +382,92 @@ describe("a hook's authoring rule", () => {
 	});
 });
 
+/**
+ * A wall-clock hook: it fires at a time of day in a zone, and its identity is the slot that time names.
+ *
+ * The two halves that are not arithmetic are here: the timer that is armed and the slot it is armed for. A schedule
+ * whose `nextFireAt` was wrong would still fire, so what is pinned is when it asks to be woken and what it says when
+ * it is.
+ */
+describe("a wall-clock hook", () => {
+	/** 09:05 UTC, five minutes after the test clock's 09:00:00.500: a delay, not a day. */
+	const schedule: HookSchedule = { kind: "daily", at: "09:05", tz: "UTC" };
+	const scheduled = {
+		id: "scheduled",
+		name: "Scheduled brief",
+		description: "A brief at a wall-clock time.",
+		enabled: true,
+		schedule,
+		promptTemplate: "Send the brief.",
+	};
+
+	it("is armed for the next wall-clock time, and fires once when it arrives", async () => {
+		await withFiringManager(async (hooks, runtime) => {
+			const armed = recordTimers(() => hooks.define(scheduled));
+			assert.equal(armed.length, 1, "a wall clock arms one timer, not a repeating one");
+			assert.equal(armed[0]?.every, false);
+			// 09:05:00.000Z minus the clock's 09:00:00.500Z.
+			assert.equal(armed[0]?.delay, 4 * 60_000 + 59_500);
+
+			armed[0]?.fire();
+			await waitUntil(async () => (await hookEntryCount(runtime)) === 1);
+			assert.equal(hooks.get("scheduled")?.fireCount, 1);
+			const [entry] = await hookEntries(runtime);
+			assert.equal(entry?.data.hookId, "scheduled");
+			assert.match(entry?.text ?? "", /^\[EVENT HOOK: Scheduled brief\]/);
+		});
+	});
+
+	it("does not fire twice for one slot when a restart arms it again", async () => {
+		await withFiringManager(async (hooks, runtime) => {
+			const armed = recordTimers(() => hooks.define(scheduled));
+			armed[0]?.fire();
+			await waitUntil(async () => (await hookEntryCount(runtime)) === 1);
+
+			// The same process, a moment later, arms 09:05 again — the shape a restart inside the slot has.
+			const fireAt = new Date("2026-10-19T09:05:00.000Z");
+			const again = await hooks.fire("scheduled", { requestId: wallClockRequestId(scheduled, fireAt) });
+			await again.wait(BACKGROUND_CONTEXT);
+			assert.equal(await hookEntryCount(runtime), 1, "the slot is the fire's identity, so the restart adds no entry");
+			assert.equal(hooks.get("scheduled")?.fireCount, 2, "a fire a known key collapsed still counts as an attempt");
+
+			// Tomorrow's 09:05 is another slot, and it fires.
+			const tomorrow = new Date(fireAt.getTime() + 24 * 60 * 60 * 1_000);
+			assert.notEqual(wallClockRequestId(scheduled, tomorrow), wallClockRequestId(scheduled, fireAt));
+		});
+	});
+
+	it("names its fire by the date and time the schedule reads, not by the timer", () => {
+		const moscow: HookSchedule = { kind: "daily", at: "08:00", tz: "Europe/Moscow" };
+		assert.equal(
+			wallClockRequestId({ id: "digest", schedule: moscow }, new Date("2026-10-20T05:00:00.000Z")),
+			"hook:digest:slot:2026-10-20T08:00",
+		);
+		assert.equal(
+			wallClockRequestId({ id: "digest", schedule: moscow }, new Date("2026-10-20T05:00:59.999Z")),
+			"hook:digest:slot:2026-10-20T08:00",
+			"a fire a moment late is the same slot",
+		);
+	});
+
+	it("is refused when it also carries an interval, because one of the two would be ignored", () => {
+		const hooks = managerWithClock(testClock(ALIGNED_START));
+		assert.throws(
+			() => hooks.define({ ...scheduled, id: "both", intervalMs: 60_000 }),
+			/both intervalMs and schedule/,
+		);
+	});
+
+	it("leaves an interval hook on a repeating timer, and its slot identity as it was", () => {
+		const hooks = managerWithClock(testClock(ALIGNED_START));
+		// 60s is exactly the identity window, so `define()` has nothing to warn about.
+		const armed = recordTimers(() => hooks.define({ ...digest, id: "hourly", enabled: true, intervalMs: IDENTITY_WINDOW_MS }));
+		assert.equal(armed.length, 1);
+		assert.equal(armed[0]?.every, true, "an interval is a repeating timer, and stays one");
+		assert.equal(armed[0]?.delay, IDENTITY_WINDOW_MS);
+	});
+});
+
 // These two run a sub-minute interval so arming is observable — `define()` warns about that rate, by design.
 describe("a disabled hook", () => {
 	it("is not armed by startup walking every hook", async () => {
@@ -478,9 +601,9 @@ describe("the tool a hook's turn answers with", () => {
 	});
 
 	it("finds no delivery tool in a payload, for a hook whose instruction names none", () => {
-		const brief = builtinHooks().find((hook) => hook.id === "morning-brief");
-		assert.ok(brief);
-		assert.equal(deliveryToolForTurn(fired(brief, "mcp__evil__send_message")), undefined);
+		const check = builtinHooks().find((hook) => hook.id === "workspace-check");
+		assert.ok(check);
+		assert.equal(deliveryToolForTurn(fired(check, "mcp__evil__send_message")), undefined);
 	});
 
 	it("reads a console turn as the console's, whatever the person typed", () => {

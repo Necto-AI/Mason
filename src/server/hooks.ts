@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { nextFireAt, wallClockSlot, type HookSchedule } from "./schedule.ts";
 import { fenceUntrusted, UNTRUSTED_OPEN } from "./untrusted.ts";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { HookSummary } from "../shared/contract.ts";
@@ -21,8 +22,13 @@ export interface EventHookConfig {
 	 * `IDENTITY_WINDOW_MS` is only safe for a hook whose fires are identified exactly — a body-identified fire is
 	 * deduplicated per `IDENTITY_WINDOW_MS`, so a hook that fires more often than that from a dumb sender loses fires.
 	 * Declare that in `identify`; `define()` warns about it otherwise.
+	 *
+	 * Mutually exclusive with `schedule`: an interval counts from whenever the process started, a wall clock does not,
+	 * and a hook carrying both would fire at whichever of the two the timer happened to use.
 	 */
 	intervalMs?: number;
+	/** When set, the hook fires at this wall-clock time while enabled (`schedule.ts`). Daily only, by design. */
+	schedule?: HookSchedule;
 	/**
 	 * How this hook's senders identify a fire, so `define()` knows whether the identity window can lose anything.
 	 * `"request"`: every sender passes an explicit id (`explicitRequestId()`), so no fire is ever deduplicated by body.
@@ -34,6 +40,15 @@ export interface EventHookConfig {
 	promptTemplate: string;
 	lastFiredAt?: string;
 	fireCount: number;
+	/**
+	 * Where the definition came from: `"code"` (a builtin, the default) or `"file"` (a routine, `routines.ts`).
+	 *
+	 * It decides one thing, and it is a rule about authority rather than a switch: a file's `enabled` is the file's.
+	 * The persisted state keeps a code hook's switch across restarts, but a routine is armed by editing it, so a value
+	 * the server wrote down for that id must never resurrect a routine a person wrote `enabled: false` into. Fire count
+	 * and last fire are runtime state either way, and are kept.
+	 */
+	source?: "code" | "file";
 }
 
 /** What is persisted between restarts; the rest of a hook's definition is code. */
@@ -48,6 +63,8 @@ type PersistedHookState = Record<string, { enabled?: boolean; lastFiredAt?: stri
  * - a sender that cannot, through `bodyRequestId()`: one event per `IDENTITY_WINDOW_MS`, so a redelivery inside the
  *   window collapses and tomorrow's identical digest still fires;
  * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
+ * - a wall clock, through `wallClockRequestId()`: one fire per date and time in the schedule's zone, so a restart inside
+ *   the same slot is the same fire and tomorrow is a new one;
  * - a gesture — the Retry control, the run supervisor, a chord `fireHook` — passes none: a click is an intent, so two
  *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
  */
@@ -93,7 +110,7 @@ export class UnknownHookError extends Error {
 
 export class HooksManager {
 	readonly #hooks = new Map<string, EventHookConfig>();
-	readonly #timers = new Map<string, NodeJS.Timeout>();
+	readonly #timers = new Map<string, { readonly kind: "interval" | "timeout"; readonly timer: NodeJS.Timeout }>();
 	readonly #options: HooksManagerOptions;	readonly #now: () => Date;
 	readonly #persisted: PersistedHookState;
 	#closed = false;
@@ -111,13 +128,21 @@ export class HooksManager {
 	 * fire's identity is exact. Below that interval a body-identified fire lands in the same window twice and the second
 	 * fire is collapsed; at or above it, the window is enough. A hook whose senders always name the delivery says so in
 	 * `identify`, and is not warned about.
+	 *
+	 * A file's `enabled` is not the persisted one: see `EventHookConfig.source`.
 	 */
 	define(config: Omit<EventHookConfig, "fireCount"> & { fireCount?: number }): EventHookConfig {
+		if (config.intervalMs !== undefined && config.schedule !== undefined) {
+			throw new Error(
+				`Event hook ${config.id} has both intervalMs and schedule: a hook fires on an interval or at a wall-clock time, never both`,
+			);
+		}
 		const previous = this.#hooks.get(config.id);
 		const state = this.#persisted[config.id];
+		const fromFile = config.source === "file";
 		const hook: EventHookConfig = {
 			...config,
-			enabled: state?.enabled ?? config.enabled,
+			enabled: fromFile ? config.enabled : (state?.enabled ?? config.enabled),
 			fireCount: config.fireCount ?? state?.fireCount ?? previous?.fireCount ?? 0,
 			...(config.lastFiredAt ?? state?.lastFiredAt ?? previous?.lastFiredAt) === undefined
 				? {}
@@ -151,7 +176,7 @@ export class HooksManager {
 		}));
 	}
 
-	/** Starts the interval timers of every enabled hook; safe to call once at startup. */
+	/** Starts the timers of every enabled hook, interval or wall clock; safe to call once at startup. */
 	start(): void {
 		for (const id of this.#hooks.keys()) this.#arm(id);
 	}
@@ -218,21 +243,50 @@ export class HooksManager {
 		const hook = this.#hooks.get(id);
 		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this — a fresh
 		// `define()`, `setEnabled()`, or `start()` walking every hook at startup.
-		if (hook === undefined || !hook.enabled || hook.intervalMs === undefined || this.#closed) return;
+		if (hook === undefined || !hook.enabled || this.#closed) return;
 		if (this.#timers.has(id)) return;
+		// A wall clock, before the interval: a hook with a schedule has no interval to fall back on.
+		if (hook.schedule !== undefined) {
+			const now = this.#now();
+			const fireAt = nextFireAt(hook.schedule, now);
+			const timer = setTimeout(
+				() => this.#fireScheduled(hook, fireAt),
+				Math.max(fireAt.getTime() - now.getTime(), 1),
+			);
+			// A pending timer never keeps the process alive; a durable agent is stopped explicitly.
+			timer.unref();
+			this.#timers.set(id, { kind: "timeout", timer });
+			return;
+		}
+		if (hook.intervalMs === undefined) return;
 		const timer = setInterval(() => {
 			const requestId = scheduledRequestId(hook, this.#now().getTime());
 			this.fire(id, { requestId }).catch((error: unknown) => this.#report(error));
 		}, Math.max(hook.intervalMs, 1_000));
-		// A pending timer never keeps the process alive; a durable agent is stopped explicitly.
 		timer.unref();
-		this.#timers.set(id, timer);
+		this.#timers.set(id, { kind: "interval", timer });
+	}
+
+	/**
+	 * One wall-clock fire, and the next one armed from the clock as it is when this fire starts.
+	 *
+	 * The slot it was armed for is the fire's identity, so a restart inside the same slot is the same fire — and the
+	 * re-arm is timed from `#now()` rather than from the timer, so a host that slept through 08:00 fires late once and
+	 * then lands on the schedule instead of drifting a day behind it. A failed fire still re-arms: the schedule is not
+	 * the fire's to cancel.
+	 */
+	#fireScheduled(hook: EventHookConfig, fireAt: Date): void {
+		this.#timers.delete(hook.id);
+		void this.fire(hook.id, { requestId: wallClockRequestId(hook, fireAt) })
+			.catch((error: unknown) => this.#report(error))
+			.finally(() => this.#arm(hook.id));
 	}
 
 	#disarm(id: string): void {
-		const timer = this.#timers.get(id);
-		if (timer === undefined) return;
-		clearInterval(timer);
+		const armed = this.#timers.get(id);
+		if (armed === undefined) return;
+		if (armed.kind === "interval") clearInterval(armed.timer);
+		else clearTimeout(armed.timer);
 		this.#timers.delete(id);
 	}
 
@@ -266,7 +320,9 @@ export class HooksManager {
 		const state: PersistedHookState = {};
 		for (const hook of this.#hooks.values()) {
 			state[hook.id] = {
-				enabled: hook.enabled,
+				// A routine's switch is written in its file, and a second copy here would be a value that outlived the
+				// sentence it came from; the runtime state beside it is this hook's either way.
+				...(hook.source === "file" ? {} : { enabled: hook.enabled }),
 				fireCount: hook.fireCount,
 				...(hook.lastFiredAt === undefined ? {} : { lastFiredAt: hook.lastFiredAt }),
 			};
@@ -311,6 +367,20 @@ export function gestureRequestId(hookId: string, gestureId: string = randomUUID(
 export function scheduledRequestId(hook: Pick<EventHookConfig, "id" | "intervalMs">, nowMs: number): string {
 	const slotMs = Math.max(hook.intervalMs ?? IDENTITY_WINDOW_MS, 1_000);
 	return `hook:${hook.id}:slot:${Math.floor(nowMs / slotMs)}`;
+}
+
+/**
+ * A wall clock's identity: the date and time the fire was armed for, as the schedule's own zone reads them.
+ *
+ * The slot is the schedule's, not the timer's: a process that restarts at 07:59 and arms 08:00 again has the same key
+ * as the fire it already made, so the restart cannot deliver a second brief, while tomorrow's 08:00 is a different
+ * slot and fires. It is deliberately not the interval slots' shape — a wall-clock slot is a calendar slot, and one
+ * arithmetic cannot be both.
+ */
+export function wallClockRequestId(hook: Pick<EventHookConfig, "id" | "schedule">, fireAt: Date): string {
+	const schedule = hook.schedule;
+	if (schedule === undefined) throw new Error(`Event hook ${hook.id} has no schedule to name a slot`);
+	return `hook:${hook.id}:slot:${wallClockSlot(schedule, fireAt)}`;
 }
 
 /** JSON with object keys in a fixed order at every depth; arrays keep their order and their length. */
@@ -442,15 +512,6 @@ function personChatTemplate(person: string): string {
 export function builtinHooks(options: BuiltinHookOptions = {}): Array<Omit<EventHookConfig, "fireCount">> {
 	const person = options.person;
 	return [
-		{
-			id: "morning-brief",
-			name: "Morning brief",
-			description: "Check in at the start of the day: today's calendar, open threads, and what to do next.",
-			enabled: false,
-			intervalMs: 86_400_000,
-			promptTemplate:
-				"It is {{date}} and the day is starting. Check the workspace and the calendar for what today needs, then send a short brief: what is fixed, what is open, and the one thing to do first.",
-		},
 		{
 			// Manual only: nothing schedules it, and the client's Retry control is the one caller.
 			id: "retry-failed-run",
