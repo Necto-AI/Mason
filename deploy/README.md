@@ -237,6 +237,13 @@ checkout is left on the ref you asked for, so the way back is the previous tag a
 `DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_PORT` and `COMPOSE_CMD` override the defaults; the podman override file is always
 applied, and `COMPOSE_EXTRA_FILES` comes from `deploy/.env` on the host like every other setting.
 
+**One upgrade needs a hand: a home that armed `morning-brief`.** That builtin is gone — a daily brief is a routine now,
+`agent/routines/<name>.md`, armed by the file rather than by the server. Two leftovers: a trigger still pointing at
+`morning-brief` refuses the boot (it is a door firing nothing, and the boot names it), so repoint the trigger at
+`routine-<name>` or at another hook in `service/integrations.json` and restart; and the old hook's entry in
+`service/data/hooks.json` is named once on the boot's report channel with the same instruction, then dropped at the next
+write. Write the routine — the agent drafts it from `skills/routines/SKILL.md` — and nothing about the upgrade is silent.
+
 ## A person, and a device
 
 Two different things, and two different commands — a person is a name the transcript can carry, a device is something

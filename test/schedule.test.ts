@@ -68,11 +68,18 @@ describe("nextFireAt()", () => {
 		assert.equal(next(daily("02:15", "Australia/Lord_Howe"), "2026-10-03T00:00:00.000Z"), "2026-10-03T15:30:00.000Z");
 	});
 
-	it("keeps two schedules in one zone apart, because the time of day is the slot", () => {
-		assert.equal(wallClockSlot(daily("08:00", "Europe/Moscow"), new Date("2026-10-20T05:00:00.000Z")), "2026-10-20T08:00");
-		// The same instant read in another zone is another slot, and a fire a minute later is still the same one.
-		assert.equal(wallClockSlot(daily("08:00", "UTC"), new Date("2026-10-20T05:00:00.000Z")), "2026-10-20T05:00");
-		assert.equal(wallClockSlot(daily("08:00", "Europe/Moscow"), new Date("2026-10-20T05:00:59.000Z")), "2026-10-20T08:00");
+	it("names a slot by the schedule's calendar date, so a retimed routine is still one fire a day", () => {
+		const at = new Date("2026-10-20T05:00:00.000Z");
+		// 05:00Z is 08:00 in Moscow on the 20th: the slot is the date, in that zone.
+		assert.equal(wallClockSlot(daily("08:00", "Europe/Moscow"), at), "2026-10-20");
+		// Retimed to 08:05 after 08:00 has fired: the same day, so the same slot and no second brief.
+		assert.equal(wallClockSlot(daily("08:05", "Europe/Moscow"), at), "2026-10-20");
+		// The same instant read in another zone is another date, and a fire a minute later is still the same one.
+		assert.equal(wallClockSlot(daily("08:00", "UTC"), at), "2026-10-20");
+		assert.equal(wallClockSlot(daily("08:00", "Europe/Moscow"), new Date("2026-10-20T05:00:59.000Z")), "2026-10-20");
+		// And a zone across the date line is a different day at the same instant: 05:00Z is the 20th in Moscow, the 19th in
+		// Los Angeles, so two homes' mornings are two slots rather than one.
+		assert.equal(wallClockSlot(daily("08:00", "America/Los_Angeles"), at), "2026-10-19");
 	});
 });
 

@@ -36,7 +36,7 @@ import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./hou
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
-import { loadRoutines } from "./routines.ts";
+import { loadRoutines, chatRoutineReports } from "./routines.ts";
 import { readRoster } from "./roster.ts";
 
 /**
@@ -241,10 +241,10 @@ export async function openAgentRuntime(
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
-		// The hooks manager exists before the harness opens, because a trigger that fires a hook no build defines has to
-		// refuse the boot before anything can run: the door names one hook, so a name that is not a hook is a door that would
-		// accept a delivery and drop it. This is config, not health — a missing hook is fatal whatever the container's own
-		// `required` says.
+		// The hooks manager exists before the harness opens, because a trigger whose hook this build does not define has to refuse
+		// the boot: the door names one hook, so a name that is not a hook is a door that would accept a delivery and drop it.
+		// The check itself runs once the routines are loaded (below): they are hooks this build defines, and a trigger may name
+		// one. This is config, not health — a missing hook is fatal whatever the container's own `required` says.
 		const hooks = new HooksManager({
 			conversation: () => harness.root(BACKGROUND_CONTEXT),
 			statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
@@ -257,7 +257,6 @@ export async function openAgentRuntime(
 		const roster = await readRoster(house);
 		const sole = roster.people.length === 1 ? roster.people[0]?.name : undefined;
 		for (const hook of builtinHooks(sole === undefined ? {} : { person: sole })) hooks.define(hook);
-		assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
 
 		const storage =
 			options.storageOverride ??
@@ -332,11 +331,15 @@ export async function openAgentRuntime(
 			const routines = await loadRoutines(env, house.routinesDir, context, hooks.list().map((hook) => hook.id));
 			for (const definition of routines.definitions) hooks.define(definition);
 			for (const report of routines.reports) reportRoutine(report);
+			for (const report of chatRoutineReports(routines.definitions, currentIntegrations())) reportRoutine(report);
 		} catch (error) {
 			reportRoutine(
 				`[routines] cannot read ${house.routinesDir}: the bot runs with its builtin hooks only (${error instanceof Error ? error.message : String(error)})`,
 			);
 		}
+		// The routines are defined by then, and nothing has been armed yet: a trigger a person pointed at `routine-<name>` is a
+		// trigger on a hook, and one that names nothing refuses the boot now rather than accepting a delivery it would drop.
+		assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
 		hooks.start();
 		// Picks up a run the last process left unfinished.
 		harness.resume();

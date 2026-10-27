@@ -12,7 +12,9 @@
  * **The file is the whole truth about `enabled`.** A routine is armed by editing it, so `HooksManager` is told the
  * definition came from a file (`source: "file"`) and keeps the persisted runtime state — fire count, last fire — while
  * ignoring the persisted switch. Otherwise a routine a person wrote `enabled: false` into would come back on the next
- * boot, because `service/data/hooks.json` still said `true` from the day it was armed.
+ * boot, because `service/data/hooks.json` still said `true` from the day it was armed. There is no second switch either:
+ * `HooksManager.setEnabled()` refuses a routine, because an arm taken there would last until the boot that read the file
+ * again.
  *
  * **A new or changed routine takes effect on restart.** The list is read once at boot, with the integrations, because
  * the timers are armed from it: a file written mid-turn is a promise for the next boot, not a timer that appears under a
@@ -20,13 +22,16 @@
  *
  * **Daily only**, and with no chat sentence in the person's prose: when the routine names a chat, the sentence telling
  * the model where to answer is appended here, in code. A delivery tool named by a prompt the model wrote itself is the
- * same authority problem as one named by an untrusted payload (`hooks.ts`, `deliveryToolOf`).
+ * same authority problem as one named by an untrusted payload (`hooks.ts`, `deliveryToolOf`) — and it would win, since the
+ * appended sentence is last and the first tool named is the one that delivers — so a body that names one is refused when
+ * the file is parsed.
  */
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import type { EventHookConfig } from "./hooks.ts";
+import { deliveryToolOf, deliveryToolsIn, type EventHookConfig } from "./hooks.ts";
+import type { Integration } from "./integrations.ts";
 import { validateSchedule } from "./schedule.ts";
 
 /** The longest prompt a routine may carry: a turn's instruction, not a document. */
@@ -43,6 +48,14 @@ const ROUTINE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** A chat id as a chat renders it: Telegram's own, positive for a person and negative for a group. */
 const CHAT_ID = /^-?\d+$/;
+
+/**
+ * The tool a routine's `chat` is answered with, written into the prompt by `parseRoutine` below.
+ *
+ * One spelling for the two readers: the prompt that tells the model where to answer, and the boot check that asks whether
+ * that tool exists at all (`chatRoutineReports`).
+ */
+export const CHAT_DELIVERY_TOOL = "mcp__telegram__send_message";
 
 /** A routine as a hook: everything `define()` needs, and nothing about when it has fired. */
 export type RoutineHook = Omit<EventHookConfig, "fireCount">;
@@ -99,6 +112,15 @@ export function parseRoutine(text: string, filePath: string): { definition: Rout
 			`the prompt is ${instruction.length} characters; a turn's instruction is at most ${ROUTINE_PROMPT_MAX_CHARS}`,
 		);
 	}
+	// Where the answer goes is the file's `chat`, and it is appended below. A body that named a delivery tool as well would
+	// be the first one `deliveryToolOf()` finds, so the prose the person wrote would decide over the field that was set —
+	// the same authority problem as a tool named by an untrusted payload, with the file instead of the sender.
+	const named = deliveryToolsIn(instruction);
+	if (named.length > 0) {
+		return refuse(
+			`the prompt names ${named[0]}, which is where an answer is delivered: put the chat id in \`chat:\` and leave the prose to the work`,
+		);
+	}
 	return {
 		definition: {
 			id: `routine-${name}`,
@@ -110,9 +132,7 @@ export function parseRoutine(text: string, filePath: string): { definition: Rout
 			// The chat is named here rather than asked for in the prompt, so where the answer goes is the routine's own
 			// instruction and never something the model or a payload decided.
 			promptTemplate:
-				chat === undefined
-					? instruction
-					: `${instruction}\n\nSend the answer to chat ${chat} with mcp__telegram__send_message.`,
+				chat === undefined ? instruction : `${instruction}\n\nSend the answer to chat ${chat} with ${CHAT_DELIVERY_TOOL}.`,
 		},
 	};
 }
@@ -142,9 +162,13 @@ export interface LoadedRoutines {
 /**
  * Every routine under `dir`, sorted by file name, with one report line per file that is not one.
  *
+ * A routine is named by its file: `morning-brief.md` says `name: morning-brief`, and a file whose frontmatter disagrees is
+ * refused rather than renamed. Two names for one routine would be two answers to "which file is `routine-x`": the id is
+ * built from the frontmatter, so a file named one thing and calling itself another arms a hook nobody can find.
+ *
  * `taken` is the hook ids this boot already defines — the builtins — because `define()` replaces a hook of the same id
- * silently, and a routine that quietly took `team-chat`'s id would stop the chat from being answered. A collision is
- * refused by name and the file is skipped, like a file that does not parse.
+ * silently. A routine's id is `routine-<name>`, so no builtin collides with one today; the guard is the rule for the day
+ * one is named `routine-<something>`, and it costs a line.
  *
  * Absent is not a failure: a home nobody has written a routine in has no `routines/` to mention. Neither is one file
  * that cannot be read — it is reported and skipped, so a bad file costs one routine and not the boot.
@@ -183,6 +207,13 @@ export async function loadRoutines(
 			reports.push(parsed.error);
 			continue;
 		}
+		const stem = file.slice(0, -3);
+		if (stem !== parsed.definition.name) {
+			reports.push(
+				`${path}: the frontmatter names "${parsed.definition.name}", and a routine is named by its file: rename the file to ${parsed.definition.name}.md, or the name to ${stem}`,
+			);
+			continue;
+		}
 		const owner = owners.get(parsed.definition.id);
 		if (owner !== undefined) {
 			reports.push(`${path}: ${parsed.definition.id} is already ${owner}; a routine may not take another hook's id`);
@@ -192,4 +223,26 @@ export async function loadRoutines(
 		definitions.push(parsed.definition);
 	}
 	return { definitions, reports };
+}
+
+/**
+ * One line per routine whose answer has nowhere to go.
+ *
+ * `chat` is delivered with the Telegram integration's message tool, and that tool exists only while an enabled integration
+ * named `telegram` has a tools face. Without one the routine fires every morning into a tool that is not there: the model
+ * is told to answer with something it does not have, and the brief is lost with nothing said. So the boot says it, once per
+ * routine, where the operator and the agent already read what the boot reported.
+ */
+export function chatRoutineReports(
+	definitions: readonly RoutineHook[],
+	integrations: Record<string, Integration>,
+): string[] {
+	const telegram = integrations.telegram;
+	if (telegram?.enabled === true && telegram.tools !== undefined) return [];
+	return definitions
+		.filter((definition) => deliveryToolOf(definition.promptTemplate) === CHAT_DELIVERY_TOOL)
+		.map(
+			(definition) =>
+				`[routines] ${definition.id} answers in a chat, and no enabled integration named "telegram" lends ${CHAT_DELIVERY_TOOL}: every fire would deliver nowhere`,
+		);
 }

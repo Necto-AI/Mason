@@ -11,7 +11,7 @@
  * gate that keeps them quiet.
  */
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -76,30 +76,58 @@ function tempHouse(): Promise<string> {
 	return mkdtemp(join(tmpdir(), "pda-hooks-"));
 }
 
+/** A timer the manager asked for, instead of waiting for it: a test reads the delay and runs the callback itself. */
+interface RecordedTimer {
+	readonly every: boolean;
+	readonly delay: number;
+	fire(): void;
+}
+
+/** Timers recorded until `restore()`: what a test needs when the arming it watches happens after the call that starts it. */
+interface TimerRecorder {
+	readonly timers: RecordedTimer[];
+	restore(): void;
+}
+
 /**
- * The timers an arming call asked for, instead of waiting for them: a wall-clock hook's next fire is the delay it hands
+ * The timers an arming call asks for, instead of waiting for them: a wall-clock hook's next fire is the delay it hands
  * `setTimeout`, so a test reads the delay and runs the callback itself. Each handle is a real timer's shape, because the
  * manager calls `unref()` on everything it arms.
+ *
+ * `recordTimersThrough()` keeps the recorder installed across whatever the test does next — including a fire — which is the
+ * only way to see a second arming. While it is installed there is no working `setTimeout`, so a test that needs to wait
+ * restores first (`waitUntil()` waits with a real timer).
  */
-function recordTimers(arm: () => void): { readonly every: boolean; readonly delay: number; fire(): void }[] {
-	const recorded: { readonly every: boolean; readonly delay: number; fire(): void }[] = [];
+function recordTimersThrough(): TimerRecorder {
+	const timers: RecordedTimer[] = [];
 	const realSetTimeout = globalThis.setTimeout;
 	const realSetInterval = globalThis.setInterval;
 	const record =
 		(every: boolean) =>
 		(handler: () => void, delay?: number): NodeJS.Timeout => {
-			recorded.push({ every, delay: delay ?? 0, fire: () => handler() });
+			timers.push({ every, delay: delay ?? 0, fire: () => handler() });
 			return { unref() {} } as unknown as NodeJS.Timeout;
 		};
 	globalThis.setTimeout = record(false) as unknown as typeof globalThis.setTimeout;
 	globalThis.setInterval = record(true) as unknown as typeof globalThis.setInterval;
+	return {
+		timers,
+		restore: () => {
+			globalThis.setTimeout = realSetTimeout;
+			globalThis.setInterval = realSetInterval;
+		},
+	};
+}
+
+/** The timers one call asks for, with the recorder taken away again before the test goes on. */
+function recordTimers(arm: () => void): RecordedTimer[] {
+	const recorder = recordTimersThrough();
 	try {
 		arm();
 	} finally {
-		globalThis.setTimeout = realSetTimeout;
-		globalThis.setInterval = realSetInterval;
+		recorder.restore();
 	}
-	return recorded;
+	return recorder.timers;
 }
 
 /** A fired timer has no submission to await, so its consequence is what is waited for. */
@@ -401,15 +429,29 @@ describe("a wall-clock hook", () => {
 		promptTemplate: "Send the brief.",
 	};
 
-	it("is armed for the next wall-clock time, and fires once when it arrives", async () => {
-		await withFiringManager(async (hooks, runtime) => {
-			const armed = recordTimers(() => hooks.define(scheduled));
-			assert.equal(armed.length, 1, "a wall clock arms one timer, not a repeating one");
-			assert.equal(armed[0]?.every, false);
-			// 09:05:00.000Z minus the clock's 09:00:00.500Z.
-			assert.equal(armed[0]?.delay, 4 * 60_000 + 59_500);
+	it("arms the next slot on the frozen clock before the fire is answered", async () => {
+		await withFiringManager(async (hooks, runtime, clock) => {
+			const recorder = recordTimersThrough();
+			try {
+				hooks.define(scheduled);
+				const [first] = recorder.timers;
+				assert.equal(recorder.timers.length, 1, "a wall clock arms one timer, not a repeating one");
+				assert.equal(first?.every, false);
+				// 09:05:00.000Z minus the clock's 09:00:00.500Z.
+				assert.equal(first?.delay, 4 * 60_000 + 59_500);
 
-			armed[0]?.fire();
+				clock.advance(4 * 60_000 + 59_500);
+				first?.fire();
+				// The second arming is not the fire's finally: it happened while the submission was still pending, which is what
+				// keeps a schedule alive when a submission never settles.
+				assert.equal(recorder.timers.length, 2, "the fire re-arms the schedule it just kept");
+				const [second] = recorder.timers.slice(1);
+				assert.equal(second?.every, false, "the next slot is another wall clock, not a repeating timer");
+				assert.equal(second?.delay, 24 * 60 * 60 * 1_000, "tomorrow's 09:05, measured from the clock that just fired");
+			} finally {
+				recorder.restore();
+			}
+
 			await waitUntil(async () => (await hookEntryCount(runtime)) === 1);
 			assert.equal(hooks.get("scheduled")?.fireCount, 1);
 			const [entry] = await hookEntries(runtime);
@@ -437,16 +479,74 @@ describe("a wall-clock hook", () => {
 		});
 	});
 
-	it("names its fire by the date and time the schedule reads, not by the timer", () => {
+	it("re-arms with tomorrow's delay when the fire's conversation rejects, and reports it", async () => {
+		const clock = testClock(ALIGNED_START);
+		const reports: unknown[] = [];
+		// `managerWithClock`'s conversation throws, which is the fire this test is about: the schedule is not the fire's to
+		// cancel, so the rejection is reported and the next slot is armed anyway.
+		const hooks = managerWithClock(clock, (error) => reports.push(error));
+		const recorder = recordTimersThrough();
+		try {
+			hooks.define(scheduled);
+			clock.advance(4 * 60_000 + 59_500);
+			recorder.timers[0]?.fire();
+			// The catch is a microtask away; setImmediate keeps the recorder's fake `setTimeout` out of the wait.
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.equal(recorder.timers.length, 2, "a failed fire still arms tomorrow");
+			assert.equal(recorder.timers[1]?.delay, 24 * 60 * 60 * 1_000, "and tomorrow is measured from now, not from the failure");
+			assert.equal(reports.length, 1, "the failure is reported, not swallowed by the re-arm");
+			assert.match(String(reports[0]), /this manager only defines hooks/);
+		} finally {
+			recorder.restore();
+			await hooks.close();
+		}
+	});
+
+	it("keeps the schedule when one submission never settles", async () => {
+		// A submission that neither resolves nor rejects: the old shape deleted the timer, re-armed in `finally`, and so a
+		// single stuck turn ended the routine for the life of the process.
+		const clock = testClock(ALIGNED_START);
+		const hooks = new HooksManager({ conversation: () => new Promise(() => {}), now: clock.now, onReport: () => {} });
+		const recorder = recordTimersThrough();
+		try {
+			hooks.define(scheduled);
+			clock.advance(4 * 60_000 + 59_500);
+			recorder.timers[0]?.fire();
+			assert.equal(recorder.timers.length, 2, "the next slot does not wait for an answer that is not coming");
+			assert.equal(recorder.timers[1]?.delay, 24 * 60 * 60 * 1_000);
+		} finally {
+			recorder.restore();
+			await hooks.close();
+		}
+	});
+
+	it("names its fire by the calendar date the schedule reads, not by the timer", () => {
 		const moscow: HookSchedule = { kind: "daily", at: "08:00", tz: "Europe/Moscow" };
 		assert.equal(
 			wallClockRequestId({ id: "digest", schedule: moscow }, new Date("2026-10-20T05:00:00.000Z")),
-			"hook:digest:slot:2026-10-20T08:00",
+			"hook:digest:slot:2026-10-20",
 		);
 		assert.equal(
 			wallClockRequestId({ id: "digest", schedule: moscow }, new Date("2026-10-20T05:00:59.999Z")),
-			"hook:digest:slot:2026-10-20T08:00",
+			"hook:digest:slot:2026-10-20",
 			"a fire a moment late is the same slot",
+		);
+		// Retimed after it fired: the same day, so the same fire. The trade is stated in `wallClockSlot`: it fires tomorrow.
+		assert.equal(
+			wallClockRequestId({ id: "digest", schedule: { ...moscow, at: "08:05" } }, new Date("2026-10-20T05:05:00.000Z")),
+			"hook:digest:slot:2026-10-20",
+		);
+	});
+
+	it("is refused when its schedule would throw at arm time, naming the hook and the reason", () => {
+		const hooks = managerWithClock(testClock(ALIGNED_START));
+		assert.throws(
+			() => hooks.define({ ...scheduled, id: "bad-time", schedule: { kind: "daily", at: "8:00", tz: "UTC" } }),
+			/Event hook bad-time has a schedule that is not one: schedule\.at/,
+		);
+		assert.throws(
+			() => hooks.define({ ...scheduled, id: "bad-zone", schedule: { kind: "daily", at: "08:00", tz: "Mars/Olympus" } }),
+			/bad-zone.*no time zone/,
 		);
 	});
 
@@ -500,6 +600,47 @@ describe("a disabled hook", () => {
 			await new Promise((resolve) => setTimeout(resolve, 1_200));
 			assert.ok((runtime.hooks.get("tick")?.fireCount ?? 0) >= 1);
 		});
+	});
+});
+
+/**
+ * An upgrade that removes a hook leaves its state behind: the id is still in `hooks.json` and a trigger may still name it.
+ * A refused boot is the loud half of that mistake, and this is the quiet one — the ids, said once, at the start.
+ */
+describe("a build that no longer defines a persisted hook", () => {
+	it("names it once at start, and keeps the state of the hooks it does define", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pda-hooks-state-"));
+		const statePath = join(dir, "hooks.json");
+		await writeFile(
+			statePath,
+			JSON.stringify({
+				"routine-morning-brief": { fireCount: 12, lastFiredAt: "2026-10-19T05:00:00.000Z" },
+				digest: { enabled: true, fireCount: 3 },
+			}),
+			"utf8",
+		);
+		const reports: unknown[] = [];
+		const hooks = new HooksManager({
+			conversation: async () => {
+				throw new Error("this manager never fires");
+			},
+			statePath,
+			onReport: (error) => reports.push(error),
+		});
+		const armed = recordTimers(() => {
+			hooks.define(digest);
+			hooks.start();
+		});
+
+		const stale = reports.map(String).filter((message) => message.includes("routine-morning-brief"));
+		assert.equal(stale.length, 1, "one line for the id, however many more there are");
+		assert.match(stale[0] ?? "", /no hook in this build defines/);
+		assert.match(stale[0] ?? "", /must be repointed/, "what an operator with a trigger still naming it has to do");
+		assert.equal(reports.length, 1, "a hook the build does define is not news");
+		// The id that is gone costs nothing else: the hook that is here is defined as it always was, with the switch the
+		// state remembered for it.
+		assert.equal(hooks.get("digest")?.enabled, true, "the persisted switch of a code hook still counts");
+		assert.equal(armed.length, 0, "and a hook with no timer is not given one");
 	});
 });
 

@@ -6,7 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { nextFireAt, wallClockSlot, type HookSchedule } from "./schedule.ts";
+import { nextFireAt, validateSchedule, wallClockSlot, type HookSchedule } from "./schedule.ts";
 import { fenceUntrusted, UNTRUSTED_OPEN } from "./untrusted.ts";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { HookSummary } from "../shared/contract.ts";
@@ -63,8 +63,8 @@ type PersistedHookState = Record<string, { enabled?: boolean; lastFiredAt?: stri
  * - a sender that cannot, through `bodyRequestId()`: one event per `IDENTITY_WINDOW_MS`, so a redelivery inside the
  *   window collapses and tomorrow's identical digest still fires;
  * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
- * - a wall clock, through `wallClockRequestId()`: one fire per date and time in the schedule's zone, so a restart inside
- *   the same slot is the same fire and tomorrow is a new one;
+ * - a wall clock, through `wallClockRequestId()`: one fire per date in the schedule's zone, so a restart inside
+ *   the same day is the same fire and tomorrow is a new one;
  * - a gesture — the Retry control, the run supervisor, a chord `fireHook` — passes none: a click is an intent, so two
  *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
  */
@@ -129,6 +129,9 @@ export class HooksManager {
 	 * fire is collapsed; at or above it, the window is enough. A hook whose senders always name the delivery says so in
 	 * `identify`, and is not warned about.
 	 *
+	 * A `schedule` is validated here rather than at the arm: a definition that would throw at the moment the next fire is
+	 * armed is a wrong definition, and a hook that disappears at midnight is worse than a boot that says which one and why.
+	 *
 	 * A file's `enabled` is not the persisted one: see `EventHookConfig.source`.
 	 */
 	define(config: Omit<EventHookConfig, "fireCount"> & { fireCount?: number }): EventHookConfig {
@@ -136,6 +139,12 @@ export class HooksManager {
 			throw new Error(
 				`Event hook ${config.id} has both intervalMs and schedule: a hook fires on an interval or at a wall-clock time, never both`,
 			);
+		}
+		if (config.schedule !== undefined) {
+			const checked = validateSchedule(config.schedule);
+			if ("error" in checked) {
+				throw new Error(`Event hook ${config.id} has a schedule that is not one: ${checked.error}`);
+			}
 		}
 		const previous = this.#hooks.get(config.id);
 		const state = this.#persisted[config.id];
@@ -178,11 +187,32 @@ export class HooksManager {
 
 	/** Starts the timers of every enabled hook, interval or wall clock; safe to call once at startup. */
 	start(): void {
+		// A persisted id this build does not define is a hook an upgrade removed. Its state is kept — a hook of that id that
+		// comes back finds its history — but a trigger still naming it refuses the boot, so the one useful thing left to do
+		// is to say which id it was and that the name has to move.
+		for (const id of Object.keys(this.#persisted)) {
+			if (this.#hooks.has(id)) continue;
+			this.#warn(
+				`[hooks] the saved state names "${id}", which no hook in this build defines: a trigger that fires it must be repointed, because the boot refuses a trigger naming nothing`,
+			);
+		}
 		for (const id of this.#hooks.keys()) this.#arm(id);
 	}
 
+	/**
+	 * Switches a code-defined hook on or off. A routine's switch is its file's: see `EventHookConfig.source`.
+	 *
+	 * This refuses a routine instead of arming it, because there is nothing to keep. Arm one here and it fires, reports
+	 * `enabled: true` and reverts on the next boot when the file is read again — a switch whose answer lasts until the
+	 * restart it did not survive. The file is the one place the truth lives, so the refusal names it.
+	 */
 	setEnabled(id: string, enabled: boolean): EventHookConfig {
 		const hook = this.#require(id);
+		if (hook.source === "file") {
+			throw new Error(
+				`${id} is a routine: it is armed by \`enabled\` in its file in agent/routines/, and that file is the only switch a routine has. Edit the file and restart`,
+			);
+		}
 		hook.enabled = enabled;
 		if (enabled) this.#arm(id);
 		else this.#disarm(id);
@@ -242,7 +272,7 @@ export class HooksManager {
 	#arm(id: string): void {
 		const hook = this.#hooks.get(id);
 		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this — a fresh
-		// `define()`, `setEnabled()`, or `start()` walking every hook at startup.
+		// `define()`, `setEnabled()`, `start()` walking every hook at startup, or the re-arm after a fire.
 		if (hook === undefined || !hook.enabled || this.#closed) return;
 		if (this.#timers.has(id)) return;
 		// A wall clock, before the interval: a hook with a schedule has no interval to fall back on.
@@ -272,14 +302,18 @@ export class HooksManager {
 	 *
 	 * The slot it was armed for is the fire's identity, so a restart inside the same slot is the same fire — and the
 	 * re-arm is timed from `#now()` rather than from the timer, so a host that slept through 08:00 fires late once and
-	 * then lands on the schedule instead of drifting a day behind it. A failed fire still re-arms: the schedule is not
-	 * the fire's to cancel.
+	 * then lands on the schedule instead of drifting a day behind it.
+	 *
+	 * The next slot is armed before this fire is awaited, because the two are not each other's condition: a submission that
+	 * never settles would otherwise delete the timer and never put another one back, ending a daily schedule for the life of
+	 * the process. A failed fire is still reported, and the schedule it could not keep is still there tomorrow.
 	 */
 	#fireScheduled(hook: EventHookConfig, fireAt: Date): void {
 		this.#timers.delete(hook.id);
-		void this.fire(hook.id, { requestId: wallClockRequestId(hook, fireAt) })
-			.catch((error: unknown) => this.#report(error))
-			.finally(() => this.#arm(hook.id));
+		this.#arm(hook.id);
+		void this.fire(hook.id, { requestId: wallClockRequestId(hook, fireAt) }).catch((error: unknown) =>
+			this.#report(error),
+		);
 	}
 
 	#disarm(id: string): void {
@@ -370,12 +404,13 @@ export function scheduledRequestId(hook: Pick<EventHookConfig, "id" | "intervalM
 }
 
 /**
- * A wall clock's identity: the date and time the fire was armed for, as the schedule's own zone reads them.
+ * A wall clock's identity: the date the fire was armed for, as the schedule's own zone reads it.
  *
  * The slot is the schedule's, not the timer's: a process that restarts at 07:59 and arms 08:00 again has the same key
  * as the fire it already made, so the restart cannot deliver a second brief, while tomorrow's 08:00 is a different
  * slot and fires. It is deliberately not the interval slots' shape — a wall-clock slot is a calendar slot, and one
- * arithmetic cannot be both.
+ * arithmetic cannot be both — and it names the date alone, so a routine retimed later the same day fires tomorrow
+ * rather than twice (`wallClockSlot`).
  */
 export function wallClockRequestId(hook: Pick<EventHookConfig, "id" | "schedule">, fireAt: Date): string {
 	const schedule = hook.schedule;

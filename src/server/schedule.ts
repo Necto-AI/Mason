@@ -57,16 +57,18 @@ export function nextFireAt(schedule: HookSchedule, now: Date): Date {
 }
 
 /**
- * The identity of one wall-clock slot: the date and time the fire belongs to, as the schedule's own zone reads them.
+ * The identity of one wall-clock slot: the calendar date the fire belongs to, as the schedule's own zone reads it.
  *
  * A schedule's fire is identified by the slot it was armed for, not by when the timer happened to run, so a restart
- * inside the same minute-long fire does not fire twice — pi-durable never forgets a request id — while tomorrow's
- * 08:00 is a new slot and fires again. The time of day is part of the key: two routines' schedules are two slots even
- * when they share a zone.
+ * inside the same day does not fire twice — pi-durable never forgets a request id — while tomorrow is a new slot and
+ * fires again. The date alone, without the time of day, is what makes a retimed routine one fire a day: moving 08:00 to
+ * 08:05 after 08:00 already fired would otherwise be a second slot and a second brief. The trade is the other
+ * direction, and it is the one to prefer — a routine retimed to later today fires tomorrow, because a duplicate brief
+ * is worse than a late one. Two routines cannot collide in this key: the hook's id is in front of it.
  */
 export function wallClockSlot(schedule: HookSchedule, at: Date): string {
 	const parts = zonedParts(schedule.tz, at.getTime());
-	return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
+	return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
 }
 
 /**

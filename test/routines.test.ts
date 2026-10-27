@@ -7,16 +7,16 @@
  * beside it. A routine's timer is `schedule.test.ts`'s and `hooks.test.ts`'s; this is what decides there is one.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import { daemonCommand } from "../src/server/env.ts";
 import { deliveryToolOf, HooksManager } from "../src/server/hooks.ts";
 import { housePaths } from "../src/server/house.ts";
-import { loadRoutines, parseRoutine } from "../src/server/routines.ts";
+import { chatRoutineReports, loadRoutines, parseRoutine } from "../src/server/routines.ts";
 import { openAgentRuntime } from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
@@ -89,11 +89,25 @@ describe("parseRoutine()", () => {
 
 	it("appends the delivery sentence, in code, when the routine names a chat", () => {
 		// Where the answer goes is the routine's own instruction, so the prose the person wrote cannot name a tool at all.
-		const parsed = parseRoutine(routineFile({ chat: "-1001234567890" }), "/routines/chatty.md");
+		const parsed = parseRoutine(routineFile({ chat: "-1001234567890" }), "/routines/morning-brief.md");
 		assert.ok("definition" in parsed);
 		assert.match(parsed.definition.promptTemplate, /^Send the brief\.\n\n/);
 		assert.match(parsed.definition.promptTemplate, /Send the answer to chat -1001234567890 with mcp__telegram__send_message\.$/);
 		assert.equal(deliveryToolOf(parsed.definition.promptTemplate), "mcp__telegram__send_message");
+	});
+
+	it("refuses a body that names a delivery tool, because where the answer goes is `chat`", () => {
+		// The appended sentence is last, and the delivery is the first tool the instruction names: a body naming one would win
+		// and the routine could answer somewhere the file never chose — or nowhere.
+		assert.match(
+			refusal(routineFile({ chat: "-1001234567890" }, "Send the brief with mcp__sneaky__send_message.")),
+			/names mcp__sneaky__send_message.*put the chat id in `chat:`/,
+		);
+		assert.match(
+			refusal(routineFile({}, "Answer in the chat with mcp__telegram__send_message.")),
+			/names mcp__telegram__send_message/,
+			"a file with no chat at all is refused too: the field, not the prose, says where an answer goes",
+		);
 	});
 
 	it("refuses what a turn cannot be armed from, naming the file and the field", () => {
@@ -126,8 +140,8 @@ describe("parseRoutine()", () => {
 describe("loadRoutines()", () => {
 	it("reads every markdown file directly under the directory, sorted, and reports the rest", async () => {
 		const dir = await tempDir("mason-routines-");
-		await writeFile(join(dir, "b-weekly.md"), routineFile({ name: "weekly-review", at: '"18:00"' }), "utf8");
-		await writeFile(join(dir, "a-daily.md"), routineFile({ name: "daily", enabled: "true" }), "utf8");
+		await writeFile(join(dir, "weekly-review.md"), routineFile({ name: "weekly-review", at: '"18:00"' }), "utf8");
+		await writeFile(join(dir, "daily.md"), routineFile({ name: "daily", enabled: "true" }), "utf8");
 		await writeFile(join(dir, "broken.md"), "---\nname: broken\ndescription: Broken.\nat: '08:00'\n---\n\nno zone\n", "utf8");
 		// Not a routine file: a directory of drafts, a note, and a document that is not markdown.
 		await mkdir(join(dir, "drafts"));
@@ -156,15 +170,60 @@ describe("loadRoutines()", () => {
 		assert.match(loaded.reports[0] ?? "", /routine-team-chat is already a builtin hook/);
 	});
 
-	it("refuses the second of two files that claim one name, in file order", async () => {
-		const dir = await tempDir("mason-routines-duplicate-");
-		await writeFile(join(dir, "a.md"), routineFile({ name: "same" }), "utf8");
-		await writeFile(join(dir, "b.md"), routineFile({ name: "same", enabled: "true" }), "utf8");
+	it("refuses a file whose frontmatter name is not its own, because a routine is named by its file", async () => {
+		const dir = await tempDir("mason-routines-stem-");
+		await writeFile(join(dir, "morning-brief.md"), routineFile({ name: "daily" }), "utf8");
 
 		const loaded = await loadRoutines(toolMachine, dir, BACKGROUND_CONTEXT, []);
-		assert.equal(loaded.definitions.length, 1);
-		assert.equal(loaded.definitions[0]?.enabled, false, "the first file is the one that won");
-		assert.match(loaded.reports[0] ?? "", /is already the routine in .*a\.md/);
+		assert.deepEqual(loaded.definitions, [], "the file is two names for one routine, so it is neither");
+		assert.equal(loaded.reports.length, 1);
+		assert.match(loaded.reports[0] ?? "", /morning-brief\.md: the frontmatter names "daily"/);
+		assert.match(loaded.reports[0] ?? "", /rename the file to daily\.md/);
+	});
+
+	it("reports a file it cannot read, and loads the ones beside it", async (t) => {
+		if (process.getuid?.() === 0) {
+			// The read is on the tool machine, as the same user: root is not refused by a mode bit, so there is no refusal to see.
+			t.skip("a 000 file is readable as root");
+			return;
+		}
+		const dir = await tempDir("mason-routines-unreadable-");
+		await writeFile(join(dir, "good.md"), routineFile({ name: "good" }), "utf8");
+		await writeFile(join(dir, "secret.md"), routineFile({ name: "secret" }), "utf8");
+		await chmod(join(dir, "secret.md"), 0o000);
+
+		const loaded = await loadRoutines(toolMachine, dir, BACKGROUND_CONTEXT, []);
+		assert.deepEqual(loaded.definitions.map((definition) => definition.id), ["routine-good"]);
+		assert.equal(loaded.reports.length, 1, "one line for the file, and the boot goes on");
+		assert.match(loaded.reports[0] ?? "", /secret\.md: cannot be read: .*permission denied/i);
+	});
+
+	it("names a chat routine whose delivery tool no integration lends, and says nothing when one does", () => {
+		const parsed = parseRoutine(routineFile({ chat: "-1001234567890" }), "/routines/morning-brief.md");
+		assert.ok("definition" in parsed);
+		const definitions = [parsed.definition];
+
+		const silent = chatRoutineReports(definitions, {});
+		assert.equal(silent.length, 1);
+		assert.match(silent[0] ?? "", /routine-morning-brief answers in a chat/);
+		assert.match(silent[0] ?? "", /no enabled integration named "telegram" lends mcp__telegram__send_message/);
+		// A face that is off lends nothing: the report is about a tool the turn can find, not an entry in a file.
+		assert.equal(
+			chatRoutineReports(definitions, { telegram: { enabled: false, tools: { url: "http://telegram:8080/mcp" } } }).length,
+			1,
+		);
+		assert.deepEqual(
+			chatRoutineReports(definitions, {
+				telegram: { enabled: true, description: "Telegram", tools: { url: "http://telegram:8080/mcp" } },
+			}),
+			[],
+			"the tool exists, so the routine has somewhere to answer",
+		);
+		assert.deepEqual(
+			chatRoutineReports([{ ...parsed.definition, promptTemplate: "Send the brief." }], {}),
+			[],
+			"a routine with no chat answers in the console, and needs no integration",
+		);
 	});
 
 	it("says nothing for a directory nobody has written a routine in", async () => {
@@ -210,11 +269,22 @@ describe("a routine's switch", () => {
 		assert.equal(hook.fireCount, 7, "how often it has fired is history, and history is kept");
 		assert.equal(hook.lastFiredAt, "2026-10-19T05:00:00.000Z");
 
-		// And the server does not write a switch of its own back for it: the file is the only place that line lives.
-		hooks.setEnabled("routine-morning-brief", true);
+		// There is no second switch to flip: an arm taken here would fire once and revert on the next boot, so it is refused
+		// and the refusal names the file that does own it.
+		assert.throws(
+			() => hooks.setEnabled("routine-morning-brief", true),
+			/routine-morning-brief is a routine: it is armed by `enabled` in its file in agent\/routines\//,
+		);
+		assert.equal(hook.enabled, false, "the refused switch changed nothing");
+
+		// And the server does not write a switch of its own back for it, where it does write one for a code hook: a second
+		// copy would be a value that outlived the sentence it came from.
+		hooks.define({ id: "manual", name: "Manual", description: "A hook defined in code.", enabled: false, promptTemplate: "go" });
+		hooks.setEnabled("manual", true);
 		const written = JSON.parse(await readFile(statePath, "utf8")) as Record<string, Record<string, unknown>>;
 		assert.equal("enabled" in (written["routine-morning-brief"] ?? {}), false);
 		assert.equal(written["routine-morning-brief"]?.fireCount, 7);
+		assert.equal(written.manual?.enabled, true, "a code hook's switch is still written, which is what the state is for");
 	});
 
 	it("keeps a code hook's switch, which is what the persisted state is for", async () => {
@@ -244,6 +314,12 @@ describe("a boot", () => {
 		const routinesDir = housePaths(home).routinesDir;
 		await mkdir(routinesDir, { recursive: true });
 		await writeFile(join(routinesDir, "daily.md"), routineFile({ name: "daily", enabled: "true" }), "utf8");
+		// A routine whose answer is a chat, in a home with no integration to lend it the tool to answer with.
+		await writeFile(
+			join(routinesDir, "chatty.md"),
+			routineFile({ name: "chatty", at: '"18:00"', chat: "-1001234567890" }),
+			"utf8",
+		);
 		await writeFile(join(routinesDir, "broken.md"), "no frontmatter at all\n", "utf8");
 
 		const reported: unknown[] = [];
@@ -266,6 +342,72 @@ describe("a boot", () => {
 				/broken\.md: no "name"/,
 				"a file that is not a routine is said out loud, and the boot goes on without it",
 			);
+			assert.match(
+				reported.map(String).find((message) => message.includes("routine-chatty")) ?? "",
+				/no enabled integration named "telegram"/,
+				"a chat routine with no tool to answer through would fire silently forever, so the boot says it",
+			);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("boots with a trigger that fires a routine, because a routine is a hook by the time they are checked", async () => {
+		// The check that would refuse this used to run before the routines were defined, so a trigger a person pointed at
+		// `routine-<name>` refused the boot and named a hook that did exist.
+		const home = await tempDir("mason-routines-trigger-");
+		const paths = housePaths(home);
+		await mkdir(paths.routinesDir, { recursive: true });
+		await writeFile(join(paths.routinesDir, "daily.md"), routineFile({ name: "daily", enabled: "true" }), "utf8");
+		await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
+		await writeFile(
+			paths.integrations,
+			JSON.stringify({
+				integrations: { telegram: { enabled: true, trigger: { hook: "routine-daily", secret: "0f".repeat(32) } } },
+			}),
+			{ encoding: "utf8", mode: 0o600 },
+		);
+
+		const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			storage: "memory",
+			houseHome: home,
+			faux: true,
+			onReport: () => {},
+		});
+		try {
+			assert.ok(runtime.hooks.has("routine-daily"), "the trigger's hook is the routine, so the boot goes on");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("keeps its builtin hooks, and says why, when the tool machine cannot be reached", async () => {
+		// A boot that refuses over a routine is worse than a boot without one: the door, the transcript and the builtins
+		// have to come up even when `agent/` is on a machine that will not answer.
+		const home = await tempDir("mason-routines-env-");
+		const routinesDir = housePaths(home).routinesDir;
+		await mkdir(routinesDir, { recursive: true });
+		await writeFile(join(routinesDir, "daily.md"), routineFile({ name: "daily", enabled: "true" }), "utf8");
+
+		const reported: unknown[] = [];
+		const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			storage: "memory",
+			houseHome: home,
+			faux: true,
+			onReport: (message) => reported.push(message),
+			env: {
+				envFor: async () => {
+					throw new Error("connection lost");
+				},
+				close: async () => {},
+			},
+		});
+		try {
+			assert.ok(runtime.hooks.has("team-chat"), "the builtins survive a machine that cannot be read");
+			assert.equal(runtime.hooks.has("routine-daily"), false, "and the routines are the part that is missing");
+			const reasons = reported.map(String).filter((message) => message.startsWith("[routines] cannot read"));
+			assert.equal(reasons.length, 1, "one line, not one per file");
+			assert.match(reasons[0] ?? "", /builtin hooks only \(connection lost\)/);
 		} finally {
 			await runtime.close();
 		}

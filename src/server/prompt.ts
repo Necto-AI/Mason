@@ -81,9 +81,16 @@ design system, and the sandbox limits. Keep it out of context until you actually
  *
  * Resident rather than found, because the moment it is needed is the moment a person asks for something recurring — and
  * an agent that answers "I cannot schedule things" because nothing ever said it could is the failure this prevents.
+ *
+ * The directory is the absolute one, the way the profile's path is: `write` resolves a relative path against the turn's
+ * cwd, which is `agent/workspace`, so `agent/routines/x.md` written from this pointer landed in
+ * `agent/workspace/agent/routines/x.md` — a file no boot reads, and a routine that silently never fires. The home is
+ * settled once at boot, so the text is the same bytes in every turn of one process and the prefix stays cacheable.
  */
-export const ROUTINES_POINTER = `Your routines are files in \`agent/routines/\`: a markdown file whose frontmatter says when it runs and whose body is
-what you do when it does. Read the \`routines\` skill before you draft one — an armed routine speaks first, on its own.`;
+export function routinesPointer(): string {
+	return `Your routines are files in \`${currentHouse().routinesDir}\`: a markdown file whose frontmatter says when it runs and whose body is
+what you do when it does. Write it with that full path. Read the \`routines\` skill before you draft one — an armed routine speaks first, on its own.`;
+}
 
 /** Roughly 1200 tokens of profile: enough for who he is and how he wants to be treated, and no more. */
 const PROFILE_MAX_CHARS = 4_800;
@@ -158,7 +165,7 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	section("profile", (input, context) => renderProfile(input, context)),
 	// Beside the profile: both are the agent's own files, and both are about what it does for this person rather than about
 	// this turn. The pointer is two lines; the format and the rules are the skill.
-	section("routines", () => ROUTINES_POINTER),
+	section("routines", () => routinesPointer()),
 	section("generative_ui", () => GENERATIVE_UI_POINTER),
 	// What exists beyond the tool list, by name and purpose only: a capability arrived without its schemas being paid
 	// for. Absent when no integration is enabled with a tools face.
