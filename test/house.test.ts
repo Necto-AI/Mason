@@ -73,6 +73,7 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			journalDir: join(home, "agent", "journal"),
 			skillsDir: join(home, "agent", "skills"),
 			agentsDir: join(home, "agent", "agents"),
+			routinesDir: join(home, "agent", "routines"),
 			workspaceDir: join(home, "agent", "workspace"),
 			// The server's half: the soul it renders, the door, the names, the keys and the state.
 			soul: join(home, "service", "soul.md"),
@@ -121,6 +122,7 @@ test("ensureHouse() creates both halves, their directories and the modes they ne
 		paths.journalDir,
 		paths.skillsDir,
 		paths.agentsDir,
+		paths.routinesDir,
 		paths.workspaceDir,
 		paths.serviceDir,
 		paths.dataDir,
@@ -301,6 +303,7 @@ async function oldLayoutHomeWithoutGit(): Promise<string> {
 	await mkdir(join(home, "ssh"), { recursive: true });
 	await mkdir(join(home, "pi"), { recursive: true });
 	await mkdir(join(home, "skills", "weekly"), { recursive: true });
+	await mkdir(join(home, "routines"), { recursive: true });
 	await writeFile(join(home, "soul.md"), "You are SOUL-MARKER.\n", "utf8");
 	await writeFile(join(home, "profile.md"), "Denis prefers short answers.\n", "utf8");
 	await writeFile(join(home, "log", "2026-01-05.md"), "# 2026-01-05\n\n- 09:07 — Something remembered.\n", "utf8");
@@ -309,6 +312,8 @@ async function oldLayoutHomeWithoutGit(): Promise<string> {
 	await writeFile(join(home, "data", "agent.sqlite"), SECRETS.transcript, "utf8");
 	await writeFile(join(home, "pi", "auth.json"), '{"provider":{"type":"api_key","key":"k"}}\n', "utf8");
 	await writeFile(join(home, "skills", "weekly", "SKILL.md"), "---\nname: weekly\ndescription: Write it.\n---\n", "utf8");
+	// A routine written before the split: it is the agent's, so it moves into its half like a skill does.
+	await writeFile(join(home, "routines", "weekly-review.md"), "---\nname: weekly-review\ndescription: Friday.\nat: '18:00'\ntz: UTC\n---\n\nReview the week.\n", "utf8");
 	// A file mason does not know about: an upgrade is not allowed to decide what happens to it.
 	await writeFile(join(home, "NOTES.md"), "Denis's own notes.\n", "utf8");
 	return home;
@@ -402,6 +407,7 @@ test("migrateHouse() moves the halves apart, and no service path reaches the age
 		"# 2026-01-05\n\n- 09:07 — Something remembered.\n",
 	);
 	assert.ok(existsSync(join(paths.skillsDir, "weekly", "SKILL.md")), "skills moved with the files they instruct");
+	assert.ok(existsSync(join(paths.routinesDir, "weekly-review.md")), "a routine is the agent's, and moves with it");
 	assert.ok(existsSync(paths.workspaceDir), "the workspace is created even though the old home had none");
 	// The server's half.
 	assert.equal(await readFile(paths.soul, "utf8"), "You are SOUL-MARKER.\n");
@@ -409,7 +415,7 @@ test("migrateHouse() moves the halves apart, and no service path reaches the age
 	assert.ok(existsSync(join(paths.sshDir, "id_ed25519")), "and so is the key mason logs in with");
 	// And what mason does not know about stays where it was.
 	assert.equal(await readFile(join(home, "NOTES.md"), "utf8"), "Denis's own notes.\n");
-	for (const name of ["soul.md", "profile.md", "log", "data", "ssh", "pi", "skills", "config.json"]) {
+	for (const name of ["soul.md", "profile.md", "log", "data", "ssh", "pi", "skills", "routines", "config.json"]) {
 		assert.ok(!existsSync(join(home, name)), `${name} is no longer at the root`);
 	}
 

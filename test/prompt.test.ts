@@ -23,6 +23,7 @@ import {
 	GENERATIVE_UI_POINTER,
 	INTEGRATIONS_POINTER,
 	PROMPT_SECTIONS,
+	ROUTINES_POINTER,
 	TEAM_GUIDELINES,
 	promptSectionKeys,
 } from "../src/server/prompt.ts";
@@ -698,6 +699,7 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"team",
 		"skills",
 		"profile",
+		"routines",
 		"generative_ui",
 		// What exists beyond the tool list, and then the tools a script can call: a capability and the way to reach it
 		// sit next to each other, and both before the rule about the reader.
@@ -708,6 +710,22 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		// section sat fourth, and once it moved here.
 		"delivery",
 	]);
+});
+
+/**
+ * The routines pointer is resident because the moment it is needed is the moment a person asks for something recurring:
+ * the format lives in the skill, and two lines are all the turn pays for knowing it exists.
+ */
+test("the routines section names the directory and the skill, in two lines", async () => {
+	const rendered = await renderSection(sectionOf("routines"));
+	assert.equal(rendered, `<routines>\n${ROUTINES_POINTER}\n</routines>`);
+	assert.match(ROUTINES_POINTER, /agent\/routines\//, "where the files are");
+	assert.match(ROUTINES_POINTER, /`routines` skill/, "and the manual that carries the format");
+	assert.match(ROUTINES_POINTER, /speaks first/, "an armed routine is a message, and not a note to self");
+	assert.ok(ROUTINES_POINTER.length < 400, `the pointer is ${ROUTINES_POINTER.length} characters`);
+	// The section sits beside the profile: both are the agent's own files about this person.
+	const keys = promptSectionKeys();
+	assert.equal(keys.indexOf("routines"), keys.indexOf("profile") + 1);
 });
 
 /**

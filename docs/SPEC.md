@@ -126,6 +126,7 @@ you everything the agent is told. A test fails if another base extension grows a
 | `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
+| `routines` | `<routines>` | plain text: the pointer to `agent/routines/` and the `routines` skill |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 | `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
 | `codemode` | `<codemode>` | the vendor's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
@@ -265,6 +266,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 │   ├── journal/            # Where the daily journal will be written
 │   ├── skills/<name>/SKILL.md  # Denis's own skills, and the shipped ones seeded here on first boot
 │   ├── agents/             # Worker definitions, beside skills so `write` can edit them
+│   ├── routines/<name>.md  # A scheduled prompt (`routines.ts`): the agent drafts one, a person arms it
 │   ├── workspace/          # The directory the agent works in; not the repo that runs it
 │   └── .git                # The home's repository: the agent's memory and its history
 └── service/                # Never mounted into the tool machine
@@ -324,6 +326,7 @@ than appended to per turn.
 | `team` | the transcript is shared; a person's message starts `[from <name>] `, and no prefix means no author | a fixed ~300-character constant |
 | `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
 | `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
+| `routines` | the pointer: routines are files in `agent/routines/`, read the `routines` skill | a fixed ~230-character constant |
 | `generative_ui` | the pointer: widgets exist, read the skill | ~300 characters |
 | `delivery` | words reach the reader only through a delivery call: `send_to_user` in the console, the tool a hook's instruction names in a turn that answers one | a fixed ~430-character constant |
 
@@ -347,6 +350,22 @@ the next conversation — what to call him, what he wants done, his hours and ch
 then write the answers, under a page at a time, rewriting as it learns. The header is not decoration: a profile can
 quote text the agent did not write, so it is declared data about the user, and what he asks in a conversation always
 wins over it.
+
+**Routines.** `agent/routines/<name>.md` is a prompt with a time attached: YAML frontmatter — `name`, `description`,
+`at`, `tz`, and optionally `days`, `chat`, `enabled` — then the instruction the turn is started with (`routines.ts`). It
+is the schedule of §3.3 (daily, in an IANA zone, on an optional weekday set) and it fires as an ordinary event hook
+whose instruction is the file's body, so nothing about a routine's turn is special except where it came from. **The
+file is the whole truth about `enabled`**: a routine is armed by editing it, and `service/data/hooks.json` keeps only
+the fire count and the last fire, because a value the server wrote down must never resurrect a routine a person wrote
+`enabled: false` into. The list is read once at boot through the execution environment — it is `agent/`, which is on
+the tool machine's volume — so **a new or changed routine takes effect on restart**; a file that does not parse, a
+name another hook already owns and a file that cannot be read are each reported with their path and skipped, and none
+of them refuses a boot. `chat` names a Telegram chat id, and when it is there the loader appends the delivery sentence
+itself — `Send the answer to chat <id> with mcp__telegram__send_message.` — so the tool that answers is named by the
+routine's own instruction and never by a sentence its prompt invented; without `chat` the answer goes to the console
+through `send_to_user`, like any hook whose instruction names no chat tool. `skills/routines/SKILL.md` is the format and
+the rules for the agent: draft with `enabled: false`, tell the person what it will do and when, arm it only when they
+say yes.
 
 **The `remember` tool and the log.** `agent/log/YYYY-MM-DD.md` holds facts, one per line, appended as
 `- HH:MM — <fact>` under a `# YYYY-MM-DD` heading. `agent/` is a git repository, so each append is committed —

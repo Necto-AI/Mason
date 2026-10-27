@@ -12,6 +12,7 @@
  * │   ├── journal/            # where the daily journal will be written
  * │   ├── skills/<name>/SKILL.md
  * │   ├── agents/             # worker definitions; they sit beside skills so `write` can edit them
+ * │   ├── routines/<name>.md  # a scheduled prompt: the agent drafts one with `write`, a person arms it (`routines.ts`)
  * │   └── workspace/          # the directory the agent works in, separate from the code that runs it
  * └── service/                # everything the server owns: never a path inside the tool machine
  *     ├── soul.md             # the first section of the system prompt, supplied by the operator
@@ -65,6 +66,12 @@ export interface HousePaths {
 	readonly skillsDir: string;
 	/** Where worker definitions live, beside skills: a file the agent may edit with `write`. */
 	readonly agentsDir: string;
+	/**
+	 * The routines: one markdown file per scheduled prompt (`routines.ts`). In `agent/` because the agent drafts them with
+	 * the same `write` tool it edits its skills with, and a routine a person could not read and edit at a path is not a
+	 * routine.
+	 */
+	readonly routinesDir: string;
 	readonly workspaceDir: string;
 	/**
 	 * `agent.sqlite`, `hooks.json` and the record of seeded skills: state the server keeps, in the half the agent cannot
@@ -120,6 +127,7 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		journalDir: join(agentDir, "journal"),
 		skillsDir: join(agentDir, "skills"),
 		agentsDir: join(agentDir, "agents"),
+		routinesDir: join(agentDir, "routines"),
 		workspaceDir: join(agentDir, "workspace"),
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
@@ -154,6 +162,7 @@ function layoutDirectories(paths: HousePaths): string[] {
 		paths.journalDir,
 		paths.skillsDir,
 		paths.agentsDir,
+		paths.routinesDir,
 		paths.workspaceDir,
 		paths.serviceDir,
 		paths.dataDir,
@@ -175,6 +184,7 @@ export const HOUSE_ENTRIES: readonly HouseEntry[] = [
 	{ name: "journal", half: "agent" },
 	{ name: "skills", half: "agent" },
 	{ name: "agents", half: "agent" },
+	{ name: "routines", half: "agent" },
 	{ name: "workspace", half: "agent" },
 	{ name: "soul.md", half: "service" },
 	{ name: "config.json", half: "service" },

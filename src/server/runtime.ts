@@ -36,6 +36,7 @@ import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./hou
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
+import { loadRoutines } from "./routines.ts";
 import { readRoster } from "./roster.ts";
 
 /**
@@ -320,6 +321,22 @@ export async function openAgentRuntime(
 		// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
 		// had connected. A failed repair is a failed guarantee, so the server does not start with it.
 		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
+		// The routines, once, where the timers are armed: `agent/routines/` is on the tool machine's volume, so it is read
+		// through the environment the tools run in — the root conversation's, because a routine has no conversation of its
+		// own and its fires arrive in that one. A file that does not parse is reported and skipped, and a tool machine that
+		// cannot be reached leaves the bot with its builtin hooks: a boot that refuses over a routine is worse than a boot
+		// without one. Both are said on the host's report channel, or in the log when it has none.
+		const reportRoutine = options.onReport ?? ((message: unknown) => console.warn(message));
+		try {
+			const env = await envManager.envFor({ conversationId: String(root.id), cwd: workspaceDir });
+			const routines = await loadRoutines(env, house.routinesDir, context, hooks.list().map((hook) => hook.id));
+			for (const definition of routines.definitions) hooks.define(definition);
+			for (const report of routines.reports) reportRoutine(report);
+		} catch (error) {
+			reportRoutine(
+				`[routines] cannot read ${house.routinesDir}: the bot runs with its builtin hooks only (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
 		hooks.start();
 		// Picks up a run the last process left unfinished.
 		harness.resume();

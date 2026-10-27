@@ -28,7 +28,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 
 | Half | What is in it | Where it is mounted |
 |---|---|---|
-| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
+| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `routines/` (scheduled prompts), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
 | `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
