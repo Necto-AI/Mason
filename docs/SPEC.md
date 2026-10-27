@@ -126,7 +126,7 @@ you everything the agent is told. A test fails if another base extension grows a
 | `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
-| `routines` | `<routines>` | a `prompt.ts` constant naming the routines directory's **absolute** path (`currentHouse().routinesDir`, as the profile section names `profile.md`) and the `routines` skill |
+| `routines` | `<routines>` | a `prompt.ts` constant naming the routines directory's **absolute** path (`currentHouse().routinesDir`, spelled out the way `firstRun()` spells the `profile.md` path) and the `routines` skill |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 | `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
 | `codemode` | `<codemode>` | the vendor's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
@@ -228,7 +228,7 @@ type HookSchedule = { kind: "daily"; at: string /* "HH:MM" */; days?: number[] /
     - **A declared command is held to its shape.** `stop`, `clear` and `status` take no argument (`400`, one line saying so); `compact` takes at most 200 characters of instructions (`400` past it). The refusal names the rule it broke, because a command that ran with an argument the door dropped would do something other than what the person asked for.
     - **`id` keeps its meaning.** A command is claimed in the durable log under ``command:<integration>:<id>``, in one commit with the display-only entry that records what was asked, so a redelivery, a minute later or after a restart, answers and changes nothing. Where the claim sits is per command, and the difference is the trade: `clear` and `compact` claim **before** they act, because a crash between the two loses one command rather than repeating it and a repeated `/clear` is the worse of those two, while `stop` aborts **first** and claims second, because `abort` is idempotent and a claim taken first would turn a failed abort into a permanent `stopped` that no redelivery could retry. The abort is never gated on its claim. `status` is not claimed, because it changes nothing. A delivery that finds the claim answers `{"handled": true, "reply": ""}` — no reply at all, because nothing ran and the first delivery already answered.
     The answer to a handled command is `200 { "handled": true, "reply": "<one line>" }`, and the reply is what the relay posts into the chat: `stopped`, `compacted`, `cleared`, or the status sentence (`idle: nothing queued; telegram connected; nothing unreachable since boot`). `/clear` answers `clearing after this turn` instead of `cleared` when a run is in progress or anything is queued, because a reset is not display-only: it lands *behind* the running turn, and a person told `cleared` would watch the answer they cleared arrive. The reply is prose because a person reads it, and it is one line because that is what a chat message is.
-  - **Signature, limits, identity.** `X-Mason-Signature: sha256=<hex hmac-sha256(secret, raw body)>`, compared in constant time over the bytes that arrived, before JSON parsing; missing or wrong is `401` with no detail, no hint which half failed. The secret is 32 bytes hex, stored `0600` through the same atomic write as the rest of the file, and minted by `npm run integration -- secret <name> [--hook <hook-id>]`, which prints it exactly once. Limits are per integration: a 256 KiB body cap (`413`) and **two** budgets of 6 a minute (`429` with `retry-after`) — fires under `integration:<name>` and commands under `command:<name>`, keyed apart so that one chatty sender cannot spend another's, and so that a spent fire budget can never be the reason a `/stop` is refused. Only a delivery mason acts on is charged: an undeclared word (`handled: false`) and a malformed command (`400`) spend neither budget. Boot refuses an **enabled** integration whose trigger names a hook this build does not define, naming the integration and the hook: a door that fires nothing is a silent black hole, and it is a config error, not a missing optional container. The check runs once the routines have been read and before any timer is armed, so a trigger a person pointed at `routine-<name>` is a trigger on a hook; a disabled integration is not checked — its door is `404`, and a name is no reason to keep an integration the operator switched off from ever being switched on again. The switch is read at boot, so enabling it is the restart that runs the same check.
+  - **Signature, limits, identity.** `X-Mason-Signature: sha256=<hex hmac-sha256(secret, raw body)>`, compared in constant time over the bytes that arrived, before JSON parsing; missing or wrong is `401` with no detail, no hint which half failed. The secret is 32 bytes hex, stored `0600` through the same atomic write as the rest of the file, and minted by `npm run integration -- secret <name> [--hook <hook-id>]`, which prints it exactly once. Limits are per integration: a 256 KiB body cap (`413`) and **two** budgets of 6 a minute (`429` with `retry-after`) — fires under `integration:<name>` and commands under `command:<name>`, keyed apart so that one chatty sender cannot spend another's, and so that a spent fire budget can never be the reason a `/stop` is refused. Only a delivery mason acts on is charged: an undeclared word (`handled: false`) and a malformed command (`400`) spend neither budget. Boot refuses an **enabled** integration whose trigger names a hook this build does not define, naming the integration and the hook: a door that fires nothing is a silent black hole, and it is a config error, not a missing optional container. The check runs once every definition is registered — the builtins and then the routines — so a trigger a person pointed at `routine-<name>` is a trigger on a hook (a routine's timer is already armed by then, and a refused boot closes the hooks manager, which disarms what it armed); a disabled integration is not checked — its door is `404`, and a name is no reason to keep an integration the operator switched off from ever being switched on again. The switch is read at boot, so enabling it is the restart that runs the same check.
   - **A delivery by hand.** The door's one prerequisite is an HMAC over the exact bytes that are sent, and there is no wrapper script for it: any sender that can run `openssl` is a sender. The secret is the one `npm run integration -- secret <name>` printed once; the name in the path is the integration's.
 
     ```sh
@@ -327,7 +327,7 @@ than appended to per turn.
 | `team` | the transcript is shared; a person's message starts `[from <name>] `, and no prefix means no author | a fixed ~300-character constant |
 | `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
 | `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
-| `routines` | the pointer: the routines directory's absolute path (`currentHouse().routinesDir`) and the `routines` skill, so `write` is told where the file goes | a fixed ~250-character constant |
+| `routines` | the pointer: the routines directory's absolute path (`currentHouse().routinesDir`) and the `routines` skill, so `write` is told where the file goes | the home's routines path plus a fixed sentence (281 characters at `/home/denis/.mason`, and it grows with the path) |
 | `generative_ui` | the pointer: widgets exist, read the skill | ~300 characters |
 | `delivery` | words reach the reader only through a delivery call: `send_to_user` in the console, the tool a hook's instruction names in a turn that answers one | a fixed ~430-character constant |
 
@@ -362,18 +362,21 @@ the fire count and the last fire, because a value the server wrote down must nev
 the server, is what decides who armed it: the agent drafts `enabled: false` and flips that line once the person said yes
 (§3.5, `skills/routines/SKILL.md`), so the owner is the file and the person is the one who was told yes. The list is read
 once at boot through the execution environment — it is `agent/`, which is on the tool machine's volume — so **a new or
-changed routine takes effect on restart**. A file that does not parse, a file whose frontmatter `name` differs from its own
-file name and a file that cannot be read are each reported with their path and skipped, and none of them refuses a boot. A
-routine's id is `routine-<name>`, so a builtin cannot collide with one; a build that already defines `routine-<name>`
-refuses the file rather than being replaced by it. `chat` names a Telegram chat id, and when it is there the loader appends
-the delivery sentence itself — `Send the answer to chat <id> with mcp__telegram__send_message.` — so the tool that answers is
-named by the routine's own instruction and never by a sentence its prompt invented; a body that names a delivery tool is
-**refused**, because the sentence is appended last and the first tool the instruction names is the one that wins. Without
-`chat` the answer goes to the console through `send_to_user`, like any hook whose instruction names no chat tool. And a
-`chat` routine is answered with the Telegram integration's tool, so the boot reports one line for each one while no enabled
-integration named `telegram` has a tools face: otherwise it fires every morning and delivers nowhere, silently.
-`skills/routines/SKILL.md` is the format and the rules for the agent: draft with `enabled: false`, tell the person what it
-will do and when, arm it only when they say yes.
+changed routine takes effect on restart**. A file that does not parse, a file whose frontmatter `name` differs from its
+own file name and a file that cannot be read are each reported with their path and skipped: the file never refuses a
+boot itself. What does refuse one is a trigger naming the routine that file was meant to be — there is no hook then, and
+the boot will not accept a door firing nothing (§3.3). A routine's id is `routine-<name>`, so a builtin cannot collide
+with one; a build that already defines `routine-<name>` refuses the file rather than being replaced by it. `chat` names
+a Telegram chat id, and when it is there the loader appends the delivery sentence itself — `Send the answer to chat <id>
+with mcp__telegram__send_message.` — so the tool that answers is named by the routine's own instruction and never by a
+sentence its prompt invented; a body that names a delivery tool is **refused**, because the sentence is appended last
+and the first tool the instruction names is the one that wins. Without `chat` the answer goes to the console through
+`send_to_user`, like any hook whose instruction names no chat tool. And a `chat` routine is answered with the Telegram
+integration's tool, so the boot reports one line for each **armed** one while this boot connected no such tool — no
+enabled integration named `telegram` with a tools face, or one that did not answer — because otherwise it fires every
+morning and delivers nowhere, silently. A routine still at `enabled: false` is a draft with no fires, and gets no line.
+`skills/routines/SKILL.md` is the format and the rules for the agent: draft with `enabled: false`, tell the person what
+it will do and when, arm it only when they say yes.
 
 **The `remember` tool and the log.** `agent/log/YYYY-MM-DD.md` holds facts, one per line, appended as
 `- HH:MM — <fact>` under a `# YYYY-MM-DD` heading. `agent/` is a git repository, so each append is committed —

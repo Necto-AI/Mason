@@ -244,6 +244,15 @@ applied, and `COMPOSE_EXTRA_FILES` comes from `deploy/.env` on the host like eve
 `service/data/hooks.json` is named once on the boot's report channel with the same instruction, then dropped at the next
 write. Write the routine — the agent drafts it from `skills/routines/SKILL.md` — and nothing about the upgrade is silent.
 
+**One more upgrade needs a hand, in routine files that already exist.** A routine body may no longer name a delivery tool:
+where an answer goes is the file's `chat:` field, and the sentence that decides it is appended in code, so a body
+containing anything matching `mcp__<name>__send_message` is **refused when the file is loaded** — reported with its path
+and skipped, not a routine. A routine drafted before this build that says "send the brief with
+`mcp__telegram__send_message`" therefore stops existing at the upgrade, and the boot reports it. The fix is in the file:
+put the chat id in `chat: -1001234567890`, delete the sentence from the prose, and restart — and if a trigger names that
+routine, the boot refuses until the file loads again, so fix the file rather than the trigger. The check is
+textual (the body is searched, not parsed as markdown), so a tool name left inside an example counts too.
+
 ## A person, and a device
 
 Two different things, and two different commands — a person is a name the transcript can carry, a device is something

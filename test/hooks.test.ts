@@ -634,13 +634,36 @@ describe("a build that no longer defines a persisted hook", () => {
 
 		const stale = reports.map(String).filter((message) => message.includes("routine-morning-brief"));
 		assert.equal(stale.length, 1, "one line for the id, however many more there are");
-		assert.match(stale[0] ?? "", /no hook in this build defines/);
+		assert.match(stale[0] ?? "", /no hook this boot defines it/);
 		assert.match(stale[0] ?? "", /must be repointed/, "what an operator with a trigger still naming it has to do");
 		assert.equal(reports.length, 1, "a hook the build does define is not news");
 		// The id that is gone costs nothing else: the hook that is here is defined as it always was, with the switch the
 		// state remembered for it.
 		assert.equal(hooks.get("digest")?.enabled, true, "the persisted switch of a code hook still counts");
 		assert.equal(armed.length, 0, "and a hook with no timer is not given one");
+	});
+
+	it("says where the fix is when the id is a routine this boot skipped rather than a hook an upgrade removed", async () => {
+		// A routine is defined from its file, so a file this boot could not use leaves no hook behind while the history the
+		// state remembers stays: the id is in `hooks.json` and the file is on disk. "Repoint the trigger" would be the wrong
+		// instruction for it — the hook does exist in this build, in the file that was skipped.
+		const dir = await mkdtemp(join(tmpdir(), "pda-hooks-skipped-"));
+		const statePath = join(dir, "hooks.json");
+		await writeFile(statePath, JSON.stringify({ "routine-morning-brief": { fireCount: 4 } }), "utf8");
+		const reports: unknown[] = [];
+		const hooks = new HooksManager({
+			conversation: async () => {
+				throw new Error("this manager never fires");
+			},
+			statePath,
+			onReport: (error) => reports.push(error),
+		});
+		recordTimers(() => hooks.start());
+
+		const line = reports.map(String).find((message) => message.includes("routine-morning-brief")) ?? "";
+		assert.match(line, /no hook this boot defines it/, "the one thing that is true of both causes");
+		assert.match(line, /its file in agent\/routines\/ is the fix/, "the skipped routine's fix is the file, not the trigger");
+		assert.match(line, /must be repointed/, "and a hook the build dropped still moves the trigger's name");
 	});
 });
 

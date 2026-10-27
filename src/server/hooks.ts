@@ -187,13 +187,14 @@ export class HooksManager {
 
 	/** Starts the timers of every enabled hook, interval or wall clock; safe to call once at startup. */
 	start(): void {
-		// A persisted id this build does not define is a hook an upgrade removed. Its state is kept — a hook of that id that
-		// comes back finds its history — but a trigger still naming it refuses the boot, so the one useful thing left to do
-		// is to say which id it was and that the name has to move.
+		// An id in the saved state that nothing here defines has two causes, and the line has to be true of both: a hook this
+		// build removed, or a routine whose file this boot could not read or would not take. Its state is not kept —
+		// `#writeState` writes one entry per defined hook, so the id is gone from the file at the next write, and only a hook
+		// of that id defined before one finds its history. What an operator needs is where the fix is, so the warning names it.
 		for (const id of Object.keys(this.#persisted)) {
 			if (this.#hooks.has(id)) continue;
 			this.#warn(
-				`[hooks] the saved state names "${id}", which no hook in this build defines: a trigger that fires it must be repointed, because the boot refuses a trigger naming nothing`,
+				`[hooks] the saved state names "${id}", and no hook this boot defines it: if it is a routine, its file in agent/routines/ is the fix — it was skipped when the boot read the directory; if the hook is gone from this build, a trigger still naming it must be repointed, because the boot refuses a trigger naming nothing`,
 			);
 		}
 		for (const id of this.#hooks.keys()) this.#arm(id);

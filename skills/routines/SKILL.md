@@ -60,8 +60,9 @@ loop.
 2. **Arm it only when they say yes.** Arming is changing that one line to `enabled: true` — nothing else. An armed
    routine means the bot speaks first: it is a message the person will receive without having asked for it that morning,
    so it is their decision and not a detail of the draft. Their yes is for that schedule, and a later change of time,
-   days or chat is the same kind of change and gets the same yes. The file is the switch and you are the one who flips it,
-   once they have said yes — no one else does it, and the server cannot.
+   days or chat is the same kind of change and gets the same yes. The file is the switch, and nothing else is: no tool
+   flips it and the server cannot. Whoever was told yes edits that one line — you with `write`, or the person in their
+   editor — and the yes is what makes the edit right, not the hands that type it.
 3. **Say that it starts on restart.** The list is read at boot. Do not tell them it is running until it is.
 
 Two things to get right, because they are what a bad routine gets wrong: a routine that fires into a chat nobody is
@@ -75,11 +76,15 @@ The turn starts with `[EVENT HOOK: <name>]` and your own prompt under it. The an
 the instruction names the delivery tool, so a routine with `chat` answers with `mcp__telegram__send_message` and
 `send_to_user` is refused there, while a routine without one answers in the console with `send_to_user`. Do not name a
 delivery tool yourself in the body — the file's `chat` already decided where the answer goes, and a file that names one is
-refused at load time rather than leaving the routine to answer somewhere nobody chose.
+refused at load time rather than leaving the routine to answer somewhere nobody chose. That rule is **textual**: the body
+is searched for `mcp__…__send_message`, not parsed as markdown, so where the name appears does not matter — a fenced
+example, a quoted sentence, a note to yourself. Leave it out of the body entirely; naming it to the person, or in a
+skill like this one, is fine.
 
-A `chat` routine needs the Telegram integration: it is where that tool comes from. With no enabled integration named
-`telegram`, there is nothing to answer through, and the boot says so once per such routine — tell the person rather than
-letting a brief go missing every morning.
+A `chat` routine needs the Telegram integration: it is where that tool comes from. When this boot connected no such tool
+— no enabled `telegram` integration, or one that did not answer — an armed routine has nothing to answer through, and the
+boot says so once per routine. Tell the person rather than letting a brief go missing every morning; a routine still dark
+is not reported, because it has no fire to lose.
 
 The profile, the log and the workspace are yours in a routine's turn, the same as any other. A fire carries no payload:
 there is no event behind it beyond the clock.

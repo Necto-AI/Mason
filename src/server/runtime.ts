@@ -323,22 +323,26 @@ export async function openAgentRuntime(
 		// The routines, once, where the timers are armed: `agent/routines/` is on the tool machine's volume, so it is read
 		// through the environment the tools run in — the root conversation's, because a routine has no conversation of its
 		// own and its fires arrive in that one. A file that does not parse is reported and skipped, and a tool machine that
-		// cannot be reached leaves the bot with its builtin hooks: a boot that refuses over a routine is worse than a boot
-		// without one. Both are said on the host's report channel, or in the log when it has none.
+		// cannot be reached leaves the bot with its builtin hooks: a boot that refuses over a file is worse than a boot without
+		// the routine. Both are said on the host's report channel, or in the log when it has none.
 		const reportRoutine = options.onReport ?? ((message: unknown) => console.warn(message));
 		try {
 			const env = await envManager.envFor({ conversationId: String(root.id), cwd: workspaceDir });
 			const routines = await loadRoutines(env, house.routinesDir, context, hooks.list().map((hook) => hook.id));
 			for (const definition of routines.definitions) hooks.define(definition);
 			for (const report of routines.reports) reportRoutine(report);
-			for (const report of chatRoutineReports(routines.definitions, currentIntegrations())) reportRoutine(report);
+			for (const report of chatRoutineReports(routines.definitions, mcp.tools.map((tool) => tool.name))) {
+				reportRoutine(report);
+			}
 		} catch (error) {
 			reportRoutine(
 				`[routines] cannot read ${house.routinesDir}: the bot runs with its builtin hooks only (${error instanceof Error ? error.message : String(error)})`,
 			);
 		}
-		// The routines are defined by then, and nothing has been armed yet: a trigger a person pointed at `routine-<name>` is a
-		// trigger on a hook, and one that names nothing refuses the boot now rather than accepting a delivery it would drop.
+		// The routines are defined by then, so a trigger a person pointed at `routine-<name>` is a trigger on a hook, and one
+		// that names nothing refuses the boot rather than accepting a delivery it would drop. The timers are not unarmed here:
+		// `define()` arms a schedule where it registers it, so an enabled routine has had one for a few lines. Nothing escapes
+		// the throw — a refused boot closes the hooks manager, and closing it disarms every timer it armed.
 		assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
 		hooks.start();
 		// Picks up a run the last process left unfinished.

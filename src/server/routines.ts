@@ -31,7 +31,6 @@ import type { Context } from "@earendil-works/chord";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { deliveryToolOf, deliveryToolsIn, type EventHookConfig } from "./hooks.ts";
-import type { Integration } from "./integrations.ts";
 import { validateSchedule } from "./schedule.ts";
 
 /** The longest prompt a routine may carry: a turn's instruction, not a document. */
@@ -226,23 +225,27 @@ export async function loadRoutines(
 }
 
 /**
- * One line per routine whose answer has nowhere to go.
+ * One line per armed routine whose answer has nowhere to go.
  *
- * `chat` is delivered with the Telegram integration's message tool, and that tool exists only while an enabled integration
- * named `telegram` has a tools face. Without one the routine fires every morning into a tool that is not there: the model
- * is told to answer with something it does not have, and the brief is lost with nothing said. So the boot says it, once per
- * routine, where the operator and the agent already read what the boot reported.
+ * `chat` is delivered with the Telegram integration's message tool, and what matters for a fire is not what the config file
+ * says but what the turn can find: `connectedTools` is the boot's own tool list (`mcp.tools`), so an integration that is
+ * enabled with a tools face at a url that did not answer is the failure this reports, and a routine it left without a tool
+ * would otherwise fire every morning into something that is not there — the model is told to answer with what it does not
+ * have, and the brief is lost with nothing said. So the boot says it, once per routine, where the operator and the agent
+ * already read what the boot reported.
+ *
+ * Only an armed routine is reported. `enabled: false` is a draft with no fires, and a line about how the fires it is not
+ * having would end is a line about nothing: the person is told at the draft, and the file is the switch.
  */
 export function chatRoutineReports(
 	definitions: readonly RoutineHook[],
-	integrations: Record<string, Integration>,
+	connectedTools: readonly string[],
 ): string[] {
-	const telegram = integrations.telegram;
-	if (telegram?.enabled === true && telegram.tools !== undefined) return [];
+	if (connectedTools.includes(CHAT_DELIVERY_TOOL)) return [];
 	return definitions
-		.filter((definition) => deliveryToolOf(definition.promptTemplate) === CHAT_DELIVERY_TOOL)
+		.filter((definition) => definition.enabled && deliveryToolOf(definition.promptTemplate) === CHAT_DELIVERY_TOOL)
 		.map(
 			(definition) =>
-				`[routines] ${definition.id} answers in a chat, and no enabled integration named "telegram" lends ${CHAT_DELIVERY_TOOL}: every fire would deliver nowhere`,
+				`[routines] ${definition.id} answers in a chat, and this boot did not connect ${CHAT_DELIVERY_TOOL}: it comes from an enabled integration named "telegram" with a tools face, and every fire would deliver nowhere`,
 		);
 }

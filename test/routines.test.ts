@@ -198,29 +198,34 @@ describe("loadRoutines()", () => {
 		assert.match(loaded.reports[0] ?? "", /secret\.md: cannot be read: .*permission denied/i);
 	});
 
-	it("names a chat routine whose delivery tool no integration lends, and says nothing when one does", () => {
-		const parsed = parseRoutine(routineFile({ chat: "-1001234567890" }), "/routines/morning-brief.md");
+	it("names an armed chat routine only while this boot did not connect its delivery tool", () => {
+		const parsed = parseRoutine(
+			routineFile({ chat: "-1001234567890", enabled: "true" }),
+			"/routines/morning-brief.md",
+		);
 		assert.ok("definition" in parsed);
 		const definitions = [parsed.definition];
 
-		const silent = chatRoutineReports(definitions, {});
-		assert.equal(silent.length, 1);
-		assert.match(silent[0] ?? "", /routine-morning-brief answers in a chat/);
-		assert.match(silent[0] ?? "", /no enabled integration named "telegram" lends mcp__telegram__send_message/);
-		// A face that is off lends nothing: the report is about a tool the turn can find, not an entry in a file.
-		assert.equal(
-			chatRoutineReports(definitions, { telegram: { enabled: false, tools: { url: "http://telegram:8080/mcp" } } }).length,
-			1,
-		);
+		const nowhere = chatRoutineReports(definitions, []);
+		assert.equal(nowhere.length, 1);
+		assert.match(nowhere[0] ?? "", /routine-morning-brief answers in a chat/);
+		assert.match(nowhere[0] ?? "", /this boot did not connect mcp__telegram__send_message/);
+		// What the report asks is what the turn can find, and only that: an integration in the file is not a tool in the
+		// list, and another integration's tools do not stand in for this one's.
+		assert.equal(chatRoutineReports(definitions, ["mcp__github__create_issue"]).length, 1);
 		assert.deepEqual(
-			chatRoutineReports(definitions, {
-				telegram: { enabled: true, description: "Telegram", tools: { url: "http://telegram:8080/mcp" } },
-			}),
+			chatRoutineReports(definitions, ["mcp__telegram__send_message"]),
 			[],
-			"the tool exists, so the routine has somewhere to answer",
+			"the boot connected the tool, so the fire has somewhere to answer",
+		);
+		// A draft has no fires, so a line about how its fires would end is a line about nothing.
+		assert.deepEqual(
+			chatRoutineReports([{ ...parsed.definition, enabled: false }], []),
+			[],
+			"disabled is a draft, and the boot does not warn about a routine that is not armed",
 		);
 		assert.deepEqual(
-			chatRoutineReports([{ ...parsed.definition, promptTemplate: "Send the brief." }], {}),
+			chatRoutineReports([{ ...parsed.definition, promptTemplate: "Send the brief." }], []),
 			[],
 			"a routine with no chat answers in the console, and needs no integration",
 		);
@@ -317,7 +322,13 @@ describe("a boot", () => {
 		// A routine whose answer is a chat, in a home with no integration to lend it the tool to answer with.
 		await writeFile(
 			join(routinesDir, "chatty.md"),
-			routineFile({ name: "chatty", at: '"18:00"', chat: "-1001234567890" }),
+			routineFile({ name: "chatty", at: '"18:00"', chat: "-1001234567890", enabled: "true" }),
+			"utf8",
+		);
+		// And the same routine unarmed: a draft with no fires is nobody's missing brief.
+		await writeFile(
+			join(routinesDir, "draft.md"),
+			routineFile({ name: "draft", at: '"09:00"', chat: "-1001234567890" }),
 			"utf8",
 		);
 		await writeFile(join(routinesDir, "broken.md"), "no frontmatter at all\n", "utf8");
@@ -344,8 +355,58 @@ describe("a boot", () => {
 			);
 			assert.match(
 				reported.map(String).find((message) => message.includes("routine-chatty")) ?? "",
-				/no enabled integration named "telegram"/,
-				"a chat routine with no tool to answer through would fire silently forever, so the boot says it",
+				/this boot did not connect mcp__telegram__send_message/,
+				"an armed chat routine with no tool to answer through would fire silently forever, so the boot says it",
+			);
+			assert.equal(
+				reported.map(String).filter((message) => message.includes("routine-draft")).length,
+				0,
+				"a routine still at `enabled: false` has no fires to lose, so it is not reported",
+			);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("reports a chat routine when the integration that would lend its tool did not connect", async () => {
+		// The file is not the boot: telegram is enabled with a tools face, and the face is at a url nothing answered. The
+		// connect records it as unreachable and drops its tools, so the routine would fire into silence — and a check that
+		// read `integrations.json` instead of the boot's tools said nothing at all.
+		const home = await tempDir("mason-routines-unreachable-");
+		const paths = housePaths(home);
+		await mkdir(paths.routinesDir, { recursive: true });
+		await writeFile(
+			join(paths.routinesDir, "chatty.md"),
+			routineFile({ name: "chatty", chat: "-1001234567890", enabled: "true" }),
+			"utf8",
+		);
+		await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
+		await writeFile(
+			paths.integrations,
+			JSON.stringify({
+				integrations: {
+					telegram: { enabled: true, description: "Telegram", tools: { url: "http://telegram:8080/mcp" } },
+				},
+			}),
+			{ encoding: "utf8", mode: 0o600 },
+		);
+
+		const reported: unknown[] = [];
+		const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			storage: "memory",
+			houseHome: home,
+			faux: true,
+			onReport: (message) => reported.push(message),
+			mcpTransport: () => {
+				throw new Error("connection refused");
+			},
+		});
+		try {
+			assert.ok(runtime.hooks.has("routine-chatty"), "the routine is a hook either way: its fire is not the door's");
+			assert.match(
+				reported.map(String).find((message) => message.includes("routine-chatty")) ?? "",
+				/this boot did not connect mcp__telegram__send_message/,
+				"what the turn can find is this boot's tools, not the entry in the file",
 			);
 		} finally {
 			await runtime.close();
