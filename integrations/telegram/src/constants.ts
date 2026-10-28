@@ -30,3 +30,30 @@ export const DEFAULT_INBOX_DIR = "/home/mason/.mason/agent/workspace/inbox";
  * stack where the file clause has to be dropped for every message.
  */
 export const INBOX_PATH_MAX_BYTES = 512;
+
+/**
+ * How long a voice note may wait for its transcript before the message goes on without one.
+ *
+ * The poller prepares a message before it posts it, so a transcription holds the rest of the batch behind it — including
+ * a `/stop` typed in the same breath, which is the one thing that has to arrive while a turn is running. A minute of
+ * speech is about four seconds on this CPU (rtf 0.07, measured), so twelve seconds covers a three-minute note and bounds
+ * a hung service at a dozen seconds rather than twenty. A service that takes longer than that is down, and the message
+ * goes on with the sentence that says the note could not be transcribed.
+ */
+export const ASR_TIMEOUT_MS = 12_000;
+
+/**
+ * The largest file worth posting, in MiB. Telegram lets a bot download 20 MiB, but a voice note is speech, and speech is
+ * a few hundred kilobytes a minute: this is roughly a quarter of an hour of talking. A file past it is a recording — an
+ * `audio` that is a podcast, not a message — and the round trip would be spent for a transcript longer than the door's
+ * payload could carry.
+ */
+export const ASR_MAX_MIB = 4;
+export const ASR_MAX_BYTES = ASR_MAX_MIB * 1024 * 1024;
+
+/**
+ * How much of an answer is kept as the transcript. `renderPayload`'s cap is 2 000 characters, so anything longer is going
+ * to be cut there anyway; this only keeps a service that answers with a whole document from making this container hold
+ * it.
+ */
+export const ASR_TEXT_MAX = 4_000;

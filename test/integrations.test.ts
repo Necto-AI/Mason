@@ -19,6 +19,7 @@ import { promisify } from "node:util";
 import { after, describe, it } from "node:test";
 import { housePaths, type HousePaths } from "../src/server/house.ts";
 import {
+	commandsFor,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
@@ -202,6 +203,22 @@ describe("the integration list on disk", () => {
 		assert.equal((await readIntegrations(paths)).integrations.github?.trigger?.hook, "github-activity");
 	});
 
+	it("refuses a command mason does not have, naming the whole set", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({ integrations: { github: { ...github, commands: ["stop", "restart"] } } }),
+		);
+		const message = await refusal(paths);
+		assert.ok(message.includes(paths.integrations), `the refusal names the file: ${message}`);
+		assert.match(message, /"restart"/);
+		assert.match(message, /stop, compact, clear, status/);
+
+		// Empty is the one honest list: a trigger with no commands is an existing secret that gained nothing.
+		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: [] } } }));
+		assert.deepEqual((await readIntegrations(paths)).integrations.github?.commands, []);
+	});
+
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {
 		const paths = await temporaryHome();
 		await writeIntegration(paths, "github", github);
@@ -370,6 +387,45 @@ describe("the integration command", () => {
 		assert.ok(!listed.includes(rotatedSecret), "a secret in a printed line is a secret in a log");
 	});
 
+	it("declares the commands its trigger may issue, and refuses one mason does not have", async () => {
+		const paths = await temporaryHome();
+		await writeIntegration(paths, "telegram", {
+			enabled: true,
+			description: "The team's Telegram group",
+			tools: { url: "http://mason-telegram:8082/mcp" },
+			trigger: { hook: "team-chat", secret: "0123456789abcdef0123456789abcdef" },
+		});
+
+		// An absent list is no vocabulary at all: an existing trigger secret gains nothing by being read.
+		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, undefined);
+
+		await integration(paths.home, "commands", "telegram", "stop, compact ,clear");
+		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, ["stop", "compact", "clear"]);
+		assert.match((await integration(paths.home, "list")).stdout, /trigger team-chat, commands stop,compact,clear/);
+
+		// A name this build does not have is refused rather than stored, and the refusal names the whole set.
+		await assert.rejects(
+			() => integration(paths.home, "commands", "telegram", "stop,stopp"),
+			(error: Error) => {
+				assert.match(error.message, /"stopp"/);
+				assert.match(error.message, /stop, compact, clear, status/);
+				assert.ok(error.message.includes(paths.integrations), "the refusal names the file to fix");
+				return true;
+			},
+		);
+		assert.deepEqual(
+			(await readIntegrations(paths)).integrations.telegram?.commands,
+			["stop", "compact", "clear"],
+			"a refused write leaves the file as it was",
+		);
+
+		// An empty list is how the vocabulary is taken away again, and it reads as none either way.
+		await integration(paths.home, "commands", "telegram", "");
+		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, []);
+		assert.doesNotMatch((await integration(paths.home, "list")).stdout, /commands/);
+		await assert.rejects(() => integration(paths.home, "commands", "nobody", "stop"), /no integration nobody/);
+	});
+
 	it("prints the home and the file it edits when it is asked how to be used", async () => {
 		const paths = await temporaryHome();
 		// No command: the usage block, which is where a person looks first.
@@ -436,6 +492,31 @@ describe("the trigger a door may use", () => {
 		assert.equal(triggerFor(integrations, "off"), undefined, "a disabled integration's door is nowhere");
 		assert.equal(triggerFor(integrations, "tools-only"), undefined, "tools are not a door");
 		assert.equal(triggerFor(integrations, "nobody"), undefined);
+	});
+});
+
+describe("the vocabulary a trigger may issue", () => {
+	it("is the declared commands of an enabled entry with a trigger, and nothing else", () => {
+		// This is the privilege gate itself: what one integration's secret may ask mason to do. Everything else — a
+		// declaration with no trigger to spend it with, a switched-off entry, an absent list — is nothing at all, so a
+		// later `secret` minting a trigger is what first makes an old declaration live.
+		const integrations: Record<string, Integration> = {
+			telegram: {
+				enabled: true,
+				trigger: { hook: "workspace-check", secret: "0f".repeat(32) },
+				commands: ["stop", "status"],
+			},
+			silent: { enabled: true, trigger: { hook: "workspace-check", secret: "1e".repeat(32) } },
+			off: { enabled: false, trigger: { hook: "workspace-check", secret: "2a".repeat(32) }, commands: ["stop"] },
+			"no-trigger": { enabled: true, commands: ["stop"] },
+			"off-and-no-trigger": { enabled: false, commands: ["stop"] },
+		};
+		assert.deepEqual(commandsFor(integrations, "telegram"), ["stop", "status"]);
+		assert.deepEqual(commandsFor(integrations, "silent"), [], "an absent list is no vocabulary at all");
+		assert.deepEqual(commandsFor(integrations, "off"), [], "a switched-off entry's door is nowhere, so its words are too");
+		assert.deepEqual(commandsFor(integrations, "no-trigger"), [], "a declaration with no secret to spend it with grants nothing");
+		assert.deepEqual(commandsFor(integrations, "off-and-no-trigger"), []);
+		assert.deepEqual(commandsFor(integrations, "nobody"), []);
 	});
 });
 

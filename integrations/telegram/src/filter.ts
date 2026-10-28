@@ -26,7 +26,9 @@ import type { SeenChat } from "./state.ts";
 import type { FileKind, TelegramChat, TelegramFileish, TelegramMessage, TelegramUpdate, TelegramUser } from "./telegram.ts";
 
 export interface FilterContext {
-	/** The chats this bot may relay, as the strings a payload carries. */
+	/**
+	 * The chats this bot may relay, as the strings a payload carries: chat ids, and the @usernames it takes anywhere.
+	 */
 	readonly allowedChats: ReadonlySet<string>;
 	/** The bot's own username from `getMe`, which is the mention to remove. Undefined when Telegram gave none. */
 	readonly botUsername: string | undefined;
@@ -63,7 +65,17 @@ export function readMessage(update: TelegramUpdate, context: FilterContext): Rea
 	if (from === undefined) return { skip: "no sender" };
 	if (from.is_bot === true) return { skip: "sent by a bot" };
 	const chatId = String(message.chat.id);
-	if (!context.allowedChats.has(chatId)) return { skip: `chat ${chatId} is not in TELEGRAM_ALLOWED_CHATS` };
+	const handle = handleOf(from);
+	// Either entry admits the message: the chat, or the person writing in it. The handle is undefined when Telegram gave
+	// none, so a missing username can never match an entry — an empty one is not a wildcard.
+	if (!context.allowedChats.has(chatId) && (handle === undefined || !context.allowedChats.has(handle))) {
+		return {
+			skip:
+				handle === undefined
+					? `chat ${chatId} is not in TELEGRAM_ALLOWED_CHATS`
+					: `chat ${chatId} is not in TELEGRAM_ALLOWED_CHATS, and ${handle} is not either`,
+		};
+	}
 	const attachment = attachmentIn(message);
 	let text = written(message, context.botUsername);
 	if (text === undefined) {
@@ -87,6 +99,17 @@ export function readMessage(update: TelegramUpdate, context: FilterContext): Rea
 		chat: seenChat(message.chat),
 		...(attachment === undefined ? {} : { attachment }),
 	};
+}
+
+/**
+ * The sender's handle as an allowlist entry spells it, or undefined when Telegram gave none. Lower-cased because a
+ * Telegram username is case-insensitive; "" is undefined rather than "@", because an empty username must never match an
+ * entry: a missing handle is not a wildcard.
+ */
+function handleOf(from: TelegramUser): string | undefined {
+	const username = from.username;
+	if (username === undefined || username === "") return undefined;
+	return `@${username.toLowerCase()}`;
 }
 
 /** A person's name as it should read in a sentence, with the username as the fallback rather than an empty string. */

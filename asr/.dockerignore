@@ -1,0 +1,11 @@
+# The build context for the ASR image is this directory (deploy/compose.yaml builds from `asr/`), and the context is
+# sent to the builder in full before the Dockerfile copies four files out of it.
+#
+# `models/` is the one that matters: ~1.3 GB of ONNX weights, gitignored, and deliberately not in the image — a fresh
+# stack fetches them into a volume (docker-entrypoint.sh). Shipping them to the builder on every rebuild would make a
+# one-line change to `audio.py` a two-gigabyte build.
+models
+.venv
+__pycache__
+tests
+*.pyc

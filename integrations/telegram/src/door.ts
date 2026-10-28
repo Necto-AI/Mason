@@ -9,7 +9,8 @@
  *   that is not POST, `413` a body over the door's cap — is final, and only those five are. The offset advances past it,
  *   because a message the door will never accept must not be retried forever: it would block the chat behind it, and
  *   every retry would make the same refusal again. It is logged with the body's own `error` rather than swallowed, so the
- *   operator can fix the config and know what was lost.
+ *   operator can fix the config and know what was lost — and the sentence travels with the refusal, because a refused
+ *   command still has the message it came from: `src/poller.ts` falls back to that and tells the chat why.
  * - **`429` over the budget is a wait, not a verdict.** The door answers six deliveries a minute and says in
  *   `retry-after` when it has room; the same bytes are posted again after exactly that, which is one fire either way
  *   because the envelope's id never changes. One line names the wait — not one a second — and a wait longer than
@@ -24,6 +25,11 @@
  *   at all: nothing said the same bytes will get the same answer, and a door that failed to fire the hook did not refuse
  *   the event. It is reported as unreachable exactly like a network failure, so `src/poller.ts` holds the batch and
  *   tries the same bytes again rather than losing a message to a restart on the mason side.
+ *
+ * **An accepted answer is read, not assumed.** A message is `202` with a submission id, and a command is `200` with
+ * `{ handled, reply }`, so the body is parsed on every accepted answer and reduced to the two things a relay acts on: was
+ * it handled, and what does the chat say. A body that is not JSON is an accepted delivery of something this relay does
+ * not ask about, which is exactly what a message's answer looks like from here.
  *
  * The signature is over the exact bytes posted: `JSON.stringify` once, then the same string signed and sent. Re-encoding
  * on the way out would sign something the door never received, which is precisely the failure the header exists to
@@ -49,14 +55,28 @@ export const MAX_THROTTLE_WAIT_MS = 5 * 60_000;
 export const FINAL_REFUSAL_STATUSES: readonly number[] = [400, 401, 404, 405, 413];
 
 export type DoorResult =
-	| { readonly kind: "accepted" }
-	| { readonly kind: "refused"; readonly status: number }
+	| { readonly kind: "accepted"; readonly answer: DoorAnswer }
+	/**
+	 * `reason` is the door's own sentence about the refusal, when its body carried one. It is not decoration: a refused
+	 * *command* still has the message it came from, so the relay falls back to that and posts this sentence into the chat,
+	 * which is the only way the person learns why the word did not happen.
+	 */
+	| { readonly kind: "refused"; readonly status: number; readonly reason?: string }
 	| { readonly kind: "unreachable"; readonly error: string };
+
+/**
+ * What an accepted answer carried: whether mason acted on the envelope, and the one line it wants posted into the chat.
+ * A message answers a submission id and neither of these, so here it is `handled: false` with no reply.
+ */
+export interface DoorAnswer {
+	readonly handled: boolean;
+	readonly reply: string | undefined;
+}
 
 /** What one POST came to. `throttled` is a `429` whose wait this will not honour, and it is not final. */
 type PostResult =
-	| { readonly kind: "accepted" }
-	| { readonly kind: "refused"; readonly status: number }
+	| { readonly kind: "accepted"; readonly answer: DoorAnswer }
+	| { readonly kind: "refused"; readonly status: number; readonly reason?: string }
 	| { readonly kind: "throttled"; readonly waitMs: number | undefined }
 	| { readonly kind: "failed"; readonly error: string };
 
@@ -94,8 +114,8 @@ export class EventDoor {
 		for (let attempt = 0; attempt <= this.#retries; attempt += 1) {
 			if (attempt > 0) await this.#sleep(this.#backoffMs * 2 ** (attempt - 1));
 			const outcome = await this.#post(body, envelope);
-			if (outcome.kind === "accepted") return { kind: "accepted" };
-			if (outcome.kind === "refused") return { kind: "refused", status: outcome.status };
+			if (outcome.kind === "accepted") return { kind: "accepted", answer: outcome.answer };
+			if (outcome.kind === "refused") return outcome;
 			if (outcome.kind === "throttled") {
 				// Not final, and not a network failure either: the message is good and the door is full. `src/poller.ts`
 				// holds the batch, which is the same message tried again later.
@@ -138,11 +158,12 @@ export class EventDoor {
 				return { kind: "failed", error: describeError(error) };
 			}
 			if (answer.ok) {
+				const text = await answer.text().catch(() => "");
 				this.#options.log(
 					"info",
 					`delivered ${envelope.id} (${envelope.kind}) to the ${this.#options.integration} door as ${answer.status}`,
 				);
-				return { kind: "accepted" };
+				return { kind: "accepted", answer: acceptedAnswer(text) };
 			}
 			const text = await answer.text().catch(() => "");
 			if (answer.status !== 429) {
@@ -157,7 +178,7 @@ export class EventDoor {
 					"warn",
 					`${this.#options.integration}: the door refused ${envelope.id} with ${said}; the offset advances past it`,
 				);
-				return { kind: "refused", status: answer.status };
+				return { kind: "refused", status: answer.status, ...(reason === undefined ? {} : { reason }) };
 			}
 			const waitMs = retryAfterMs(answer, text);
 			if (waitMs === undefined || waitMs > this.#maxWaitMs) return { kind: "throttled", waitMs };
@@ -184,6 +205,18 @@ function jsonObject(text: string): Record<string, unknown> | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/** What a `200` said, as far as a relay acts on it: `{ handled: true, reply: "stopped" }` for a command mason ran. */
+function acceptedAnswer(text: string): DoorAnswer {
+	const body = jsonObject(text);
+	const reply = body?.reply;
+	return {
+		handled: body?.handled === true,
+		// A reply that is not a non-empty string is no reply: an empty message is one Telegram refuses, and a line the chat
+		// reads is the whole reason the answer carries one.
+		reply: typeof reply === "string" && reply !== "" ? reply : undefined,
+	};
 }
 
 /** The door's own sentence about an answer: `{ "error": "…" }`, which is what its `400` and `500` bodies carry. */

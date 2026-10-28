@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EventDoor } from "../src/door.ts";
+import { EventDoor, type DoorResult } from "../src/door.ts";
 import type { EventEnvelope } from "../src/envelope.ts";
 import { createLog, type Log } from "../src/log.ts";
 import { signBody } from "../src/envelope.ts";
@@ -22,6 +22,10 @@ const ENVELOPE: EventEnvelope = {
 	kind: "chat.message",
 	payload: "Ilya (@ilya) in chat -1001234 (Team chat): ship it?",
 };
+const COMMAND: EventEnvelope = { v: 1, id: "tg-8812", kind: "command", payload: "stop" };
+
+/** An accepted answer that says nothing about a command: a message's `202`, which is what every event is. */
+const ACCEPTED: DoorResult = { kind: "accepted", answer: { handled: false, reply: undefined } };
 
 interface Sent {
 	readonly url: string;
@@ -86,14 +90,39 @@ describe("a delivery the door accepts", () => {
 
 		const result = await rig.door.fire(ENVELOPE);
 
-		assert.deepEqual(result, { kind: "accepted" });
+		assert.deepEqual(result, ACCEPTED);
 		assert.equal(rig.sent.length, 1);
 		assert.equal(rig.sent[0]?.url, "http://mason:8787/api/events/telegram");
 		assert.equal(rig.sent[0]?.request.method, "POST");
-		const body = rig.sent[0]?.request.body ?? "";
+		const body = rig.sent[0]?.request.body;
+		assert.ok(typeof body === "string", "the door posts an envelope as JSON");
 		assert.deepEqual(JSON.parse(body), ENVELOPE);
 		assert.equal(rig.sent[0]?.request.headers["x-mason-signature"], signBody(SECRET, body));
 		assert.match(rig.lines.join("\n"), /delivered tg-8811 \(chat\.message\)/);
+	});
+
+	it("reads the answer a command gets, so the relay knows whether it was handled and what to post", async () => {
+		const handled = door(() => answer(200, JSON.stringify({ handled: true, reply: "stopped" })));
+		assert.deepEqual(await handled.door.fire(COMMAND), {
+			kind: "accepted",
+			answer: { handled: true, reply: "stopped" },
+		});
+		assert.match(handled.lines.join("\n"), /delivered tg-8812 \(command\)/);
+
+		// mason did not act: no reply, and the relay has a message to send down the ordinary path.
+		const undeclared = door(() => answer(200, JSON.stringify({ handled: false })));
+		assert.deepEqual(await undeclared.door.fire(COMMAND), {
+			kind: "accepted",
+			answer: { handled: false, reply: undefined },
+		});
+
+		// An empty reply is no reply: Telegram refuses an empty message, and a chat that read nothing is the one outcome
+		// worse than an answer that came too late.
+		const silent = door(() => answer(200, JSON.stringify({ handled: true, reply: "" })));
+		assert.deepEqual(await silent.door.fire(COMMAND), {
+			kind: "accepted",
+			answer: { handled: true, reply: undefined },
+		});
 	});
 });
 
@@ -103,7 +132,7 @@ describe("a delivery the door refuses", () => {
 
 		const result = await rig.door.fire(ENVELOPE);
 
-		assert.deepEqual(result, { kind: "refused", status: 401 });
+		assert.deepEqual(result, { kind: "refused", status: 401, reason: "bad or missing signature" });
 		assert.equal(rig.sent.length, 1);
 		const logged = rig.lines.join("\n");
 		assert.match(logged, /telegram: the door refused tg-8811 with 401: bad or missing signature/);
@@ -113,7 +142,11 @@ describe("a delivery the door refuses", () => {
 	it("treats every status the door refuses deterministically the same way: final", async () => {
 		for (const status of [400, 404, 405, 413]) {
 			const rig = door(() => answer(status, JSON.stringify({ error: "no enabled trigger face there" })));
-			assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "refused", status });
+			assert.deepEqual(await rig.door.fire(ENVELOPE), {
+				kind: "refused",
+				status,
+				reason: "no enabled trigger face there",
+			});
 			assert.equal(rig.sent.length, 1);
 		}
 	});
@@ -155,7 +188,7 @@ describe("a delivery the door is over budget for", () => {
 
 		const result = await rig.door.fire(ENVELOPE);
 
-		assert.deepEqual(result, { kind: "accepted" });
+		assert.deepEqual(result, ACCEPTED);
 		assert.equal(rig.sent.length, 2);
 		assert.deepEqual(rig.waits, [42_000]);
 		// One fire, whichever delivery reached the door: the id is the dedupe and the bytes are identical.
@@ -174,7 +207,7 @@ describe("a delivery the door is over budget for", () => {
 				: answer(202, ""),
 		);
 
-		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(await rig.door.fire(ENVELOPE), ACCEPTED);
 		assert.deepEqual(rig.waits, [3_000]);
 	});
 
@@ -184,7 +217,7 @@ describe("a delivery the door is over budget for", () => {
 			return attempt === 2 ? tooManyDeliveries(1) : answer(202, "");
 		});
 
-		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(await rig.door.fire(ENVELOPE), ACCEPTED);
 		assert.deepEqual(rig.waits, [250, 1_000]);
 	});
 
@@ -202,7 +235,7 @@ describe("a delivery the door is over budget for", () => {
 	it("states a fractional wait in the same whole seconds as every other line", async () => {
 		const rig = door((attempt) => (attempt === 1 ? answer(429, "", { "retry-after": "3.5" }) : answer(202, "")));
 
-		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(await rig.door.fire(ENVELOPE), ACCEPTED);
 		assert.deepEqual(rig.waits, [3_500]);
 		assert.match(rig.lines.join("\n"), /over its budget; waiting 4s and posting tg-8811 again/);
 	});
@@ -240,7 +273,7 @@ describe("a delivery the network would not carry", () => {
 			return answer(202, "");
 		});
 
-		assert.deepEqual(await rig.door.fire(ENVELOPE), { kind: "accepted" });
+		assert.deepEqual(await rig.door.fire(ENVELOPE), ACCEPTED);
 		assert.equal(rig.sent.length, 3);
 		assert.deepEqual(rig.waits, [250, 500]);
 	});

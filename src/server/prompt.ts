@@ -54,12 +54,19 @@ A message with no such prefix has no author: a scheduled trigger, or a device no
 Attribute a decision to the person who wrote it, and do not assume the newest message came from Denis.`;
 
 /**
- * The delivery invariant, in every turn: the chat renders messages out of `send_to_user` calls only, so prose the model
- * writes is working notes nobody reads.
+ * The delivery invariant, in every turn: words reach the reader through a delivery call and never as prose, so anything
+ * the model writes outside one is working notes nobody reads.
+ *
+ * Which call that is depends on who is reading, and this section is resident in every turn, so it names the choice
+ * rather than the console's half of it. It used to say `send_to_user` is the one channel — true in the console, false in
+ * a turn an event hook started, where that tool is refused and the person is reached by the hook's own message tool
+ * (`extensions/delivery.ts`, `hooks.ts`). A resident section naming the tool that cannot arrive is worse than a vague
+ * one: the model follows it, and the call it makes is refused.
  */
-export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the user: the chat renders only messages sent with \`send_to_user\`.
-If you do not call it, the reader gets nothing at all. Answer every turn with a \`send_to_user\` call, even a one-line
-answer to a direct question; everything else you write is working notes.`;
+export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the reader: words reach them through a delivery call, and everything
+else you write is working notes. In the operator console that call is \`send_to_user\`. In a turn an event hook started
+the reader is in a chat: the hook's instruction names the tool that answers there, and \`send_to_user\` is refused.
+Answer every turn with a delivery call, even a one-line answer to a direct question.`;
 
 /**
  * The widget tool in one paragraph. The manual — parameter order, design system, sandbox limits — is the

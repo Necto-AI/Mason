@@ -10,9 +10,11 @@
  * The envelope is a public contract before the first third-party integration ships. `v` names the version being spoken,
  * and one mason does not know is a sender's bug, refused rather than guessed at. `id` is the envelope id and the fire's
  * identity, which is why no table of seen ids exists: it becomes the fire's request id, and the durable log never
- * forgets one, so a redelivery after a restart — or days later — is the same fire. `kind` is a label for the log, never
- * a dispatch key: one trigger, one hook. `payload` is text, refused when it is over the cap rather than truncated,
- * because a truncated event is a lie about what happened.
+ * forgets one, so a redelivery after a restart — or days later — is the same fire. `kind` is a label for the log, and
+ * one word is more than a label: `command` says the payload names something mason should do, so this file owns that
+ * vocabulary and the shape each word takes. Every other kind stays a label and nothing else: one trigger, one hook.
+ * `payload` is text, refused when it is over the cap rather than truncated, because a truncated event is a lie about
+ * what happened.
  *
  * Two of these reach the accept log, so both are held to one line: `kind` is a token, and `id`, which is whatever opaque
  * key a provider chose, may not carry a control character — a newline in it would forge the rest of that line.
@@ -45,6 +47,21 @@ const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
  * a letter or a digit, at most 64 — enough for `issue.opened`, `push` or `chat.message`, and nothing that needs quoting.
  */
 const KIND_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+
+/** The one kind that is a verb rather than a label: the payload names something mason should do. */
+export const COMMAND_KIND = "command";
+
+/**
+ * The commands mason acts on, and the whole of them: a closed set, because every name here is a method the console can
+ * call too, and a chat should reach exactly what a person at a console can reach. An integration declares which of them
+ * its secret may issue (`integrations.ts`), and this list is what that declaration is checked against.
+ */
+export const COMMAND_NAMES = ["stop", "compact", "clear", "status"] as const;
+
+export type CommandName = (typeof COMMAND_NAMES)[number];
+
+/** Long enough for a sentence of instruction, short enough that it stays one: an argument is a line, not a document. */
+export const COMMAND_ARGUMENT_MAX = 200;
 
 /** The v1 envelope, checked. Unknown keys are ignored: a sender may add fields before mason knows them. */
 export interface EventEnvelope {
@@ -113,4 +130,55 @@ export function readEnvelope(raw: Buffer): EventEnvelope | { error: string } {
 		};
 	}
 	return { v: 1, id, kind, payload };
+}
+
+export function isCommandName(value: string): value is CommandName {
+	return (COMMAND_NAMES as readonly string[]).includes(value);
+}
+
+/** The command a command envelope names, checked, or the reason it is not one. */
+export type CommandReading =
+	| { readonly command: CommandName; readonly argument: string | undefined }
+	| { readonly undeclared: true }
+	| { readonly error: string };
+
+/**
+ * The command a `kind: "command"` payload names, held to what this integration declares.
+ *
+ * An undeclared name is not an error: the sender typed something mason has no use for, and the relay has an ordinary
+ * message in hand. `/start`, `/foo` and a mistaken `/stopp` therefore stay messages instead of becoming failures — the
+ * door answers `handled: false` and the relay sends the text down the path it always took. A declared command is held to
+ * its shape, and a malformed one is a `400` naming the rule that was broken: a command that ran with an argument the
+ * door silently dropped would do something other than what the person asked for.
+ */
+export function readCommand(payload: string, declared: readonly string[]): CommandReading {
+	// A name, then at most one argument: `compact keep the pricing thread`. The wire form is one string, so this is the
+	// whole of the grammar, and the argument is everything after the first run of whitespace rather than one word.
+	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(payload.trim());
+	const name = match?.[1] ?? "";
+	if (!isCommandName(name) || !declared.includes(name)) return { undeclared: true };
+	const argument = match?.[2]?.trim() ?? "";
+	if (name !== "compact") {
+		if (argument !== "") {
+			return {
+				error: `"${name}" takes no argument: a command is one word, and only "compact" reads what follows it`,
+			};
+		}
+		return { command: name, argument: undefined };
+	}
+	if (argument.length > COMMAND_ARGUMENT_MAX) {
+		return {
+			error: `"compact" takes at most ${COMMAND_ARGUMENT_MAX} characters of instructions; this one is ${argument.length}`,
+		};
+	}
+	return { command: name, argument: argument === "" ? undefined : argument };
+}
+
+/**
+ * One command's identity in the durable log: the integration's name inside the key, exactly as a fire's request id
+ * carries it, because a sender only promises uniqueness inside its own stream. A redelivery is therefore the same
+ * admission however long after the first one it arrives, which is what stops a command running twice.
+ */
+export function commandRequestId(integration: string, id: string): string {
+	return `command:${integration}:${id}`;
 }

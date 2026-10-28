@@ -13,7 +13,7 @@ Verified on the deployed instance, not remembered:
 | Piece | State |
 |---|---|
 | Durable agent | `@earendil-works/pi-durable` with a log-backed conversation, submissions with idempotency, `whenBusy` (`followUp` / `steer` / `reject`), abort, reset, compact |
-| Triggers | Five builtin hooks (`team-chat`, `retry`, …) plus an HMAC-signed event door that can do exactly one thing: fire the hook its trigger names |
+| Triggers | Five builtin hooks (`team-chat`, `retry`, …) plus an HMAC-signed event door that fires the hook its trigger names, or issues one of the commands its entry declares |
 | Integrations | ADR-0003: a service with a tools face (MCP over Streamable HTTP), a trigger face (HMAC), or both. Telegram is the first one, with auto-reconnect, a per-chat send queue and a typing indicator |
 | Surfaces | Chord over WebSocket for live replication and methods; the operator console (frozen) reads a projection of the transcript and never the conversation |
 | Tool machine | `pi-env` daemon in a second container, reached over SSH, `RemoteExecutionEnv` on the harness side |
@@ -54,27 +54,32 @@ Consequences that are worth the work:
 Exit: Telegram, a second chat integration and the console get different prompts from the same hook, with no vendor's name
 in `src/server/`; a reply reaches the place it came from without the model choosing a tool by name.
 
-### 2. There is no vocabulary for control
+### 2. There was no vocabulary for control
 
-`abort`, `reset` and `compact` exist as Chord methods, so the console has them and a chat does not. A person talking to
-the bot needs at least `/stop`, `/compact`, `/clear`, `/status`, `/help` — and the bot needs them to mean the same thing
-everywhere.
+`abort`, `reset` and `compact` existed as Chord methods, so the console had them and a chat did not. A person talking to
+the bot needed at least `/stop`, `/compact`, `/clear`, `/status` and `/help`, and the bot needed them to mean the same
+thing everywhere.
 
-Design, in order of preference:
+**Shipped as the first option.** Mason owns the vocabulary and an interface forwards it. A signed
+`POST /api/events/<integration>` gained one more thing it may say, `{"v":1,"id":…,"kind":"command","payload":"stop"}`,
+and the route acts only on what the entry declares (`"commands": ["stop","compact","clear","status"]`, empty by
+default, written with `npm run integration -- commands`). A declared command calls the same conversation method the
+console calls and answers `{handled:true, reply:"stopped"}`; a word the integration does not declare answers
+`{handled:false}`, and the relay sends the message it was already holding. An existing trigger secret opened nothing new:
+no declaration, no command. The envelope id claims the command in the durable log, so a redelivery answers instead of
+stopping a turn twice, and the claim is a display-only entry, so `/stop` is not queued behind the turn it stops. Telegram
+forwards a `/word` as a command, answers `/help` itself, and posts the reply through its per-chat send queue; the same
+list sets Telegram's own bot command menu.
 
-1. **Mason owns the vocabulary, an interface forwards it.** A signed `POST /api/events/<integration>` gains one more
-   thing it may say: `{"v":1,"id":…,"kind":"command","payload":"stop"}`. The route checks that the integration's entry
-   declares the command (`"commands": ["stop","compact","clear"]`, empty by default), then calls the same conversation
-   method the console calls. Returns `{handled:true, reply:"stopped"}` or `{handled:false}` for the relay to treat as an
-   ordinary message. An existing trigger secret opens nothing new: no declaration, no command.
-2. Later, when an integration needs to *read* (an approval inbox, a status panel), it becomes a service principal with
-   its own token and a Chord link, and the command route is the first method it is allowed to call.
+The second option is still the way in for a service that needs to *read*: an approval inbox or a status panel would
+become a principal with its own token and a Chord link, and the command route is the first method it is allowed to call.
 
 Why not the agent's own tools: `/stop` has to work while the model is busy, and a tool cannot interrupt the turn that is
 calling it.
 
-Exit: `/stop` lands mid-generation from Telegram in under a second; `/compact` leaves a summary the next message can use;
-an undeclared command is refused and logged.
+Exit, as it stands: `/stop` from Telegram reaches `conversation.abort()` without queueing for anything, a declared
+`/compact` leaves a summary the next message can use, and an undeclared `/word` arrives as the message it was, with no
+error to interpret.
 
 ### 3. Nothing is proactive
 
