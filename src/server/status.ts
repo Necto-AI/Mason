@@ -6,6 +6,7 @@
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { InboxState, LiveState, UsageState } from "@earendil-works/pi-durable";
 import type { AgentStatus, HookSummary, RunStatus } from "../shared/contract.ts";
+import type { IntegrationSummary } from "./integration-status.ts";
 
 export function liveOf(view: ConversationView | undefined): LiveState | undefined {
 	return view?.docs["pi.live"] as LiveState | undefined;
@@ -58,6 +59,39 @@ export interface DeriveStatusOptions {
 	hooks: HookSummary[];
 	model?: { provider: string; modelId: string };
 	cwd?: string;
+}
+
+/**
+ * The words a chat reads for a run status. `runStatus` is a token for the console, where it is mapped to a label the
+ * client owns; a chat gets the sentence itself, because the relay posts this line into a conversation.
+ */
+const RUN_STATUS_WORDS: Record<RunStatus, string> = {
+	idle: "idle",
+	generating: "answering",
+	running_tools: "running tools",
+	compacting: "compacting",
+	retrying: "retrying after a failure",
+};
+
+/**
+ * The one line a chat gets for `/status`: what the agent is doing, whether anything is waiting, which integrations
+ * answered at boot, and how many did not. A sentence rather than the JSON `/api/status` answers, and derived from the
+ * same view, so it cannot say something the console does not.
+ *
+ * The integrations are the caller's: `integration-status.ts` holds this boot's findings, and passing them in keeps the
+ * sentence a pure function of what was found.
+ */
+export function statusLine(
+	view: ConversationView | undefined,
+	integrations: readonly IntegrationSummary[],
+): string {
+	const queued = queuedSubmissions(view);
+	const connected = integrations.filter((entry) => entry.enabled && entry.connected).map((entry) => entry.name);
+	const unreachable = integrations.filter((entry) => entry.error !== null).length;
+	const waiting = queued === 0 ? "nothing queued" : `${queued} queued`;
+	const reached = connected.length === 0 ? "no integration connected" : `${connected.join(", ")} connected`;
+	const missed = unreachable === 0 ? "nothing unreachable since boot" : `${unreachable} unreachable since boot`;
+	return `${RUN_STATUS_WORDS[deriveRunStatus(view)]}: ${waiting}; ${reached}; ${missed}`;
 }
 
 export function deriveAgentStatus(view: ConversationView | undefined, options: DeriveStatusOptions): AgentStatus {

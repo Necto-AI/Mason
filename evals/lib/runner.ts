@@ -12,7 +12,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
 import { projectTranscript } from "../../src/server/projection.ts";
-import { DELIVERY_REMINDER } from "../../src/shared/contract.ts";
+import { isDeliveryReminder } from "../../src/shared/contract.ts";
 import { formatPrompt } from "../../src/server/hooks.ts";
 import { openAgentRuntime } from "../../src/server/runtime.ts";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
@@ -203,7 +203,7 @@ function remindersOf(view: ConversationView): number {
 		if (entry.kind !== "pi.user") continue;
 		const message = (entry.model?.[0] as { content?: unknown } | undefined)?.content;
 		const text = typeof message === "string" ? message : "";
-		if (text.trim() === DELIVERY_REMINDER.trim()) count += 1;
+		if (isDeliveryReminder(text)) count += 1;
 	}
 	return count;
 }

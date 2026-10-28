@@ -12,7 +12,7 @@
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { DELIVERY_REMINDER, HOOK_ENTRY_KIND, MESSAGE_TOOL, WIDGET_TOOL, splitAuthor } from "../shared/contract.ts";
+import { HOOK_ENTRY_KIND, isDeliveryReminder, MESSAGE_TOOL, WIDGET_TOOL, splitAuthor } from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
 
 /**
@@ -75,6 +75,10 @@ function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean 
  * The round in flight contributes the same two shapes, streaming: a message appears as the model writes it, a widget
  * as its markup arrives, exactly as they will stand once committed. A half-written message is the one thing the reader
  * is meant to watch.
+ *
+ * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
+ * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
+ * cross the wire.
  */
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
@@ -93,8 +97,9 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	for (const entry of entries) {
 		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
-			// The delivery gate's reminder is a user entry the model reads, not one the reader sent.
-			const reminder = entry.kind === "pi.user" && spoken === DELIVERY_REMINDER.trim();
+			// The delivery gate's reminder is a user entry the model reads, not one the reader sent — in either shape,
+			// the console's and the one a hooked turn gets.
+			const reminder = entry.kind === "pi.user" && isDeliveryReminder(spoken);
 			if (!reminder) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
 			// is not part of the conversation.

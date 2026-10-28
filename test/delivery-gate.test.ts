@@ -23,9 +23,21 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
+import {
+	defineExtension,
+	defineTool,
+	type EntryRecord,
+	type Extension,
+	type SettledSubmissionRecord,
+} from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { DELIVERY_REMINDER, MESSAGE_TOOL, WIDGET_TOOL } from "../src/shared/contract.ts";
+import {
+	DELIVERY_REMINDER,
+	hookDeliveryReminder,
+	isDeliveryReminder,
+	MESSAGE_TOOL,
+	WIDGET_TOOL,
+} from "../src/shared/contract.ts";
 import { projectTranscript } from "../src/server/projection.ts";
 import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 
@@ -70,11 +82,19 @@ function recorder(steps: readonly FauxResponseStep[]): {
 	return { steps: queue, requests };
 }
 
-async function runScripted(
+/**
+ * A turn, scripted: how it started, and everything it left behind.
+ *
+ * The evidence is deliberately more than the reader's transcript: a refusal or a "delivered" is a tool result, and the
+ * transcript is the one place it does not appear, so the raw entries come back too.
+ */
+async function runTurn(
 	directory: string,
 	script: ReturnType<typeof recorder>,
-	prompt = "Anything new?",
-	extensions: readonly Extension[] = [],
+	extensions: readonly Extension[],
+	start: (runtime: AgentRuntime) => Promise<{
+		wait(context: typeof BACKGROUND_CONTEXT): Promise<SettledSubmissionRecord>;
+	}>,
 ) {
 	const { access, faux } = fauxAccess();
 	faux.setResponses(script.steps);
@@ -89,19 +109,93 @@ async function runScripted(
 		onReport: () => {},
 	});
 	try {
-		const conversation = await runtime.conversation();
-		const submission = await conversation.submit({ type: "input", content: prompt }, BACKGROUND_CONTEXT);
-		const settled = await submission.wait(BACKGROUND_CONTEXT);
+		const settled = await (await start(runtime)).wait(BACKGROUND_CONTEXT);
 		const state = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
-		return { settled, transcript: projectTranscript(state), requests: script.requests };
+		return {
+			settled,
+			transcript: projectTranscript(state),
+			entries: (state?.entries ?? []) as readonly EntryRecord[],
+			requests: script.requests,
+		};
 	} finally {
 		await runtime.close();
 	}
 }
 
-/** Whether the gate ever nudged the model: the reminder is only ever an input the gate added. */
+/** A turn a person started in the console: the only case where `send_to_user` is the reader. */
+function runScripted(
+	directory: string,
+	script: ReturnType<typeof recorder>,
+	prompt = "Anything new?",
+	extensions: readonly Extension[] = [],
+) {
+	return runTurn(directory, script, extensions, async (runtime) => {
+		const conversation = await runtime.conversation();
+		return conversation.submit({ type: "input", content: prompt }, BACKGROUND_CONTEXT);
+	});
+}
+
+/** One fire, one turn: the id is the sender's, so it has to be one only this test uses. */
+let fires = 0;
+
+/**
+ * A turn an event hook started, through the hook a boot defines: the chat door firing `team-chat`, which is how the
+ * person in the chat reaches the agent. The template is the boot's own, so this is the production instruction.
+ */
+function runFired(
+	directory: string,
+	script: ReturnType<typeof recorder>,
+	extensions: readonly Extension[] = [],
+	payload = "Привет",
+) {
+	return runTurn(directory, script, extensions, async (runtime) => {
+		fires += 1;
+		return runtime.hooks.fire("team-chat", { payload, requestId: `delivery-gate:${fires}` });
+	});
+}
+
+/** The tools face of the integration behind the hook: one tool that answers a chat, under mason's MCP name. */
+const CHAT_TOOL = "mcp__telegram__send_message";
+
+function chatFace(name = CHAT_TOOL): Extension {
+	const tool = defineTool({
+		name,
+		description: "Send a message to a chat.",
+		parameters: Type.Object({ chat_id: Type.String(), text: Type.String() }),
+		replay: "unsafe",
+		execute: async ({ text }) => ({ output: [{ type: "text", text: "sent" }], details: { length: text.length } }),
+	});
+	return defineExtension({ name: "chat-face", tools: [tool] });
+}
+
+/** What a call answered: the text the model read, and whether it was refused (which code mode turns into a rejection). */
+function answerTo(entries: readonly EntryRecord[], callId: string): { isError: boolean; text: string } {
+	for (const entry of entries) {
+		if (entry.kind !== "pi.tool-result") continue;
+		const message = entry.model?.[0] as { toolCallId?: unknown; isError?: unknown; content?: unknown } | undefined;
+		if (message?.toolCallId !== callId) continue;
+		const content = message.content;
+		const text =
+			typeof content === "string"
+				? content
+				: Array.isArray(content)
+					? content
+							.map((part) => {
+								const block = part as { type?: unknown; text?: unknown };
+								return block.type === "text" && typeof block.text === "string" ? block.text : "";
+							})
+							.join("")
+					: "";
+		return { isError: message.isError === true, text };
+	}
+	return { isError: false, text: "" };
+}
+
+/** Whether the gate ever nudged the model: a reminder is only ever a user input the gate added, in either shape. */
 function reminded(requests: readonly (readonly Message[])[]): boolean {
-	return requests.some((messages) => messages.some((message) => message.content === DELIVERY_REMINDER));
+	return requests.some((messages) =>
+		messages.some((message) => typeof message.content === "string" && isDeliveryReminder(message.content)),
+	);
 }
 
 /** What a nested call answered the script: whether it failed, and the text a program reads out of it. */
@@ -283,4 +377,105 @@ test("a widget built from inside a script is refused the same way", async () => 
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Here is the chart."],
 	);
+});
+
+/**
+ * The other reader: a turn an event hook started.
+ *
+ * The person is in a chat, and `send_to_user` writes into a console they are not looking at. It used to answer
+ * "delivered" there, which the gate counted, so a turn could close believing it had spoken while nothing left the
+ * machine. These tests pin the fix on both sides of it: the call is refused with the tool that does reach the chat, the
+ * gate counts that tool and not `send_to_user`, and the reminder names it.
+ */
+test("a hooked turn refuses send_to_user, and names the tool that reaches the chat", async () => {
+	const directory = await temporary();
+	const script = recorder([
+		deliver("Привет!"),
+		said("Written down."),
+		call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"),
+		said("Done."),
+	]);
+	const { settled, entries } = await runFired(directory, script, [chatFace()]);
+
+	assert.equal(settled.status, "done");
+	const refusal = answerTo(entries, "sent");
+	assert.equal(refusal.isError, true, "the call was refused, not answered with a delivery");
+	assert.match(refusal.text, /send_to_user cannot reach the reader in this turn/, "the refusal says what does not happen");
+	assert.match(refusal.text, /the call rejects/, "code mode reads an error result as a rejection, and the text says so");
+	assert.match(refusal.text, new RegExp(CHAT_TOOL), "and names the tool that does reach the chat");
+	assert.match(refusal.text, /the chat the payload names/, "and says which chat to answer in");
+});
+
+test("a hooked turn that answers with the chat's own tool is not reminded", async () => {
+	const directory = await temporary();
+	const script = recorder([call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"), said("Done.")]);
+	const { settled, requests, entries } = await runFired(directory, script, [chatFace()]);
+
+	assert.equal(settled.status, "done");
+	assert.equal(requests.length, 2, "the model's own turn, and nothing added to it");
+	assert.equal(reminded(requests), false, "no reminder was offered: the chat's tool is the delivery here");
+	assert.equal(answerTo(entries, "tele").text, "sent", "the chat's tool ran as the model called it");
+});
+
+test("a hooked turn that only calls send_to_user is reminded with the chat's tool", async () => {
+	const directory = await temporary();
+	const script = recorder([
+		deliver("Привет!"),
+		said("Written down."),
+		call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"),
+		said("Done."),
+	]);
+	const { settled, requests } = await runFired(directory, script, [chatFace()]);
+
+	assert.equal(settled.status, "done");
+	assert.equal(requests.length, 4, "the refusal, the reminder, and the answer it produced");
+	const reminder = requests[2]?.at(-1) as { role?: string; content?: unknown } | undefined;
+	assert.equal(reminder?.role, "user");
+	assert.equal(reminder?.content, hookDeliveryReminder(CHAT_TOOL), "the reminder names the tool that reaches the chat");
+	assert.match(String(reminder?.content), new RegExp(CHAT_TOOL));
+});
+
+test("a console turn still delivers with send_to_user while a chat-facing hook exists", async () => {
+	const directory = await temporary();
+	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
+	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?", [chatFace()]);
+
+	assert.equal(settled.status, "done");
+	assert.equal(answerTo(entries, "sent").isError, false, "the console turn's delivery is not refused");
+	assert.equal(answerTo(entries, "sent").text, "delivered", "and still answers exactly what it always did");
+	assert.equal(requests.length, 2, "no reminder: the console is this turn's reader");
+	assert.deepEqual(
+		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
+		["Standup moved to nine."],
+	);
+});
+
+test("a second integration's hook is answered by its own message tool", async () => {
+	const directory = await temporary();
+	// Nothing in the delivery tool names this one: the hook's instruction does, and that is where both sides read it.
+	const MATRIX = "mcp__matrix__send_message";
+	const hook = {
+		id: "matrix-chat",
+		name: "Matrix message",
+		description: "A message in the team's Matrix room.",
+		enabled: true,
+		identify: "request" as const,
+		promptTemplate: `A message arrived in the room. Answer it with ${MATRIX}, in the room the payload names.\n{{payload}}`,
+	};
+	const script = recorder([
+		deliver("Hello"),
+		said("Written down."),
+		call(MATRIX, { chat_id: "!abc:matrix", text: "Hello" }, "matrix"),
+		said("Done."),
+	]);
+	const { settled, entries, requests } = await runTurn(directory, script, [chatFace(MATRIX)], async (runtime) => {
+		runtime.hooks.define(hook);
+		return runtime.hooks.fire(hook.id, { payload: "Hello", requestId: "matrix-fire" });
+	});
+
+	assert.equal(settled.status, "done");
+	assert.match(answerTo(entries, "sent").text, new RegExp(MATRIX), "the refusal names the tool this hook's chat uses");
+	assert.equal(answerTo(entries, "matrix").isError, false, "and the gate counted it, so the turn could answer");
+	assert.equal(requests.length, 4);
+	assert.equal(requests[2]?.at(-1)?.content, hookDeliveryReminder(MATRIX), "the reminder names it too");
 });

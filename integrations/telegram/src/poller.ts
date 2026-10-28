@@ -21,10 +21,41 @@
  *
  * **A failed long poll is not a failed container.** A proxy reconnecting, a VPN dropping, a `429` from Telegram — each is
  * one logged line and a wait, because the alternative is a restart loop that loses its place less gracefully.
+ *
+ * **A command is an envelope of its own kind, and the message it came from is kept beside it.** Text that starts with a
+ * slash is posted as `kind: "command"`, and mason answers whether it acted. `handled: false` means the word means
+ * nothing there, so the same update goes to the door again as the message it always was: `/start`, `/foo` and a mistaken
+ * `/stopp` reach the agent as text rather than disappearing or failing. A command the door *refuses* — a declared word
+ * with a stray argument, or one over the cap — falls back the same way, with the door's own sentence posted into the chat,
+ * because the person typing `/stop now` must be told something rather than watching a silent chat. `/help` never goes
+ * anywhere — it is the relay describing itself, and `src/commands.ts` owns the words.
+ *
+ * **The fallback takes the file with it.** A caption that is a command is not a message about a file, so nothing is
+ * fetched while the word is still a word — but the moment the update turns out to be a message after all, its photo is
+ * fetched and named, because a message that arrives as text with no mention of the file the person sent is a message
+ * about something else.
+ *
+ * **A transcript is asked for once, after the file lands, before the envelope exists.** `src/asr.ts` is optional and the
+ * poller treats it as it treats the inbox: a dependency a test can leave out. The request happens in the same preparation
+ * the download does, so a door that holds the batch does not post the same voice note to the service again, and a
+ * service that is down costs one sentence on the payload rather than the message.
+ *
+ * Nothing here waits for a turn. The poller's only queue is the door's own answer, and a command is one more envelope in
+ * the batch: `/stop` is posted while the turn it stops is still running, because the door acts on it straight away. The
+ * chat's own send queue is not waited on either: an answer posted into a chat that has spent its minute is one warning.
  */
+import { isSpeech, type Transcription } from "./asr.ts";
 import type { ChatDirectory } from "./chats.ts";
+import { commandIn, HELP_TEXT, isHelp } from "./commands.ts";
 import type { DoorResult } from "./door.ts";
-import { envelopeFor, type EventEnvelope, type EventFile } from "./envelope.ts";
+import {
+	commandEnvelopeFor,
+	envelopeFor,
+	type ChatEvent,
+	type EventEnvelope,
+	type EventFile,
+	type Transcript,
+} from "./envelope.ts";
 import { readMessage, type Attachment, type FilterContext } from "./filter.ts";
 import type { SaveOutcome } from "./inbox.ts";
 import { describeError, formatDuration, type Log } from "./log.ts";
@@ -65,8 +96,20 @@ export interface PollerOptions {
 	readonly inbox?: {
 		save(attachment: Attachment, options: { readonly updateId: number }): Promise<SaveOutcome>;
 	};
+	/**
+	 * Where a voice note is turned into words. Optional and structural for the same reason as the inbox: a test without a
+	 * service says so by leaving it out, and `src/asr.ts` stays the file that knows what a transcription endpoint looks like.
+	 */
+	readonly asr?: {
+		transcribe(file: EventFile): Promise<Transcription>;
+	};
 	/** The clock the downtime log is kept to, in milliseconds. Injected so a test can hold a minute in no time. */
 	readonly now?: () => number;
+	/**
+	 * Posting a command's answer into the chat. Optional and structural, like the indicator: a test without a queue simply
+	 * records what was said, and `src/queue.ts` stays the file that knows one chat's minute.
+	 */
+	readonly reply?: (chatId: string, text: string) => Promise<void>;
 }
 
 /**
@@ -96,7 +139,21 @@ export interface PollSummary {
 /** What one update is worth posting, once the filter has answered and the attachment — if any — is on the volume. */
 type Prepared =
 	| { readonly kind: "skipped"; readonly reason: string }
-	| { readonly kind: "ready"; readonly chatId: string; readonly envelope: EventEnvelope };
+	/** `/help`: the relay describing itself, answered here and never posted to the door. */
+	| { readonly kind: "answered"; readonly chatId: string; readonly text: string }
+	| {
+			readonly kind: "ready";
+			readonly chatId: string;
+			/** What is posted first: a command when the message is one, otherwise the message. */
+			readonly envelope: EventEnvelope;
+			/**
+			 * The same update as an ordinary message, which a command falls back to when mason does not handle the word or
+			 * refuses it. A function rather than an envelope because the file it carried is fetched here — when, and only when,
+			 * the update turns out to be a message after all: a download spent on `/stop` is spent for nothing, and the photo
+			 * behind a mistyped `/stopp` is the thing the agent is being told about.
+			 */
+			readonly message?: () => Promise<EventEnvelope>;
+	  };
 
 export class Poller {
 	readonly #options: PollerOptions;
@@ -192,8 +249,16 @@ export class Poller {
 				this.#offset = update.update_id + 1;
 				continue;
 			}
+			if (prepared.kind === "answered") {
+				this.#say(prepared.chatId, prepared.text);
+				this.#offset = update.update_id + 1;
+				continue;
+			}
+			// The envelope being delivered. A command starts here and is replaced by the message when mason says it did not
+			// handle it or refuses it, so the retry after a door that was down re-posts whichever one is still owed.
+			let envelope = prepared.envelope;
 			for (;;) {
-				const delivery = await this.#options.door.fire(prepared.envelope);
+				const delivery = await this.#options.door.fire(envelope);
 				if (delivery.kind !== "unreachable") {
 					if (down > 0) {
 						this.#options.log(
@@ -204,10 +269,29 @@ export class Poller {
 						announcedAt = undefined;
 					}
 					fired += 1;
-					// Only an accepted fire is work in progress. A refusal (a disabled trigger face, a bad signature) means
-					// nobody is thinking about this message, and dots that stay up for a turn that never started are the
-					// interface lying.
-					if (delivery.kind === "accepted") this.#options.typing?.start(prepared.chatId);
+					if (delivery.kind === "refused" && envelope.kind === "command" && prepared.message !== undefined) {
+						// mason will not do this word with these words after it, and said why. The person's words are still a
+						// message, so the update becomes the one it always was — and the reason is posted into the chat, because a
+						// silent refusal is the one outcome worse than either. No loop risk: the fallback is a `chat.message`, and a
+						// refused message advances the offset.
+						this.#say(prepared.chatId, refusedLine(delivery.reason));
+						envelope = await prepared.message();
+						continue;
+					}
+					if (delivery.kind === "accepted" && envelope.kind === "command") {
+						if (!delivery.answer.handled && prepared.message !== undefined) {
+							// The word means nothing there, so the update is the message it always was. Nothing was fired, and the
+							// typing indicator is the message's to start.
+							envelope = await prepared.message();
+							continue;
+						}
+						const reply = delivery.answer.reply;
+						if (delivery.answer.handled && reply !== undefined) this.#say(prepared.chatId, reply);
+					} else if (delivery.kind === "accepted") {
+						// Only an accepted fire is work in progress. A command is not a turn, and dots for one would be the interface
+						// lying about what is running.
+						this.#options.typing?.start(prepared.chatId);
+					}
 					this.#offset = update.update_id + 1;
 					break;
 				}
@@ -242,12 +326,56 @@ export class Poller {
 		// Recorded before the door answers, because the chat is real whether or not this particular message got through:
 		// `list_chats` is where the agent may write, not a log of successful deliveries.
 		this.#options.chats.add(reading.chat);
-		const file = await this.#save(update.update_id, reading.attachment);
+		const command = commandIn(reading.event.text);
+		if (command !== undefined) {
+			if (isHelp(command)) return { kind: "answered", chatId: reading.chat.id, text: HELP_TEXT };
+			// The message envelope is built beside the command because a word mason does not handle is still a message. It is
+			// built lazily because the file is fetched there: a caption that is a command is not a message about a file, so a
+			// download is spent only once the word turns out to be a message after all.
+			return {
+				kind: "ready",
+				chatId: reading.chat.id,
+				envelope: commandEnvelopeFor(reading.event.updateId, command),
+				message: async () => envelopeFor(await this.#message(reading.event, reading.attachment)),
+			};
+		}
 		return {
 			kind: "ready",
 			chatId: reading.chat.id,
-			envelope: envelopeFor(file === undefined ? reading.event : { ...reading.event, file }),
+			envelope: envelopeFor(await this.#message(reading.event, reading.attachment)),
 		};
+	}
+
+	/**
+	 * The message as the door will see it: the file it carried, on the volume, and — when this container is configured with
+	 * one — what a transcription service heard in it.
+	 *
+	 * Both the file and its transcript are fetched here rather than in `src/envelope.ts`, which has no network and no
+	 * volume: a rendering function that posted a request would be a rendering function that could fail. Neither is fetched
+	 * per delivery attempt, which is what keeps a held batch from downloading or transcribing the same note twice.
+	 */
+	async #message(event: ChatEvent, attachment: Attachment | undefined): Promise<ChatEvent> {
+		const file = await this.#save(event.updateId, attachment);
+		if (file === undefined) return event;
+		const transcript = await this.#transcribe(event.updateId, file);
+		return { ...event, file, ...(transcript === undefined ? {} : { transcript }) };
+	}
+
+	/**
+	 * One line into the chat, through the queue the caller owns. A reply that could not be sent is one warning: the command
+	 * itself was answered, and a chat that did not read it must not cost the batch.
+	 *
+	 * Deliberately not awaited. The queue waits out a chat's twenty-a-minute window (`src/queue.ts`, a minute at its longest),
+	 * and this is one loop for every chat — a chat that did not read its answer must not hold the messages behind it, which
+	 * is the promise the README makes and the reason a `/stop` typed elsewhere is not stuck behind a `/status` reply. There
+	 * is nothing to wait for either way: an answer is posted, or it is logged.
+	 */
+	#say(chatId: string, text: string): void {
+		const reply = this.#options.reply;
+		if (reply === undefined) return;
+		void reply(chatId, text).catch((error: unknown) => {
+			this.#options.log("warn", `could not answer a command in chat ${chatId}: ${describeError(error)}`);
+		});
 	}
 
 	/**
@@ -274,6 +402,39 @@ export class Poller {
 		return undefined;
 	}
 
+	/**
+	 * What the transcription service heard, whether it heard nothing, or why it could not be asked — never undefined when
+	 * the question was worth asking.
+	 *
+	 * A failure is never fatal and never silent: the message goes out with the file exactly as it would have without a
+	 * service, plus a parenthetical saying the voice note could not be transcribed, because a person's spoken message that
+	 * arrives with no mention of its words is a message the agent answers as if it were empty. One log line, keyed by the
+	 * update id, names the reason and not the endpoint: `src/asr.ts` reduces the URL to its host before this ever sees it.
+	 *
+	 * Silence is not that case. It is a service that answered, about a clip that had no words in it, and it earns no
+	 * warning: the payload says `(the voice message was transcribed and says nothing)`, which is true, instead of the
+	 * failure sentence, which would not be.
+	 */
+	async #transcribe(updateId: number, file: EventFile): Promise<Transcript | undefined> {
+		const asr = this.#options.asr;
+		if (asr === undefined || !isSpeech(file.kind)) return undefined;
+		let outcome: Transcription;
+		try {
+			outcome = await asr.transcribe(file);
+		} catch (error) {
+			// `transcribe` answers its expected failures; this is the one it did not foresee, and it must not cost a message.
+			outcome = { kind: "failed", reason: describeError(error) };
+		}
+		if (outcome.kind === "text") return { kind: "text", text: outcome.text };
+		if (outcome.kind === "silent") return { kind: "silent" };
+		this.#options.log(
+			"warn",
+			`could not transcribe the ${file.kind} in update ${updateId} (${outcome.reason}); ` +
+				"delivering the message with the file and without a transcript",
+		);
+		return { kind: "unavailable" };
+	}
+
 	/** The offset and, when it grew, the chat list — in that order, so a crash between the two loses a chat, not a place. */
 	async #persist(): Promise<void> {
 		if (this.#offset !== undefined) await this.#options.state.writeOffset(this.#offset);
@@ -287,4 +448,15 @@ export class Poller {
 /** The wait before a batch the door could not take is tried again: 1 s, doubling, and no longer than half a minute. */
 export function reconnectWaitMs(failures: number): number {
 	return Math.min(RECONNECT_BACKOFF_MS * 2 ** Math.max(0, failures - 1), RECONNECT_BACKOFF_MAX_MS);
+}
+
+/**
+ * What a chat reads when the door refused a command: the door's own sentence, which is the only place the rule that was
+ * broken is written down. A refusal whose body carried nothing still says the one thing that matters — the word did not
+ * happen — rather than leaving the chat silent while the message it fell back to arrives.
+ */
+function refusedLine(reason: string | undefined): string {
+	return reason === undefined
+		? "mason could not run that command; it is being delivered as a message"
+		: `mason could not run that command: ${reason}; it is being delivered as a message`;
 }

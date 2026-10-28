@@ -11,8 +11,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
+import type { Transcription } from "../src/asr.ts";
 import { ChatDirectory } from "../src/chats.ts";
-import type { DoorResult } from "../src/door.ts";
+import { HELP_TEXT } from "../src/commands.ts";
+import type { DoorAnswer, DoorResult } from "../src/door.ts";
 import type { EventEnvelope, EventFile } from "../src/envelope.ts";
 import type { Attachment } from "../src/filter.ts";
 import type { SaveOutcome } from "../src/inbox.ts";
@@ -46,7 +48,7 @@ class RecordingDoor implements EventSink {
 	readonly #script: DoorResult[];
 	readonly #answer: DoorResult;
 
-	constructor(answer: DoorResult = { kind: "accepted" }, script: readonly DoorResult[] = []) {
+	constructor(answer: DoorResult = ACCEPTED, script: readonly DoorResult[] = []) {
 		this.#answer = answer;
 		this.#script = [...script];
 	}
@@ -55,6 +57,15 @@ class RecordingDoor implements EventSink {
 		this.envelopes.push(envelope);
 		return this.#script.shift() ?? this.#answer;
 	}
+}
+
+/** An accepted answer, as a message's `202` is: nothing was handled, and there is no line to post. */
+const ACCEPTED: DoorResult = { kind: "accepted", answer: { handled: false, reply: undefined } };
+
+/** An accepted answer to a command mason ran, and the line it wants posted. */
+function handled(reply: string): DoorResult {
+	const answer: DoorAnswer = { handled: true, reply };
+	return { kind: "accepted", answer };
 }
 
 function update(updateId: number, overrides: Record<string, unknown> = {}): TelegramUpdate {
@@ -79,6 +90,11 @@ function documentUpdate(updateId: number): TelegramUpdate {
 	});
 }
 
+/** The same message, carrying a voice note and no words: Telegram gives one no name and no size at all. */
+function voiceUpdate(updateId: number): TelegramUpdate {
+	return update(updateId, { text: undefined, voice: { file_id: "v1", file_unique_id: "vu1" } });
+}
+
 /** What the door is told, from an inbox that answered the same thing every time: saving is `src/inbox.ts`'s test. */
 class StubInbox {
 	readonly saved: { attachment: Attachment; updateId: number }[] = [];
@@ -95,6 +111,22 @@ class StubInbox {
 	}
 }
 
+/** What a transcription service heard, and which files it was asked about: what it does with them is `src/asr.ts`'s test. */
+class StubAsr {
+	readonly asked: EventFile[] = [];
+	readonly #answer: Transcription | Error;
+
+	constructor(answer: Transcription | Error) {
+		this.#answer = answer;
+	}
+
+	async transcribe(file: EventFile): Promise<Transcription> {
+		this.asked.push(file);
+		if (this.#answer instanceof Error) throw this.#answer;
+		return this.#answer;
+	}
+}
+
 interface Rig {
 	readonly state: StateFiles;
 	readonly poller: Poller;
@@ -102,6 +134,8 @@ interface Rig {
 	readonly door: RecordingDoor;
 	readonly chats: ChatDirectory;
 	readonly lines: string[];
+	readonly said: { readonly chatId: string; readonly text: string }[];
+	readonly started: string[];
 	readonly directory: string;
 }
 
@@ -110,8 +144,14 @@ async function rig(
 	options: {
 		readonly offset?: number;
 		readonly door?: DoorResult;
+		/** One answer per fire, for the tests where the first delivery is not the answer the second one gets. */
+		readonly script?: readonly DoorResult[];
 		readonly chats?: ChatDirectory;
 		readonly inbox?: StubInbox;
+		/** A voice note's transcription, when the test wants one; absent is a container with no service configured. */
+		readonly asr?: StubAsr;
+		/** Appended after the recording, so a test can make an answer wait the way a spent chat window does. */
+		readonly reply?: (chatId: string, text: string) => Promise<void>;
 	} = {},
 ): Promise<Rig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -119,9 +159,11 @@ async function rig(
 	const state = new StateFiles(directory);
 	if (options.offset !== undefined) await state.writeOffset(options.offset);
 	const api = new ScriptedUpdates(batches);
-	const door = new RecordingDoor(options.door);
+	const door = new RecordingDoor(options.door, options.script);
 	const chats = options.chats ?? new ChatDirectory(await state.readChats());
 	const lines: string[] = [];
+	const said: { chatId: string; text: string }[] = [];
+	const started: string[] = [];
 	const poller = new Poller({
 		api,
 		state,
@@ -129,9 +171,33 @@ async function rig(
 		chats,
 		log: createLog([], (line) => lines.push(line)),
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
+		reply: async (chatId, text) => {
+			said.push({ chatId, text });
+			await options.reply?.(chatId, text);
+		},
+		typing: { start: (chatId) => started.push(chatId) },
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
+		...(options.asr === undefined ? {} : { asr: options.asr }),
 	});
-	return { state, poller, api, door, chats, lines, directory };
+	return { state, poller, api, door, chats, lines, said, started, directory };
+}
+
+/**
+ * A promise that must settle within `ms`. A poller that waits for a queued answer would otherwise hang the suite rather
+ * than fail it, and a hang says nothing about which line did it.
+ */
+async function within<T>(what: string, work: Promise<T>, ms = 2_000): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			work,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(`${what} did not happen within ${ms} ms`)), ms);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 async function readOffset(state: StateFiles, directory: string): Promise<unknown> {
@@ -160,6 +226,7 @@ async function pollAgainstDoor(
 		readonly offset?: number;
 		readonly stopAfter?: number;
 		readonly inbox?: StubInbox;
+		readonly asr?: StubAsr;
 	} = {},
 ): Promise<DownRig> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-telegram-"));
@@ -168,7 +235,7 @@ async function pollAgainstDoor(
 	await state.writeOffset(options.offset ?? 100);
 	const waits: number[] = [];
 	const lines: string[] = [];
-	const door = new RecordingDoor(script.at(-1) ?? { kind: "accepted" }, script);
+	const door = new RecordingDoor(script.at(-1) ?? ACCEPTED, script);
 	const controller = new AbortController();
 	let clock = 0;
 	const stopAfter = options.stopAfter ?? Number.POSITIVE_INFINITY;
@@ -181,6 +248,7 @@ async function pollAgainstDoor(
 		filter: { allowedChats: new Set(["-1001234"]), botUsername: "mason_bot" },
 		now: () => clock,
 		...(options.inbox === undefined ? {} : { inbox: options.inbox }),
+		...(options.asr === undefined ? {} : { asr: options.asr }),
 		sleep: async (ms) => {
 			waits.push(ms);
 			clock += ms;
@@ -252,7 +320,7 @@ describe("the offset on a restart", () => {
 			[
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 		);
 
@@ -269,10 +337,10 @@ describe("the offset on a restart", () => {
 	it("keeps the whole batch when the door is down, so the update after it is not skipped either", async () => {
 		const down = await pollAgainstDoor(
 			[
-				{ kind: "accepted" },
+				ACCEPTED,
 				{ kind: "unreachable", error: "the door answered 429 with a 3600s wait" },
-				{ kind: "accepted" },
-				{ kind: "accepted" },
+				ACCEPTED,
+				ACCEPTED,
 			],
 			{ batches: [[update(100), update(101)]], offset: 100 },
 		);
@@ -296,7 +364,7 @@ describe("the offset on a restart", () => {
 		const down = await pollAgainstDoor(
 			[
 				{ kind: "unreachable", error: "the door answered 500: the integration's hook is not a hook" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 			{ stopAfter: 1 },
 		);
@@ -398,13 +466,317 @@ describe("a message with a file", () => {
 			[
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
 				{ kind: "unreachable", error: "connect ECONNREFUSED" },
-				{ kind: "accepted" },
+				ACCEPTED,
 			],
 			{ batches: [[documentUpdate(100)]], offset: 100, inbox },
 		);
 
 		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
 		assert.equal(inbox.saved.length, 1, "a 20 MiB download is not repeated for every retry");
+	});
+});
+
+describe("a voice note", () => {
+	const NOTE: EventFile = {
+		path: "/home/mason/.mason/agent/workspace/inbox/100-voice-vu1.ogg",
+		name: "100-voice-vu1.ogg",
+		size: 40_960,
+		kind: "voice",
+	};
+
+	it("fires exactly the payload it fired before, when no transcription service is configured", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			`Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note, with a file at ${NOTE.path}`,
+			"no service, no transcript, no parenthetical: byte for byte what this container always sent",
+		);
+		assert.doesNotMatch(lines.join("\n"), /transcri/);
+	});
+
+	it("carries what the service heard, labelled, and still names the file", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "text", text: "can you check the pricing sheet before Thursday" });
+		const { poller, door } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note\n" +
+				"[transcript of the voice message, spoken and not typed by the sender]\n" +
+				"can you check the pricing sheet before Thursday\n" +
+				`[end of transcript], with a file at ${NOTE.path}`,
+			"the words and the bytes, in one event: the transcript does not replace the path",
+		);
+		assert.deepEqual(asr.asked, [NOTE], "asked once, about the file the inbox had just written");
+	});
+
+	it("delivers the message with a parenthetical and one log line when the service failed", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "failed", reason: "asr.local:9000 answered 500" });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), " +
+				`with a file at ${NOTE.path}`,
+			"the message arrives as it would have without a service, and says what is missing",
+		);
+		const complaints = lines.filter((line) => line.includes("could not transcribe the voice in update 100"));
+		assert.equal(complaints.length, 1, "one line per update, keyed by the id");
+		assert.match(complaints[0] ?? "", /asr\.local:9000 answered 500/);
+		assert.doesNotMatch(complaints[0] ?? "", /http/, "the endpoint is named by its host, never by a URL that may carry a token");
+	});
+
+	it("passes a silent transcript through as silence, with no warning to an operator", async () => {
+		// The service answered: there were no words in the clip. That is not the failure sentence, and it is not the empty
+		// payload a reader would take for a bug either.
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "silent" });
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message was transcribed and says " +
+				`nothing), with a file at ${NOTE.path}`,
+		);
+		assert.doesNotMatch(lines.join("\n"), /could not transcribe/, "a service that answered is not a service to complain about");
+	});
+
+	it("is the same parenthetical when the transcriber throws, because a bug there is not a lost message", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr(new Error("ENOTFOUND asr.local"));
+		const { poller, door, lines } = await rig([[voiceUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(
+			door.envelopes[0]?.payload,
+			"Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), " +
+				`with a file at ${NOTE.path}`,
+		);
+		assert.match(lines.join("\n"), /could not transcribe the voice in update 100 \(ENOTFOUND asr\.local\)/);
+	});
+
+	it("is not asked about a file nobody spoke into", async () => {
+		const file: EventFile = { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 4_096, kind: "document" };
+		const inbox = new StubInbox({ kind: "saved", file });
+		const asr = new StubAsr({ kind: "text", text: "never read" });
+		const { poller, door } = await rig([[documentUpdate(100)]], { offset: 100, inbox, asr });
+
+		await poller.pollOnce();
+
+		assert.equal(asr.asked.length, 0, "a document is not speech, and a round trip for it is spent for nothing");
+		assert.equal(
+			door.envelopes[0]?.payload,
+			`Ilya (@ilya) in chat -1001234 (Team chat): sent a file: report.pdf, with a file at ${file.path}`,
+		);
+	});
+
+	it("is asked once even when the door holds the batch and the envelope is posted again", async () => {
+		const inbox = new StubInbox({ kind: "saved", file: NOTE });
+		const asr = new StubAsr({ kind: "text", text: "ship it" });
+		const down = await pollAgainstDoor(
+			[
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				{ kind: "unreachable", error: "connect ECONNREFUSED" },
+				ACCEPTED,
+			],
+			{ batches: [[voiceUpdate(100)]], offset: 100, inbox, asr },
+		);
+
+		assert.equal(down.door.envelopes.length, 3, "the same message, three attempts");
+		assert.equal(asr.asked.length, 1, "a held batch does not post the same voice note to the service three times");
+	});
+});
+
+describe("a command in the chat", () => {
+	it("posts a slash message as a command, posts the answer, and fires no turn", async () => {
+		// A group sends `/stop@mason_bot`, and the mention stripper has already left `/stop` by the time the filter answers.
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stop@mason_bot" })]], {
+			offset: 100,
+			door: handled("stopped"),
+		});
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [{ v: 1, id: "tg-100", kind: "command", payload: "stop" }]);
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "stopped" }], "the chat reads the one line mason answered");
+		assert.deepEqual(started, [], "a command is not a turn, so nothing is typing");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("sends the message it kept when mason says it did not handle the word", async () => {
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stopp" })]], {
+			offset: 100,
+			door: ACCEPTED,
+		});
+
+		await poller.pollOnce();
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stopp"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stopp"],
+			],
+			"the same update, delivered as the message it always was",
+		);
+		assert.deepEqual(said, []);
+		assert.deepEqual(started, ["-1001234"], "the message is the thing a turn is started for");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("does not wait for an answer that is still queued, so one chat cannot hold the batch", async () => {
+		// The send queue waits out a chat's twenty-a-minute window, which can be a minute, and this is one loop for every
+		// chat: an answer parked there would put a `/stop` typed in another chat behind a spent window it has nothing to do
+		// with. Both answers are handed over, and neither is waited for.
+		let release!: () => void;
+		const queued = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { poller, door, state, directory, said } = await rig(
+			[[update(100, { text: "/help" }), update(101, { text: "/stop" }), update(102, { text: "ship it?" })]],
+			{ offset: 100, door: handled("stopped"), reply: () => queued },
+		);
+
+		await within("a batch whose answers are still queueing", poller.pollOnce());
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => envelope.kind),
+			["command", "chat.message"],
+			"the command and the message behind it went out while both answers were still waiting for their window",
+		);
+		assert.deepEqual(await readOffset(state, directory), { offset: 103 });
+		assert.deepEqual(
+			said.map((line) => line.text),
+			[HELP_TEXT, "stopped"],
+			"both were handed to the queue; the batch did not wait for either",
+		);
+		release();
+	});
+
+	it("fetches the file a caption carried once the command turns out to be a message", async () => {
+		// The command fetches nothing, because a caption that is a command is not a message about a file. The fallback
+		// fetches it, because the update has become a message and a photo nobody mentions is a message about something
+		// else. It is fetched once however many times the door has to be told.
+		const file: EventFile = { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 1, kind: "document" };
+		const inbox = new StubInbox({ kind: "saved", file });
+		const { poller, door } = await rig(
+			[
+				[
+					update(100, {
+						text: undefined,
+						caption: "/stopp",
+						document: { file_id: "f1", file_unique_id: "u1", file_name: "report.pdf" },
+					}),
+				],
+			],
+			{ offset: 100, door: ACCEPTED, inbox },
+		);
+
+		await poller.pollOnce();
+
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stopp"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stopp, with a file at /inbox/100-report.pdf"],
+			],
+			"the photo the caption carried is named in the message the agent actually reads",
+		);
+		assert.deepEqual(inbox.saved.map((saved) => saved.updateId), [100], "fetched once, and only for the message");
+	});
+
+	it("falls back to the message when the door refuses the command, and posts the rule it broke", async () => {
+		const reason = '"stop" takes no argument: a command is one word, and only "compact" reads what follows it';
+		const { poller, door, state, directory, said, started } = await rig([[update(100, { text: "/stop now" })]], {
+			offset: 100,
+			script: [{ kind: "refused", status: 400, reason }, ACCEPTED],
+		});
+
+		await poller.pollOnce();
+
+		// A refused command is not a refused message: the offset still advances, and the person's words still arrive — but
+		// the door's own sentence about the rule goes into the chat first, because a silent chat was the worst answer of the
+		// three the design had.
+		assert.deepEqual(
+			door.envelopes.map((envelope) => [envelope.kind, envelope.payload]),
+			[
+				["command", "stop now"],
+				["chat.message", "Ilya (@ilya) in chat -1001234 (Team chat): /stop now"],
+			],
+		);
+		assert.deepEqual(said, [
+			{
+				chatId: "-1001234",
+				text: `mason could not run that command: ${reason}; it is being delivered as a message`,
+			},
+		]);
+		assert.deepEqual(started, ["-1001234"], "the message is the thing a turn is started for");
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("answers /help itself, without posting anything to mason", async () => {
+		const { poller, door, state, directory, said } = await rig([[update(100, { text: "/help" })]], { offset: 100 });
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [], "the relay describing itself is not a request");
+		assert.deepEqual(said, [{ chatId: "-1001234", text: HELP_TEXT }]);
+		assert.deepEqual(await readOffset(state, directory), { offset: 101 });
+	});
+
+	it("is posted in the same batch as the message before it, so /stop does not wait for the turn it stops", async () => {
+		const { poller, door, said } = await rig(
+			[[update(100, { text: "write the report" }), update(101, { text: "/stop" })]],
+			{ offset: 100, door: handled("stopped") },
+		);
+
+		await poller.pollOnce();
+
+		// The poller's only wait is the door's answer, and a running turn is not one: both updates go out in order and the
+		// command is the second envelope before the first turn has reported anything.
+		assert.deepEqual(
+			door.envelopes.map((envelope) => envelope.kind),
+			["chat.message", "command"],
+		);
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "stopped" }]);
+	});
+
+	it("does not fetch the file a command's caption carried", async () => {
+		// A caption that is a command is not a message about a file, and a 20 MiB download spent on `/stop` is spent for
+		// nothing. The words are the whole envelope.
+		const inbox = new StubInbox({ kind: "saved", file: { path: "/inbox/100-report.pdf", name: "100-report.pdf", size: 1, kind: "document" } });
+		const { poller, door, said } = await rig(
+			[
+				[
+					update(100, {
+						text: undefined,
+						caption: "/compact keep the pricing thread",
+						document: { file_id: "f1", file_unique_id: "u1", file_name: "report.pdf" },
+					}),
+				],
+			],
+			{ offset: 100, door: handled("compacted"), inbox },
+		);
+
+		await poller.pollOnce();
+
+		assert.deepEqual(door.envelopes, [
+			{ v: 1, id: "tg-100", kind: "command", payload: "compact keep the pricing thread" },
+		]);
+		assert.equal(inbox.saved.length, 0, "no download for a command");
+		assert.deepEqual(said, [{ chatId: "-1001234", text: "compacted" }]);
 	});
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mason's boot: the five things the server cannot do for itself, then the server.
+# mason's boot: the six things the server cannot do for itself, then the server.
 #
 # Runs as the unprivileged `mason` user, from the repo root (the image's WORKDIR, /app), on first boot and on every boot
 # after it. Each step is idempotent and prints one `[deploy]` line saying what it did, in the shape the server's own
@@ -13,8 +13,9 @@
 #   3. the env host key — pinned into the file the server reads at import time (PI_ENV_SSH_KNOWN_HOSTS);
 #   4. the integrations — the operator's mounted file, copied into the service half, because the copy is what the server
 #      reads and what `npm run integration` writes;
-#   5. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
-#   6. the server, with the SSH target it reads from the environment.
+#   5. the bot's own files — `soul.md` and a starter `skills/` tree, installed once and never overwritten;
+#   6. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
+#   7. the server, with the SSH target it reads from the environment.
 set -euo pipefail
 
 : "${MASON_HOME:?mason-entrypoint: MASON_HOME is not set (deploy/compose.yaml sets it)}"
@@ -97,7 +98,7 @@ chmod 0600 "$ssh_dir/id_ed25519"
 if ! install -m 0600 "$ssh_dir/id_ed25519.pub" /run/env-keys/authorized_keys 2>/dev/null; then
   echo "[deploy] cannot write /run/env-keys/authorized_keys as uid $(id -u): the env-keys volume is not writable." >&2
   echo "[deploy] the volume was created before the image owned that directory; recreate it with:" >&2
-  echo "[deploy]   docker compose down && docker volume rm env-keys" >&2
+  echo "[deploy]   docker compose down && docker volume rm ${MASON_ENV_KEYS_VOLUME:-env-keys}" >&2
   exit 1
 fi
 echo "[deploy] published $ssh_dir/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys"
@@ -160,7 +161,61 @@ else
   echo "[deploy] no integrations.json in $MASON_INTEGRATIONS_SRC: $integrations_target left as it is"
 fi
 
-# 5. The roster, from TEAM, only on a home that has none.
+# 5. The bot's own files: a soul, and a starter kit of skills.
+#
+# Both are the operator's, not the server's: `soul.md` is written by a person and the bot has no path to it, and the
+# skills are seeds the bot then owns and rewrites. That is why neither is ever restored over an existing file — a second
+# boot that re-installed them would undo the bot's own edits and, in the soul's case, a person's.
+#
+# The directory is optional on purpose (`MASON_BOT_SRC` may name one with neither): a deployment that ships no soul gets
+# DEFAULT_SOUL on a fresh home, which is what every deployment did before this step existed.
+bot_dir="${MASON_BOT_SRC:-/run/bot}"
+soul_target="$service_dir/soul.md"
+if [ ! -f "$bot_dir/soul.md" ]; then
+  echo "[deploy] no soul.md in $bot_dir: the home keeps its own, or DEFAULT_SOUL on a fresh one"
+elif [ -f "$soul_target" ] && [ "${MASON_BOT_FORCE:-0}" != "1" ]; then
+  # A home that has booted once always has a soul.md, because the server writes DEFAULT_SOUL into a fresh one. That is not
+  # a person's file in that case, and the message has to say how to replace it, or a deployment that was given a soul
+  # months after it started runs the default one forever and never learns why.
+  echo "[deploy] soul.md present: not overwriting it from $bot_dir (remove $soul_target, or boot once with" \
+    "MASON_BOT_FORCE=1, if you meant to install this one)"
+else
+  install -m 0600 "$bot_dir/soul.md" "$soul_target"
+  echo "[deploy] installed soul.md from $bot_dir"
+fi
+
+seed_skills() {
+  local source="$bot_dir/skills"
+  [ -d "$source" ] || return 0
+  local seeded=0
+  for candidate in "$source"/*/; do
+    [ -d "$candidate" ] || continue
+    local name
+    name="$(basename "$candidate")"
+    # A directory with no SKILL.md is not a skill the index can see. Seeding it would be worse than skipping it: the copy
+    # takes the name, and the next boot refuses the operator's corrected directory because something is already there.
+    if [ ! -f "$candidate/SKILL.md" ]; then
+      echo "[deploy] $source/$name has no SKILL.md: skipped" >&2
+      continue
+    fi
+    # A skill of the same name is the bot's own (or mason's shipped one, already seeded): leave it alone.
+    if [ -e "$agent_dir/skills/$name" ]; then
+      echo "[deploy] skill \"$name\" present: not overwriting it"
+      continue
+    fi
+    # A starter kit is optional, so a failure to copy one is not a reason to refuse the boot: say so and keep going.
+    if ! install -d -m 0700 "$agent_dir/skills" || ! cp -R "$candidate" "$agent_dir/skills/$name"; then
+      echo "[deploy] could not seed skill \"$name\" into $agent_dir/skills" >&2
+      continue
+    fi
+    seeded=$((seeded + 1))
+    echo "[deploy] seeded skill \"$name\" from $source"
+  done
+  [ "$seeded" -gt 0 ] || echo "[deploy] no new skills in $source"
+}
+seed_skills
+
+# 6. The roster, from TEAM, only on a home that has none.
 #
 # Names are written by `npm run team -- add`, not by this script: the CLI owns validation and the file's mode, and a
 # second writer would be a second spelling of the rule.
@@ -193,7 +248,7 @@ else
   fi
 fi
 
-# 6. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
+# 7. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
 export PI_ENV_SSH_HOST="$MASON_ENV_HOST"
 export PI_ENV_SSH_USER="$MASON_ENV_USER"
 export PI_ENV_SSH_PORT="$MASON_ENV_PORT"

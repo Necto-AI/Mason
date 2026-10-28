@@ -1,27 +1,55 @@
 # mason-telegram
 
 The first integration built on the two faces of
-[ADR-0003](../../docs/adr/0003-integrations-are-services.md): one container that lends mason two tools and wakes it when
+[ADR-0003](../../docs/adr/0003-integrations-are-services.md): one container that lends mason three tools and wakes it when
 the team chat says something. It is a package of its own — its own `package.json`, its own tests, its own image — and
 nothing in mason's build depends on it: mason knows `http://mason-telegram:8082/mcp` and a trigger secret, and the rest
 is Telegram's business.
 
 It never speaks as the owner: no transcript, no roster, no `send_to_user`. Its whole vocabulary is one event out and one
-message back.
+message or one file back.
 
 ## The tools face — MCP over Streamable HTTP on `:8082/mcp`
 
 | Tool | What it does |
 |---|---|
 | `send_message(chat_id, text, reply_to_message_id?)` | Sends a message to a Telegram chat and returns the id of the message it created. Queued per chat at 20 a minute. |
+| `send_file(chat_id, path, caption?)` | Sends a file that is already in the inbox: a photo renders in the chat and anything else arrives as a download. Queued per chat at 20 a minute. |
 | `list_chats()` | Lists the chats the poller has seen — `{id, title, type}` — so the agent can find an id without a human pasting one. |
 
 Nothing else is offered, and the container answers nothing on any other path. The endpoint is stateless: no session id,
-no per-session state, one `McpServer` and transport per request over the same two tools, so either end restarting is
+no per-session state, one `McpServer` and transport per request over the same three tools, so either end restarting is
 a reconnect rather than a stale session.
 
 A `429` is not retried blindly: Telegram's own `retry_after` is honoured in its place, at most three times, and a wait
 longer than a minute ends the tool call with a message the model can act on instead of holding it open.
+
+### Files go back the same way
+
+`send_file` is the other half of the inbox. The directory an attachment is written to is the only one the relay and the
+tool machine share, so it is also the only place a file may be sent *from*: the agent writes the file there with its own
+`write`, then names that absolute path. A path outside it is refused, because the relay reading the profile, the log, the
+skills and the memory repository is exactly the boundary the deployment exists to keep. So is a symlink that escapes, a
+`..` that lands outside, a directory, and a file that is not there. Every refusal is one sentence the model reads, and it
+says what to do instead: `there is no file at …; write it into the inbox first`.
+
+A photo renders in the chat and a document arrives as a download, decided by the extension and nothing else. The caps are
+Telegram's own, and a file over one is refused with the number rather than cut:
+
+| The file | The call | The cap |
+|---|---|---|
+| `.png` `.jpg` `.jpeg` `.webp` | `sendPhoto` | 10 MiB |
+| anything else | `sendDocument` | 50 MiB |
+
+A caption is optional and capped at 1 024 characters, and a longer one is refused rather than shortened: a caption
+silently cut is a message that says something the agent did not write. The name the file arrives under is its basename,
+sanitised by the same rule the inbox writes a name under, so a name is never a path. On success the answer has the shape
+`send_message` answers with, which is what gives the model one idiom for "this reached a person":
+
+```text
+→ send_file {chat_id: "-1001234", path: "/home/mason/.mason/agent/workspace/inbox/chart.png", caption: "last week"}
+← {"chat_id":"-1001234","message_id":8815}
+```
 
 ## The trigger face — long polling into the event door
 
@@ -35,6 +63,9 @@ longer than a minute ends the tool call with a message the model can act on inst
 
 - `id` is `tg-<update_id>`, and an update id is unique per bot and monotonic, so the door's permanent dedupe turns a
   redelivery after a crash into the same event rather than a second one.
+- A message whose text starts with `/` is posted as
+  `{"v":1,"id":"tg-8811","kind":"command","payload":"stop"}` instead, and does not fire a turn. Mason decides what the
+  word means; the section below is what this container does with the answer.
 - The chat id is inside the payload on purpose: the reply needs it, and `payload` is a string.
 - The reply clause appears only when it is a reply, the handle only when the sender has one, and the title only when the
   chat has one — a private chat has none, and a stable rendering beats empty brackets.
@@ -49,7 +80,10 @@ longer than a minute ends the tool call with a message the model can act on inst
   ```
 
   A photo with no caption reads `…: sent a photo, with a file at …`, a voice note `…: sent a voice note, with a file at …`:
-  the sentence says what arrived, and the clause says where it is.
+  the sentence says what arrived, and the clause says where it is. A voice note that was transcribed carries the words in
+  a labelled block just before that clause, one transcribed as silence says `(the voice message was transcribed and says
+  nothing)`, and one that could not be transcribed carries `(the voice message could not be transcribed)` — the section
+  below is the whole of it.
 - A message longer than the door's 2 000-character payload cap is cut here with `… [truncated]`, because the door refuses
   an over-long payload rather than truncating it and a refusal advances the offset — the event would be lost. The cut is
   on the text, never on the file clause: a caption loses its own words before a payload loses the path.
@@ -68,12 +102,13 @@ longer than a minute ends the tool call with a message the model can act on inst
     backoff that starts at a second and doubles to half a minute, with one log line a minute while it is down and one
     when it answers again. Redelivery is free because a batch's ids are the update ids, and the door dedupes on them.
 
-**What is dropped, and where.** A message from a bot, an edit, a chat that is not in `TELEGRAM_ALLOWED_CHATS`, and
-anything that is neither words nor a file (a sticker, a location, a poll, a service notice) never becomes an event, and a
-chat we did not choose never enters `list_chats` either. Commands are delivered: `/start` and `/command@this_bot` are what
-a person typed in a chat we chose, and deciding here which commands mean something would be this container guessing at
-what the agent should hear. The bot's own `@mention` is stripped (case-insensitively, via `getMe` at startup) and
-everything else in the message is kept verbatim.
+**What is dropped, and where.** A message from a bot, an edit, a message whose chat id and sender's @username are both
+absent from `TELEGRAM_ALLOWED_CHATS`, and anything that is neither words nor a file (a sticker, a location, a poll, a
+service notice) never becomes an event, and no chat enters `list_chats` unless a message in it was admitted. A word that
+starts with `/` takes the command path below and is never dropped for being one: `/help` is answered here, and every
+other word is posted to mason, which answers whether it acted. The bot's own `@mention` is stripped (case-insensitively,
+via `getMe` at startup), and everything else in the message is kept verbatim, which is also how a group sends
+`/stop@mason_bot`.
 
 **Files arrive as a path, because the agent reads one.** A photo, a document, a voice note, an audio file or a video is
 written to `TELEGRAM_INBOX` as `<update_id>-<the sender's name, sanitised>` with mode `0600`, and the payload ends with
@@ -84,12 +119,118 @@ how the agent tells a file that arrived from one that could not be fetched. Anyt
 a sweep on every write and once at startup, because nobody else watches that volume. `mason-telegram` and `mason-env`
 mount it at the same path (`mason-inbox`, declared in `deploy/compose.yaml`), which is what makes a path in a payload a
 file `read` opens on the other side — and the mount is a directory of its own, so the rest of the agent's home (the
-profile, the log, the skills, the memory repository) stays out of this container.
+profile, the log, the skills, the memory repository) stays out of this container. The other direction costs nothing extra:
+a file the agent writes into that same directory is one `send_file` may name, so the volume is the bridge both ways.
+
+**A voice note arrives as words as well, when there is a service to ask.** The agent has no tool that reads Ogg/Opus, so
+with `TELEGRAM_ASR_URL` set, the file that just landed in the inbox is posted to it — `multipart/form-data`, one `file`
+part holding **the bytes exactly as they landed**, the inbox name as the filename — and the answer, `{"text": "…"}`, goes
+into the payload as a labelled block, with the path still the last thing in it:
+
+```text
+Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note
+[transcript of the voice message, spoken and not typed by the sender]
+can you check the pricing sheet before Thursday
+[end of transcript], with a file at /home/mason/.mason/agent/workspace/inbox/8811-voice-u1.ogg
+```
+
+The label and the closing line are the point: the words are what a service heard, not what the person typed, and neither
+the model nor a reader should have to infer that. **Nothing is re-encoded, resampled or rewrapped on the way out**: the
+inbox file is posted as it is, and decoding audio is the service's side of the contract, so a voice note's Ogg, an
+`audio`'s MP3 and a round video's MP4 all travel as they landed. The service takes one `file` part and may take an
+optional `model` field; this container sends no model and leaves the choice to the service. It is attempted for the three
+kinds somebody spoke into — a voice note, an audio file and a round video note — and for nothing else.
+
+**The endpoint this is written for is mason's own Parakeet service (`asr/`), not a general-purpose phonon box.** On a
+5.3 s Russian clip a phonon container on the host answered English gibberish, while `asr/transcribe.py` on the same clip
+gave the right Russian at rtf 0.07 on CPU — and this bot is Russian-first, so the model is the setting that decides
+whether a transcript is worth carrying at all. A plain-text body is still read as the transcript, the other shape this
+setting accepted from the start, but `{"text": "…"}` is the contract: extra fields (`words`, timings, the model's name)
+are the service's business and are ignored here. The contract has two ends — this container posts the file exactly as it
+landed and reads `text`; the service decodes whatever audio it is given and answers what was said.
+
+**What it costs is one HTTP round trip per voice message, and the message waits for it**: the request is made while the
+batch is being prepared, so a voice note being transcribed holds the messages behind it for up to the timeout (12 s), and
+that held batch includes a `/stop` typed in the same breath — the one thing that has to arrive while a turn is running.
+Twelve seconds is about three minutes of speech at the rtf mason's service measures (0.07) and bounds a service that is
+down at a dozen seconds rather than twenty; past it the message goes on with the sentence that says the note could not be
+transcribed. The request is made once, so a door that holds the batch does not post the same note again on every retry.
+A file over 4 MiB is not posted at all — a voice note is a few hundred kilobytes a minute, and a 20 MiB podcast is not
+one — and with the variable unset nothing is asked and the payload is byte for byte what this container sent before the
+setting existed.
+The endpoint is called directly rather than through `HTTPS_PROXY` — the sidecar is Telegram's route — so the address has
+to be one this container can reach as it stands, such as a service on the compose network.
+
+**Silence is a success, and the payload says which.** `{"text": ""}` means the clip was transcribed and there were no
+words in it — a cough, a room with nobody talking, a note recorded by accident — and the sentence then reads `…: sent a
+voice note (the voice message was transcribed and says nothing), with a file at …`. That is deliberately not the failure
+sentence: a service that answered has told the agent something true about the message, and calling it a failure would
+tell it something false.
+
+**Its failure mode is a sentence on the event, never a lost message.** A service that is down, a timeout, a non-`200`, a
+body that is not the promised shape — half a document, a `text` that is not a string, an array — or a file too large:
+the event goes out exactly as it would have without a service, with a parenthetical on the sentence —
+
+```text
+Ilya (@ilya) in chat -1001234 (Team chat): sent a voice note (the voice message could not be transcribed), with a file at /home/mason/.mason/agent/workspace/inbox/8811-voice-u1.ogg
+```
+
+— so the agent knows the voice message's words are missing, rather than answering a message that looks empty. One log line
+per update names the update id and the reason, and names the endpoint by its host and never by its URL, which is where a
+token would be. The transcript is fitted like a caption: an over-long one is cut with `… [truncated]`, and the file path
+is still the thing that never gives way.
 
 **The offset.** `offset.json` on the container's own volume (`/data`), written whole — temporary file, rename, `0600` —
 once per batch, not once per message: a crash mid-batch replays at most one batch, and the id makes the replay the same
 fire. A container whose volume has never held an offset reads `getUpdates` once with no offset, discards the backlog and
 starts from now, because a restart must never replay yesterday's chat into the agent. `chats.json` sits beside it.
+
+## Commands: what a chat can ask for
+
+A message whose text starts with `/` is a command candidate: it is posted to the same door as `kind: "command"`, with
+the word after the slash as the payload, and it does not fire a turn. Mason decides what the word means, because the
+vocabulary is mason's (`src/server/events.ts`), and this container relays the answer.
+
+| What a person types | What happens |
+|---|---|
+| `/stop` | The running turn is stopped, and the chat reads `stopped`. |
+| `/compact` | The conversation is summarised, and the chat reads `compacted`. Words after the command are the instructions mason passes on. |
+| `/clear` | The conversation is forgotten and started again, and the chat reads `cleared`. |
+| `/status` | One line: what the agent is doing, what is queued, which integrations answered at boot, and how many did not. |
+| `/help` | The paragraph below, answered here and never sent to mason. |
+
+An integration declares which of those its secret may issue (`npm run integration -- commands telegram
+stop,compact,clear,status` on the mason side); with none declared, every one of them is a message. **A word mason does
+not act on is not an error**: the door answers `{"handled":false}`, and this container posts the message it kept beside
+the command, so `/start`, `/foo` and a mistyped `/stopp` reach the agent as the text they were. A declared command that is
+malformed (an argument where mason takes none, more than 200 characters of instructions to `/compact`) is refused with a
+`400`, and that falls back the same way with one difference: the door's own sentence about the rule that was broken is
+posted into the chat first, so `/stop now` tells the person why the word did not happen before the text arrives. The
+offset advances over both, because neither is something a retry would get a different answer to.
+
+The command envelope carries the id its message would have had, so a redelivery is one claim at the door and the command
+does not run twice. `/help` answers with what this relay forwards, because it cannot read `integrations.json`:
+
+A file is fetched for the message, never for the command: a caption that is a command is not a message about a file, so a
+20 MiB download is not spent on a word mason may act on. The exception is the fallback — a word mason did not handle, or
+refused — because then the update *is* a message, and the file is fetched and named in it at that point, once, however
+many times the door has to be told.
+
+```text
+mason understands these commands in this chat, when the integration declares them:
+/stop: stop the turn that is running
+/compact: summarise the conversation so far, with optional instructions
+/clear: forget the conversation and start again
+/status: what the agent is doing, and what is connected
+Anything else you type, including any other /word, arrives as a message.
+```
+
+The same four names are set as Telegram's own bot command menu (`setMyCommands`) before the first poll, so typing `/` in
+the chat shows them; a menu Telegram refuses is one warning and nothing else. A command is posted in the batch it arrived
+in, immediately, because a turn that is running is not something the poller waits on: `/stop` reaches mason while the turn
+it stops is still running. The answer is posted through the same per-chat send queue as `send_message`, so Telegram's
+twenty-a-minute limit stays one file's problem, and a failed answer is a logged warning rather than a held batch: the
+command was answered, and a chat that did not read the answer must not block the messages behind it.
 
 ## Configuration — the environment, and nothing else
 
@@ -98,10 +239,11 @@ starts from now, because a restart must never replay yesterday's chat into the a
 | `TELEGRAM_BOT_TOKEN` | yes | The bot's credential, from BotFather. Never logged, never written, never inside a payload. |
 | `MASON_EVENT_URL` | yes | Where events go: `http://mason:8787/api/events/telegram` on the compose network. |
 | `MASON_TRIGGER_SECRET` | yes | The HMAC key the door verifies with, at least 32 characters. Minted by `npm run integration -- secret telegram --hook team-chat` on the mason side, printed once. |
-| `TELEGRAM_ALLOWED_CHATS` | yes | Comma-separated chat ids this bot may relay. Anything else is dropped before it becomes an event. |
+| `TELEGRAM_ALLOWED_CHATS` | yes | Comma-separated chat ids or `@usernames` this bot may relay. A username admits that person in any chat the bot receives; anything else is dropped before it becomes an event. |
 | `HTTPS_PROXY` | no | The VPN sidecar, `http://vpn:1080`, where Telegram is blocked. |
 | `DATA_DIR` | no | Defaults to `/data`, the volume. |
 | `TELEGRAM_INBOX` | no | Where an incoming file is written. Defaults to `/home/mason/.mason/agent/workspace/inbox`, the path both compose files mount `mason-inbox` at: moving it means moving both mounts, or the payload names a file nothing can open. |
+| `TELEGRAM_ASR_URL` | no | A transcription endpoint for voice notes: `http(s)`, `multipart/form-data` with one `file` part (an optional `model` field is the service's), `{"text": "…"}` back. Point it at mason's own Parakeet service (`asr/`) — a phonon box answered a Russian clip in English gibberish. Unset, a voice note is a path and a sentence, as it always was. One round trip per voice message, made before the event is posted; an empty transcript is a valid "nothing said", and a failure costs a parenthetical on the payload, not the message. |
 | `PORT` | no | Defaults to `8082`. Moving it means moving `tools.url` in `integrations.json` too. |
 
 A missing or malformed variable is a refusal at startup that names it: an instance without its allowlist would relay
@@ -109,8 +251,9 @@ every chat the bot is in, and one without its secret would deliver events nothin
 
 **The proxy is for Telegram, not for mason.** Node 22's `fetch` does not read `HTTPS_PROXY` by itself, so the API calls
 go through `undici`'s `ProxyAgent` configured from it (`src/fetch.ts`). The event POST does not: the door is a name that
-only exists inside the compose network, and the sidecar has no route to it. One variable, one route — and a VPN outage
-never looks like a delivery made.
+only exists inside the compose network, and the sidecar has no route to it. Nor does the transcription request: an ASR
+service is on this container's own network, not behind the VPN. One variable, one route — and a VPN outage never looks
+like a delivery made or a voice note nobody could hear.
 
 ## Privacy mode, and why a group is quiet
 
@@ -142,6 +285,7 @@ npm install
 npm test        # node:test, injected fetch — no sockets, no network, no token
 npm run typecheck
 TELEGRAM_BOT_TOKEN=… MASON_EVENT_URL=… MASON_TRIGGER_SECRET=… TELEGRAM_ALLOWED_CHATS=… npm start
+# add TELEGRAM_ASR_URL=http://asr:8788/transcribe (mason's Parakeet service) to deliver a voice note's words too
 ```
 
 Node 22, TypeScript run from source with `--experimental-strip-types`: there is no build step, and the image (`Dockerfile`
@@ -154,6 +298,6 @@ integration's trigger therefore requires mason to be up to date before the conta
 
 ## What is not here
 
-Webhooks (they need public HTTPS), outbound media — the agent sends words, not files — reactions, threads as
-first-class, multi-bot, and identity mapping beyond the sender's name and username in the payload. Each is a face of
-Telegram this container does not show the agent, and none of them is needed to answer a message.
+Webhooks (they need public HTTPS), reactions, threads as first-class, multi-bot, and identity mapping beyond the sender's
+name and username in the payload. Each is a face of Telegram this container does not show the agent, and none of them is
+needed to answer a message.

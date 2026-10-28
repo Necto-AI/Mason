@@ -33,10 +33,20 @@ import {
 } from "./auth.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
 import { integrationSummaries } from "./integration-status.ts";
-import { currentIntegrations, triggerFor } from "./integrations.ts";
-import { EVENT_SIGNATURE_HEADER, EVENTS_PATH, readEnvelope, verifySignature } from "./events.ts";
+import { commandsFor, currentIntegrations, triggerFor } from "./integrations.ts";
+import {
+	COMMAND_KIND,
+	EVENT_SIGNATURE_HEADER,
+	EVENTS_PATH,
+	commandRequestId,
+	readCommand,
+	readEnvelope,
+	verifySignature,
+	type CommandName,
+} from "./events.ts";
 import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
+	COMMAND_LIMIT,
 	createFireLimiter,
 	EVENT_BODY_MAX_BYTES,
 	type FireLimiter,
@@ -50,7 +60,7 @@ import { projectQueued, projectTranscript } from "./projection.ts";
 import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
 import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
 import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
-import { createCacheReporter, deriveAgentStatus } from "./status.ts";
+import { createCacheReporter, deriveAgentStatus, isBusy, queuedSubmissions, statusLine } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -315,6 +325,144 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	};
 }
 
+/**
+ * What a command acts on, apart from the door: the three conversation methods the console already calls, the claim that
+ * makes an envelope id an identity, whether the conversation is busy, and the line `status` answers.
+ *
+ * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
+ * without a provider, a turn or a second of waiting. The six methods are the whole of what a command may do, so a new
+ * command means changing this interface as well as the vocabulary in `events.ts`.
+ */
+export interface CommandTarget {
+	abort(): Promise<void>;
+	clear(): Promise<void>;
+	compact(instructions: string | undefined): Promise<void>;
+	status(): Promise<string>;
+	/**
+	 * Whether the conversation is working or has anything waiting — the same two facts `/status` reads out of the view.
+	 * `/clear` asks because a reset is not display-only: it queues behind a running turn, so this is the difference
+	 * between "cleared" and "the answer you just cleared is still coming".
+	 */
+	busy(): Promise<boolean>;
+	/**
+	 * Claims this command's id in the durable log, and answers whether the claim is new. A redelivery finds the claim and
+	 * is answered with nothing at all, so nothing runs twice.
+	 */
+	claim(requestId: string, command: CommandName, argument: string | undefined): Promise<boolean>;
+}
+
+/** What the three commands that change something answer a chat, in one word each: the person knows what happened. */
+const ONE_WORD: Record<"stop" | "compact" | "clear", string> = {
+	stop: "stopped",
+	compact: "compacted",
+	clear: "cleared",
+};
+
+/** What `/clear` answers when the reset is queued behind a turn: the person is told what is going to happen, not asked. */
+const CLEARING_AFTER_TURN = "clearing after this turn";
+
+/**
+ * One declared command, run once per envelope id, and the line the chat gets back — or nothing at all when the log
+ * already held this command's id, which is the caller's cue to say `already ran` and answer with an empty reply.
+ *
+ * The dedupe is the durable log's own: a command's request id is admitted like a fire's, and the log never forgets one,
+ * so a redelivery after a restart answers what it answered instead of stopping a second turn or clearing a conversation
+ * that has moved on. `status` is not claimed, because it changes nothing and a claim would be a record of something that
+ * did not happen: a retried question is still a question.
+ *
+ * **Where the claim sits is a trade, and it differs per command — deliberately.** `stop` aborts first and claims second:
+ * `abort` is idempotent, so stopping a turn that is already stopped costs nothing, where claiming first would turn a
+ * *failed* abort into a permanent "stopped" — the log would hold a stop that never happened, and no redelivery could
+ * retry it because the id was already spent. `clear` and `compact` claim first: a repeated clear throws away a
+ * conversation that has moved on and a repeated compact spends a second model call, so a redelivery that does nothing is
+ * the better half of that trade. The abort is not gated on its claim — only the reply is; tidying the three into one rule
+ * breaks one of them whichever rule you pick.
+ *
+ * Nothing here waits for a running turn: `abort`, `reset` and `compact` are the conversation's own methods, and the claim
+ * is a display-only entry, which the log appends at once even mid-run — `/stop` is the whole point of that. `clear` is the
+ * one that is not display-only: the reset is a write the log queues behind the turn, which is why the answer says it is
+ * queueing rather than pretending the conversation is already empty.
+ */
+export async function runCommand(
+	target: CommandTarget,
+	requestId: string,
+	command: CommandName,
+	argument: string | undefined,
+): Promise<string | undefined> {
+	switch (command) {
+		case "status":
+			return target.status();
+		case "stop": {
+			// The act comes first and nothing is gated on the claim, so a redelivery that reached here before its own first
+			// delivery finished did no harm — the turn is stopped either way. The claim's answer decides the reply alone.
+			await target.abort();
+			return (await target.claim(requestId, command, argument)) ? ONE_WORD.stop : undefined;
+		}
+		case "compact": {
+			if (!(await target.claim(requestId, command, argument))) return undefined;
+			await target.compact(argument);
+			return ONE_WORD.compact;
+		}
+		case "clear": {
+			if (!(await target.claim(requestId, command, argument))) return undefined;
+			// Asked before the act, because the question is "will the reset land now, or behind the turn?" — a reset submits a
+			// write with `head: "self"`, which is not display-only, so on a busy conversation it queues in the inbox and returns
+			// at once. Either way the reset happens; only the answer differs, and "cleared" over a conversation that is still
+			// delivering the answer it was told to forget is a lie the person watches come true.
+			const busy = await target.busy();
+			await target.clear();
+			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
+		}
+		default: {
+			// Every name in `COMMAND_NAMES` has an arm above, and this line is what makes a fifth one a compile error rather
+			// than a command that answers nothing.
+			const unhandled: never = command;
+			throw new Error(`no arm for command ${String(unhandled)}`);
+		}
+	}
+}
+
+/** The entry a command leaves behind: the record that makes its id an identity, and the trace of what a chat asked for. */
+const COMMAND_ENTRY_KIND = "app.command";
+
+/** The real target: the root conversation the console drives, the durable log that remembers a command's id, and the
+ * status line this boot derives. */
+async function commandTarget(runtime: AgentRuntime): Promise<CommandTarget> {
+	const conversation = await runtime.conversation();
+	return {
+		abort: () => conversation.abort(BACKGROUND_CONTEXT),
+		clear: () => conversation.reset(undefined, BACKGROUND_CONTEXT),
+		compact: async (instructions) => {
+			await conversation.compact(instructions, BACKGROUND_CONTEXT);
+		},
+		status: async () =>
+			statusLine(await runtime.viewSnapshot(BACKGROUND_CONTEXT), integrationSummaries(currentIntegrations())),
+		busy: async () => {
+			const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+			return isBusy(view) || queuedSubmissions(view) > 0;
+		},
+		// One commit: the lookup, the entry and the submission that names it are the claim, so two deliveries of one id
+		// cannot both find it absent. The entry carries no model content, which is what makes it display-only — the log
+		// appends it at once instead of queueing it behind the turn the command is about.
+		claim: (requestId, command, argument) =>
+			conversation.commit(async (tx) => {
+				if ((await tx.submissionByRequest(conversation.id, requestId)) !== undefined) return false;
+				const entry = await tx.appendEntry(conversation.id, {
+					kind: COMMAND_ENTRY_KIND,
+					data: { command, ...(argument === undefined ? {} : { argument }) },
+				});
+				await tx.createSubmission({
+					conversationId: conversation.id,
+					requestId,
+					type: "write",
+					status: "done",
+					entry: entry.id,
+				});
+				return true;
+			}, BACKGROUND_CONTEXT),
+	};
+}
+
 async function handleRequest(
 	request: IncomingMessage,
 	response: ServerResponse,
@@ -343,8 +491,8 @@ async function handleRequest(
 
 	// Everything under `/api` is the owner's, except two doors that cannot present a token: the liveness probe, and
 	// the event door, which is authenticated by the sender's own HMAC below (src/server/events.ts) and can do exactly one
-	// thing. The static shell is public on purpose: it is a bundle with no secrets in it, and the page is where a reader
-	// is told that this browser is not paired.
+	// of the things its entry declares: fire its hook, or issue one of its commands. The static shell is public on purpose:
+	// it is a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
 	let device: TokenRecord | undefined;
 	let claimed: string | undefined;
 	const eventDoor = eventDoorPath(url.pathname);
@@ -373,10 +521,11 @@ async function handleRequest(
 		return;
 	}
 
-	// The event door: one path, one verb, one effect — one fire of the hook the integration's trigger names
-	// (§3.3). The path names the integration; the boot resolved which ones are enabled, and a delivery is never a way to
-	// read, claim or call. A misspelt name, a disabled integration and one with no trigger all answer `404` like a path
-	// that is not a door, because which of them it is is not a sender's business.
+	// The event door: one path, one verb, and one of the two effects its entry declares — one fire of the hook the
+	// integration's trigger names (§3.3), or one of the commands that trigger may issue. The path names the integration;
+	// the boot resolved which ones are enabled, and a delivery is never a way to read, claim or call. A misspelt name, a
+	// disabled integration and one with no trigger all answer `404` like a path that is not a door, because which of them
+	// it is is not a sender's business.
 	if (eventDoor !== undefined) {
 		if (eventDoor === "malformed") {
 			console.warn(`[events] refused a delivery to ${url.pathname}: the path names no integration`);
@@ -389,15 +538,6 @@ async function handleRequest(
 			return notFound(response);
 		}
 		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
-		// Before the body is read: a delivery is a whole turn, and a loop of them is a bill. The key is the integration's
-		// own, so one chatty sender cannot spend another's minute.
-		const wait = fires.take(`integration:${name}`);
-		if (wait !== undefined) {
-			console.warn(`[events] refused a delivery for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
-			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
-			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
-			return;
-		}
 		const raw = await readRawBodyCapped(request, EVENT_BODY_MAX_BYTES);
 		if (raw === undefined) {
 			console.warn(`[events] refused a delivery for ${name}: over ${EVENT_BODY_MAX_BYTES} bytes`);
@@ -415,6 +555,57 @@ async function handleRequest(
 		if ("error" in envelope) {
 			console.warn(`[events] refused a delivery for ${name}: ${envelope.error}`);
 			return json(response, 400, { error: envelope.error });
+		}
+		if (envelope.kind === COMMAND_KIND) {
+			// A command has a budget of its own, and it is not the fire budget. Both are a bill — `/compact` is a model call —
+			// but a person who has just sent six messages must still be able to say `/stop`, and a chat that spent the
+			// integration's minute on messages would otherwise be unable to interrupt the turn those messages started.
+			const reading = readCommand(envelope.payload, commandsFor(currentIntegrations(), name));
+			if ("error" in reading) {
+				console.warn(`[events] refused a command for ${name}: ${reading.error}`);
+				return json(response, 400, { error: reading.error });
+			}
+			if ("undeclared" in reading) {
+				// Not a refusal: the sender typed something mason has no use for, and it still has a message in hand. Saying so is
+				// what keeps `/start`, `/foo` and a mistaken `/stopp` ordinary text instead of an error.
+				return json(response, 200, { handled: false });
+			}
+			// The budget is spent here, immediately before the dispatch, and nowhere above it: only a command mason will act
+			// on is a bill. A word it does not declare and a malformed one are neither acted on nor charged, because they must
+			// not be able to spend the minute a real `/stop` needs — six `/stopp` used to make the seventh command a `429`,
+			// which is the opposite of what the separate budget was for.
+			const wait = fires.take(`command:${name}`);
+			if (wait !== undefined) {
+				console.warn(`[events] refused a command for ${name}: ${COMMAND_LIMIT} a minute is the budget`);
+				response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
+				response.end(JSON.stringify({ error: "too many commands", retryAfterSeconds: wait }));
+				return;
+			}
+			const reply = await runCommand(
+				await commandTarget(runtime),
+				commandRequestId(name, envelope.id),
+				reading.command,
+				reading.argument,
+			);
+			if (reply === undefined) {
+				// The log held this command's id, so nothing ran this time: the first delivery already answered, and the relay
+				// suppresses an empty reply (`integrations/telegram/src/door.ts`), so a redelivery says nothing in the chat and
+				// the audit line does not claim an act that did not happen.
+				console.log(`[events] ${name} already ran ${reading.command} for ${envelope.id}`);
+				return json(response, 200, { handled: true, reply: "" });
+			}
+			console.log(`[events] ${name} ran ${reading.command} for ${envelope.id}`);
+			return json(response, 200, { handled: true, reply });
+		}
+		// A fire is a whole turn, and a loop of them is a bill. The key is the integration's own, so one chatty sender cannot
+		// spend another's minute. Checked after the body only because a command is the one delivery that must survive a
+		// sender's spent budget: the body is capped, and a forged signature is refused before this line.
+		const wait = fires.take(`integration:${name}`);
+		if (wait !== undefined) {
+			console.warn(`[events] refused a delivery for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
+			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
+			return;
 		}
 		try {
 			// `id` is the delivery's identity, so a redelivery is this same fire however much later it arrives; `payload` is

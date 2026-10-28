@@ -76,3 +76,25 @@ accounts because nothing in mason's contract says "one surface per person".
 `BACKEND-PLAN.md` milestone 1 becomes: voice and capabilities on the entry, origin on the fire, `reply` as the router, and
 the prompt section — with `send_to_user` deleted in the same milestone rather than kept. Milestone 2's event channel gains
 the connector subscription, so one contract carries what Chord carries for the console today.
+
+## Amendment, same day: the reply is a router with a fan-out, not a broadcast
+
+Denis's refinement, kept because it is right and because it hides two different things behind one flag.
+
+**A connector may receive the reply as a reply, so several surfaces show what the bot said.** That sentence covers two
+acts, and they must not share a setting.
+
+1. **A display mirror needs no mechanism at all.** Every reply is committed to the transcript before it is sent, and a
+   connector that declares `state: ["projection"]` reads it. apiary showing the Telegram conversation is not fan-out: it is
+   the projection, which is exactly why one bot can be used from two surfaces without a second protocol. Nothing to build
+   beyond the capability in §4 of this ADR.
+2. **A delivery fan-out is a different act with a different audience.** "Also send this to Slack" makes another
+   application buzz, and the people in it are not necessarily the people in the chat that asked. So it is opt-in per
+   connector and stated on the entry — `also: ["slack"]` beside `reply` — and the default is the origin alone.
+
+One rule binds the second: **a reply is never fanned out of a private conversation into a space that speaks to more than
+one person without being asked.** The entry knows which it is (`speaks: "person" | "service"`), so the refusal is a
+boot-time check rather than a runtime guess.
+
+**Why not `mirrors: true`.** If one boolean meant "send everywhere", the first bug would be a direct message arriving in a
+team channel and the second would be the same person notified twice in two apps for one thought. Two acts, two words.

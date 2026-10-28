@@ -2,8 +2,8 @@
  * Admission: where a submission came from, and where it waits.
  *
  * The origin is read from the entry kind pi-durable already places, so the mapping is the whole policy — there is no
- * parallel field to keep in step. One rule falls out of it: only the user may steer, so a trigger source that asks to
- * steer is downgraded to a follow-up instead of talking over the person driving.
+ * parallel field to keep in step. One rule falls out of it: a message arriving mid-turn is read by that turn, so a hook
+ * steers like the user does, and a hook that asks to wait asks for itself.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -34,14 +34,17 @@ describe("where an input waits", () => {
 		assert.equal(whenBusyFor("user"), undefined, "asking for nothing leaves pi's own default in place");
 	});
 
-	it("downgrades a hook's steer to a follow-up: a trigger source never steers", () => {
-		assert.equal(whenBusyFor("hook", "steer"), "followUp");
+	it("steers a hook's fire into the running turn: the message may be the one cancelling it", () => {
+		assert.equal(whenBusyFor("hook"), "steer");
+		assert.equal(whenBusyFor("hook", "steer"), "steer");
+	});
+
+	it("honours a hook that asks to wait, because a report has nothing to interrupt for", () => {
 		assert.equal(whenBusyFor("hook", "followUp"), "followUp");
-		assert.equal(whenBusyFor("hook"), "followUp");
+		assert.equal(whenBusyFor("hook", "reject"), "followUp", "a hook has nobody to refuse for: a refusal would lose the fire");
 	});
 
 	it("passes the user's own reject through: it is their refusal, not a placement policy", () => {
 		assert.equal(whenBusyFor("user", "reject"), "reject");
-		assert.equal(whenBusyFor("hook", "reject"), "followUp", "a hook has nobody to refuse for");
 	});
 });

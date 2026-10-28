@@ -226,8 +226,11 @@ function tooLarge(bytes: number): SaveOutcome {
  * The sender's name as a name on this volume: the last path segment of it, without control characters, without a leading
  * dot, without a trailing `.part` — which is what a write that never finished looks like — and no longer than
  * `NAME_MAX_BYTES`. A name that sanitises to nothing is `file`: a path is never allowed to end in a bare hyphen.
+ *
+ * Exported for the other direction (`src/send-file.ts`): the name a file goes out under is a header rather than a path,
+ * and the same rule is what keeps it one segment with nothing in it that a chat has to render.
  */
-function safeName(raw: string): string {
+export function safeName(raw: string): string {
 	const cleaned = (raw.split(/[/\\]/).at(-1) ?? "")
 		.replace(/[\u0000-\u001f\u007f]/g, "")
 		.replace(/^\.+/, "")

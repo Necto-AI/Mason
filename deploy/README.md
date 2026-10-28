@@ -1,18 +1,24 @@
 # Deploying mason
 
-Two containers. `mason` is the server: the repo run from source, the built web client, the agent's home on a volume,
-the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu 24.04 and
-an sshd, reached only by mason, with no route out. The split is not packaging taste — every `read`, `write`, `edit`,
-`bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the boundary between thinking and doing
-was in the code before it was in a compose file. A deployment may add a third container per integration (see "An
-integration" below); those are other people's images, not this repo's.
+Three containers of our own. `mason` is the server: the repo run from source, the built web client, the agent's home on
+a volume, the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu
+24.04 and an sshd, reached only by mason, with no route out. `mason-asr` is mason's own speech-to-text, which is what
+turns a voice note from a phone into words (see "The transcription service" below). The split is not packaging taste —
+every `read`, `write`, `edit`, `bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the
+boundary between thinking and doing was in the code before it was in a compose file. A deployment may add one more
+container per integration (see "An integration" below); those are other people's images, not this repo's.
 
 ```
-host loopback :8787 ──► mason ──ssh──► mason-env        (no ports, internal network only)
+host loopback :8787 ──► mason ──ssh──► mason-env        (no ports; in on mason-internal, out on mason-out)
                           │
                           ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
-                          │                                           mason-egress with the vpn sidecar)
-                          └── volumes: mason-agent (both containers), mason-service, env-keys,
+                          │        │                                  mason-egress with the vpn sidecar)
+                          │        └────► mason-asr                  (no ports; Ogg/Opus in, words out)
+                          ├── mason-edge ──► the internet            (mason's route to the model provider; the
+                          │                                          vpn sidecar, and an integration's upstream)
+                          ├── mason-out ───► the internet            (mason-env and mason-asr: a bridge apart,
+                          │                                          so that mason-edge cannot reach either)
+                          └── volumes: mason-agent (both containers), mason-service, env-keys, asr-models,
                                       mason-inbox (mason-env and the telegram relay)
 ```
 
@@ -64,6 +70,11 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_UID=1000                         # optional: must match on both images (see below)
    MASON_GID=1000
    MASON_MODEL_REQUIRED=1                 # 0 starts a stack with no model at all
+   MASON_STACK=mason                      # optional: the compose project and the volume prefix — one per bot
+   MASON_BOT_DIR=./soul                   # optional: a directory holding this bot's soul.md and skills/
+   MASON_BOT_FORCE=1                      # optional: install that soul.md over an existing one, once
+   MASON_INTEGRATIONS_FILE=./integrations.json  # optional: the services this bot reaches (a second stack points this at its own file)
+   MASON_ENV_KEYS_VOLUME=env-keys         # optional: pins the env-key volume's name; the default is ${MASON_STACK}-env-keys
    TZ=Europe/Moscow                       # optional: decides the date in log/YYYY-MM-DD.md
    MASON_ENV_HOST=mason-env               # optional: the env container's name on the compose network
    MASON_ENV_USER=mason                   # optional: the login account; the images create it, so changing it is a rebuild
@@ -73,8 +84,9 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    EXAMPLE_TOKEN=…                          # optional: an integration container's own credential (see "An integration")
    TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
    TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
-   TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids the bot may relay, comma-separated
+   TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids or @usernames the bot may relay, comma-separated
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
+   TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: the relay's transcript endpoint, the value compose.telegram.yaml defaults to
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/home/denis/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
    ```
@@ -118,6 +130,53 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    which makes uid 1000 the same person on both sides and gives both a single ownership on the shared `mason-agent`
    volume. The two explicit builds are there because podman-compose 1.6 tries to *pull* an `image:` name that only ever
    exists locally (`short-name "mason-env:local" did not resolve to an alias`) before it considers building it.
+
+## Two bots on one host
+
+mason defines one bot (`docs/adr/0001-mason-defines-one-bot.md`), so a second bot is a second stack: its own home, its
+own database, its own port, its own Telegram bot. `MASON_STACK` is what makes that possible without a second copy of
+this directory — it names the compose project, the volumes and the images, all of which are `${MASON_STACK:-mason}`
+prefixed, so the defaults are exactly what a single-bot host already has.
+
+What a second stack needs, and nothing else:
+
+```sh
+# one directory per bot, outside the checkout, holding what is the operator's and not the repo's
+mkdir -p ~/mason-tanya && cd ~/mason-tanya
+#   .env     — same names as deploy/.env, with MASON_STACK=tanya, its own MASON_PORT, TELEGRAM_*, MASON_BOT_DIR=$PWD,
+#              MASON_INTEGRATIONS_FILE=$PWD/integrations.json
+#   soul.md  — the bot's job and voice
+#   skills/  — optional starter skills
+#   files/   — a directory the agent works in, if REPO_DIR points here
+
+cd ~/dev/mason/deploy
+export MASON_STACK=tanya
+podman compose -p tanya --env-file ~/mason-tanya/.env \
+  -f compose.yaml -f compose.podman.yaml -f compose.telegram.yaml up -d --build
+```
+
+`MASON_STACK` prefixes the two images this repository builds (`tanya:local`, `tanya-env:local`), so building one never
+repoints the other's tag. The integration images are not prefixed — `ghcr.io/denissud/mason-telegram:latest`,
+`sing-box` — so both stacks run whatever that tag last pointed at.
+
+They share no volume, no `service/` and no `agent/`: two bots are two homes, and the isolation between them is the same
+mount boundary that separates a home from its tool machine. Every volume is named from `MASON_STACK` — `env-keys`
+included, so the second stack's key volume is `tanya-env-keys` and its `.env` says nothing about it. `MASON_ENV_ALIAS`
+is per-home state (a `known_hosts` entry), so it does not collide either.
+
+`MASON_ENV_KEYS_VOLUME` is the one escape hatch, for a host whose first stack booted before that prefix existed: it
+pins the volume's name, and such a stack already says `env-keys` in its own `deploy/.env`, so nothing has to migrate.
+Two stacks sharing that volume is not a shared file but a boot that overwrites the key the other stack's sshd is
+holding, after which the other stack's tool machine refuses logins.
+
+The networks are per project (`tanya_mason-internal`, `tanya_mason-edge`, …), and DNS inside one cannot resolve a name
+in the other. What they do share is the rootless network namespace: podman accepts traffic between two non-internal
+bridges, so the two `*-edge` networks can reach each other, and the two `*-out` networks with them. No credential
+crosses — each stack's sshd accepts only its own key and each `/api/*` wants its own token — but it is reachability,
+not isolation, and the paragraph above should not be read as saying otherwise.
+
+The one thing they do share is the host port range (`MASON_PORT`) and the provider credential directory
+(`MASON_PI_AGENT_DIR`), which is read-only input and copied into each home.
 
 ## First boot, and the pairing link
 
@@ -257,13 +316,14 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
    one conversation. `docker compose restart mason` is how an edit lands. `npm run integration -- list | add | remove |
    enable | disable` inside the container is the writer that validates the file, and it says the same thing.
 
-**Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose network,
-joined by mason and the integration containers only. No integration declares `ports:` — mason reaches it by name, so it
-needs none — and a published port would be a second door into a service holding a credential, with no token of mason's in
-front of it. mason keeps `mason-edge` for the model provider, and an integration keeps it for its upstream — or, where
-the upstream is not reachable from this host, the integration joins `mason-egress` instead and the proxy sidecar beside
-it keeps `mason-edge` (`mason-telegram`, below). The network is the authentication on the MCP wire: as long as the only
-peer is mason, a shared secret would be a secret with one holder.
+**Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose
+network, joined by mason, the integration containers and `mason-asr` — the three things that answer to mason, and
+nothing that answers to somebody else. No integration declares `ports:` — mason reaches it by name, so it needs none —
+and a published port would be a second door into a service holding a credential, with no token of mason's in front of
+it. mason keeps `mason-edge` for the model provider, and an integration keeps it for its upstream — or, where the
+upstream is not reachable from this host, the integration joins `mason-egress` instead and the proxy sidecar beside it
+keeps `mason-edge` (`mason-telegram`, below). The network is the authentication on the MCP wire: mason is the only
+thing on it that speaks MCP, so a shared secret would be a secret with one holder.
 
 **`mason-env` is not on `mason-mcp`, and must not be.** The tool machine runs `bash` for a model that can be talked into
 anything. If it could reach an MCP endpoint directly, the tool surface would stop being what `integrations.json` says it
@@ -297,14 +357,75 @@ this runs on, so the integration is given `HTTPS_PROXY=http://vpn:1080` and reac
 bridge with a gateway — being on it would have given the container its own way out and made the proxy decoration. The
 sidecar is the only container that stands on both (`mason-egress` in, `mason-edge` out), and `mason-telegram` is the only
 other member of `mason-egress`, so that network is that container's single route and the proxy is its only address there.
-The proxy is not a fence between mason and an integration: mason stands on `mason-edge` as the sidecar does, so mason can
-open `vpn:1080` too — and it changes nothing, because `mason-edge` already gives mason egress of its own, which is why
-mason never joins `mason-egress` and has no use for the proxy. What `mason-egress` keeps off it is the tool machine:
-`mason-env` joins neither network, so it has no route to the proxy at all. The proxy's config is a real server's address
-and key, so it is a file the operator owns — copy `vpn/config.example.json` to `vpn/config.json` (gitignored) and fill in
-the TODOs; it is mounted read-only, never baked into an image, and the sidecar publishes no port, because a published
-SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on 1080, and only the integrations that name it use
-it.
+The proxy is not a fence between mason and an integration: mason stands on `mason-edge` as the sidecar does, so mason
+can open `vpn:1080` too — and it changes nothing, because `mason-edge` already gives mason egress of its own, which is
+why mason never joins `mason-egress` and has no use for the proxy. What `mason-egress` keeps off it is the tool
+machine: `mason-env` joins neither network, so it has no route to the proxy at all — its own route out is `mason-out`,
+which carries mason's outbound-only containers and nothing else (see "What is exposed, and what is not"). The proxy's
+config is a real server's address and key, so it is a file the operator owns — copy `vpn/config.example.json` to
+`vpn/config.json` (gitignored) and fill in the TODOs; it is mounted read-only, never baked into an image, and the
+sidecar publishes no port, because a published SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on
+1080, and only the integrations that name it use it.
+
+## The transcription service: `mason-asr`
+
+A voice note from a phone is Ogg/Opus at 48 kHz, and for a long time that was a container nobody in this stack could
+read: posted to a WAV-only endpoint it came back as an empty transcript, which is worse than an error because the agent
+then answered a sentence nobody had said. So the stack runs mason's own speech-to-text beside the relay — `asr/` in
+this repository, one container, one POST, one JSON body. The model is `nvidia/parakeet-tdt-0.6b-v3` as three ONNX
+graphs, a featurizer, an encoder and a greedy decoder, run by onnxruntime: no NeMo and no PyTorch in the image. It
+is in `compose.yaml` and not in an extra file because every stack may want a voice note read, and a stack that runs no
+relay simply never calls it.
+
+**What it costs.** CPU only: no GPU, no CUDA runtime in the image, one core busy while a note is transcribed and nothing
+between notes. ~1.3 GB of ONNX weights in the `${MASON_STACK:-mason}-asr-models` volume, fetched once on the first boot
+(or copied in, below) and never backed up, because weights are a download rather than state. At the measured rtf 0.07 a
+15 s voice note is about a second of it, and a five-second one about a third.
+
+**What it accepts.** Anything ffmpeg reads: Ogg/Opus (what a phone records), MP3, M4A/MP4, WebM, FLAC, AMR, and WAV.
+Internally there is one format — 16 kHz mono float32 — and ffmpeg resamples and downmixes into it, so the container a
+phone produces is a container this service takes. A WAV is the exception that keeps its fast path: it is parsed
+in-process and must already be 16 kHz mono (the browser client resamples before it posts), so a 44.1 kHz stereo WAV is
+refused by a message that says to resample first rather than quietly resampled here. Headerless PCM16 is still read, but
+it has to be declared (`Content-Type: application/octet-stream` or `audio/pcm`) — bytes that say nothing about
+themselves go to ffmpeg instead of being guessed at, which is the rule that closed this bug. A body nothing can decode
+is a `400` naming the format it looked like, never a `200` with an empty transcript.
+
+**How a relay reaches it.** By name, on `mason-mcp`: `http://mason-asr:8100/transcribe`, which is the default
+`TELEGRAM_ASR_URL` in `compose.telegram.yaml` names. POST the file's bytes — or the same bytes as one
+`multipart/form-data` part named `file`, which is what the Telegram relay sends — and read `text` out of the answer.
+The rest of that body (`words`, `durationMs`, `elapsedMs`, `rtf`, `model`) is the service's own report and the relay
+ignores it. No token and no published port: the network is the authentication here, exactly as it is for an MCP
+endpoint, and the only containers that can resolve the name are mason and the integrations. `mason-env` is not one of
+them.
+
+**What it is on.** `mason-mcp` is the inbound half, and `mason-out` is the outbound one: an ordinary bridge with a
+gateway, shared with `mason-env` and with no integration, because a transcriber holds what a person said and the bridge
+that carries an integration with a reachable upstream has no business reaching it. The only request the service makes
+is the first boot's fetch of the weights from Hugging Face, which is why that membership can go once the volume is
+seeded (below). It is not on `mason-edge`. Its healthcheck reads `/health`, and its start period covers a model load of
+5 to 15 s and, on a first boot, a 1.3 GB fetch, so a slow start is not a restart loop.
+
+**Seeding the volume instead of downloading.** The first boot with an empty volume fetches the weights and says so
+(`[asr] /models holds no encoder-model.fp16.onnx: fetching the ONNX export from Hugging Face once`). A fetch that fails
+names the URL that failed, logs a line about seeding the volume, and exits non-zero — the container stays down rather
+than answering `200` with no model behind it. Where Hugging Face is unreachable from the host — this deployment proxies
+Telegram's API for much the same reason — copy an existing model directory in once and the fetch never happens:
+
+```sh
+cd deploy
+podman volume create "${MASON_STACK:-mason}-asr-models"     # or let the first `up` create it
+podman run --rm --entrypoint sh -v "${MASON_STACK:-mason}-asr-models":/models \
+  -v "$PWD/../asr/models":/seed:ro "${MASON_STACK:-mason}-asr:local" -c 'cp -a /seed/. /models/'
+podman compose -f compose.yaml -f compose.podman.yaml up -d mason-asr
+```
+
+The image is `${MASON_STACK:-mason}-asr:local`, so `up -d --build` has to have built it once. `ASR_MODEL_BASE_URL`
+points the fetch at a mirror instead, and `ASR_ENCODER`/`ASR_DECODER` choose the precision — the volume has to hold the
+pair those name, and `fp16`/`int8` is what `asr/fetch_models.py` downloads by default.
+
+A stack that seeds the volume this way can drop `mason-out` from the `mason-asr` service in `compose.yaml`: the weights
+are then the whole of what the container needs, and it has no route out at all.
 
 ## When it looks broken but is not
 
@@ -345,16 +466,19 @@ declaration or a missing restart, never the door.
 
 ## What to back up
 
-**Two volumes, and both of them.** `mason-inbox` is deliberately not one of them: it holds the files a chat sent, which
-are somebody else's documents and which the sweep deletes after a week anyway. `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the
-shipped ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose
-history begins at the migration if the home was migrated, since the pre-split history stays in the repository at the
-home root, which is not a volume. `mason-service` is the server: `soul.md`,
-`roster.json`, `config.json` (the token hashes — no plaintext token lives here), `integrations.json` (the integrations
-mason reaches, and each one's trigger secret), `data/agent.sqlite`
-(the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
+**Two volumes, and both of them.** Every volume is named `${MASON_STACK}-…` on the host, so the default stack's are
+`mason-agent`, `mason-service`, `mason-env-keys`, `mason-asr-models` and `mason-inbox`, plus `mason-telegram-data`
+when the relay runs; the commands below use the first two of those names. `mason-inbox` is deliberately not one of
+them, and neither is `asr-models`: the inbox holds the files a chat sent, which are somebody else's documents and
+which the sweep deletes after a week anyway, and the model volume holds weights that one command refills (see "The
+transcription service"). `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the shipped
+ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose history
+begins at the migration if the home was migrated, since the pre-split history stays in the repository at the home
+root, which is not a volume. `mason-service` is the server: `soul.md`, `roster.json`, `config.json` (the token hashes
+— no plaintext token lives here), `integrations.json` (the integrations mason reaches, and each one's trigger secret),
+`data/agent.sqlite` (the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
-`env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
+`mason-env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.
 
 A home upgraded from a build that still had the GitHub connector also keeps a `service/data/connectors.json`: no code
@@ -376,25 +500,31 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
 - `mason`: port 8787 published on the host's **loopback only**. Nothing else is published.
 - `mason-env`: no ports ever. Its inbound is `mason-internal` only, which is `internal: true` — no gateway, no DNS
   beyond the compose network, so nothing outside can open a connection to the sshd. Its outbound is a separate network
-  and a separate decision: `mason-edge` is in the `mason-env` service because a tool that can work on a repository needs
+  and a separate decision: `mason-out` is in the `mason-env` service because a tool that can work on a repository needs
   to clone, `gh` and `curl`. Delete that line to put the fence back; with it, a tool can also send out what it can read.
+  `mason-out` and not `mason-edge`, because the address is the same and the channel is not (below).
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
-- `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else. Nothing on it
-  publishes a port, and `mason-env` is not a member (see "An integration" above).
-- `mason-egress` is the third, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
+- `mason-mcp` is a second `internal: true` network: mason, the integration containers and `mason-asr`, and nobody else.
+  Nothing on it publishes a port, and `mason-env` is not a member (see "An integration" above).
+- `mason-out` is an ordinary bridge with a gateway, and it carries mason's own outbound services: `mason-env` and
+  `mason-asr`. No integration is ever a member, so the tool machine and the transcriber are out of reach of every image
+  a third party built, and it is that membership rather than a policy that keeps them out. It is where the tool
+  machine's internet and the transcriber's one-way-out both live; `mason-edge` keeps its own.
+- `mason-egress` is the last, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
   integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`. Neither mason nor
-  `mason-env` joins it: both already have a route out on `mason-edge`, so the proxy gains them nothing, and the tool
-  machine cannot reach the proxy even though it has the internet of its own.
+  `mason-env` joins it: mason has a route out on `mason-edge` and `mason-env` on `mason-out`, so the proxy adds nothing
+  to either, and the tool machine cannot reach the proxy even though it has the internet of its own.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
   `X-Forwarded-Proto: https` so the session cookie is issued `Secure`.
-- Two paths are outside `src/server/auth.ts` on purpose, and each can do exactly one thing. `/api/health` answers one word
+- Two paths are outside `src/server/auth.ts` on purpose, and both are narrower than a token. `/api/health` answers one word
   and needs no credential at all (a monitor that needs a token is a monitor nobody runs), and
   `POST /api/events/<integration>` is authenticated by that integration's trigger secret: the HMAC is the door, and the
-  door opens `hooks.fire` and nothing else — it cannot read, claim or call. Everything else under `/api`, and the Chord
-  socket, goes through `src/server/auth.ts`; the shell itself is served publicly because it is a bundle with no secrets in
-  it, and it is where a browser is told it is not paired.
+  door fires the hook the trigger names or issues one of the commands the entry declares, and nothing else — it cannot
+  read, claim or call. Everything else under `/api`, and the Chord socket, goes through `src/server/auth.ts`; the shell
+  itself is served publicly because it is a bundle with no secrets in it, and it is where a browser is told it is not
+  paired.
 
 ## The path agreement, and the one honest limitation
 
@@ -412,7 +542,9 @@ failure: every tool call lands in a directory that does not exist, which measure
 One path that is deliberately *not* shared through `mason-agent`: `workspace/inbox` is a volume of its own
 (`mason-inbox`), mounted at the same path in `mason-env` and in the telegram relay. Inside the `mason-agent` volume the
 directory is empty, and only the tool machine and the relay see those bytes — which is what lets a chat message's file be
-read by the agent without the relay being handed the profile, the log, the skills and the memory repository as well.
+read by the agent without the relay being handed the profile, the log, the skills and the memory repository as well. It
+carries files both ways: a file the agent writes there is one the relay may send into a chat, so this one directory is the
+whole of what crosses in either direction.
 
 The limitation is that coupling. The remote cwd is not its own name — it is the mason container's path, borrowed by
 another machine — so anyone who moves the workspace in one image has to remember the other. Giving the remote cwd its
@@ -440,13 +572,28 @@ Two smaller honest notes:
 
 ## What is in the env image, and why nothing else is
 
-ubuntu 24.04 plus `openssh-server`, `git`, `curl`, `jq` and `gh`. The `git` is not for the upload: `remember` appends a
-fact and commits it on that machine, in `agent/.git`. `gh` and `curl` are there because the tools of a machine with a
-route out can work on a repository — `gh issue list`, `gh pr create`, a clone, a build. No `pi-env` daemon:
+ubuntu 24.04 plus `openssh-server`, `git`, `curl`, `jq`, `gh` and OCR. The `git` is not for the upload: `remember`
+appends a fact and commits it on that machine, in `agent/.git`. `gh` and `curl` are there because the tools of a machine
+with a route out can work on a repository — `gh issue list`, `gh pr create`, a clone, a build. No `pi-env` daemon:
 `sshConnection()` uploads the binary over the connection, checks its SHA-256 on the far side, renames it into place and
 deletes older ones. An image that carried a daemon would freeze a protocol version inside the deployment and then
 disagree with the mason image that replaced it — silently, because the upload is designed never to fail loudly about a
 version it did not ship.
+
+**OCR is in the image**, and it is a binary rather than a service for one reason: the file is already there. A photo of a
+page, a scan, a screenshot or a PDF arrives in a chat, lands on the `mason-inbox` volume, and that same path is on this
+machine — so `indra-ocr <path> --format md` is one process away, with no upload, no second copy and nothing to reach over
+a network. It is Indra (`datalab-to/indra`), pinned to tag `v1.1.2`, the same OCR `~/dev/pi-setup` installs; CPU only, no
+torch, no GPU, no port, no credential, and no configuration. It is installed into a virtualenv at `/opt/indra` with
+`indra-ocr` symlinked onto the PATH, so a tool runs it by name and not by an interpreter's path. Its ~76 MB of weights
+are fetched at build time into the Hugging Face cache of the `mason` account and looked up again with the Hub offline, so
+the first message is not the slow one, a machine with no route out reads a page all the same, and a build that could not
+fetch fails instead of shipping an OCR that downloads later. The agent reaches for it through the `ocr` skill
+(`skills/ocr/SKILL.md`), not through code (`docs/CAPABILITY-PLAN.md`, phase 3).
+
+It is also the one thing here that makes the image noticeably bigger: 214 MB → 688 MB when this was written, of which a
+349 MB virtualenv (`opencv-python-headless` 72 MB, `onnxruntime` 68 MB, `numpy` 43 MB, `pip` 16 MB, the rest their
+dependencies) and 74 MB of weights, on top of 39 MB of `python3` and `python3-venv` in the apt layer above.
 
 A tool runs as `mason` inside that container, with `env -i` and a nine-variable allowlist from the server side, so it
 cannot read the server's environment or the provider key. It can read and write `agent/` — the profile, the log,
@@ -463,7 +610,9 @@ Two things are a deployment's decision and not the image's:
   same thing on the host and inside the container. Default `/home/denis/dev/clinical-compass`; the bind source must
   exist or the container will not start.
 
-The image is no longer a fence by default. `mason-env` joins `mason-edge` in `compose.yaml`, which is an ordinary bridge
-with a gateway: a tool has the internet, and the same network is the one a tool could exfiltrate over. That is the trade a
-worker on a repository makes. Deleting that one network line from the service restores the fence, and with it a machine
-where `curl`, `gh` and a clone all fail — which is also a legitimate deployment.
+The image is no longer a fence by default. `mason-env` joins `mason-out` in `compose.yaml`, which is an ordinary bridge
+with a gateway: a tool has the internet, and the same network is the one a tool could exfiltrate over. That is the trade
+a worker on a repository makes. Deleting that one network line from the service restores the fence, and with it a
+machine where `curl`, `gh` and a clone all fail — which is also a legitimate deployment. What the separate bridge buys
+is that the fence's other half holds: an image somebody else built, on `mason-edge`, cannot reach this container, and
+the only peers on `mason-out` are mason's own.

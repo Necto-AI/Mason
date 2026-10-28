@@ -28,6 +28,16 @@ export const REQUIRED_VARIABLES = [
  */
 const TRIGGER_SECRET_MIN = 32;
 
+/**
+ * A Telegram username without its leading @. The shape is Telegram's own, and it is checked here because an entry that is
+ * neither a chat id nor a well-formed username can only ever match nothing: the bot would start and relay nobody, which
+ * is the silent half-configured instance this file exists to refuse.
+ */
+const USERNAME_PATTERN = /^[A-Za-z0-9_]{5,32}$/;
+
+/** A chat id as Telegram writes it, negative for a group or a channel: what this list has always taken. */
+const CHAT_ID_PATTERN = /^-?\d+$/;
+
 /** Configuration mason cannot run with. The message is written for the operator who has to fix `.env`. */
 export class ConfigError extends Error {
 	constructor(message: string) {
@@ -43,16 +53,49 @@ export interface Config {
 	readonly eventUrl: string;
 	/** The HMAC key the door verifies with. Never logged. */
 	readonly triggerSecret: string;
-	/** The chats this bot may relay. Anything else is dropped before it becomes an event. */
+	/**
+	 * The chats this bot may relay, by chat id or by the sender's @username. Anything else is dropped before it becomes
+	 * an event.
+	 */
 	readonly allowedChats: readonly string[];
 	/** `HTTPS_PROXY` for Telegram's API, or undefined for a direct route. */
 	readonly httpsProxy: string | undefined;
+	/**
+	 * Where a voice note's bytes are posted for transcription, or undefined for none. Optional in the strict sense: without
+	 * it a voice note reaches the agent as a file and a sentence, exactly as it did before this was a setting. It is a
+	 * service on the relay's own network rather than Telegram's API, so it is called directly and never through the proxy.
+	 */
+	readonly asrUrl: string | undefined;
 	/** The volume this container keeps its offset in. */
 	readonly dataDir: string;
 	/** Where an attachment is written: a directory the tool machine mounts at this same path, so a payload's path opens. */
 	readonly inboxDir: string;
 	/** The MCP endpoint's port. Fixed at 8082 in the compose template; a variable here only so a test can move it. */
 	readonly port: number;
+}
+
+/**
+ * One allowlist entry as the filter compares it: a chat id unchanged, or a username folded to lower case, because a
+ * Telegram username is case-insensitive and one spelling in `.env` has to match every case Telegram sends. A leading @ is
+ * what says an entry is a person; an entry without one has to be a chat id, and anything else is refused here so that the
+ * log names the entry rather than the bot silently ignoring every message.
+ */
+function allowedEntry(entry: string): string {
+	if (!entry.startsWith("@")) {
+		if (CHAT_ID_PATTERN.test(entry)) return entry;
+		throw new ConfigError(
+			`refusing to start: TELEGRAM_ALLOWED_CHATS names ${entry}, which is not a chat id and has no leading @. ` +
+				`An entry is a chat id (-1001234) or a username (@kareva_tanya), comma-separated.`,
+		);
+	}
+	const username = entry.slice(1);
+	if (!USERNAME_PATTERN.test(username)) {
+		throw new ConfigError(
+			`refusing to start: TELEGRAM_ALLOWED_CHATS names ${entry}, and a username is @ followed by 5-32 letters, ` +
+				`digits or underscores.`,
+		);
+	}
+	return `@${username.toLowerCase()}`;
 }
 
 function isHttpUrl(candidate: string): boolean {
@@ -75,7 +118,7 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 		throw new ConfigError(
 			`refusing to start: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not set. ` +
 				`The bot token and the door's URL and secret are the integration; TELEGRAM_ALLOWED_CHATS is the list of ` +
-				`chat ids it may relay, comma-separated.`,
+				`chat ids or @usernames it may relay, comma-separated.`,
 		);
 	}
 
@@ -95,11 +138,12 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 	const allowedChats = value("TELEGRAM_ALLOWED_CHATS")
 		.split(",")
 		.map((chat) => chat.trim())
-		.filter((chat) => chat !== "");
+		.filter((chat) => chat !== "")
+		.map(allowedEntry);
 	if (allowedChats.length === 0) {
 		throw new ConfigError(
 			"refusing to start: TELEGRAM_ALLOWED_CHATS names no chat, and a bot with no allowlist would relay every " +
-				"chat it is in. List the chat ids it may relay, comma-separated.",
+				"chat it is in. List the chat ids or @usernames it may relay, comma-separated.",
 		);
 	}
 
@@ -109,6 +153,17 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 	}
 
 	const httpsProxy = (environment.HTTPS_PROXY ?? "").trim();
+	// Optional, and the one optional value with a shape: an endpoint that is not an URL would fail at the first voice note
+	// instead of at boot, and the log line it produced would be one every voice note rather than one an operator can fix.
+	// The refusal does not print the value — unlike MASON_EVENT_URL's — because a transcription endpoint is often a LAN
+	// address with a token in its path or query, and a half-typed one is exactly the case this branch sees.
+	const asrUrl = value("TELEGRAM_ASR_URL");
+	if (asrUrl !== "" && !isHttpUrl(asrUrl)) {
+		throw new ConfigError(
+			"refusing to start: TELEGRAM_ASR_URL is not an http(s) URL; it takes the whole endpoint, " +
+				"as in http://asr.local:9000/transcribe",
+		);
+	}
 	const inboxDir = value("TELEGRAM_INBOX");
 	// The path is a promise to two machines: the payload names it, and the tool machine resolves it against a mount. A
 	// relative one would be written under this container's working directory and read nowhere.
@@ -129,6 +184,7 @@ export function readConfig(environment: Record<string, string | undefined>): Con
 		triggerSecret,
 		allowedChats,
 		httpsProxy: httpsProxy === "" ? undefined : httpsProxy,
+		asrUrl: asrUrl === "" ? undefined : asrUrl,
 		dataDir: (environment.DATA_DIR ?? "").trim() === "" ? DEFAULT_DATA_DIR : (environment.DATA_DIR ?? "").trim(),
 		inboxDir: inboxDir === "" ? DEFAULT_INBOX_DIR : inboxDir,
 		port,

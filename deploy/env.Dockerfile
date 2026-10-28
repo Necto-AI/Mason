@@ -19,8 +19,11 @@ ARG MASON_GID=1000
 # mktemp, mkdir, chmod, mv) and a shell for the login session. `git` is not for the upload: `remember` appends a fact and
 # commits it on this machine, in the repository that lives in the agent's half of the home, because the log and its
 # history have to share a filesystem (src/server/house.ts, `appendFact`).
+#
+# `python3` and `python3-venv` are for one thing only, the OCR in the layer after the login account: the interpreter it
+# runs under, in a virtualenv of its own (see below). Nothing else on this image is Python.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server git curl ca-certificates jq gnupg \
+ && apt-get install -y --no-install-recommends openssh-server git curl ca-certificates jq gnupg python3 python3-venv \
  && install -d -m 0755 /etc/apt/keyrings \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -50,6 +53,41 @@ RUN set -eux; \
 # yes`, because with `UsePAM no` nothing can unlock it later. `*` is "no password, not locked": the account still cannot
 # be logged into with a password (`PasswordAuthentication no`), and a key is the only way in, which is the intent.
 RUN usermod -p '*' mason
+
+# OCR, in the image and not behind a service — because the file is already here. A photo of a page, a scan, a screenshot
+# or a PDF arrives in a chat, lands on the `mason-inbox` volume, and this container is the process holding that path:
+# `indra-ocr <path> --format md` is one call away — no upload, no second copy, no port, no credential
+# (docs/CAPABILITY-PLAN.md, phase 3). CPU only: a small ONNX graph (det 0.4 MB, rec 5 MB) with the OpenCV/PDFium
+# post-processing that turns a page into markdown, no torch and no GPU.
+#
+# Pinned to upstream tag `v1.1.2` of `github:datalab-to/indra`, the same tag `~/dev/pi-setup` packages, so both machines
+# read a page with the same code and the same weights. Code and weights move together: the package names the Hugging
+# Face revision it was built against (`HF_REVISION` in `indra_ocr/models.py`), so an install that floated would let a
+# rebuilt image read a page differently with nothing in this repository to point at. A virtualenv rather than the system
+# python: Ubuntu 24.04 marks its `python3` EXTERNALLY-MANAGED (PEP 668), and this image has no business owning a
+# system-wide python package. The dependencies are wheels for this arch (`opencv-python-headless`, `onnxruntime`,
+# `pypdfium2`), so nothing compiles here — which is also why NixOS, whose `opencv-python-headless` has no usable wheel,
+# packages this same tag from source instead of installing it.
+#
+# The ~76 MB of weights are fetched here, at build time, into the cache the runtime reads with no network at all: the
+# default `$HOME/.cache/huggingface` under the account a tool runs as. `XDG_CACHE_HOME` is set to the same directory
+# rather than a cache of its own, because the daemon a tool runs under is started with an allowlist that carries `HOME`
+# and not `XDG_CACHE_HOME` (src/server/env.ts, `DAEMON_ENV_ALLOWED`) — the default is the path to fill. The download runs
+# as root and the directory is handed to `mason` before the layer ends. The second call is the same lookup with
+# `HF_HUB_OFFLINE=1`, which succeeds only from a warm cache: a build with no network, or one whose download refused,
+# stops here, loudly, instead of shipping an OCR whose first message is a download and whose offline answer is an error.
+RUN set -eux; \
+    python3 -m venv /opt/indra; \
+    /opt/indra/bin/pip install --no-cache-dir --disable-pip-version-check \
+      "git+https://github.com/datalab-to/indra@v1.1.2"; \
+    ln -sf /opt/indra/bin/indra-ocr /usr/local/bin/indra-ocr; \
+    install -d -m 0755 /home/mason/.cache; \
+    HOME=/home/mason XDG_CACHE_HOME=/home/mason/.cache HF_HUB_DISABLE_TELEMETRY=1 \
+      /opt/indra/bin/python -c 'from indra_ocr.models import model_dir; print(model_dir())'; \
+    HOME=/home/mason XDG_CACHE_HOME=/home/mason/.cache HF_HUB_OFFLINE=1 \
+      /opt/indra/bin/python -c 'from indra_ocr.models import model_dir; print(model_dir())'; \
+    chown -R mason:mason /home/mason/.cache; \
+    indra-ocr --version
 
 # The volumes, with the ownership they need on a first `up`. Whichever container starts first initialises an empty
 # named volume from the directory in its own image, so both images carry the same answer: `env-keys` writable by the
