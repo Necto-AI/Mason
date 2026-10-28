@@ -171,8 +171,9 @@ async function hookEntries(
 }
 
 /**
- * Waits until the transcript holds `count` hook entries. A fire is admitted at once but a busy conversation queues the
- * inputs behind the running turn, so the entries arrive when the run ends — and this is what the reader's history says.
+ * Waits until the transcript holds `count` hook entries. A fire is admitted at once, and a busy conversation places it at
+ * the boundary after the tool round in flight, so an entry can arrive while the run it joined is still working — and
+ * this is what the reader's history says.
  */
 async function settledHookEntries(
 	runtime: AgentRuntime,
