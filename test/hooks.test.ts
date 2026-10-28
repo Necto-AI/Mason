@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
 	bodyRequestId,
 	deliveryToolForTurn,
@@ -33,6 +33,7 @@ import {
 	scheduledRequestId,
 	type EventHookConfig,
 } from "../src/server/hooks.ts";
+import type { ConversationView } from "@earendil-works/pi-durable";
 import type { AgentRuntime } from "../src/server/runtime.ts";
 import { openAgentRuntime } from "../src/server/runtime.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
@@ -486,5 +487,89 @@ describe("the tool a hook's turn answers with", () => {
 	it("reads a console turn as the console's, whatever the person typed", () => {
 		assert.equal(deliveryToolForTurn("answer it with mcp__telegram__send_message please"), undefined);
 		assert.equal(deliveryToolForTurn(undefined), undefined);
+	});
+});
+
+/**
+ * Where a fire lands when the conversation is already working.
+ *
+ * The fire's placement is `admission.ts`'s decision, and this is the half a unit test cannot see: that the decision
+ * reaches pi-durable and becomes a real boundary placement. The regression it pins is the one that cost a reader half
+ * an hour — a correction sent while the agent worked, queued behind the work it was cancelling.
+ */
+describe("a fire's placement", () => {
+	function liveOf(view: ConversationView | undefined) {
+		return view?.docs["pi.live"] as
+			| { run?: { taskId: number }; tools?: { callId: string; name: string; status: string }[] }
+			| undefined;
+	}
+
+	function inboxOf(view: ConversationView | undefined): { id: number; mode: string }[] {
+		return (view?.docs["pi.inbox"] as { items: { id: number; mode: string }[] } | undefined)?.items ?? [];
+	}
+
+	async function waitFor<T>(what: string, read: () => T | undefined, timeoutMs = 15_000): Promise<T> {
+		const deadline = Date.now() + timeoutMs;
+		for (;;) {
+			const value = read();
+			if (value !== undefined) return value;
+			if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+
+	it("steers into the running turn, so the message is read by the work it corrects", async () => {
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([
+			// One tool round that outlasts the fire, so the conversation is busy when it arrives.
+			fauxAssistantMessage([fauxToolCall("bash", { command: "sleep 1.5" }, { id: "slow" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage(fauxText("the slow round finished")),
+			fauxAssistantMessage(fauxText("read the correction")),
+			fauxAssistantMessage(fauxText("nothing else")),
+		]);
+		const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			storage: "memory",
+			houseHome: await tempHouse(),
+			modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
+			onReport: () => {},
+		});
+		const clock = testClock(ALIGNED_START);
+		const hooks = new HooksManager({ conversation: () => runtime.conversation(), now: clock.now });
+		hooks.define(digest);
+		const conversation = await runtime.conversation();
+		const watch = await conversation.watch(BACKGROUND_CONTEXT);
+		watch.start(async () => {});
+		try {
+			await conversation.submit({ type: "input", content: "spend a while on this" }, BACKGROUND_CONTEXT);
+			const running = await waitFor("the tool round to start", () =>
+				liveOf(watch.value)?.tools?.some((slot) => slot.status === "running"),
+			);
+			assert.equal(running, true);
+
+			const fire = await hooks.fire("digest", { payload: "only the benchmarks, drop the poster" });
+			const queued = await waitFor("the fire in the inbox", () =>
+				inboxOf(watch.value).find((item) => item.id === fire.id),
+			);
+			assert.equal(queued.mode, "steer", "the fire joins the run in flight instead of waiting for it to end");
+
+			// And the running turn reads it: the fire is placed at the boundary right after the tool round, so the run in
+			// flight is the one that answered it rather than a turn that started once it was over.
+			await conversation.waitForIdle(BACKGROUND_CONTEXT);
+			const page = await conversation.entries({ order: "ascending" }, 50, undefined, BACKGROUND_CONTEXT);
+			const order = page.items.map((entry) => entry.kind);
+			assert.equal(
+				order.indexOf(HOOK_ENTRY_KIND),
+				order.lastIndexOf("pi.tool-result") + 1,
+				`the fire sits at the boundary after the tool round: ${order.join(", ")}`,
+			);
+		} finally {
+			await watch.stop();
+			await hooks.close();
+			await runtime.close();
+		}
 	});
 });

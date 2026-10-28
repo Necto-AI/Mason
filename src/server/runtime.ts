@@ -287,8 +287,9 @@ export async function openAgentRuntime(
 
 		const settings: HarnessSettings = {
 			...options.settings,
-			// Admission: only the user's steer cuts in, and queued follow-ups drain as one turn — the model prioritises
-			// between them, because nothing here can rank a fired hook against a wish the reader typed.
+			// Admission: a steer is placed at the next boundary, from either origin, and queued follow-ups drain as one
+			// turn — the model prioritises between them, because nothing here can rank a fired hook against a wish the
+			// reader typed.
 			followUpMode: options.settings?.followUpMode ?? "all",
 			steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
 			// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
