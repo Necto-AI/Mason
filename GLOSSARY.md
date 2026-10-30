@@ -154,8 +154,25 @@ _Avoid_: client, user, frontend
 Another system mason is connected to, and the only kind of thing that talks to it from outside. It has two halves, either
 of which may be absent: tools it lends the bot, and a trigger that wakes the bot with its events. An integration that
 carries a person's words is also the place a reply goes — there is no separate interface type
-(`docs/adr/0005-there-is-no-interface-type.md`).
+(`docs/adr/0005-there-is-no-interface-type.md`). An integration mason trusts may also bring code — a prompt section, a
+reply route, a `close()` (`docs/adr/0009-an-integration-may-bring-code.md`); one it does not trust stays a container, an
+entry, a secret and a hook.
 _Avoid_: connector, plugin, client, app, interface (that is a role an integration plays, not a kind of thing)
+
+**contribution**:
+What an integration's code adds to one running mason: a prompt section, a reply route, and the lifecycle of a resource it
+owns. Never a route, a socket, a command word, an entry kind or a tool name mason does not already have.
+_Avoid_: extension, plugin, capability (a capability is mason's own code, chosen per bot)
+
+**loader**:
+Where an integration's code is read from: `src/integrations/`, named in code and compiled in, or `service/integrations/`,
+named by an explicit path and imported at boot. A loader says where code runs, never whose it is.
+_Avoid_: plugin system, module resolver
+
+**host**:
+The integer a contribution declares, naming the connector API it was written against. A host newer than the build
+refuses the boot naming both numbers. It is a fourth version number, not the wire's.
+_Avoid_: api version, engine version, semver
 
 **trigger**:
 The half of an integration that wakes the bot: one authenticated event becomes one fire.

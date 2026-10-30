@@ -1,5 +1,10 @@
 # An integration is a service with two halves: a tool surface and a trigger
 
+**Superseded in part by:** [`0006`](0006-connectors-are-full-duplex-peers.md), which gave every entry an origin and a
+reply route, and [`0009`](0009-an-integration-may-bring-code.md), which lets an integration mason trusts contribute a
+prompt section, a reply route and a `close()`. What stands: an integration mason does not trust is a container, a config
+entry, a secret and a hook, and no code in `src/` knows its name.
+
 mason is meant to carry many integrations, so per-integration code in the server does not scale — every new system
 would mean a TypeScript module, a test and a review. An integration is therefore a separate process with at most two
 network faces: an MCP endpoint over Streamable HTTP that lends the bot tools, and one authenticated POST that wakes it

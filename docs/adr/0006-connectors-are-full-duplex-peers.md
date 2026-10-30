@@ -7,6 +7,11 @@
 **Revisited if:** a connector needs a channel this contract does not have (a write, a file, a presence the agent must
 react to), or if a second person needs to share one bot — which is a different decision (`docs/adr/0001-mason-defines-one-bot.md`).
 
+**Supersedes in part:** [`0003`](0003-integrations-are-services.md) — "No extension is written per integration", and the
+hook ADR-0004 appended to that list. An integration mason trusts may contribute a prompt section, a reply route and a
+`close()` ([`0009`](0009-an-integration-may-bring-code.md)); one it does not trust still is a container, an entry, a
+secret and a hook.
+
 ADR-0003 made an integration a service with two halves. ADR-0005 removed the interface type and gave an integration a
 voice. This decision finishes the job Denis asked for: **one way in, for every surface, including the app that shows the
 transcript** — and it costs two things that have to be named before anything is built.
