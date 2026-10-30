@@ -130,8 +130,8 @@ that a reader needs. `style.css` kept its chat sections minus the trace, tool-ro
   Busy placeholder "Steer or follow-up…". Queued bubbles label the mode (`steering` / `follow-up`).
 - Stop: `abort()`; queued items stay visible (durable inbox) instead of sibling's restore-to-composer.
 - Compact: `compact()` while idle.
-- ~~Debug sheet~~ — removed with the raw view. Firing a hook by hand is a server-side or webhook action now; a UI for it
-  belongs to the trace endpoint that replaces the inspector.
+- ~~Debug sheet~~ — removed with the raw view. Firing a hook by hand is the transcript's Retry control or a server-side
+  call now; a UI for it belongs to the trace endpoint that replaces the inspector.
 - Widget bridge unchanged: `sendPrompt` → `submit({ whenBusy: "followUp" })`, `openLink` → new tab.
 
 ## 5. Phases

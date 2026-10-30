@@ -15,9 +15,9 @@ import { daemonCommand, daemonEnv, DAEMON_ENV_ALLOWED } from "../src/server/env.
 import { ensureHouse, housePaths } from "../src/server/house.ts";
 import {
 	createFireLimiter,
-	HOOK_BODY_MAX_BYTES,
-	HOOK_FIRE_LIMIT,
-	HOOK_FIRE_WINDOW_MS,
+	EVENT_FIRE_LIMIT,
+	EVENT_FIRE_WINDOW_MS,
+	JSON_BODY_MAX_BYTES,
 	parseJsonObject,
 	readBodyCapped,
 } from "../src/server/limits.ts";
@@ -76,8 +76,8 @@ describe("the fire limit", () => {
 
 	it("defaults to a budget no honest sender needs to reach", () => {
 		const limiter = createFireLimiter({ now: () => 0 });
-		for (let index = 0; index < HOOK_FIRE_LIMIT; index += 1) assert.equal(limiter.take("hook"), undefined);
-		assert.equal(limiter.take("hook"), HOOK_FIRE_WINDOW_MS / 1000);
+		for (let index = 0; index < EVENT_FIRE_LIMIT; index += 1) assert.equal(limiter.take("hook"), undefined);
+		assert.equal(limiter.take("hook"), EVENT_FIRE_WINDOW_MS / 1000);
 	});
 });
 
@@ -87,7 +87,7 @@ describe("the body cap", () => {
 	});
 
 	it("refuses a body over the cap without reading it, when the sender declares the size", async () => {
-		const body = "x".repeat(HOOK_BODY_MAX_BYTES + 1);
+		const body = "x".repeat(JSON_BODY_MAX_BYTES + 1);
 		assert.equal(await readBodyCapped(requestOf([body], { "content-length": String(body.length) })), undefined);
 	});
 

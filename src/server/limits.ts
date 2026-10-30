@@ -1,18 +1,18 @@
 /**
  * What a caller may ask the server to spend.
  *
- * The door (§4.1b) answers *who may speak*. This answers *how much*, because the two costs a webhook sender controls
- * are not the door's business: bytes on the socket, and model turns. A hook fire is a whole turn — provider tokens,
- * a tool loop, a delivered message — so a sender that can fire without a bound is a sender that can spend Denis's
- * budget and fill his transcript from a cron typo or a hostile body.
+ * The door (§4.1b) answers *who may speak*. This answers *how much*, because the two costs a sender controls are not
+ * the door's business: bytes on the socket, and model turns. A fire is a whole turn — provider tokens, a tool loop, a
+ * delivered message — so a sender that can fire without a bound is a sender that can spend Denis's budget and fill
+ * his transcript from a cron typo or a hostile body.
  *
  * Both limits are small on purpose. Honest senders here fire hourly or daily, and a sender that needs more than six
  * fires a minute is a sender whose queue is the wrong shape.
  */
 import type { IncomingMessage } from "node:http";
 
-/** A webhook body carries a summary, a URL or a status line; 32 KiB is already generous for that. */
-export const HOOK_BODY_MAX_BYTES = 32 * 1024;
+/** A small write's body — a name to claim, a session to open. 32 KiB is already generous for that. */
+export const JSON_BODY_MAX_BYTES = 32 * 1024;
 
 /**
  * A generic event delivery: how many bytes a trigger may send. An envelope carries a paragraph, and the cap bounds what
@@ -20,24 +20,24 @@ export const HOOK_BODY_MAX_BYTES = 32 * 1024;
  */
 export const EVENT_BODY_MAX_BYTES = 256 * 1024;
 
-/** Fires one hook may start per window, counted per hook id. */
-export const HOOK_FIRE_LIMIT = 6;
+/** Fires one integration may start per window, counted per integration name. */
+export const EVENT_FIRE_LIMIT = 6;
 
 /**
  * Commands one integration may ask for per window — a budget of its own, keyed `command:<integration>` where a fire is
  * `integration:<integration>`, so a sender that spent its minute on messages can still stop the turn they started.
  *
- * The same number as `HOOK_FIRE_LIMIT` on purpose, defined once: they bound the same kind of spend, and a second literal
+ * The same number as `EVENT_FIRE_LIMIT` on purpose, defined once: they bound the same kind of spend, and a second literal
  * is a number that drifts. Charged only for a command mason will act on.
  */
-export const COMMAND_LIMIT = HOOK_FIRE_LIMIT;
+export const COMMAND_LIMIT = EVENT_FIRE_LIMIT;
 
 /** The window fires are counted in. */
-export const HOOK_FIRE_WINDOW_MS = 60_000;
+export const EVENT_FIRE_WINDOW_MS = 60_000;
 
 /**
- * How many hook ids a limiter remembers. The ids come from the URL, so the map is bounded rather than trusted: a
- * sender inventing hook names must not be able to grow it, and the oldest key is the one to forget first.
+ * How many integration names a limiter remembers. The names come from the URL, so the map is bounded rather than
+ * trusted: a sender inventing paths must not be able to grow it, and the oldest key is the one to forget first.
  */
 const TRACKED_KEYS_MAX = 512;
 
@@ -56,8 +56,8 @@ export interface FireLimiter {
 export function createFireLimiter(
 	options: { limit?: number; windowMs?: number; now?: () => number } = {},
 ): FireLimiter {
-	const limit = options.limit ?? HOOK_FIRE_LIMIT;
-	const windowMs = options.windowMs ?? HOOK_FIRE_WINDOW_MS;
+	const limit = options.limit ?? EVENT_FIRE_LIMIT;
+	const windowMs = options.windowMs ?? EVENT_FIRE_WINDOW_MS;
 	const now = options.now ?? Date.now;
 	const fires = new Map<string, number[]>();
 
@@ -87,7 +87,7 @@ export function createFireLimiter(
  */
 export async function readBodyCapped(
 	request: IncomingMessage,
-	maxBytes: number = HOOK_BODY_MAX_BYTES,
+	maxBytes: number = JSON_BODY_MAX_BYTES,
 ): Promise<string | undefined> {
 	const declared = Number(request.headers["content-length"]);
 	if (Number.isFinite(declared) && declared > maxBytes) return undefined;
@@ -109,7 +109,7 @@ export async function readBodyCapped(
  */
 export async function readRawBodyCapped(
 	request: IncomingMessage,
-	maxBytes: number = HOOK_BODY_MAX_BYTES,
+	maxBytes: number = JSON_BODY_MAX_BYTES,
 ): Promise<Buffer | undefined> {
 	const declared = Number(request.headers["content-length"]);
 	if (Number.isFinite(declared) && declared > maxBytes) return undefined;

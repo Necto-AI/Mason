@@ -199,26 +199,6 @@ function entries(view: ConversationView | undefined) {
 	return [...(view?.entries ?? [])];
 }
 
-/** POST a hook fire the way an external script or a cron timer would: with the server's own token. */
-async function fireWebhook(
-	server: RunningServer,
-	hookId: string,
-	body: Record<string, unknown>,
-	headers: Record<string, string> = {},
-): Promise<{ submissionId: number }> {
-	const response = await fetch(`http://127.0.0.1:${server.port}/api/hooks/${hookId}/fire`, {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			authorization: `Bearer ${server.pairingToken ?? ""}`,
-			...headers,
-		},
-		body: JSON.stringify(body),
-	});
-	assert.equal(response.status, 200);
-	return (await response.json()) as { submissionId: number };
-}
-
 function textOf(message: { content?: unknown } | undefined): string {
 	const content = message?.content;
 	if (typeof content === "string") return content;
@@ -537,44 +517,6 @@ describe("chord client <-> server", () => {
 		}
 	});
 
-	it("takes a webhook delivery's id from the sender, or its body per window", async () => {
-		const client = await openClient();
-		const { agent, state, faux, server } = client;
-		try {
-			await agent.ready;
-			faux.setResponses(Array.from({ length: 4 }, (_, index) => fauxAssistantMessage(fauxText(`answer ${index}`))));
-			const deliveries = (): number => entries(state.serverView).filter((entry) => entry.kind === "app.hook").length;
-
-			// A dumb sender: the body is the delivery's identity inside the window, so the same POST retried is one event.
-			const first = await fireWebhook(server, "workspace-check", { message: "ping" });
-			const replay = await fireWebhook(server, "workspace-check", { message: "ping" });
-			assert.equal(replay.submissionId, first.submissionId, "a redelivered body is one submission");
-			await waitFor("the first delivery", () => (deliveries() === 1 ? true : undefined));
-
-			// A sender that names its delivery is exact, whether the id comes in the body or in the header.
-			const named = await fireWebhook(
-				server,
-				"workspace-check",
-				{ message: "ping" },
-				{ "x-request-id": "delivery-9" },
-			);
-			assert.notEqual(named.submissionId, first.submissionId, "a named delivery is an event of its own");
-			await waitFor("the named delivery", () => (deliveries() === 2 ? true : undefined));
-
-			const again = await fireWebhook(server, "workspace-check", { message: "pong", requestId: "delivery-10" });
-			assert.notEqual(again.submissionId, named.submissionId);
-			const againLater = await fireWebhook(server, "workspace-check", {
-				message: "pong",
-				requestId: "delivery-10",
-			});
-			assert.equal(againLater.submissionId, again.submissionId, "the same delivery id is the same event");
-			await waitFor("the third delivery", () => (deliveries() === 3 ? true : undefined));
-			await waitFor("idle", () => (state.agentStatus?.busy === false ? true : undefined));
-		} finally {
-			await client.close();
-		}
-	});
-
 	it("aborts a running conversation", async () => {
 		const client = await openClient();
 		const { agent, state } = client;
@@ -648,15 +590,12 @@ describe("chord client <-> server", () => {
 		}
 	});
 
-	it("fires a hook from the client and from the webhook endpoint", async () => {
+	it("fires a hook from the client, and the turn it starts answers proactively", async () => {
 		const client = await openClient();
 		const { agent, state } = client;
 		try {
 			await agent.ready;
-			client.faux.setResponses([
-				fauxAssistantMessage(fauxText("Proactive check done.")),
-				fauxAssistantMessage(fauxText("Webhook check done.")),
-			]);
+			client.faux.setResponses([fauxAssistantMessage(fauxText("Proactive check done."))]);
 			await agent.fireHook({ hookId: "workspace-check" });
 			const hookEntry = await waitFor("the hook entry", () =>
 				entries(state.serverView).find((entry) => entry.kind === "app.hook"),
@@ -668,24 +607,6 @@ describe("chord client <-> server", () => {
 			await waitFor("the hook counter", () =>
 				state.agentStatus?.hooks.find((hook) => hook.id === "workspace-check")?.fireCount === 1 ? true : undefined,
 			);
-
-			// An external script or timer wakes the agent through HTTP.
-			const response = await fetch(`http://127.0.0.1:${client.server.port}/api/hooks/morning-brief/fire`, {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					authorization: `Bearer ${client.server.pairingToken ?? ""}`,
-				},
-				body: JSON.stringify({ message: "the build is red" }),
-			});
-			assert.equal(response.status, 200);
-			const body = (await response.json()) as { submissionId: number };
-			assert.equal(typeof body.submissionId, "number");
-			await waitFor("the webhook answer", () =>
-				entries(state.serverView).some((entry) => messageText(entry) === "Webhook check done.") ? true : undefined,
-			);
-			const webhook = entries(state.serverView).find((entry) => entry.kind === "app.hook" && messageText(entry).includes("the build is red"));
-			assert.ok(webhook, "the webhook payload reaches the agent");
 		} finally {
 			await client.close();
 		}
