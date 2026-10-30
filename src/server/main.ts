@@ -32,6 +32,7 @@ import {
 	type TokenStore,
 } from "./auth.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
+import { installEnvHttpProxy } from "./http-proxy.ts";
 import { integrationSummaries } from "./integration-status.ts";
 import { commandsFor, currentIntegrations, triggerFor } from "./integrations.ts";
 import {
@@ -105,6 +106,10 @@ export interface RunningServer {
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
+	// Before the runtime: a provider client captures `fetch` when it is built, so the dispatcher has to be installed
+	// before the first one exists. A stack with no proxy in its environment is untouched, which is every stack with a
+	// direct route to its provider.
+	installEnvHttpProxy();
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, options);
 	const webDir = options.webDir ?? resolve(repositoryRoot, "dist/web");
 
