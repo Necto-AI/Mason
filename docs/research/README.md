@@ -1,7 +1,7 @@
 # Research, and what it changed
 
-Four runs, in the order they happened. Each is a directory with an index of its own; this page exists so that nobody
-starts a fifth one without knowing what the first four already answered.
+Every run so far, in the order they happened. Each is a directory with an index of its own; this page exists so that
+nobody starts a new one without knowing what the earlier ones already answered.
 
 | Run | Question it was asked | Files | Sources | What it actually decided |
 |---|---|---|---|---|
@@ -10,6 +10,7 @@ starts a fifth one without knowing what the first four already answered.
 | [`openbot/`](openbot/README.md) (2026-10-24) | What is in CopilotKit's open-source agent product, file by file? | 14 | — | The control-plane layer: one container per bot behind a gateway that resolves the target, evaluates a CEL policy, writes the audit row *before* acting. AG-UI as the agent↔UI protocol |
 | [`agent-computers.md`](agent-computers.md) (2026-10-26) | Can every agent have a real computer, snapshotted and asleep when idle? Firecracker against Cloud Hypervisor, Kata, gVisor, libkrun and the managed sandboxes | 1 | 60+ | The VMM that meets all of it is Cloud Hypervisor, not Firecracker: Firecracker refuses virtiofs and 9p, so a host directory cannot be shared, and its rootless story is a PoC. [`../ENV-PLAN.md`](../ENV-PLAN.md) is built on that |
 | [`yandex-integrations/`](yandex-integrations/INDEX.md) (2026-10-26) | Can mason reach Denis's Yandex Disk, Calendar and Mail, and what does each cost? | 3 | 107 | Three protocols, no webhooks: Disk is one OAuth token, Calendar is CalDAV with a password that never expires, Mail is IMAP/SMTP with an error taxonomy nobody wrote down. All three are the `mason-telegram` shape |
+| [`connector-mechanism/`](connector-mechanism/INDEX.md) (2026-10-30) | Should a connector be able to add code to mason, and what mechanism makes that clean? | 15 | 79 | **Recommended, not yet decided:** one contribution model, two loaders, no third tier — first-party code compiled in `src/connectors/`, operator code imported at boot from `service/connectors/` by explicit path, and everything untrusted stays a process on MCP + HMAC. Issue #16 forbade *runtime* install; this breaks ADR-0007's "no directory to drop a file into" for the operator loader only |
 
 ## The five findings that survived all four runs
 
