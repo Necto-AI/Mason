@@ -2,9 +2,10 @@
  * The integration list: one file in the server's half, the command that edits it, and the route that reports on it.
  *
  * What matters here is the shape of a failure. An empty integration list quietly removes tools, so a file mason cannot
- * read or cannot validate refuses the boot, naming the path — never an empty set. A rewrite keeps every key mason does
- * not understand, because the file grows and a hand-written note is not mason's to drop. A trigger secret is never
- * printed, not even truncated.
+ * read or cannot validate refuses the boot, naming the path — never an empty set. A key inside an entry is refused
+ * rather than ignored, because a key mason skips is a capability its author believes in; a key at the document's own
+ * level survives a rewrite, because there mason reads exactly one key and a note is not its business. A trigger secret
+ * is never printed, not even truncated.
  *
  * The two files are tested apart from each other: the list on disk through `readIntegrations` and the command, and the
  * route through a started server — a reachable server is a fake MCP server on an in-memory transport, never a port.
@@ -75,26 +76,24 @@ describe("the integration list on disk", () => {
 		assert.deepEqual(await readIntegrations(paths), { integrations: {} });
 	});
 
-	it("reads a file back and keeps the keys mason does not know", async () => {
+	it("reads a file back, keeps the document's own keys and normalises the entry", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
 			JSON.stringify({
-				future: "a key from a later version",
+				$schema: "a key from a later version",
 				integrations: {
-					github: {
-						enabled: true,
-						description: "Issues and pull requests",
-						note: "hand-written, and not mason's to drop",
-						tools: { url: "http://mason-github:8082/mcp", owner: "denis" },
-					},
+					github: { enabled: true, description: "Issues and pull requests", tools: { url: "http://mason-github:8082/mcp" } },
 				},
 			}),
 		);
 
 		const read = await readIntegrations(paths);
-		assert.equal(read.integrations.github?.note, "hand-written, and not mason's to drop");
-		assert.equal(read.integrations.github?.tools?.owner, "denis");
+		assert.deepEqual(read.integrations.github, {
+			enabled: true,
+			description: "Issues and pull requests",
+			tools: { url: "http://mason-github:8082/mcp" },
+		});
 
 		await writeIntegration(paths, "docs", {
 			enabled: true,
@@ -103,15 +102,59 @@ describe("the integration list on disk", () => {
 		});
 
 		const stored = JSON.parse(await readFile(paths.integrations, "utf8")) as {
-			future?: string;
+			$schema?: string;
 			integrations: Record<string, Record<string, unknown>>;
 		};
-		assert.equal(stored.future, "a key from a later version", "a key from the top level survived the rewrite");
-		assert.equal(stored.integrations.github?.note, "hand-written, and not mason's to drop");
-		assert.deepEqual(stored.integrations.github?.tools, { url: "http://mason-github:8082/mcp", owner: "denis" });
+		assert.equal(stored.$schema, "a key from a later version", "a key of the document's own survived the rewrite");
 		assert.deepEqual(Object.keys(stored.integrations), ["docs", "github"], "the file is in a stable order");
 		// The description is a line in the prompt: the space around it is nobody's intent.
 		assert.equal(stored.integrations.docs?.description, "The internal documentation server");
+	});
+
+	it("refuses a key inside an entry, naming it, instead of storing something mason will not read", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({ integrations: { github: { ...github, note: "hand-written, and not mason's to drop" } } }),
+		);
+		const message = await refusal(paths);
+		assert.ok(message.includes(paths.integrations));
+		assert.match(message, /has the key "note"/, "the refusal names the key it would otherwise ignore");
+		assert.match(message, /commands, description, enabled, tools, trigger/, "and the set it should have drawn from");
+	});
+
+	/**
+	 * The sentence `docs/CONNECTOR-PROTOCOL.md` has promised since it was written: an entry that uses a channel this
+	 * build does not have refuses the boot naming the field. The code used to spread these through, so an operator had a
+	 * reply route that was accepted, stored and never routed.
+	 */
+	it("refuses a channel the contract declares and this build does not have", async () => {
+		for (const channel of [{ reply: "send_message" }, { state: ["projection"] }, { also: ["slack"] }]) {
+			const paths = await temporaryHome();
+			const key = Object.keys(channel)[0] as string;
+			await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, ...channel } } }));
+			const message = await refusal(paths);
+			assert.match(message, new RegExp(`uses "${key}"`), `${key} is refused rather than accepted and ignored`);
+			assert.match(message, /CONNECTOR-PROTOCOL/, "the refusal says where the channel is promised");
+		}
+	});
+
+	/**
+	 * The security case behind the same rule (`#85`): a credential an operator added for a hosted MCP server used to be
+	 * dropped on the floor by the index signature on the tools face, which is worse than a refused boot because they
+	 * believed they had authenticated.
+	 */
+	it("refuses a key inside the tools face, so a dropped credential cannot pass as one that landed", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp", headers: { authorization: "x" } } } },
+			}),
+		);
+		const message = await refusal(paths);
+		assert.match(message, /has the key "headers"/);
+		assert.match(message, /required, url/);
 	});
 
 	it("refuses a file it cannot parse, naming the path rather than reading as empty", async () => {

@@ -4,9 +4,15 @@
  * Every section that reaches the model is declared here: its key, whether it is tagged, and where its text comes from —
  * a service-owned file read by the server (`service/soul.md`), an agent-owned file read through the execution
  * environment (`agent/profile.md`, `agent/skills/`), a computation over the boot's configuration
- * (`service/integrations.json`), pi-durable's own renderer for the tools a script can call, or a constant in this file.
- * No other extension contributes a section, and the agent carries no `instructions` of its own, so this list is the
- * whole prompt: an audit reads one file, and a test fails if anything else appears.
+ * (`service/integrations.json`), pi-durable's own renderer for the tools a script can call, a constant in this file, or
+ * text an integration contributed (`src/integrations/index.ts`). No other extension contributes a section, and the agent
+ * carries no `instructions` of its own: an audit reads this file, and one directory further for the integrations that
+ * are listed here and nowhere else. A test fails if anything else appears.
+ *
+ * A contributed section is the one thing this file does not own the text of. It owns everything else about it — where it
+ * sits, what tag it renders under, what the cap is, and the order two of them share — because those are the prompt's
+ * shape rather than any one integration's business, and because a section that could choose its position could check
+ * itself out of the prompt's argument (`docs/adr/0009-an-integration-may-bring-code.md`).
  *
  * Which half a section reads from is not cosmetic. `service/` is never mounted into the tool machine, so the soul is a
  * file the bot cannot see, let alone rewrite; `agent/` is on the tool machine, so the profile and the skills index are
@@ -24,6 +30,7 @@ import { capText, currentHouse, readHouseFile } from "./house.ts";
 import { currentIntegrations } from "./integrations.ts";
 import { type ResidentInput, readResidentFile } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
+import { install, INTEGRATIONS, type InstalledIntegration } from "../integrations/index.ts";
 
 /**
  * What a fresh install starts from, and what `~/.mason/service/soul.md` is created with. Short on purpose.
@@ -133,8 +140,23 @@ async function renderProfile(input: ResidentInput, context: Context): Promise<st
 	].join("\n");
 }
 
-/** Every section of the prompt, in the order the model reads them. Adding a section means adding it here. */
-export const PROMPT_SECTIONS: readonly PromptSection[] = [
+/**
+ * What one contributed block may cost: the ceiling `docs/CONNECTOR-PROTOCOL.md` puts on an integration's paragraph, and
+ * cheaper than promoting one medium MCP tool. Longer than this is a skill, which is read on demand.
+ *
+ * The cap lives here rather than in the contribution for the same reason the order does: it is a property of the prompt
+ * budget, and an integration that could set its own would be pricing every turn of a conversation it is not in.
+ */
+const CONTRIBUTION_MAX_CHARS = 600;
+
+/**
+ * Every section of the prompt the build itself owns, in the order the model reads them. Adding one means adding it here.
+ *
+ * `BUILTIN_SECTIONS` is not the whole prompt any more, and that is the change ADR-0009 records: a listed integration
+ * may contribute a block. `promptSections()` is where those two lists meet, and it is still the only place a section
+ * reaches the model.
+ */
+const BUILTIN_SECTIONS: readonly PromptSection[] = [
 	// pi's name for the untagged opening of the system prompt; the text itself is Denis's `soul.md`.
 	section("preamble", async () => (await readHouseFile(currentHouse().soul)) ?? DEFAULT_SOUL, { tag: false }),
 	section("cwd", (input) => input.env?.cwd),
@@ -151,9 +173,9 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	// What exists beyond the tool list, by name and purpose only: a capability arrived without its schemas being paid
 	// for. Absent when no integration is enabled with a tools face.
 	section("integrations", () => renderIntegrations()),
-	// The tools a script can call, in pi-durable's own words: its `codemode` section object, declared here so this file
-	// stays the whole prompt and `delivery` stays the prompt's last word. A vendor extension installed with its section
-	// would place it by extension order instead, which is the order this list exists to decide.
+	// The tools a script can call, in pi-durable's own words: its `codemode` section object, declared here so the prompt
+	// stays one list and `delivery` stays its last word. A vendor extension installed with its section would place it by
+	// extension order instead, which is the order this list exists to decide.
 	CODEMODE_SECTION,
 	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.
 	section("delivery", () => DELIVERY_INVARIANT),
@@ -164,6 +186,45 @@ function environmentOf(input: ResidentInput): ExecutionEnv {
 	if (input.env === undefined) throw new Error("no execution environment: the agent's files are on the tool machine");
 	return input.env;
 }
+
+/** The keys this file owns, which no contribution may render under. */
+export const BUILTIN_SECTION_KEYS: readonly string[] = BUILTIN_SECTIONS.map((promptSection) => promptSection.key);
+
+/**
+ * The whole prompt for one boot: what this file declares, with the integrations' blocks where they belong.
+ *
+ * Contributed sections sit after the `integrations` pointer, because a paragraph about one integration belongs beside
+ * the list that names it: "what exists beyond the tool list", then "how to speak in this one". They sort by integration
+ * name, so two integrations render in the same order whatever order the array lists them in, and two renders of one
+ * build are the same bytes.
+ *
+ * The text is read once, here, and the render returns that same string every turn: a contributed section cannot re-price
+ * the prefix by computing something new. A section that is too long is capped instead of refused, because the operator
+ * can see the marker and fix it, and a boot that refuses over length is a bot that will not start over prose.
+ */
+export function promptSections(installed: readonly InstalledIntegration[]): readonly PromptSection[] {
+	const at = BUILTIN_SECTIONS.findIndex((promptSection) => promptSection.key === "integrations") + 1;
+	const contributed = [...installed]
+		.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+		.flatMap((integration) =>
+			integration.sections.map((contribution) => {
+				const text = capText(contribution.text, CONTRIBUTION_MAX_CHARS);
+				return section(contribution.key, () => text);
+			}),
+		);
+	return [...BUILTIN_SECTIONS.slice(0, at), ...contributed, ...BUILTIN_SECTIONS.slice(at)];
+}
+
+/**
+ * The prompt this build renders: its own sections, then whatever `INTEGRATIONS` contributes.
+ *
+ * `install()` runs here, at import, which is what "resolved before the first turn" means for code that ships with the
+ * server: a contribution that cannot be validated throws before a conversation exists, so there is no half-loaded state
+ * to reason about. The reserved keys are this file's, because the prompt is the only thing that knows what it owns.
+ */
+export const PROMPT_SECTIONS: readonly PromptSection[] = promptSections(
+	install(INTEGRATIONS, { reservedKeys: BUILTIN_SECTION_KEYS }),
+);
 
 /** The only extension in the runtime that has sections. Everything else contributes tools, hooks or state. */
 export const Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS });

@@ -128,14 +128,18 @@ you everything the agent is told. A test fails if another base extension grows a
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 | `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
+| *(a contributed key)* | `<key>` | the text one listed integration declares at boot, capped at 600 characters, sorted by integration name and placed here, between the pointer and `codemode`; refused if it collides with a key in this table (`src/integrations/index.ts`). This build contributes none |
 | `codemode` | `<codemode>` | the vendor's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
 
-Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
+Section text is one of five kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
 `profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the guidelines, the
-delivery invariant, the widget pointer), or a **rendering of something the prompt does not own** — the **boot
+delivery invariant, the widget pointer), a **rendering of something the prompt does not own** — the **boot
 configuration** (`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one
 file are the same bytes) and the **vendor-rendered `codemode` section**, whose text is pi-durable's composition and
-whose position alone is mason's.
+whose position alone is mason's — or a **value a listed integration declares at boot** (`src/integrations/`, ADR-0009).
+The fifth kind is a string fixed when the process starts and returned unchanged on every render, so a contribution cannot
+re-price the prefix; the integration supplies the text, and `prompt.ts` supplies the tag, the position, the sort order
+and the cap.
 
 There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
 tree so it can change its own extensions, themes and skills; mason's agent is not meant to have that. A test asserts
@@ -285,7 +289,10 @@ is a thing to leave readable by every other account on the machine.
 `integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a trigger that wakes
 it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
 there and a list that changed under a running turn would re-price the prefix and change what the model can do between
-two messages of one conversation.
+two messages of one conversation. Every key inside an entry is one this build reads (`enabled`, `description`, `tools`,
+`trigger`, `commands`): a channel `docs/CONNECTOR-PROTOCOL.md` declares and the code does not have (`state`, `reply`,
+`also`) refuses the boot naming the field, and so does a key mason has never heard of. An ignored key is a capability its
+author believed they had — a `reply` that never routed, a `tools.headers` credential that was silently dropped.
 
 The skills walk is one accepted deviation from the rest of this section: it reads symbolic links as nothing (a link is
 skipped rather than followed) and it does not honour a `.gitignore` inside `agent/skills/`, so a skill kept out of the

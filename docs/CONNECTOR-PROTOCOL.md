@@ -61,8 +61,9 @@ Each entry carries one paragraph, operator-authored, injected once per turn:
 ## Versioning
 
 `v` in the envelope is the event contract's version, and stays `1` until something breaks it; unknown fields are ignored,
-so v1 grows. The connector contract's own version is the file's: an entry that uses `state` or `reply` without a mason
-that knows them refuses the boot with the field's name, which is the same refusal a bad hook name gets today. A connector
+so v1 grows. The connector contract's own version is the file's: an entry that uses `state`, `reply` or `also` without a
+mason that knows them refuses the boot with the field's name, which is the same refusal a bad hook name gets — and so
+does any other key the build does not read, because an ignored channel is one its author believed was working. A connector
 built against a newer mason degrades: it loses the channels that mason does not have and keeps the rest, because every
 channel is declared separately.
 

@@ -2,9 +2,10 @@
  * Integrations: the services mason reaches, in one file in the server's half.
  *
  * An integration is a service with up to two network faces (ADR-0003): an MCP endpoint that lends the bot tools, and one
- * authenticated POST that wakes it with events. Everything that differs between integrations is configuration read at
- * boot — no TypeScript module, no extension, no client code per system — so this file and the reader below it are the
- * whole of mason's per-integration surface.
+ * authenticated POST that wakes it with events. This file is that half: the configuration read at boot, and it is the
+ * whole of an integration mason does not trust. One mason trusts may also bring code that contributes prompt text
+ * (`src/integrations/index.ts`, `docs/adr/0009-an-integration-may-bring-code.md`), which is a second surface with its own
+ * loader and its own invariants; nothing here reads it.
  *
  * The file is service-owned (`service/integrations.json`), never a path inside `agent/`: a tool that could rewrite its
  * own capability is not a capability a person chose. It is written through `npm run integration`, and read exactly once
@@ -35,23 +36,36 @@ const TRIGGER_SECRET_MIN = 32;
  * An integration's name: what a tool name is built from (`mcp__<name>__<tool>`), so lowercase letters, digits and
  * dashes only. `_` is absent on purpose: it is the tool-name separator, and a name spelling itself `my_server` would
  * collide with `my-server` in a tool list without either entry being wrong.
+ *
+ * Exported because an integration's code contributes under the same name (`src/integrations/index.ts`): one rule for one
+ * noun, rather than a second regex that accepts what the file refuses.
  */
-const NAME = /^[a-z0-9][a-z0-9-]*$/;
+export const INTEGRATION_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/** The keys an entry may carry, in this build. Inside an entry the set is closed; only the document itself grows. */
+const ENTRY_KEYS = ["commands", "description", "enabled", "tools", "trigger"];
+
+/**
+ * Channels `docs/CONNECTOR-PROTOCOL.md` declares and this build does not have. Named separately so the refusal says
+ * which: an operator who wrote `reply` against the contract is told it is not here, not that they invented a key.
+ */
+const DECLARED_CHANNELS = new Set(["also", "reply", "state"]);
+
+/** The keys inside the tools face and the trigger face. Closed for the same reason, one layer down. */
+const TOOLS_KEYS = ["required", "url"];
+const TRIGGER_KEYS = ["hook", "secret"];
 
 /** The tools half: an MCP endpoint over Streamable HTTP. */
 export interface IntegrationTools {
 	readonly url: string;
 	/** Opt in to the old behaviour: an unreachable server refuses the boot instead of removing its tools. */
 	readonly required?: boolean;
-	/** A key mason does not know survives a rewrite, here as everywhere in this file. */
-	readonly [key: string]: unknown;
 }
 
 /** The trigger half: one signed door, firing one hook. The secret is never printed by anything. */
 export interface IntegrationTrigger {
 	readonly hook: string;
 	readonly secret: string;
-	readonly [key: string]: unknown;
 }
 
 /** One integration, as the file holds it. A face that is present is a face that is on: there is no per-face switch. */
@@ -67,7 +81,6 @@ export interface Integration {
 	 * none, so an existing trigger secret gains no vocabulary by being read.
 	 */
 	readonly commands?: readonly CommandName[];
-	readonly [key: string]: unknown;
 }
 
 /** `service/integrations.json`. */
@@ -89,7 +102,9 @@ export async function readIntegrations(paths: HousePaths): Promise<Integrations>
 
 /**
  * The file and its validated entries. The raw top level travels with them so a writer can put a person's own keys back
- * where they were: `integrations.json` grows, and a key mason has never heard of is not mason's to drop.
+ * where they were: the document grows, and a key at its own level (`$schema`, a note) is not mason's to drop. Inside an
+ * entry the set is closed, because a key there changes what mason does and a key it silently ignored is a capability its
+ * author believed they configured.
  */
 async function load(
 	path: string,
@@ -142,14 +157,17 @@ function parseFile(
 }
 
 /**
- * One entry, checked and normalised, with every key mason does not know still on it.
+ * One entry, checked and normalised, with nothing on it mason does not read.
  *
  * The known keys are rebuilt rather than trusted: `enabled: "false"` is a string, and a string is truthy, so a file
- * that says it in quotes would leave an integration on that its author believed off.
+ * that says it in quotes would leave an integration on that its author believed off. And the key set is closed: a key
+ * mason does not read refuses the boot naming it, which is what `docs/CONNECTOR-PROTOCOL.md` promised for `state` and
+ * `reply` and what the code used to do for neither — it spread them through, so an operator's channel was accepted,
+ * ignored and preserved forever.
  */
 function validate(where: string, name: string, value: unknown): Integration {
 	if (name === "") throw new Error(refusal(where, name, "has no name: the key is the name"));
-	if (!NAME.test(name)) {
+	if (!INTEGRATION_NAME.test(name)) {
 		throw new Error(
 			refusal(
 				where,
@@ -163,6 +181,19 @@ function validate(where: string, name: string, value: unknown): Integration {
 		throw new Error(refusal(where, name, "is not a JSON object"));
 	}
 	const raw = value as Record<string, unknown>;
+	// A channel the contract declares and this build does not have, refused by name before anything else reads the entry.
+	for (const key of Object.keys(raw)) {
+		if (!DECLARED_CHANNELS.has(key)) continue;
+		throw new Error(
+			refusal(
+				where,
+				name,
+				`uses "${key}", which docs/CONNECTOR-PROTOCOL.md declares and this build does not have: a channel mason ` +
+					"cannot route is refused rather than accepted and ignored",
+			),
+		);
+	}
+	assertClosed(where, name, raw, ENTRY_KEYS);
 	const enabled = raw.enabled;
 	if (typeof enabled !== "boolean") {
 		throw new Error(
@@ -178,7 +209,6 @@ function validate(where: string, name: string, value: unknown): Integration {
 	const trigger = readTrigger(where, name, raw.trigger);
 	const commands = readCommands(where, name, raw.commands);
 	return {
-		...raw,
 		enabled,
 		...(description === undefined ? {} : { description }),
 		...(tools === undefined ? {} : { tools }),
@@ -187,12 +217,35 @@ function validate(where: string, name: string, value: unknown): Integration {
 	};
 }
 
+/**
+ * Refuse every key this build does not read, naming it.
+ *
+ * The alternative, and what this file did until now, is to keep the key and ignore it. That reads as generous and is the
+ * quieter failure: `"reply": "send_message"` was accepted, stored and never routed, so an operator had a channel the
+ * contract described and the server did not have. A closed set also closes the security hole one layer down, where a
+ * `tools.headers` an operator added for a hosted MCP server was dropped on the floor with no error (`#85`).
+ */
+function assertClosed(where: string, name: string, raw: Record<string, unknown>, known: readonly string[]): void {
+	for (const key of Object.keys(raw)) {
+		if (known.includes(key)) continue;
+		throw new Error(
+			refusal(
+				where,
+				name,
+				`has the key "${key}", which this build does not read: the keys here are ${known.join(", ")}. A key ` +
+					"mason would ignore is refused rather than stored, because it is a capability its author believed in",
+			),
+		);
+	}
+}
+
 function readTools(where: string, name: string, value: unknown): IntegrationTools | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "tools" face that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
+	assertClosed(where, name, raw, TOOLS_KEYS);
 	const url = raw.url;
 	if (typeof url !== "string" || !isHttpUrl(url)) {
 		throw new Error(
@@ -214,7 +267,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 			),
 		);
 	}
-	return { ...raw, url, ...(required === undefined ? {} : { required }) };
+	return { url, ...(required === undefined ? {} : { required }) };
 }
 
 /**
@@ -255,6 +308,7 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
 		throw new Error(refusal(where, name, 'has a "trigger" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
+	assertClosed(where, name, raw, TRIGGER_KEYS);
 	const hook = raw.hook;
 	if (typeof hook !== "string" || hook.trim() === "") {
 		throw new Error(
@@ -271,7 +325,7 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
 			),
 		);
 	}
-	return { ...raw, hook, secret };
+	return { hook, secret };
 }
 
 /**
