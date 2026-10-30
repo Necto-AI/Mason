@@ -1,7 +1,7 @@
 /**
  * Who may talk to mason.
  *
- * One owner, a few named credentials, and every entry point proving it: the Chord socket, `/api/*`, the webhook. A
+ * One owner, a few named credentials, and every entry point proving it: the Chord socket and `/api/*`. A
  * token is minted once (`npm run token -- add --label phone`), shown once, and stored as a hash in
  * `~/.mason/service/config.json` (mode 0600) — that file is exactly the kind of thing that ends up pasted into a bug report,
  * so it must not hold a live credential.
@@ -185,7 +185,7 @@ export function verifyToken(records: readonly TokenRecord[], presented: string |
 }
 
 /**
- * The token a request presents: a bearer header (native clients, curl, a webhook sender), else the query string (a
+ * The token a request presents: a bearer header (native clients, curl, a script), else the query string (a
  * browser cannot set a header on a WebSocket, and a pairing link is a URL).
  */
 export function presentedToken(request: IncomingMessage): string | undefined {
@@ -349,7 +349,7 @@ export function createTokenStore(home: string): TokenStore {
 
 /**
  * Which device is calling. Four ways in, tried in the order a client would use them: a bearer token (native app,
- * curl, a webhook), the query string (a pairing link, or a socket where a header is impossible), the session cookie
+ * curl), the query string (a pairing link, or a socket where a header is impossible), the session cookie
  * (a paired browser), and nothing else.
  */
 export async function authenticate(request: IncomingMessage, store: TokenStore): Promise<AuthResult> {

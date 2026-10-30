@@ -19,7 +19,6 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
-	bodyRequestId,
 	deliveryToolForTurn,
 	deliveryToolOf,
 	deliveryToolsIn,
@@ -29,7 +28,6 @@ import {
 	builtinHooks,
 	HOOK_INPUT_PREFIX,
 	HooksManager,
-	IDENTITY_WINDOW_MS,
 	scheduledRequestId,
 	type EventHookConfig,
 } from "../src/server/hooks.ts";
@@ -45,7 +43,7 @@ interface TestClock {
 	advance(ms: number): void;
 }
 
-/** Half a second past a minute boundary: inside one `IDENTITY_WINDOW_MS` window with room on both sides. */
+/** Half a second past a minute boundary: a slot boundary with room on both sides. */
 const ALIGNED_START = "2026-10-19T09:00:00.500Z";
 
 function testClock(startIso: string): TestClock {
@@ -57,17 +55,6 @@ function testClock(startIso: string): TestClock {
 			nowMs += ms;
 		},
 	};
-}
-
-/** A manager that never submits: enough for `define()` and for building keys. */
-function managerWithClock(clock: TestClock, onReport?: (error: unknown) => void): HooksManager {
-	return new HooksManager({
-		conversation: async () => {
-			throw new Error("this manager only defines hooks");
-		},
-		now: clock.now,
-		...(onReport === undefined ? {} : { onReport }),
-	});
 }
 
 /** A throwaway home: the suite must never create or read the developer's `~/.mason`. */
@@ -177,27 +164,6 @@ describe("a fire's identity", () => {
 		});
 	});
 
-	it("is the body per window when the sender cannot name it: replays collapse, the next window fires", async () => {
-		await withFiringManager(async (hooks, runtime, clock) => {
-			const body = { message: "anything new?", tags: ["daily"] };
-			const first = await hooks.fire("digest", { requestId: bodyRequestId("digest", body, clock.at()) });
-			await first.wait(BACKGROUND_CONTEXT);
-
-			// A redelivery of the same bytes, seconds later: one event, one turn.
-			clock.advance(IDENTITY_WINDOW_MS - 1_000);
-			const replay = await hooks.fire("digest", { requestId: bodyRequestId("digest", body, clock.at()) });
-			assert.equal(replay.id, first.id);
-			assert.equal(await hookEntryCount(runtime), 1);
-
-			// The next window: the same digest is news again, because a bucket is not a body hash remembered forever.
-			clock.advance(2_000);
-			const next = await hooks.fire("digest", { requestId: bodyRequestId("digest", body, clock.at()) });
-			await next.wait(BACKGROUND_CONTEXT);
-			assert.notEqual(next.id, first.id);
-			assert.equal(await hookEntryCount(runtime), 2);
-		});
-	});
-
 	it("gives one key per schedule slot, so a re-arm cannot double-fire", async () => {
 		const clock = testClock(ALIGNED_START);
 		const slotStart = clock.at();
@@ -239,21 +205,6 @@ describe("a fire's identity", () => {
 		assert.notEqual(gestureRequestId("digest"), gestureRequestId("digest"));
 		assert.match(gestureRequestId("digest"), /^hook:digest:gesture:[0-9a-f-]{36}$/);
 		assert.equal(gestureRequestId("digest", "pressed-once"), "hook:digest:gesture:pressed-once");
-	});
-
-	it("hashes a body's meaning, not its key order or its array placeholders", () => {
-		const nowMs = Date.parse(ALIGNED_START);
-		assert.equal(
-			bodyRequestId("digest", { a: 1, b: [1, 2] }, nowMs),
-			bodyRequestId("digest", { b: [1, 2], a: 1 }, nowMs),
-			"JSON objects are unordered",
-		);
-		assert.notEqual(
-			bodyRequestId("digest", { a: [1, 2] }, nowMs),
-			bodyRequestId("digest", { a: [2, 1] }, nowMs),
-			"array order is part of the body",
-		);
-		assert.notEqual(bodyRequestId("digest", { a: 1 }, nowMs), bodyRequestId("other", { a: 1 }, nowMs), "per hook");
 	});
 });
 
@@ -309,44 +260,7 @@ describe("a fire's kind", () => {
 	});
 });
 
-describe("a hook's authoring rule", () => {
-	it("warns through the report channel when it fires inside the identity bucket, and is quiet above it", () => {
-		const reports: unknown[] = [];
-		const hooks = managerWithClock(testClock(ALIGNED_START), (error) => reports.push(error));
-		hooks.define({ ...digest, id: "fast", intervalMs: IDENTITY_WINDOW_MS - 1 });
-		assert.equal(reports.length, 1, "a hook faster than the identity bucket is warned about");
-		assert.match(String(reports[0] ?? ""), /identity bucket/);
-		hooks.define({ ...digest, id: "slow", intervalMs: IDENTITY_WINDOW_MS });
-		hooks.define({ ...digest, id: "manual" });
-		assert.equal(reports.length, 1, "at the bucket, and with no interval at all, there is nothing to warn about");
-	});
-
-	it("warns in the log when the host has no report channel", () => {
-		const warnings: string[] = [];
-		const warn = console.warn;
-		console.warn = (message: string) => {
-			warnings.push(message);
-		};
-		try {
-			const hooks = managerWithClock(testClock(ALIGNED_START));
-			hooks.define({ ...digest, id: "fast", intervalMs: IDENTITY_WINDOW_MS - 1 });
-			assert.equal(warnings.length, 1, "the warning is not lost when nobody is listening to reports");
-		} finally {
-			console.warn = warn;
-		}
-	});
-
-	it("is quiet for a fast hook whose senders name their fires, however they name them", () => {
-		const reports: unknown[] = [];
-		const hooks = managerWithClock(testClock(ALIGNED_START), (error) => reports.push(error));
-		const fast = { ...digest, intervalMs: 5_000 };
-		hooks.define({ ...fast, id: "named-ids", identify: "request" });
-		hooks.define({ ...fast, id: "named-bodies", identify: "body" });
-		assert.deepEqual(reports, [], "a declared identity is exact, so the bucket cannot lose a fire");
-	});
-});
-
-// These two run a sub-minute interval so arming is observable — `define()` warns about that rate, by design.
+// These two run a sub-minute interval so arming is observable without waiting a minute.
 describe("a disabled hook", () => {
 	it("is not armed by startup walking every hook", async () => {
 		await withRuntime(async (runtime) => {
