@@ -2,14 +2,14 @@
  * Text from outside the conversation: read, never obeyed.
  *
  * The authority question has an answer the prompt can carry — Denis's own words direct the agent, everything else is
- * data — but only if the boundary is visible at the point where the text arrives. A webhook body spliced into an
- * instruction reads exactly like an instruction, so it is fenced, labelled, and capped before the model sees it.
+ * data — but only if the boundary is visible at the point where the text arrives. A delivery's payload spliced into
+ * an instruction reads exactly like an instruction, so it is fenced, labelled, and capped before the model sees it.
  *
  * Two properties matter here, and neither is about politeness:
  *
  * - the payload cannot forge the boundary: a line that looks like the closing marker is defused, so a sender cannot
  *   end the fence and continue in the instruction's voice;
- * - the payload cannot grow the prompt without limit: an 8 KB ceiling is far more than a real webhook payload and far
+ * - the payload cannot grow the prompt without limit: an 8 KB ceiling is far more than a real event carries and far
  *   less than an attacker would want.
  *
  * The fence is not a sandbox. It raises the cost of an injection and gives the model a rule it can apply; the answer to
@@ -17,7 +17,7 @@
  */
 import { capText } from "./house.ts";
 
-/** Far more than any real webhook body, and far less than an attacker wants. */
+/** Far more than a real event carries, and far less than an attacker wants. */
 export const UNTRUSTED_MAX_CHARS = 8_000;
 
 /**

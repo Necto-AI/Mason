@@ -459,7 +459,6 @@ test("a second integration's hook is answered by its own message tool", async ()
 		name: "Matrix message",
 		description: "A message in the team's Matrix room.",
 		enabled: true,
-		identify: "request" as const,
 		promptTemplate: `A message arrived in the room. Answer it with ${MATRIX}, in the room the payload names.\n{{payload}}`,
 	};
 	const script = recorder([
