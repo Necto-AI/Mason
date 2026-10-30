@@ -7,7 +7,7 @@ mason is a headless, always-on agent backend, and an interface attaches to it (`
 plus the contracts a chat or a console speaks. mason owns the tool and the projection — what the model may call, and
 what may cross the wire — and never the rendering. The operator console in this repository is frozen and only has to
 keep working (§4.3).
-1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (cron/interval timers, webhooks, manual triggers) so the agent can proactively message the user first.
+1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, an integration's signed trigger, the transcript's controls) so the agent can proactively message the user first.
 2. **Chord Client-Server Transport:** Uses `@earendil-works/chord` (`createHost`, `remote`, `acceptWebSockets`, `webSocketLink`) to replicate what the projection derives — `transcript`, `queued` and `agentStatus` — to connected clients in real time; the durable `ConversationView` itself never crosses the wire (§4.1a).
 3. **A Widget Tool and Its Artifact Contract:** `generateSandboxedUi` is a `pi-durable` extension (`GenerateSandboxedUiExtension`) in `BASE_EXTENSIONS`, so every conversation is offered the tool from its first turn and on every turn after it: there is no toggle, and therefore no tool that appears mid-conversation (§3.5). The server maps the call's arguments to widget content and only that content crosses the wire; framing, streaming and drawing it is a client's job (§5). The manual the model needs — parameter order, design system, sandbox limits — lives in `skills/generative-ui/SKILL.md`, which it reads when it decides to build a widget.
 
@@ -44,7 +44,7 @@ keep working (§4.3).
 │   │   │   ├── memory.ts              # The `remember` tool: one dated fact in agent/log/
 │   │   │   ├── delivery.ts            # The send_to_user tool and the gate: which call reaches this turn's reader
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
-│   │   ├── hooks.ts                   # Proactive event hooks (timers, HTTP webhook trigger, proactive submit)
+│   │   ├── hooks.ts                   # Proactive event hooks (timers, a trigger's fire, proactive submit)
 │   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
 │   │   ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
 │   │   └── main.ts                    # HTTP + WebSocket server + Chord host serving AgentService
@@ -160,7 +160,7 @@ what the runtime installs.
 
 ### 3.3 `src/server/hooks.ts` — Proactive Event Hooks Engine
 
-Allows the agent to message the user first when events occur (timers, webhooks, or external triggers):
+Allows the agent to message the user first when events occur (timers, an integration's trigger, the retry supervisor):
 
 ```ts
 export interface EventHookConfig {
@@ -168,8 +168,7 @@ export interface EventHookConfig {
   name: string;
   description: string;
   enabled: boolean;
-  intervalMs?: number; // If set, runs periodically when enabled
-  identify?: "request" | "body"; // How this hook's senders name a fire, when they all do
+  intervalMs?: number; // If set, runs periodically when enabled, one fire per interval slot
   promptTemplate: string;
   lastFiredAt?: string;
   fireCount: number;
@@ -201,11 +200,10 @@ export interface EventHookConfig {
      ```
   3. Because `entry.kind === "app.hook"` carries `model: [{ role: "user", content: ... }]` under the hood (per `pi-durable` custom input entries), `pi-durable` immediately starts a generation run! The `app.hook` entry stays in the conversation and never crosses the wire (§4.1a): what a connected client sees is the turn's message appear in the transcript, unannounced, as the assistant proactively streams its answer.
   4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
-     - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Exact, and permanent.
-     - `bodyRequestId(hookId, body, nowMs)` → `hook:<id>:body:<hash>:<bucket>`: a sender that cannot. One event per body per identity bucket (**T = 60s**, `IDENTITY_WINDOW_MS`), bucketed by time rather than hashed forever, so a redelivery inside the bucket collapses while tomorrow's identical digest still fires. The bucket is a division of the clock, not a span of time: a redelivery that crosses a bucket boundary is a new event, however close it is.
+     - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Every way in does, and the event door puts the integration's name inside the key. Exact, and permanent, so a redelivery days later is the same fire.
      - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
      - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
-     `define()` warns when an interval is shorter than the identity window (a body-identified fire would land in the same bucket twice); a hook whose senders always name their fires says so in `identify` and is not warned about.
+     A fire that names its delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
   5. A hook trigger steers: `whenBusyFor("hook")` places it in the turn in flight, and pi-durable puts it at the boundary after the tool round that is running, so a message arriving mid-work is read by that work. The case that decided it: a chat message cancelling the poster the agent was rebuilding sat queued for twenty-eight minutes and the poster went out anyway. A hook that asks for a follow-up gets one, because a routine whose report has nothing to interrupt for says so at the submit (`src/server/admission.ts`).
   6. **Who hears the answer.** The fired input is the whole of the signal. It opens with `[EVENT HOOK: <name>]` (`HOOK_INPUT_PREFIX`), and the delivery is the first `mcp__<integration>__send_message` the hook's instruction names (`DELIVERY_TOOL_NAME`, matched against everything before the untrusted fence, because a payload that could name a tool would let a sender choose where the agent answers). `deliveryToolForTurn()` in `src/server/hooks.ts` is where both halves are read, and both consumers read it rather than a name of their own: `send_to_user` refuses in a turn whose hook names a chat, and the gate counts the named tool as that turn's delivery (§3.4). A hook whose instruction names no chat tool has no chat to answer in — the morning brief, `github-activity`, a retry — and there `send_to_user` is a real delivery, answered with the sentence that says the console is the reader and nobody was reached.
 - **Built-in hooks:**
@@ -213,7 +211,6 @@ export interface EventHookConfig {
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
   - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though an integration's trigger may name it, and a hook nothing calls costs nothing.
   - `team-chat` (a message in the team chat, as the Telegram integration's trigger renders one): enabled, no interval — a chat message is not a schedule. It names the sender, the chat and the message a reply answers, and asks the agent to decide whether to answer there with `mcp__telegram__send_message` or stay quiet, because every answer is a message a person reads.
-  - Custom webhook (`POST /api/hooks/:id/fire` with JSON body `{ message?, data? }`) so external scripts/cron/systemd timers can wake the agent at any time. The delivery's id is the `x-request-id` header or a `requestId` in the body (the explicit tier); a sender that gives none is deduplicated by its body per bucket.
 - **`integration.trigger`: the generic event door** (`src/server/events.ts`, `src/server/main.ts`). An integration's trigger is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It has one verb — deliver an event — and that verb becomes one fire of the hook its config names, which is a prompt with the payload fenced as untrusted data (above), or one of the commands its config declares. `POST /api/events/<integration>` is the path; `<integration>` is a configured name, and the secret that verifies the body is that integration's own. The route is outside the token gate because the HMAC is the door.
   - **Envelope v1.** `{ "v": 1, "id": "issue-1421-opened", "kind": "issue.opened", "payload": "Ilya opened issue #1421 …" }`. `v` must be the integer `1`: a version mason does not know is a bug in the sender, refused `400` rather than guessed at. `id` is the envelope id and the fire's identity — non-empty, at most 200 characters, and one line: a control character in it is refused, because the accept log prints it as-is and a newline would forge the rest of the line — unique within that integration — and it becomes ``explicitRequestId(hook.id, `${name}:${id}`)``, the integration's name inside the key because a sender only promises uniqueness inside its own stream: two integrations on one hook that both call a delivery `1` are two events, and each fires. A duplicate from the same integration is the same fire however much later it arrives: the durable log never forgets a request id, so no table of seen ids exists, and a redelivery after a restart is still one event. `kind` is a short token labelling what happened — letters, digits and `.` `_` `:` `-`, the first character a letter or a digit, at most 64 — never free text: it becomes one line of the accept log and the prompt's label, so a newline or a space in it is refused, and `issue.opened`, `push` or `chat.message` are the shapes it names. It is a label rather than a dispatch key for every kind except one: `command` says the payload names something mason should do (§3.3, the command kind below), and no other kind makes mason decide anything. `payload` is **a string** (at most 2 000 characters) written by the sender for a person to read; mason never parses structure, and an over-long payload is refused rather than truncated, because a truncated event is a lie about what happened. Unknown keys are ignored (a sender may add fields before mason knows them), and a body that is not a JSON object is a `400` naming the field.
   - **The command kind.** An integration's entry may declare `"commands": ["stop", "compact", "clear", "status"]`, out of a closed set (`COMMAND_NAMES`, `src/server/events.ts`): empty or absent means none, so an existing trigger secret gains no vocabulary by being read, and a name mason does not have refuses the boot, naming the file and the whole set. The declaration is what the secret may spend, and `npm run integration -- commands <name> <a,b,c>` is how it is written. A signed body with `kind: "command"` carries the command in `payload`: the name, and at most one argument after the first run of whitespace (`compact keep the pricing thread`). Three rules hold at the door, all in `src/server/events.ts` so that `main.ts` only dispatches:
@@ -477,7 +474,7 @@ later — separately, deliberately, and with its own access rules.
 
 ### 4.1b Who may talk to the server — the door
 
-There is one owner, so every entry point proves it: the Chord socket, `/api/*`, the webhook. `src/server/auth.ts` owns
+There is one owner, so every entry point proves it: the Chord socket and `/api/*`. `src/server/auth.ts` owns
 the rule; `src/server/main.ts` applies it in exactly five places — the socket's `principal(request)`, the pairing
 exchange in `handleRequest`, the gate at the top of `handleRequest` that `/api/*` passes through, the roster refusal
 that gate applies to a claimed name, and the same refusal at the socket handshake, which a removed person's live socket
@@ -567,20 +564,22 @@ said* is the fence in §3.3 — a payload arrives labelled as data, and a reques
 The door decides *who may speak*; these are the bounds that hold after it has. Each one answers a cost a caller
 controls, and each is in `src/server/limits.ts` or `src/server/env.ts` rather than scattered through the handler.
 
-**Bytes.** `POST /api/hooks/:id/fire` reads at most `HOOK_BODY_MAX_BYTES` (32 KiB). `content-length` is checked first so
-an oversized body is refused without being received, and the running total is checked too, because a sender that chunks
-the body declares nothing. Over the cap: `413` with `{ error, maxBytes }`. A webhook body is a summary, a URL or a status
-line; 32 KiB is already generous for that.
+**Bytes.** A small JSON write to `/api/join` is capped at `JSON_BODY_MAX_BYTES` (32 KiB), and an event delivery at
+`EVENT_BODY_MAX_BYTES` (256 KiB, §3.3). `content-length` is checked first so an oversized body is refused without being
+received, and the running total is checked too, because a sender that chunks the body declares nothing. Over the cap:
+`413` with `{ error, maxBytes }`, never a truncation.
 
-**Turns.** Fires are counted per hook id in a sliding window: `HOOK_FIRE_LIMIT` (6) per `HOOK_FIRE_WINDOW_MS` (60 s), and
-the refusal is `429` with `retry-after`, because a correct sender should retry rather than treat a budget as a failure.
-The window slides rather than resets, so a sender cannot spend the whole budget at the end of one window and again at the
-start of the next. Honest senders here fire hourly or daily; a sender that needs more than six fires a minute has a queue
-of the wrong shape. In memory and per process is the right scope: what it protects is this process's spending, so a
-restart that forgets the window also forgets the queue it was protecting.
+**Turns.** Deliveries are counted per integration name in a sliding window: `EVENT_FIRE_LIMIT` (6) per
+`EVENT_FIRE_WINDOW_MS` (60 s), and the refusal is `429` with `retry-after`, because a correct sender should retry
+rather than treat a budget as a failure. The window slides rather than resets, so a sender cannot spend the whole
+budget at the end of one window and again at the start of the next. Honest senders here deliver hourly or daily; a
+sender that needs more than six deliveries a minute has a queue of the wrong shape. In memory and per process is the
+right scope: what it protects is this process's spending, so a restart that forgets the window also forgets the queue
+it was protecting.
 
-The counter lives in the fires, not in the hook, so it applies before the hook is looked up and before a body is read:
-an invented hook id spends one of the sender's six, which is what makes the limit a budget rather than a suggestion.
+The counter lives in the door, not in the hook, so it applies before the hook is looked up and before a body is read:
+an invented integration name spends one of the sender's six, which is what makes the limit a budget rather than a
+suggestion.
 
 **What a tool can see.** A tool call is arbitrary code in the agent's own shell, so anything the server carries in its
 environment is one `echo $NAME` away from the transcript and the provider: an API key exported for one experiment, a

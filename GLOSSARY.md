@@ -120,7 +120,7 @@ queue.
 _Avoid_: message (that is what is read afterwards), prompt, request
 
 **hook**:
-Something outside the conversation that can wake the bot: an integration event, a webhook, a schedule.
+Something outside the conversation that can wake the bot: an integration event, a schedule slot, a gesture.
 _Avoid_: trigger, event source, listener
 
 **fire**:
