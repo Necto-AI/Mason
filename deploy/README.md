@@ -89,6 +89,8 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: the relay's transcript endpoint, the value compose.telegram.yaml defaults to
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/home/user/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
+   HTTPS_PROXY=http://vpn:1080            # optional: the model's egress, when the provider is not reachable directly
+   NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr  # …and the names that must not go through it
    ```
 
 3. **Provider credentials**, in the directory `MASON_PI_AGENT_DIR` names. This is pi's own layout, unchanged — two
@@ -358,14 +360,45 @@ bridge with a gateway — being on it would have given the container its own way
 sidecar is the only container that stands on both (`mason-egress` in, `mason-edge` out), and `mason-telegram` is the only
 other member of `mason-egress`, so that network is that container's single route and the proxy is its only address there.
 The proxy is not a fence between mason and an integration: mason stands on `mason-edge` as the sidecar does, so mason
-can open `vpn:1080` too — and it changes nothing, because `mason-edge` already gives mason egress of its own, which is
-why mason never joins `mason-egress` and has no use for the proxy. What `mason-egress` keeps off it is the tool
-machine: `mason-env` joins neither network, so it has no route to the proxy at all — its own route out is `mason-out`,
+can open `vpn:1080` too — and joining the network adds nothing it did not already have, because `mason-edge` gives mason
+egress of its own. It joins it only so that a host which filters the *provider* the way it filters Telegram has somewhere
+to send the model traffic (`HTTPS_PROXY`, "The model's egress", below). What `mason-egress` keeps off the proxy is the
+tool machine: `mason-env` joins neither network, so it has no route to the proxy at all — its own route out is `mason-out`,
 which carries mason's outbound-only containers and nothing else (see "What is exposed, and what is not"). The proxy's
 config is a real server's address and key, so it is a file the operator owns — copy `vpn/config.example.json` to
 `vpn/config.json` (gitignored) and fill in the TODOs; it is mounted read-only, never baked into an image, and the
 sidecar publishes no port, because a published SOCKS port is an open proxy. Its mixed inbound serves SOCKS and HTTP on
 1080, and only the integrations that name it use it.
+
+## The model's egress: when the provider is blocked, not down
+
+`mason-edge` gives the server a direct route to the provider, and on some hosts that route is filtered rather than
+absent: the TCP connection opens, the TLS handshake reaches the provider's edge, and nothing comes back. Every generation
+then ends `Request timed out` after pi-ai's own retries, the submission settles `unanswered`, and the person on the other
+end reads silence — measured on 2026-10-30, two messages unanswered for 3 and 12 hours while `curl` from the same host
+reached `github.com` normally and `opencode.ai` stalled in the handshake.
+
+The stack already runs the answer for Telegram. Point the server at the same sidecar and the model leaves the way the
+relay does — two lines in `deploy/.env`, and nothing else:
+
+```
+HTTPS_PROXY=http://vpn:1080
+NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr
+```
+
+- The server installs an undici dispatcher that reads those variables (`src/server/http-proxy.ts`, the same dispatcher
+  pi's own CLI installs), so the model client inherits it. Nothing else in the stack changes and the integrations that
+  already use the proxy are unaffected.
+- **`NO_PROXY` is the part that bites.** Everything mason calls by name — the integrations on `mason-mcp`, the
+  transcriber — is not reachable through the sidecar, and a name that is not listed is a request that goes out and never
+  comes back. The compose default lists the names this repository ships; a deployment that adds an integration adds its
+  service name here too.
+- The sidecar lives in `compose.telegram.yaml`, so a stack that runs no Telegram integration has nothing to point at: an
+  unreachable provider on such a host needs its own proxy container, not two lines in `.env`.
+- The boot says what it did: `[egress] the model leaves through http://vpn:1080/ (NO_PROXY=…)`, one line, credentials
+  stripped. No line means the model is going out directly, which is the default and the common case.
+- A failed run is re-armed by the server itself (`[run-retry]`, four attempts over ~20 minutes) whether or not a browser
+  is open, so a provider that is down is a bot that is slow rather than a bot that is gone.
 
 ## The transcription service: `mason-asr`
 
@@ -510,10 +543,11 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   `mason-asr`. No integration is ever a member, so the tool machine and the transcriber are out of reach of every image
   a third party built, and it is that membership rather than a policy that keeps them out. It is where the tool
   machine's internet and the transcriber's one-way-out both live; `mason-edge` keeps its own.
-- `mason-egress` is the last, also `internal: true`, and it carries exactly two members: the `vpn` sidecar and the
-  integrations told to reach the internet through it. Its only reachable address is `http://vpn:1080`. Neither mason nor
-  `mason-env` joins it: mason has a route out on `mason-edge` and `mason-env` on `mason-out`, so the proxy adds nothing
-  to either, and the tool machine cannot reach the proxy even though it has the internet of its own.
+- `mason-egress` is the last, also `internal: true`, and its only reachable address is `http://vpn:1080`. Its members
+  are the `vpn` sidecar, the integrations told to reach the internet through it, and mason itself — mason because a host
+  that filters the model provider needs the model to leave through the same sidecar, and for no other reason: mason
+  already reaches the internet on `mason-edge`. `mason-env` is never a member, so the tool machine cannot reach the
+  proxy even though it has the internet of its own.
 - **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
   host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
