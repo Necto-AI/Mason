@@ -78,7 +78,7 @@ Claude Code's own documentation concedes that with `Read(.env)` denied "a mod ca
 `$.fs.read`".
 
 The contribution states its provenance: `trust: "first-party" | "operator"`, surfaced in `/api/integrations` and logged
-at boot with what it contributed, so nobody infers from a path what a running connector is.
+at boot with what it contributed, so nobody infers from a path what a running integration is.
 
 ### 4. `prompt.ts` stops being the whole prompt and stays the only renderer
 
@@ -94,8 +94,8 @@ right failure for a prompt: the prefix goes stale instead of going broken.
 
 Mason has three: the event envelope's `v` (a hard refusal, implemented), `AgentService`'s `version: 1` (gated in the
 vendored library, no adapter passed, so any bump breaks a stale browser bundle) and `PROTOCOL_VERSION` (closes the
-link). A connector API needs a fourth, and it is checked where a contribution is resolved — at boot — not where bytes
-arrive.
+link). An integration's API needs a fourth, and it is checked where a contribution is resolved — at boot — not where
+bytes arrive.
 
 A contribution declares `host: <integer>`. Newer than the build refuses the boot naming both numbers, in the same voice
 as the envelope's refusal. Unknown *keys* inside a contribution are tolerated, the way v1 envelopes already grow, so
@@ -124,7 +124,7 @@ it is, with the reason attached.
   line and in `/api/integrations`, and the boot carries on (ADR-0003, unchanged).
 - A contribution the bot cannot be allowed to lack is a compile-time floor. A file may name it; a file may not remove
   it. The chat's reply route is the case that will happen first.
-- A module that cannot load refuses the boot. A half-loaded connector is a bot that looks alive and cannot answer.
+- A module that cannot load refuses the boot. A half-loaded integration is a bot that looks alive and cannot answer.
 
 ## The three sentences this settles
 
@@ -169,7 +169,7 @@ follow-up, not part of this decision.
   no version gate at all. Rejected: mason's floor cannot live behind an unreviewed module.
 - **C alone: a richer protocol.** The strongest-sounding option and the weakest in the evidence. MCP carries tools, and
   its other server primitives divide by who controls them; the revision after the one this was checked against removed
-  sessions and server-initiated requests and deprecated sampling, logging and roots. A connector built on MCP's
+  sessions and server-initiated requests and deprecated sampling, logging and roots. An integration built on MCP's
   client-facing half is built on a shrinking surface. What C keeps is the process boundary, and that is exactly what an
   untrusted integration needs.
 - **Sandbox the untrusted code in-process.** No mechanism in Node gives a module its own privilege level, and the one
@@ -189,5 +189,5 @@ follow-up, not part of this decision.
   plus the `<key>` frame and the join; a promoted medium MCP tool costs about as much. Sections are the cheap thing,
   promoted tools are the expensive one.
 - Not measured, and not to be quoted as if measured: lines of code for the contribution API, and the schedule to land it.
-- The state channel stays exactly as it is: no connector principal exists on the Chord remote, and this decision does
+- The state channel stays exactly as it is: no integration principal exists on the Chord remote, and this decision does
   not add one.
