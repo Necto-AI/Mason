@@ -1,6 +1,6 @@
 /**
- * HTTP + WebSocket server: a Chord host serving `AgentService` to browsers, the webhook trigger for
- * event hooks, and the built web client.
+ * HTTP + WebSocket server: a Chord host serving `AgentService` to browsers, the event door an
+ * integration's trigger posts to, and the built web client.
  */
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
@@ -44,14 +44,14 @@ import {
 	verifySignature,
 	type CommandName,
 } from "./events.ts";
-import { bodyRequestId, explicitRequestId, UnknownHookError } from "./hooks.ts";
+import { explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
 	COMMAND_LIMIT,
 	createFireLimiter,
 	EVENT_BODY_MAX_BYTES,
+	EVENT_FIRE_LIMIT,
 	type FireLimiter,
-	HOOK_BODY_MAX_BYTES,
-	HOOK_FIRE_LIMIT,
+	JSON_BODY_MAX_BYTES,
 	parseJsonObject,
 	readBodyCapped,
 	readRawBodyCapped,
@@ -216,7 +216,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			fireHook: async ({ hookId, payload, requestId }, ctx) => {
 				if (hookId !== RETRY_HOOK_ID) supervisor.acted();
 				// Pressing a control in the transcript is a gesture: no id means one fire per press. A caller that does
-				// have an event identity passes it, and is deduplicated exactly like a named webhook delivery.
+				// have an event identity passes it, and is deduplicated exactly like a named delivery.
 				const submission = await runtime.hooks.fire(hookId, {
 					...(payload === undefined ? {} : { payload }),
 					...(requestId === undefined ? {} : { requestId: explicitRequestId(hookId, requestId) }),
@@ -602,7 +602,7 @@ async function handleRequest(
 		// sender's spent budget: the body is capped, and a forged signature is refused before this line.
 		const wait = fires.take(`integration:${name}`);
 		if (wait !== undefined) {
-			console.warn(`[events] refused a delivery for ${name}: ${HOOK_FIRE_LIMIT} a minute is the budget`);
+			console.warn(`[events] refused a delivery for ${name}: ${EVENT_FIRE_LIMIT} a minute is the budget`);
 			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
 			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
 			return;
@@ -656,7 +656,7 @@ async function handleRequest(
 		const text = await readBodyCapped(request);
 		if (text === undefined) {
 			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ error: "payload too large", maxBytes: HOOK_BODY_MAX_BYTES }));
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: JSON_BODY_MAX_BYTES }));
 			return;
 		}
 		const body = parseJsonObject(text);
@@ -683,48 +683,6 @@ async function handleRequest(
 	// and the only place health appears: a prompt section that carried it would differ between two turns of one build.
 	if (url.pathname === "/api/integrations") {
 		return json(response, 200, { integrations: integrationSummaries(currentIntegrations()) });
-	}
-
-	const fire = /^\/api\/hooks\/([^/]+)\/fire$/.exec(url.pathname);
-	if (fire !== null && request.method === "POST") {
-		const hookId = decodeURIComponent(fire[1] as string);
-		// Before the body is read and before a turn is spent: one sender cannot fill the queue or the bill. The refusal
-		// names the wait, so a correct sender retries instead of treating it as a permanent failure.
-		const wait = fires.take(hookId);
-		if (wait !== undefined) {
-			console.warn(`[hooks] refused a fire of ${hookId}: ${HOOK_FIRE_LIMIT} fires a minute is the budget`);
-			response.writeHead(429, {
-				"content-type": "application/json; charset=utf-8",
-				"retry-after": String(wait),
-			});
-			response.end(JSON.stringify({ error: "too many fires", retryAfterSeconds: wait }));
-			return;
-		}
-		const text = await readBodyCapped(request);
-		if (text === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ error: "payload too large", maxBytes: HOOK_BODY_MAX_BYTES }));
-			return;
-		}
-		const body = parseJsonObject(text);
-		const payload =
-			typeof body.message === "string" ? body.message : typeof body.data === "string" ? body.data : undefined;
-		// A webhook delivery has an identity. A sender that names it is exact and permanent; one that cannot is one
-		// event per body per window, so its queue's redelivery collapses while tomorrow's identical body still fires.
-		const senderId = senderRequestId(request, body);
-		try {
-			const submission = await runtime.hooks.fire(hookId, {
-				...(payload === undefined ? {} : { payload }),
-				requestId:
-					senderId === undefined
-						? bodyRequestId(hookId, body, Date.now())
-						: explicitRequestId(hookId, senderId),
-			});
-			return json(response, 200, { submissionId: submission.id });
-		} catch (error) {
-			if (error instanceof UnknownHookError) return json(response, 404, { error: error.message });
-			throw error;
-		}
 	}
 
 	const health: string = "ok";
@@ -858,19 +816,10 @@ function notFound(response: ServerResponse): void {
 	response.end("not found");
 }
 
-
-/** The id a webhook sender gave its delivery: in the JSON body or the `x-request-id` header, else none. */
 /** One request header as a string; repeated headers are not a thing a delivery sends, so the first is the value. */
 function headerValue(request: IncomingMessage, name: string): string | undefined {
 	const value = request.headers[name];
 	return Array.isArray(value) ? value[0] : value;
-}
-
-function senderRequestId(request: IncomingMessage, body: Record<string, unknown>): string | undefined {
-	if (typeof body.requestId === "string" && body.requestId !== "") return body.requestId;
-	const header = request.headers["x-request-id"];
-	const value = Array.isArray(header) ? header[0] : header;
-	return value === undefined || value === "" ? undefined : value;
 }
 
 /** `ConversationId` of the root conversation, for scripts and logs. */
