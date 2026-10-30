@@ -108,15 +108,39 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, options);
 	const webDir = options.webDir ?? resolve(repositoryRoot, "dist/web");
 
+	// The supervisor re-arms a run that a provider outage killed; it reads the committed view only. One for the server,
+	// not one per object: it is a policy over the one shared conversation, and a copy per person would each fire its own
+	// retry for the same failure.
+	const retryOptions = retryOptionsFromEnv();
+	const supervisor = new RunRetrySupervisor(async (error) => {
+		// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
+		await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
+	}, retryOptions);
+
 	// The prompt-cache report, one line per finished run. The watch is the server's own, not a browser's — a run
 	// finishes whether or not anyone is looking at it.
+	//
+	// The supervisor reads the same watch, and for the same reason: the person waiting on a failed run is usually not
+	// the one with the UI open. Fed from a connection instead, it observed nothing at all whenever nobody had a browser
+	// on the conversation, and a run that a provider killed stayed dead until somebody wrote again (2026-10-30: a bot's
+	// two messages sat unanswered for 3 and 12 hours while the log held no `[run-retry]` line at all).
 	const conversation = await runtime.conversation();
 	const runWatch = await conversation.watch(BACKGROUND_CONTEXT);
 	const reportRun = createCacheReporter((line) => console.log(line));
+	console.log(
+		retryOptions.maxAttempts === 0
+			? "[run-retry] off: a failed run is left to the Retry control"
+			: `[run-retry] a failed run is re-armed after ${supervisor.delaysMs.map((ms) => `${Math.round(ms / 1000)}s`).join(", ")}`,
+	);
 	// A run the last process left unfinished is counted from the moment this process attached, so its first line
-	// under-reports the tokens it spent before the restart.
+	// under-reports the tokens it spent before the restart. The supervisor is given the same first value: a failure
+	// that the previous process died on is still a task nobody answered.
 	reportRun(runWatch.value);
-	runWatch.start(async (view) => reportRun(view));
+	supervisor.observe(runWatch.value);
+	runWatch.start(async (view) => {
+		reportRun(view);
+		supervisor.observe(view);
+	});
 
 	const host = createHost<Principal>({
 		name: "server",
@@ -129,14 +153,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		principalKey: (principal) => (principal.kind === "owner" ? `owner:${principal.person ?? ""}` : principal.kind),
 		onError: (error) => console.error("[chord]", error),
 	});
-
-	// The supervisor re-arms a run that a provider outage killed; it reads the committed view only. One for the server,
-	// not one per object: it is a policy over the one shared conversation, and a copy per person would each fire its own
-	// retry for the same failure.
-	const supervisor = new RunRetrySupervisor(async (error) => {
-		// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
-		await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
-	}, retryOptionsFromEnv());
 
 	host.serve(AgentService, (_input, principal, self) => {
 		// The person this object was created for: fixed at handshake, and the only identity a method can see.
@@ -170,7 +186,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			transcript.replace(ctx, projectTranscript(next));
 			queued.replace(ctx, projectQueued(next));
 			agentStatus.replace(ctx, statusFor(next));
-			supervisor.observe(next);
 		});
 
 		const refreshStatus = (ctx: Ctx): void => {
