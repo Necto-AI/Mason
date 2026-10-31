@@ -19,22 +19,7 @@
   ];
 
   scripts.setup.exec = ''
-    set -euo pipefail
-    echo "[setup] Installing vendor/pi dependencies..."
-    (cd vendor/pi && npm ci --ignore-scripts)
-    if [ ! -f vendor/pi/packages/ai/src/providers/data/.manifest.json ]; then
-      echo "[setup] Hydrating pi-ai model data..."
-      (cd vendor/pi/packages/ai && npm run hydrate-model-data)
-    fi
-    echo "[setup] Building vendor/pi packages..."
-    (cd vendor/pi && npm run build:offline)
-    echo "[setup] Building pi-env Rust daemon..."
-    (cd vendor/pi/packages/env && npm run build:daemon)
-    mkdir -p vendor/pi/packages/env/bin/pi-env-linux-x64
-    cp vendor/pi/packages/env/daemon/target/debug/pi-env vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env
-    chmod +x vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env
-    echo "[setup] Installing root workspace dependencies..."
-    npm install
+    bash scripts/setup.sh
   '';
 
   scripts.dev.exec = ''
