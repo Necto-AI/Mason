@@ -15,37 +15,23 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          # `vendor/pi` is a submodule pinned to a commit, and the `paths` map in `tsconfig.json` resolves the
-          # `@earendil-works/*` packages through it. Without this, nothing typechecks and nothing imports.
+          # `vendor/pi` is a submodule pinned to a commit, and every `@earendil-works/*` import — at runtime and through
+          # the `paths` map in `tsconfig.json` — resolves into it. Without this nothing typechecks and nothing imports.
           submodules: recursive
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      # `npm ci` may skip the root `postinstall` (npm gates install scripts), and that script is what links the
-      # vendored packages into `node_modules` and repairs `vendor/pi`'s pruned nested dependencies. So both scripts are
-      # their own steps instead of a side effect of the install: what the checks need exists whether or not npm ran them.
-      - run: npm ci
-      - run: node scripts/link-vendor.mjs
-      - run: node scripts/verify-vendor.mjs
+      # The same recipe a fresh clone runs (`devenv shell -- setup`): `vendor/pi`'s dependencies and build, the Rust
+      # daemon, then the root install. The runner is the one place where cargo has to be there already, and on the
+      # GitHub Ubuntu image it is; `vendor/pi/packages/env/daemon/rust-toolchain.toml` names the version.
+      - run: bash scripts/setup.sh
 
       - run: npm run typecheck
       - run: npm run build:web
-
-      # `test/prompt.test.ts` and `test/house.test.ts` start a real `pi-env` daemon, and the binary is not tracked in the
-      # submodule (it is built on the machine that owns the checkout, see #57). Without these two steps those files fail
-      # before their first assertion, on a machine where `npm test` was never run before.
-      - run: npm run build:daemon
-        working-directory: vendor/pi/packages/env
-      - run: |
-          mkdir -p vendor/pi/packages/env/bin/pi-env-linux-x64
-          cp vendor/pi/packages/env/daemon/target/debug/pi-env vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env
-          chmod +x vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env
-
       - run: npm test
