@@ -9,6 +9,7 @@
     "dev:stack": "node --conditions=source --experimental-strip-types scripts/dev-stack.ts",
     "build:web": "node scripts/build-web.mjs",
     "test": "node --conditions=source --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "eval": "node --conditions=source --experimental-strip-types evals/run.ts",
     "eval:judge": "node --conditions=source --experimental-strip-types evals/judge.ts",
     "token": "node --conditions=source --experimental-strip-types scripts/token.ts",
@@ -32,6 +33,7 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@types/ws": "8.18.1"
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3"
   }
 }
