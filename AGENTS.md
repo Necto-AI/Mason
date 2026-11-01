@@ -33,10 +33,12 @@ The browser client in this repository is the operator console, frozen (`docs/adr
 ## Commands (inside `devenv shell` or via `devenv shell -- ...`)
 
 - `git submodule update --init --recursive` — checks out `vendor/` (first clone only).
+- `devenv shell -- setup` (or `bash scripts/setup.sh`) — the whole first-time setup: `vendor/pi`'s dependencies and build, the `pi-env` daemon binary (not tracked in the submodule), then the root install. One recipe, run by the dev shell and by CI, so a fresh clone and a green run cannot drift apart.
 - `npm install` — installs root dependencies, links `vendor/` packages (`scripts/link-vendor.mjs`) and repairs `vendor/pi`'s nested dependencies if a root install pruned them (`scripts/verify-vendor.mjs`, which runs `npm ci --ignore-scripts` in `vendor/pi`).
 - `npm run dev` — starts the durable agent + Chord WebSocket + HTTP server (`src/server/main.ts`).
 - `npm run build:web` — bundles the browser client (`src/web/main.tsx` -> `dist/web/`) using `esbuild`.
 - `npm test` — runs the test suite (`node --conditions=source --experimental-strip-types --test test/*.test.ts`).
+- `npm run typecheck` — the compiler over `src/`, `test/` and `scripts/` (`tsc --noEmit -p tsconfig.json`). `typescript` is a dev dependency, because the suite runs with `--experimental-strip-types`, which erases types without reading them. CI (`.github/workflows/ci.yml`) runs `setup`, this, the web build and the suite on every push to `main` and every pull request, with the Rust daemon built there since its binary is not tracked in the submodule.
 - `npm run eval` — runs the six behaviour scenarios against one model (`evals/run.ts`, default `opencode-go/deepseek-v4.1-flash`), writing traces to `.data/evals/`; flags, cost and scenario shape in `evals/README.md`. It costs real tokens on a paid provider: run it only when asked.
 - `npm run eval:judge -- <results-dir>` — scores stored eval traces on message quality against `evals/rubric.md` (`evals/judge.ts`, default judge `llama-server/Qwen3.8-27B`).
 - `npm run token -- list | add --label <name> | revoke <id>` — the credentials that may talk to the server (`scripts/token.ts`). A fresh home mints a `browser` token on first start and logs the pairing link; `add` prints one for a new device. The server reads the config per request, so a revoke lands immediately, without a restart.
