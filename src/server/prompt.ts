@@ -24,13 +24,13 @@
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, type PromptSection, section } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
+import { INTEGRATIONS, type InstalledIntegration, install } from "../integrations/index.ts";
 import { CODEMODE_SECTION } from "./extensions/codemode.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
 import { currentIntegrations } from "./integrations.ts";
 import { type ResidentInput, readResidentFile } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
-import { install, INTEGRATIONS, type InstalledIntegration } from "../integrations/index.ts";
 
 /**
  * What a fresh install starts from, and what `~/.mason/service/soul.md` is created with. Short on purpose.

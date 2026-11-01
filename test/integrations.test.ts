@@ -83,7 +83,11 @@ describe("the integration list on disk", () => {
 			JSON.stringify({
 				$schema: "a key from a later version",
 				integrations: {
-					github: { enabled: true, description: "Issues and pull requests", tools: { url: "http://mason-github:8082/mcp" } },
+					github: {
+						enabled: true,
+						description: "Issues and pull requests",
+						tools: { url: "http://mason-github:8082/mcp" },
+					},
 				},
 			}),
 		);
@@ -149,7 +153,9 @@ describe("the integration list on disk", () => {
 		await writeRaw(
 			paths,
 			JSON.stringify({
-				integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp", headers: { authorization: "x" } } } },
+				integrations: {
+					github: { ...github, tools: { url: "http://mason-github:8082/mcp", headers: { authorization: "x" } } },
+				},
 			}),
 		);
 		const message = await refusal(paths);

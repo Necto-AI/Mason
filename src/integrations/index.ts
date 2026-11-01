@@ -112,7 +112,8 @@ export function install(
 					"prompt and the name a tool is built from (`mcp__<name>__<tool>`), so an underscore cannot appear.",
 			);
 		}
-		if (names.has(name)) throw new Error(`integration "${name}" is listed twice in INTEGRATIONS: one line per integration`);
+		if (names.has(name))
+			throw new Error(`integration "${name}" is listed twice in INTEGRATIONS: one line per integration`);
 		names.add(name);
 		assertClosed(name, raw, CONTRIBUTION_KEYS);
 		const host = raw.host;
@@ -185,6 +186,8 @@ function assertClosed(name: string, raw: Record<string, unknown>, known: readonl
 					"arrives with the code that honours it, and until then it is refused rather than ignored",
 			);
 		}
-		throw new Error(`${subject} has the key "${key}", which this build does not read: the keys here are ${known.join(", ")}`);
+		throw new Error(
+			`${subject} has the key "${key}", which this build does not read: the keys here are ${known.join(", ")}`,
+		);
 	}
 }

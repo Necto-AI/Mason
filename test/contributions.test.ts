@@ -17,10 +17,10 @@ import type { PromptSection } from "@earendil-works/pi-durable";
 import {
 	defineIntegration,
 	HOST,
-	install,
 	INTEGRATIONS,
 	type InstalledIntegration,
 	type IntegrationContribution,
+	install,
 } from "../src/integrations/index.ts";
 import { BUILTIN_SECTION_KEYS, promptSectionKeys, promptSections } from "../src/server/prompt.ts";
 
@@ -120,7 +120,11 @@ test("refuses a contribution using a field that arrives with its code", () => {
 	for (const key of ["tools", "hooks", "commands", "close", "trust"]) {
 		const contribution = { name: "slack", host: HOST, [key]: {} } as unknown as IntegrationContribution;
 		const message = refusal(() => install([contribution], RESERVED));
-		assert.match(message, new RegExp(`contributes "${key}", which is part of the contribution API`), `${key}: ${message}`);
+		assert.match(
+			message,
+			new RegExp(`contributes "${key}", which is part of the contribution API`),
+			`${key}: ${message}`,
+		);
 	}
 });
 
@@ -148,17 +152,26 @@ test("refuses a section that is not a tag name, and one with no text", () => {
 		host: HOST,
 		sections: [{ key: "slack.chat", text: "x" }],
 	});
-	assert.match(refusal(() => install([bad], RESERVED)), /has no usable key \("slack\.chat"\)/);
+	assert.match(
+		refusal(() => install([bad], RESERVED)),
+		/has no usable key \("slack\.chat"\)/,
+	);
 
 	const empty = defineIntegration({ name: "slack", host: HOST, sections: [{ key: "slack", text: "   " }] });
-	assert.match(refusal(() => install([empty], RESERVED)), /has no text/);
+	assert.match(
+		refusal(() => install([empty], RESERVED)),
+		/has no text/,
+	);
 
 	const extra = defineIntegration({
 		name: "slack",
 		host: HOST,
 		sections: [{ key: "slack", text: "x", position: 1 } as never],
 	});
-	assert.match(refusal(() => install([extra], RESERVED)), /section "slack" has the key "position"/);
+	assert.match(
+		refusal(() => install([extra], RESERVED)),
+		/section "slack" has the key "position"/,
+	);
 });
 
 const installed: readonly InstalledIntegration[] = install(
@@ -193,7 +206,11 @@ test("a contributed section renders under its own tag, after the integrations po
 test("a contributed section renders the same bytes on every turn", async () => {
 	const slack = promptSections(installed).find((promptSection) => promptSection.key === "slack");
 	assert.ok(slack);
-	assert.equal(await render(slack), await render(slack), "a contribution cannot re-price the prefix between two turns");
+	assert.equal(
+		await render(slack),
+		await render(slack),
+		"a contribution cannot re-price the prefix between two turns",
+	);
 });
 
 test("a section over the budget is capped where the prompt can see it", async () => {
