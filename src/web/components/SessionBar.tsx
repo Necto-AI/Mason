@@ -8,7 +8,6 @@
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { AgentStatus } from "../../shared/contract.ts";
-import type { ConnectionState } from "../client.ts";
 
 export interface SessionBarProps {
 	readonly status: AgentStatus | undefined;
@@ -90,7 +89,9 @@ export function SessionBar({ status, person, onCompact, onReset }: SessionBarPro
 								{status === undefined ? "connecting" : `status: ${runLabel}`}
 							</code>
 							<code data-testid="status-model">
-								{status?.model === undefined ? "model: —" : `model: ${status.model.provider}/${status.model.modelId}`}
+								{status?.model === undefined
+									? "model: —"
+									: `model: ${status.model.provider}/${status.model.modelId}`}
 							</code>
 							{/* Who the agent will say you are: one line, in the menu, because knowing your name is a fact about
 							    the session and not news the transcript has to announce. */}

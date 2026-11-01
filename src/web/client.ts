@@ -2,7 +2,7 @@
  * The browser's Chord link to the server: one host in client mode, one `AgentService` reference, and a
  * reconnect loop that keeps the reference (and every subscription on it) alive across socket drops.
  */
-import { createHost, type Ref, webSocketLink, type WebSocketLike } from "@earendil-works/chord";
+import { createHost, type Ref, type WebSocketLike, webSocketLink } from "@earendil-works/chord";
 import { AgentService } from "../shared/contract.ts";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";

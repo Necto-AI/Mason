@@ -31,15 +31,7 @@ export interface ComposerProps {
 /** How long a connection blip may last before it is worth mentioning; a reload should not flash a warning. */
 const BLIP_MS = 1200;
 
-export function Composer({
-	busy,
-	enabled,
-	pending,
-	connection,
-	onSubmit,
-	onSteer,
-	onStop,
-}: ComposerProps) {
+export function Composer({ busy, enabled, pending, connection, onSubmit, onSteer, onStop }: ComposerProps) {
 	const [text, setText] = useState("");
 	const [expanded, setExpanded] = useState(false);
 	const [multiline, setMultiline] = useState(false);
@@ -56,10 +48,7 @@ export function Composer({
 		node.style.height = "0px";
 		const natural = node.scrollHeight;
 		const multi = expanded || node.value.includes("\n") || natural > PROMPT_LINE + 4;
-		const cap = Math.max(
-			3 * PROMPT_LINE,
-			Math.min((expanded ? 27 : 14) * PROMPT_LINE, window.innerHeight - 152),
-		);
+		const cap = Math.max(3 * PROMPT_LINE, Math.min((expanded ? 27 : 14) * PROMPT_LINE, window.innerHeight - 152));
 		node.style.height = `${Math.min(natural, multi ? cap : PROMPT_LINE)}px`;
 		const isCapped = node.scrollHeight > node.clientHeight + 1;
 		node.scrollTop = node.scrollHeight;
@@ -90,7 +79,9 @@ export function Composer({
 	// Dictated words land where typed words land: appended to whatever is already in the box.
 	const applyTranscript = useCallback((transcript: string) => {
 		setDictationError(null);
-		setText((previous) => (previous === "" || /\s$/.test(previous) ? previous + transcript : `${previous} ${transcript}`));
+		setText((previous) =>
+			previous === "" || /\s$/.test(previous) ? previous + transcript : `${previous} ${transcript}`,
+		);
 		input.current?.focus();
 	}, []);
 
@@ -195,7 +186,14 @@ export function Composer({
 							</button>
 						</>
 					) : (
-						<button type="button" id="send" data-testid="send" title="Send" disabled={!canSend} onClick={() => send("submit")}>
+						<button
+							type="button"
+							id="send"
+							data-testid="send"
+							title="Send"
+							disabled={!canSend}
+							onClick={() => send("submit")}
+						>
 							<svg
 								viewBox="0 0 24 24"
 								fill="none"

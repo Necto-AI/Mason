@@ -33,8 +33,8 @@ test("OCR is in the image the tools run on, pinned, and warmed, so a read never 
 test("the ocr skill ships with mason, so every bot gets it without a person copying a file", async () => {
 	const skill = await read("skills/ocr/SKILL.md");
 	const { frontmatter } = parseFrontmatter<Record<string, unknown>>(skill);
-	assert.equal(frontmatter["name"], "ocr");
-	assert.match(String(frontmatter["description"]), /indra-ocr/, "the skill names the binary it is about");
+	assert.equal(frontmatter.name, "ocr");
+	assert.match(String(frontmatter.description), /indra-ocr/, "the skill names the binary it is about");
 	assert.match(skill, /indra-ocr <path> --format md/, "and shows the call");
 });
 
@@ -51,7 +51,11 @@ test("the transcription service is part of the stack, heard by the relay and by 
 
 	const telegram = await read("deploy/compose.telegram.yaml");
 	// `-` and not `:-`: an explicit empty value has to mean off, or the sentence saying so is a cheque nothing honours.
-	assert.match(telegram, /TELEGRAM_ASR_URL: \$\{TELEGRAM_ASR_URL-http:\/\/mason-asr:8100\/transcribe\}/, "on by default");
+	assert.match(
+		telegram,
+		/TELEGRAM_ASR_URL: \$\{TELEGRAM_ASR_URL-http:\/\/mason-asr:8100\/transcribe\}/,
+		"on by default",
+	);
 });
 
 test("the tool machine is reachable only from mason: its own outbound bridge carries nothing else", async () => {
@@ -60,5 +64,5 @@ test("the tool machine is reachable only from mason: its own outbound bridge car
 	assert.match(env, /- mason-internal/, "in from mason");
 	assert.match(env, /- mason-out/, "out on a bridge of its own");
 	assert.ok(!/^\s+- mason-edge$/m.test(env), "and not on the bridge the proxy and an integration share");
-	assert.match(compose, /\n  mason-out:\n/, "the network is declared");
+	assert.match(compose, /\n {2}mason-out:\n/, "the network is declared");
 });

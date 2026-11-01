@@ -17,7 +17,7 @@
  * declaration would throw inside the iframe.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IDIOMORPH_JS } from "../lib/idiomorph-inline.ts";
+import type { OpenGenUIContent } from "../../shared/genui-content.ts";
 import {
 	buildFinalFrameContent,
 	buildPreviewBodyMorph,
@@ -39,7 +39,7 @@ import {
 	restoreHeight,
 	streamingCeiling,
 } from "../lib/frame-height.ts";
-import type { OpenGenUIContent } from "../../shared/genui-content.ts";
+import { IDIOMORPH_JS } from "../lib/idiomorph-inline.ts";
 import { extractCompleteStyles, processPartialHtml } from "../lib/process-partial-html.ts";
 import { loadWebsandbox, type SandboxInstance, type WidgetBridge } from "../lib/websandbox-loader.ts";
 
@@ -50,12 +50,7 @@ const PHRASE_MS = 2600;
 /** Matches the frame's opacity transition in chat.css; the preview is dropped once it has faded out. */
 const CROSSFADE_MS = 200;
 
-export const FALLBACK_PHRASES = [
-	"Sketching pixels",
-	"Wiring up nodes",
-	"Painting gradients",
-	"Compiling visuals",
-];
+export const FALLBACK_PHRASES = ["Sketching pixels", "Wiring up nodes", "Painting gradients", "Compiling visuals"];
 
 /** Re-exported for the frame's own tests: the ceiling on a reported height. */
 export function clampReportedHeight(height: unknown): number | null {
@@ -117,7 +112,6 @@ export interface SandboxedUiCardProps {
 }
 
 export function SandboxedUiCard({ callId, content, bridge, streaming, fullscreen }: SandboxedUiCardProps) {
-
 	const [throttled, setThrottled] = useState(content);
 	const [previous, setPrevious] = useState(content);
 	const latest = useRef(content);
@@ -158,7 +152,13 @@ export function SandboxedUiCard({ callId, content, bridge, streaming, fullscreen
 	);
 
 	return (
-		<SandboxedUiFrame callId={callId} content={throttled} bridge={bridge} streaming={streaming} fullscreen={fullscreen} />
+		<SandboxedUiFrame
+			callId={callId}
+			content={throttled}
+			bridge={bridge}
+			streaming={streaming}
+			fullscreen={fullscreen}
+		/>
 	);
 }
 
@@ -304,9 +304,7 @@ function SandboxedUiFrame({ callId, content, bridge, streaming, fullscreen }: Sa
 					if (cancelled) return;
 					previewReady.current = true;
 					sandbox.run(IDIOMORPH_JS);
-					sandbox.run(
-						`document.head.innerHTML = ${JSON.stringify(buildPreviewHeadContent(css, previewStyles))}`,
-					);
+					sandbox.run(`document.head.innerHTML = ${JSON.stringify(buildPreviewHeadContent(css, previewStyles))}`);
 					if (previewBody !== undefined) sandbox.run(buildPreviewBodyMorph(previewBody));
 					// Only now does the preview know how tall it is; before this it would report zero.
 					void sandbox.run(PREVIEW_MEASUREMENT_JS);

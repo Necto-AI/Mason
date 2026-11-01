@@ -12,8 +12,8 @@
  * pastes it into the container, and nothing mason prints is a place it should appear.
  */
 import { randomBytes } from "node:crypto";
-import { housePaths } from "../src/server/house.ts";
 import { COMMAND_NAMES, type CommandName, isCommandName } from "../src/server/events.ts";
+import { housePaths } from "../src/server/house.ts";
 import {
 	readIntegrations,
 	removeIntegration,
@@ -61,7 +61,9 @@ async function list(): Promise<void> {
 			integration.commands === undefined || integration.commands.length === 0
 				? ""
 				: `, commands ${integration.commands.join(",")}`;
-		console.log(`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${tools}  ${trigger}${commands}`);
+		console.log(
+			`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${tools}  ${trigger}${commands}`,
+		);
 	}
 }
 
@@ -174,7 +176,10 @@ async function setCommands(): Promise<void> {
 	// carries the word the operator typed beside the whole set. The writer validates again on its way in: this is the
 	// sentence a person reads, not the last line of defence.
 	const commands: CommandName[] = [];
-	for (const entry of list.split(",").map((word) => word.trim()).filter((word) => word !== "")) {
+	for (const entry of list
+		.split(",")
+		.map((word) => word.trim())
+		.filter((word) => word !== "")) {
 		if (!isCommandName(entry)) {
 			console.error(
 				`${house.integrations}: integration "${name}" declares the command "${entry}", which mason does not have: ` +

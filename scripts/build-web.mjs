@@ -37,11 +37,12 @@ if (result.errors.length > 0) {
 }
 
 const html = await readFile(join(src, "index.html"), "utf8");
-const cssFile = (result.metafile?.outputs ? Object.keys(result.metafile.outputs) : []).find((path) => path.endsWith(".css"));
+const cssFile = (result.metafile?.outputs ? Object.keys(result.metafile.outputs) : []).find((path) =>
+	path.endsWith(".css"),
+);
 // esbuild writes the extracted CSS beside the bundle but never links it: the HTML must, and this catches drift.
 const linked = html.match(/<link[^>]+href="\.\/(main\.css)"[^>]*>/);
 if (linked === null) throw new Error("src/web/index.html does not link the bundled stylesheet (./main.css)");
 await writeFile(join(outdir, "index.html"), html);
 if (cssFile === undefined && existsSync(join(outdir, "main.css"))) throw new Error("stylesheet emitted but not linked");
 console.log(`web client -> ${outdir} (${cssFile ?? "no css"})`);
-

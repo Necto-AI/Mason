@@ -12,7 +12,7 @@
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { HOOK_ENTRY_KIND, isDeliveryReminder, MESSAGE_TOOL, WIDGET_TOOL, splitAuthor } from "../shared/contract.ts";
+import { HOOK_ENTRY_KIND, isDeliveryReminder, MESSAGE_TOOL, splitAuthor, WIDGET_TOOL } from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
 
 /**
@@ -113,15 +113,18 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 			// A run that died is the reader's business; the reason it died is not. One coarse line, once per run.
 			const failed = (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "error";
 			if (failed && items[items.length - 1]?.kind !== "notice") {
-				items.push({ kind: "notice", id: `failed:${entry.id}`, text: "Something went wrong, and the turn did not finish." });
+				items.push({
+					kind: "notice",
+					id: `failed:${entry.id}`,
+					text: "Something went wrong, and the turn did not finish.",
+				});
 				spoke = true;
 			}
 			for (const call of callsOf(messageOf(entry))) {
 				if (typeof call.id !== "string") continue;
-				const args = (typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}) as Record<
-					string,
-					unknown
-				>;
+				const args = (
+					typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}
+				) as Record<string, unknown>;
 				if (call.name === MESSAGE_TOOL) {
 					const text = typeof args.message === "string" ? args.message : "";
 					// A blank message is not a message: the renderer would pad it into an empty bubble.
@@ -148,11 +151,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 			}
 			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
 			// not speech either: only the calls this file forwards above count as having said something.
-			if (
-				!failed &&
-				!spoke &&
-				(messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop"
-			) {
+			if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
 				// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
 				// person wondering whether the agent is working or gone.
 				items.push({
@@ -162,7 +161,6 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 				});
 				spoke = true;
 			}
-			continue;
 		}
 	}
 	items.push(...streamingItems(view, outcomes));
@@ -212,7 +210,12 @@ export function projectQueued(view: ConversationView | undefined): QueuedItem[] 
 	const items = inbox?.items ?? [];
 	const queued: QueuedItem[] = [];
 	for (const raw of items) {
-		const item = raw as { id?: unknown; mode?: unknown; content?: unknown; entry?: { kind?: string; data?: unknown } };
+		const item = raw as {
+			id?: unknown;
+			mode?: unknown;
+			content?: unknown;
+			entry?: { kind?: string; data?: unknown };
+		};
 		if (typeof item.id !== "number") continue;
 		const { text, author } = splitAuthor(queuedText(item));
 		queued.push({

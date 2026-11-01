@@ -25,8 +25,8 @@
 import { readFile } from "node:fs/promises";
 import { writeFileAtomic } from "./atomic.ts";
 import { COMMAND_NAMES, type CommandName, isCommandName } from "./events.ts";
-import { clearIntegrationStatus } from "./integration-status.ts";
 import type { HousePaths } from "./house.ts";
+import { clearIntegrationStatus } from "./integration-status.ts";
 
 /** A trigger secret shorter than this is a guess away from being no door: 32 bytes hex, or the like. */
 const TRIGGER_SECRET_MIN = 32;
@@ -91,7 +91,9 @@ export async function readIntegrations(paths: HousePaths): Promise<Integrations>
  * The file and its validated entries. The raw top level travels with them so a writer can put a person's own keys back
  * where they were: `integrations.json` grows, and a key mason has never heard of is not mason's to drop.
  */
-async function load(path: string): Promise<{ file: Record<string, unknown>; integrations: Record<string, Integration> }> {
+async function load(
+	path: string,
+): Promise<{ file: Record<string, unknown>; integrations: Record<string, Integration> }> {
 	const text = await readFile(path, "utf8").catch((error: unknown) => {
 		if (isMissingFile(error)) return undefined;
 		throw new Error(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
@@ -164,7 +166,11 @@ function validate(where: string, name: string, value: unknown): Integration {
 	const enabled = raw.enabled;
 	if (typeof enabled !== "boolean") {
 		throw new Error(
-			refusal(where, name, 'needs "enabled": true or "enabled": false — it is the only switch, and a face that is present is on'),
+			refusal(
+				where,
+				name,
+				'needs "enabled": true or "enabled": false — it is the only switch, and a face that is present is on',
+			),
 		);
 	}
 	const tools = readTools(where, name, raw.tools);
@@ -201,7 +207,11 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 	const required = raw.required;
 	if (required !== undefined && typeof required !== "boolean") {
 		throw new Error(
-			refusal(where, name, 'has a "tools.required" that is not true or false: it decides whether a dead server refuses the boot'),
+			refusal(
+				where,
+				name,
+				'has a "tools.required" that is not true or false: it decides whether a dead server refuses the boot',
+			),
 		);
 	}
 	return { ...raw, url, ...(required === undefined ? {} : { required }) };
@@ -215,13 +225,19 @@ function readDescription(where: string, name: string, value: unknown, required: 
 	if (value === undefined) {
 		if (required) {
 			throw new Error(
-				refusal(where, name, 'has a tools face and no "description": it is the only thing the model is told about it'),
+				refusal(
+					where,
+					name,
+					'has a tools face and no "description": it is the only thing the model is told about it',
+				),
 			);
 		}
 		return undefined;
 	}
 	if (typeof value !== "string" || value.trim() === "") {
-		throw new Error(refusal(where, name, 'has an empty "description": one line saying what these tools are for, and to whom'));
+		throw new Error(
+			refusal(where, name, 'has an empty "description": one line saying what these tools are for, and to whom'),
+		);
 	}
 	// Trimmed, because it is a line in the prompt: the space around it is nobody's intent.
 	return value.trim();
@@ -241,7 +257,9 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
 	const raw = value as Record<string, unknown>;
 	const hook = raw.hook;
 	if (typeof hook !== "string" || hook.trim() === "") {
-		throw new Error(refusal(where, name, 'has a "trigger" with no "hook": a delivery\'s one verb is firing a named hook'));
+		throw new Error(
+			refusal(where, name, 'has a "trigger" with no "hook": a delivery\'s one verb is firing a named hook'),
+		);
 	}
 	const secret = raw.secret;
 	if (typeof secret !== "string" || secret.length < TRIGGER_SECRET_MIN) {
@@ -265,7 +283,9 @@ function readTrigger(where: string, name: string, value: unknown): IntegrationTr
 function readCommands(where: string, name: string, value: unknown): readonly CommandName[] | undefined {
 	if (value === undefined) return undefined;
 	if (!Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "commands" that is not a list: the command names this trigger may issue'));
+		throw new Error(
+			refusal(where, name, 'has a "commands" that is not a list: the command names this trigger may issue'),
+		);
 	}
 	const commands: CommandName[] = [];
 	for (const entry of value) {

@@ -46,7 +46,8 @@ export function isDeliveryReminder(text: string): boolean {
 	return DELIVERY_REMINDER_OPENING.test(text.trim());
 }
 
-const DELIVERY_REMINDER_OPENING = /^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
+const DELIVERY_REMINDER_OPENING =
+	/^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
 
 /** The sentence both reminders open with: what did not happen, in the name of the tool that did not happen with. */
 function deliveryReminderOpening(tool: string): string {

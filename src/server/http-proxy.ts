@@ -102,6 +102,8 @@ export function installEnvHttpProxy(
 	// copy replaces the global. Same dance as pi's `configureHttpDispatcher`.
 	undici.install?.();
 
-	log(`[egress] the model leaves through ${proxyForLog(proxy)}${noProxy === undefined ? "" : ` (NO_PROXY=${noProxy})`}`);
+	log(
+		`[egress] the model leaves through ${proxyForLog(proxy)}${noProxy === undefined ? "" : ` (NO_PROXY=${noProxy})`}`,
+	);
 	return { proxy, noProxy };
 }

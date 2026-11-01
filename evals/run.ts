@@ -6,8 +6,8 @@
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { check, type Scenario, type Trace } from "./lib/scenario.ts";
 import { runScenario } from "./lib/runner.ts";
+import { check, type Scenario } from "./lib/scenario.ts";
 
 interface Args {
 	model: { provider: string; modelId: string };
@@ -47,9 +47,7 @@ async function loadScenarios(): Promise<Scenario[]> {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const scenarios = (await loadScenarios()).filter(
-	(scenario) => args.only === undefined || args.only.test(scenario.id),
-);
+const scenarios = (await loadScenarios()).filter((scenario) => args.only === undefined || args.only.test(scenario.id));
 if (scenarios.length === 0) {
 	console.error("No scenarios matched.");
 	process.exit(1);

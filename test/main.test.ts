@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { CommandName } from "../src/server/events.ts";
 import type { IntegrationSummary } from "../src/server/integration-status.ts";
-import { runCommand, type CommandTarget } from "../src/server/main.ts";
+import { type CommandTarget, runCommand } from "../src/server/main.ts";
 import { statusLine } from "../src/server/status.ts";
 
 const IDLE = "idle: nothing queued; no integration connected; nothing unreachable since boot";
@@ -117,7 +117,10 @@ describe("a command, dispatched", () => {
 		// did. An empty reply is no reply: the relay suppresses it, so the person sees one answer for one command, and the
 		// audit line says `already ran` rather than claiming an act that did not happen.
 		const again = stub({ claimed: false });
-		assert.equal(await runCommand(again.target, "command:telegram:compact-1", "compact", "the pricing thread"), undefined);
+		assert.equal(
+			await runCommand(again.target, "command:telegram:compact-1", "compact", "the pricing thread"),
+			undefined,
+		);
 		assert.equal(await runCommand(again.target, "command:telegram:clear-1", "clear", undefined), undefined);
 		assert.deepEqual(again.ran, { abort: 0, clear: 0, compact: [], status: 0 });
 	});
@@ -126,7 +129,10 @@ describe("a command, dispatched", () => {
 		// A reset is not display-only, so on a busy conversation it queues in the inbox and returns at once. A person told
 		// "cleared" there watches the answer they cleared arrive next.
 		const busy = stub({ busy: true });
-		assert.equal(await runCommand(busy.target, "command:telegram:clear-2", "clear", undefined), "clearing after this turn");
+		assert.equal(
+			await runCommand(busy.target, "command:telegram:clear-2", "clear", undefined),
+			"clearing after this turn",
+		);
 		assert.deepEqual(busy.ran, { abort: 0, clear: 1, compact: [], status: 0 }, "the reset is submitted either way");
 
 		const idle = stub();
@@ -191,7 +197,10 @@ describe("the status line a chat reads", () => {
 
 	it("reads a retry first, because that is what the person has to know about", () => {
 		assert.equal(
-			statusLine(view({ run: { taskId: 1, inputs: [] }, generation: { attempt: 2, retry: { at: 0, error: "429" } } }), []),
+			statusLine(
+				view({ run: { taskId: 1, inputs: [] }, generation: { attempt: 2, retry: { at: 0, error: "429" } } }),
+				[],
+			),
 			"retrying after a failure: nothing queued; no integration connected; nothing unreachable since boot",
 		);
 	});

@@ -19,11 +19,11 @@ import { after, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import { startServer, type RunningServer } from "../src/server/main.ts";
-import { housePaths, type HousePaths } from "../src/server/house.ts";
+import { type HousePaths, housePaths } from "../src/server/house.ts";
+import { type RunningServer, startServer } from "../src/server/main.ts";
+import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
-import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 
 const directories = new Set<string>();
 after(async () => {
