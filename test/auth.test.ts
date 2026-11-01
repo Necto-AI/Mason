@@ -12,8 +12,8 @@ import { after, describe, it } from "node:test";
 import { WebSocket } from "ws";
 import {
 	authenticate,
-	createTokenStore,
 	cookieValue,
+	createTokenStore,
 	deviceFromCookie,
 	ensureToken,
 	listTokens,
@@ -27,7 +27,7 @@ import {
 	verifyToken,
 } from "../src/server/auth.ts";
 import { housePaths } from "../src/server/house.ts";
-import { startServer, type RunningServer } from "../src/server/main.ts";
+import { type RunningServer, startServer } from "../src/server/main.ts";
 import { addPerson, removePerson } from "../src/server/roster.ts";
 
 const directories = new Set<string>();
@@ -190,7 +190,8 @@ describe("the browser's session", () => {
 		const browser = await mintToken(home, "browser");
 		const phone = await mintToken(home, "phone");
 		const store = createTokenStore(home);
-		const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` }, url: "/api/status" }) as never;
+		const bearer = (token: string) =>
+			({ headers: { authorization: `Bearer ${token}` }, url: "/api/status" }) as never;
 
 		assert.equal((await authenticate(bearer(browser.token), store)).ok, true);
 		assert.equal((await authenticate(bearer(phone.token), store)).ok, true);
@@ -480,7 +481,7 @@ describe("the server's door", () => {
 		const { server } = await openServer();
 		try {
 			const shell = await fetch(`http://127.0.0.1:${server.port}/`);
-			assert.equal(shell.status, 200, "the shell is public: it is the page that says \"not paired\"");
+			assert.equal(shell.status, 200, 'the shell is public: it is the page that says "not paired"');
 			assert.equal(shell.headers.get("referrer-policy"), "no-referrer");
 			assert.equal(shell.headers.get("x-content-type-options"), "nosniff");
 			assert.equal(shell.headers.get("x-frame-options"), "DENY");
@@ -515,7 +516,10 @@ describe("the server's door", () => {
 		const { server, home } = await openServer();
 		try {
 			const cookie = ((await pair(server.port, server.pairingToken as string)).split(";")[0] as string).trim();
-			assert.equal((await fetch(`http://127.0.0.1:${server.port}/api/session`, { headers: { cookie } })).status, 200);
+			assert.equal(
+				(await fetch(`http://127.0.0.1:${server.port}/api/session`, { headers: { cookie } })).status,
+				200,
+			);
 
 			const [record] = await listTokens(home);
 			assert.equal(await revokeToken(home, (record as { id: string }).id), true);

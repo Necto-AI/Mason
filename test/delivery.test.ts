@@ -13,8 +13,13 @@ import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
 import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.ts";
-import { DEFAULT_SOUL, Prompt } from "../src/server/prompt.ts";
-import { BASE_EXTENSIONS, openAgentRuntime, type AgentRuntime, unconditionalExtensionNames } from "../src/server/runtime.ts";
+import { Prompt } from "../src/server/prompt.ts";
+import {
+	type AgentRuntime,
+	BASE_EXTENSIONS,
+	openAgentRuntime,
+	unconditionalExtensionNames,
+} from "../src/server/runtime.ts";
 
 /**
  * Every extension a boot installs unconditionally, in order: the base list, then the ones `openAgentRuntime` builds per
@@ -157,11 +162,7 @@ test("a selection stored as an edit is left as it is", async () => {
 		const after = await openRuntime(directory);
 		try {
 			const stored = await storedSelection(after);
-			assert.deepEqual(
-				stored,
-				{ remove: ["prompt"] },
-				"the stored edit keeps its shape",
-			);
+			assert.deepEqual(stored, { remove: ["prompt"] }, "the stored edit keeps its shape");
 			const agent = await (await after.conversation()).agent(BACKGROUND_CONTEXT);
 			assert.deepEqual(
 				agent.extensions.map((extension) => extension.name),
@@ -185,11 +186,7 @@ test("a selection that is already complete is not written to", async () => {
 
 		const second = await openRuntime(directory);
 		try {
-			assert.equal(
-				await entryCount(second),
-				before,
-				"a repair with nothing to repair writes nothing",
-			);
+			assert.equal(await entryCount(second), before, "a repair with nothing to repair writes nothing");
 		} finally {
 			await second.close();
 		}
@@ -208,11 +205,7 @@ function apiFor(callId: string, input?: string): never {
 
 test("execute only returns: the committed call is the delivery", async () => {
 	// A model-issued call: its own ID, with no `/` in it, so a script's refusal does not apply.
-	const result = await sendToUserTool.execute(
-		{ message: "Standup moved to nine." },
-		apiFor("call-7"),
-		{} as never,
-	);
+	const result = await sendToUserTool.execute({ message: "Standup moved to nine." }, apiFor("call-7"), {} as never);
 	assert.deepEqual(result, { output: [{ type: "text", text: "delivered" }], details: { length: 22 } });
 	assert.equal(result.isError, undefined);
 	assert.equal(result.control, undefined);
@@ -225,11 +218,7 @@ function outputText(output: readonly { readonly type: string; readonly text?: st
 
 test("a call made from inside a script is refused, and told where the message has to go", async () => {
 	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
-	const result = await sendToUserTool.execute(
-		{ message: "Standup moved to nine." },
-		apiFor("call-7/1"),
-		{} as never,
-	);
+	const result = await sendToUserTool.execute({ message: "Standup moved to nine." }, apiFor("call-7/1"), {} as never);
 	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
 	assert.match(outputText(result.output), /cannot deliver from inside a script/);
 	assert.match(outputText(result.output), /send it with send_to_user directly/, "the model is told what to do");
@@ -240,7 +229,11 @@ test("a hook with no chat tool answers in the console, and the result says nobod
 	// call is a real delivery — the console is the only reader such a turn has — and "delivered" would read as "a person
 	// has this", which is false and was exactly the sentence that hid the bug in a chat.
 	const input = "[EVENT HOOK: Morning brief]\nWrite the brief and send it with send_to_user.";
-	const result = await sendToUserTool.execute({ message: "Morning: three things need you." }, apiFor("call-10", input), {} as never);
+	const result = await sendToUserTool.execute(
+		{ message: "Morning: three things need you." },
+		apiFor("call-10", input),
+		{} as never,
+	);
 	assert.notEqual(result.isError, true, "the console is a reader, so this is not a refusal");
 	const text = outputText(result.output);
 	assert.match(text, /delivered to the operator console/);
@@ -249,7 +242,11 @@ test("a hook with no chat tool answers in the console, and the result says nobod
 });
 
 test("a person typing in the console still gets one word back", async () => {
-	const result = await sendToUserTool.execute({ message: "Standup moved." }, apiFor("call-11", "Move standup."), {} as never);
+	const result = await sendToUserTool.execute(
+		{ message: "Standup moved." },
+		apiFor("call-11", "Move standup."),
+		{} as never,
+	);
 	assert.equal(result.isError, undefined);
 	assert.equal(outputText(result.output), "delivered");
 });

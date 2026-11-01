@@ -41,7 +41,11 @@ describe("where an input waits", () => {
 
 	it("honours a hook that asks to wait, because a report has nothing to interrupt for", () => {
 		assert.equal(whenBusyFor("hook", "followUp"), "followUp");
-		assert.equal(whenBusyFor("hook", "reject"), "followUp", "a hook has nobody to refuse for: a refusal would lose the fire");
+		assert.equal(
+			whenBusyFor("hook", "reject"),
+			"followUp",
+			"a hook has nobody to refuse for: a refusal would lose the fire",
+		);
 	});
 
 	it("passes the user's own reject through: it is their refusal, not a placement policy", () => {

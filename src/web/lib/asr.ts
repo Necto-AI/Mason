@@ -85,8 +85,7 @@ export async function transcribe(
 	if (!response.ok) {
 		// the OpenAI error envelope, or whatever the reverse proxy puts in the way
 		const payload = (await response.json().catch(() => null)) as { error?: { message?: string } | string } | null;
-		const message =
-			typeof payload?.error === "object" ? payload.error.message : (payload?.error ?? undefined);
+		const message = typeof payload?.error === "object" ? payload.error.message : (payload?.error ?? undefined);
 		throw new Error(message ?? `ASR service returned ${response.status}`);
 	}
 	const payload = (await response.json()) as { text?: string };

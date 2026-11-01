@@ -14,7 +14,7 @@
  */
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { appendFact, ensureRepository, currentHouse } from "../house.ts";
+import { appendFact, currentHouse, ensureRepository } from "../house.ts";
 
 const RememberParams = Type.Object({
 	fact: Type.String({

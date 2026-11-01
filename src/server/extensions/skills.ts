@@ -22,6 +22,8 @@
  * Rendering is sorted by name and carries no timestamps or listing order: two renders of an unchanged home must be
  * byte-identical, or every turn appends a prompt delta and throws away the provider's prompt cache.
  */
+
+import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import {
 	createSyntheticSourceInfo,
@@ -30,7 +32,6 @@ import {
 	type Skill,
 } from "@earendil-works/pi-coding-agent";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { join } from "node:path";
 
 /** Where the skills mason ships live. Resolved from this module, not from the process cwd. */
 export const SHIPPED_SKILLS_DIR = join(import.meta.dirname, "../../../skills");
@@ -77,11 +78,7 @@ export async function discoverSkills(
 }
 
 /** Every `SKILL.md` candidate under the roots, in root order then walk order, with the mtimes the cache is keyed on. */
-async function walk(
-	env: ExecutionEnv,
-	roots: readonly string[],
-	context: Context,
-): Promise<readonly WalkedSkill[]> {
+async function walk(env: ExecutionEnv, roots: readonly string[], context: Context): Promise<readonly WalkedSkill[]> {
 	const found: WalkedSkill[] = [];
 	for (const root of roots) await scan(env, root, root, 0, context, found);
 	return found;

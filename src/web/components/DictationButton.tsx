@@ -10,8 +10,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { transcribe } from "../lib/asr.ts";
-import { barHeights, BAR_COUNT, pressOutcome, releaseOutcome, type DictationPhase, worthTranscribing } from "../lib/dictation.ts";
-import { startRecording, type Recording } from "../lib/mic.ts";
+import {
+	BAR_COUNT,
+	barHeights,
+	type DictationPhase,
+	pressOutcome,
+	releaseOutcome,
+	worthTranscribing,
+} from "../lib/dictation.ts";
+import { type Recording, startRecording } from "../lib/mic.ts";
 
 export interface DictationButtonProps {
 	readonly onTranscript: (text: string) => void;
@@ -193,14 +200,8 @@ export function DictationButton({ onTranscript, onError, disabled = false }: Dic
 			{phase === "recording" ? (
 				<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
 					{barHeights(levels, BAR_COUNT).map((height, index) => (
-						<rect
-							key={index}
-							x={index * 3.5}
-							y={(16 - height) / 2}
-							width={2}
-							height={height}
-							rx={1}
-						/>
+						// biome-ignore lint/suspicious/noArrayIndexKey: a bar's identity is its position in the meter
+						<rect key={index} x={index * 3.5} y={(16 - height) / 2} width={2} height={height} rx={1} />
 					))}
 				</svg>
 			) : (

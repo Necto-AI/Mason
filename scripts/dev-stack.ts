@@ -10,9 +10,9 @@
  * live there, so tearing down is `rm -rf .dev` and no part of the developer's own `~/.mason` or `~/.ssh` is
  * touched. The state is deliberately disposable — this is a test bench, not an install.
  */
-import { spawn, type ChildProcess } from "node:child_process";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, resolve } from "node:path";
 import { housePaths } from "../src/server/house.ts";
 import { addPerson, readRoster } from "../src/server/roster.ts";
@@ -27,7 +27,9 @@ const option = (name: string, fallback: string): string => {
 };
 
 const port = option("--port", "8787");
-const names = args.flatMap((arg, index) => (arg === "--add" && args[index + 1] !== undefined ? [args[index + 1] as string] : []));
+const names = args.flatMap((arg, index) =>
+	arg === "--add" && args[index + 1] !== undefined ? [args[index + 1] as string] : [],
+);
 /** `--fake` plays the model offline: the whole path plus the screens, at no token cost. Real is the default. */
 const fake = flag("--fake");
 /** `--no-env-ssh` runs tools through the local daemon instead, for a machine where sshd is not available. */
@@ -195,10 +197,16 @@ function run(command: string, argv: string[]): Promise<string> {
 		const child = spawn(command, argv, { stdio: ["ignore", "pipe", "pipe"] });
 		let out = "";
 		let err = "";
-		child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
-		child.stderr.on("data", (chunk: Buffer) => (err += chunk.toString()));
+		child.stdout.on("data", (chunk: Buffer) => {
+			out += chunk.toString();
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			err += chunk.toString();
+		});
 		child.on("error", fail);
-		child.on("exit", (code) => (code === 0 ? done(out) : fail(new Error(`${command} exited ${code}: ${err.trim()}`))));
+		child.on("exit", (code) =>
+			code === 0 ? done(out) : fail(new Error(`${command} exited ${code}: ${err.trim()}`)),
+		);
 	});
 }
 

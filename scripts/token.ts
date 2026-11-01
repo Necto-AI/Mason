@@ -5,8 +5,9 @@
  * property that makes a leaked `~/.mason/config.json` worth nothing. A running server reads the file per request, so a
  * revoke lands immediately — no restart, and no window where a lost phone still works.
  */
-import { housePaths } from "../src/server/house.ts";
+
 import { listTokens, mintToken, pairingUrls, revokeToken } from "../src/server/auth.ts";
+import { housePaths } from "../src/server/house.ts";
 
 const [command, ...args] = process.argv.slice(2);
 const home = housePaths().home;
@@ -39,7 +40,9 @@ if (command === "list") {
 	console.log();
 	console.log(`  ${minted.token}`);
 	console.log();
-	console.log("Open one of these once. The server sets a cookie and redirects, so the token does not stay in the URL:");
+	console.log(
+		"Open one of these once. The server sets a cookie and redirects, so the token does not stay in the URL:",
+	);
 	for (const url of pairingUrls(hostname, port, minted.token, 2)) console.log(`  ${url}`);
 	console.log();
 	console.log("An app client sends it as `Authorization: Bearer <token>` instead.");

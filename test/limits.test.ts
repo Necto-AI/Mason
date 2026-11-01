@@ -5,13 +5,13 @@
  */
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { after, describe, it } from "node:test";
-import type { IncomingMessage } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { daemonCommand, daemonEnv, DAEMON_ENV_ALLOWED } from "../src/server/env.ts";
+import { DAEMON_ENV_ALLOWED, daemonCommand, daemonEnv } from "../src/server/env.ts";
 import { ensureHouse, housePaths } from "../src/server/house.ts";
 import {
 	createFireLimiter,
