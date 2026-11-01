@@ -68,14 +68,17 @@ async function entries(runtime: AgentRuntime): Promise<Entries[]> {
 	const conversation = await runtime.conversation();
 	const page = await conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT);
 	return page.items.map((entry) => {
+		// `Message` is a union and only some members carry a reason: a system entry in the same transcript does not, so
+		// the narrowing says "the first message is one that has a reason" rather than asserting it.
 		const assistant = entry.model?.[0];
+		const stopReason = assistant !== undefined && "stopReason" in assistant ? assistant.stopReason : undefined;
 		const data =
 			typeof entry.data === "object" && entry.data !== null && !Array.isArray(entry.data)
 				? (entry.data as Record<string, unknown>)
 				: {};
 		return {
 			kind: entry.kind,
-			...(assistant?.stopReason === undefined ? {} : { stopReason: assistant.stopReason }),
+			...(stopReason === undefined ? {} : { stopReason }),
 			...(typeof data.hookId === "string" ? { hookId: data.hookId } : {}),
 		};
 	});
