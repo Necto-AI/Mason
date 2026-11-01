@@ -4,10 +4,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { planRunRetry, readRunOutcome, RunRetrySupervisor } from "../src/server/run-retry.ts";
+import { planRunRetry, RunRetrySupervisor, readRunOutcome } from "../src/server/run-retry.ts";
 
 /** A view with nothing but the entries a test cares about. `live` decides whether the run is still going. */
-function viewOf(entries: Array<{ id: number; kind: string; stopReason?: string; errorMessage?: string }>, busy = false): ConversationView {
+function viewOf(
+	entries: Array<{ id: number; kind: string; stopReason?: string; errorMessage?: string }>,
+	busy = false,
+): ConversationView {
 	return {
 		entries: entries.map((entry) => ({
 			id: entry.id,
@@ -28,10 +31,12 @@ function viewOf(entries: Array<{ id: number; kind: string; stopReason?: string; 
 const base = { handledErrorId: undefined, attempts: 0, maxAttempts: 3, delaysMs: [15_000, 60_000, 300_000] };
 
 test("a run that ended in a model error is re-armed on a slower schedule", () => {
-	assert.deepEqual(
-		planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "Connection error." }),
-		{ kind: "wait", delayMs: 15_000, attempt: 1, error: "Connection error." },
-	);
+	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "Connection error." }), {
+		kind: "wait",
+		delayMs: 15_000,
+		attempt: 1,
+		error: "Connection error.",
+	});
 	// each further attempt waits longer, and the last delay repeats
 	const delayOf = (attempts: number): number | undefined => {
 		const plan = planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "x", attempts });
@@ -44,16 +49,25 @@ test("a run that ended in a model error is re-armed on a slower schedule", () =>
 
 test("the supervisor stops when there is nothing to do", () => {
 	// a run still in flight: its own retries are pi-ai's business
-	assert.deepEqual(planRunRetry({ ...base, busy: true, errorId: "9", errorMessage: "x" }), { kind: "idle", reason: "busy" });
+	assert.deepEqual(planRunRetry({ ...base, busy: true, errorId: "9", errorMessage: "x" }), {
+		kind: "idle",
+		reason: "busy",
+	});
 	// no failure at all
-	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: undefined, errorMessage: undefined }), { kind: "idle", reason: "clean" });
+	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: undefined, errorMessage: undefined }), {
+		kind: "idle",
+		reason: "clean",
+	});
 	// the failure already re-armed: a re-fire appends a new error entry, so ids are the only identity there is
 	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "x", handledErrorId: "9" }), {
 		kind: "idle",
 		reason: "handled",
 	});
 	// budget spent: the manual Retry control is what is left
-	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "x", attempts: 3 }), { kind: "idle", reason: "budget" });
+	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "x", attempts: 3 }), {
+		kind: "idle",
+		reason: "budget",
+	});
 });
 
 test("a message with no error text still retries, and says so", () => {
@@ -62,7 +76,12 @@ test("a message with no error text still retries, and says so", () => {
 });
 
 test("readRunOutcome finds the newest failure and whether an answer followed it", () => {
-	const clean = readRunOutcome(viewOf([{ id: 1, kind: "pi.user" }, { id: 2, kind: "pi.assistant", stopReason: "stop" }]));
+	const clean = readRunOutcome(
+		viewOf([
+			{ id: 1, kind: "pi.user" },
+			{ id: 2, kind: "pi.assistant", stopReason: "stop" },
+		]),
+	);
 	assert.deepEqual(clean, { errorId: undefined, errorMessage: undefined, answeredAfterError: false });
 
 	const failed = readRunOutcome(
@@ -105,7 +124,10 @@ test("the supervisor fires the retry hook once per failure and gives up after it
 		},
 	);
 
-	const failed = viewOf([{ id: 1, kind: "pi.user" }, { id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" }]);
+	const failed = viewOf([
+		{ id: 1, kind: "pi.user" },
+		{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+	]);
 	supervisor.observe(failed);
 	assert.equal(scheduled.length, 1);
 	assert.equal(scheduled[0]?.ms, 5_000);
@@ -118,11 +140,21 @@ test("the supervisor fires the retry hook once per failure and gives up after it
 	assert.deepEqual(fired, ["terminated"]);
 
 	// the re-fire failed too: a new error entry, one more attempt, then the budget is gone
-	supervisor.observe(viewOf([{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" }, { id: 3, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." }]));
+	supervisor.observe(
+		viewOf([
+			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+			{ id: 3, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+		]),
+	);
 	assert.equal(scheduled.length, 2);
 	scheduled[1]?.fn();
 	await Promise.resolve();
-	supervisor.observe(viewOf([{ id: 3, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." }, { id: 4, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." }]));
+	supervisor.observe(
+		viewOf([
+			{ id: 3, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+			{ id: 4, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+		]),
+	);
 	assert.equal(scheduled.length, 2, "the budget is spent, nothing more is scheduled");
 	assert.deepEqual(fired, ["terminated", "Connection error."]);
 

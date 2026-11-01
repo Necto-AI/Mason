@@ -10,7 +10,7 @@
  * `glide` animates, because there the target is a message that has not arrived yet rather than a stream arriving
  * under a still view.
  */
-import { useEffect, useRef, type RefObject } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 
 export interface ScrollSample {
 	top: number;
@@ -70,8 +70,7 @@ export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinn
 		const element = list.current;
 		if (element === null) return;
 
-		const atEnd = (): boolean =>
-			element.scrollHeight - element.clientHeight - element.scrollTop <= AT_END_SLACK;
+		const atEnd = (): boolean => element.scrollHeight - element.clientHeight - element.scrollTop <= AT_END_SLACK;
 
 		const stickToEnd = (): void => {
 			// A finger (or the momentum it started) owns the list: writing scrollTop mid-fling fights the momentum.
@@ -137,12 +136,7 @@ export function useFollower(list: RefObject<HTMLElement | null>, onChange: (pinn
 		const onScroll = (): void => {
 			const next = { top: element.scrollTop, height: element.scrollHeight };
 			setPinned(
-				pinnedAfterScroll(
-					pinned.current,
-					{ top: lastTop.current, height: lastHeight.current },
-					next,
-					atEnd(),
-				),
+				pinnedAfterScroll(pinned.current, { top: lastTop.current, height: lastHeight.current }, next, atEnd()),
 			);
 			lastTop.current = next.top;
 			lastHeight.current = next.height;

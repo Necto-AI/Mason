@@ -32,6 +32,7 @@ jobs:
       # GitHub Ubuntu image it is; `vendor/pi/packages/env/daemon/rust-toolchain.toml` names the version.
       - run: bash scripts/setup.sh
 
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run build:web
       - run: npm test

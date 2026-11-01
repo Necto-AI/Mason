@@ -9,16 +9,16 @@
  */
 
 export const IMPORTMAP = {
-  imports: {
-    "three": "https://esm.sh/three",
-    "three/": "https://esm.sh/three/",
-    "gsap": "https://esm.sh/gsap",
-    "gsap/": "https://esm.sh/gsap/",
-    "d3": "https://esm.sh/d3",
-    "d3/": "https://esm.sh/d3/",
-    "chart.js": "https://esm.sh/chart.js",
-    "chart.js/": "https://esm.sh/chart.js/",
-  },
+	imports: {
+		three: "https://esm.sh/three",
+		"three/": "https://esm.sh/three/",
+		gsap: "https://esm.sh/gsap",
+		"gsap/": "https://esm.sh/gsap/",
+		d3: "https://esm.sh/d3",
+		"d3/": "https://esm.sh/d3/",
+		"chart.js": "https://esm.sh/chart.js",
+		"chart.js/": "https://esm.sh/chart.js/",
+	},
 } as const satisfies { imports: Record<string, string> };
 export const THEME_CSS = `
 :root {
@@ -332,7 +332,7 @@ a:hover { text-decoration: underline; }
 // canonical default guidance, which contradicts this design system.
 export const IMPORTMAP_SCRIPT_TAG = `<script type="importmap">
 ${JSON.stringify(IMPORTMAP, null, 2)
-  .split("\n")
-  .map((line) => "  " + line)
-  .join("\n")}
+	.split("\n")
+	.map((line) => `  ${line}`)
+	.join("\n")}
   </script>`;

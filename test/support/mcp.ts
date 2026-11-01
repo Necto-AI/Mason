@@ -18,28 +18,28 @@ import { after } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
+	type FauxResponseStep,
 	fauxAssistantMessage,
 	fauxProvider,
-	type FauxResponseStep,
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import {
 	type CallToolResult,
 	JSON_RPC_ERROR_CODES,
-	LATEST_PROTOCOL_VERSION,
-	McpError,
 	type JsonRpcMessage,
 	type JsonRpcRequest,
-	type McpTransport,
+	LATEST_PROTOCOL_VERSION,
+	McpError,
 	type Tool as McpTool,
+	type McpTransport,
 } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
-import { MESSAGE_TOOL } from "../../src/shared/contract.ts";
 import { housePaths } from "../../src/server/house.ts";
 import type { Integration } from "../../src/server/integrations.ts";
 import type { McpTransportFactory } from "../../src/server/mcp.ts";
-import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../../src/server/runtime.ts";
+import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../../src/server/runtime.ts";
+import { MESSAGE_TOOL } from "../../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {

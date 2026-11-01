@@ -4,21 +4,21 @@
  */
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acceptWebSockets, createHost, type Ctx, type Host } from "@earendil-works/chord";
+import { acceptWebSockets, type Ctx, createHost, type Host } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type { ConversationId, ConversationView, SubmissionId } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
 import {
 	AgentService,
+	type AgentStatus,
 	AgentStatusSchema,
 	QueuedItemSchema,
 	TranscriptItemSchema,
 	withAuthor,
-	type AgentStatus,
 } from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
 import {
@@ -31,21 +31,21 @@ import {
 	type TokenRecord,
 	type TokenStore,
 } from "./auth.ts";
+import {
+	COMMAND_KIND,
+	type CommandName,
+	commandRequestId,
+	EVENT_SIGNATURE_HEADER,
+	EVENTS_PATH,
+	readCommand,
+	readEnvelope,
+	verifySignature,
+} from "./events.ts";
+import { explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
 import { installEnvHttpProxy } from "./http-proxy.ts";
 import { integrationSummaries } from "./integration-status.ts";
 import { commandsFor, currentIntegrations, triggerFor } from "./integrations.ts";
-import {
-	COMMAND_KIND,
-	EVENT_SIGNATURE_HEADER,
-	EVENTS_PATH,
-	commandRequestId,
-	readCommand,
-	readEnvelope,
-	verifySignature,
-	type CommandName,
-} from "./events.ts";
-import { explicitRequestId, UnknownHookError } from "./hooks.ts";
 import {
 	COMMAND_LIMIT,
 	createFireLimiter,
@@ -59,8 +59,8 @@ import {
 } from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
-import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions } from "./runtime.ts";
-import { RunRetrySupervisor, RETRY_HOOK_ID } from "./run-retry.ts";
+import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
+import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
 import { createCacheReporter, deriveAgentStatus, isBusy, queuedSubmissions, statusLine } from "./status.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -185,7 +185,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		const queued = self.state("queued", Type.Array(QueuedItemSchema), {
 			init: () => projectQueued(viewResource.value.value),
 		});
-		const agentStatus = self.state("agentStatus", AgentStatusSchema, { init: () => statusFor(viewResource.value.value) });
+		const agentStatus = self.state("agentStatus", AgentStatusSchema, {
+			init: () => statusFor(viewResource.value.value),
+		});
 
 		self.on("viewSync", viewResource, (next, ctx) => {
 			transcript.replace(ctx, projectTranscript(next));
@@ -303,13 +305,19 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// A state directory next to the code was the old default; saying so is worth more than silently starting a second
 	// agent that looks empty. Only for a server that took the default: a caller that passed `dataDir` (a test, a script)
 	// has already decided where its state is.
-	if (options.dataDir === undefined && resolve(runtime.dataDir) !== resolve(".data") && existsSync(join(".data", "agent.sqlite"))) {
+	if (
+		options.dataDir === undefined &&
+		resolve(runtime.dataDir) !== resolve(".data") &&
+		existsSync(join(".data", "agent.sqlite"))
+	) {
 		console.warn(`[data] ignoring ./.data (an older home): move it with \`mv .data ${runtime.dataDir}\``);
 	}
 	if (pairingToken !== undefined) {
 		console.log(`[auth] minted a token for this home; open one of these once, per browser or device:`);
 		for (const url of pairingUrls(hostname, boundPort, pairingToken)) console.log(`[auth]   ${url}`);
-		console.log(`[auth] the link sets a cookie and redirects to the bare page; the token stays out of the address bar`);
+		console.log(
+			`[auth] the link sets a cookie and redirects to the bare page; the token stays out of the address bar`,
+		);
 	} else {
 		const known = (await store.records()).length;
 		console.log(`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live)`);
@@ -317,7 +325,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// A roster nobody filled in is the team feature nobody can use: the shell sends a paired browser to a picker with no
 	// names on it, and this line is what tells the deployer why, and what to type.
 	if ((await readRoster(house)).people.length === 0) {
-		console.warn(`[team] the roster is empty: add the first person with: npm run team -- add "Ilya" (a removal is live)`);
+		console.warn(
+			`[team] the roster is empty: add the first person with: npm run team -- add "Ilya" (a removal is live)`,
+		);
 	}
 	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
 		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);

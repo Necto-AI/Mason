@@ -16,11 +16,11 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { Tool as McpTool } from "@earendil-works/pi-mcp";
-import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import { housePaths } from "../src/server/house.ts";
 import { integrationStatus } from "../src/server/integration-status.ts";
-import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
 import { startServer } from "../src/server/main.ts";
+import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
+import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import {
 	boot,
 	declared,
@@ -56,7 +56,11 @@ describe("what a server offers", () => {
 			"the integration's name and the tool's, with dots made into underscores",
 		);
 		const [create] = mcp.tools;
-		assert.equal(create.description, "Open an issue in a repository", "the server's own words, because the model reads them");
+		assert.equal(
+			create.description,
+			"Open an issue in a repository",
+			"the server's own words, because the model reads them",
+		);
 		// An MCP tool's schema is JSON Schema, declared as it arrived: a property the server named is the property the
 		// model is asked for, and an object schema without `properties` is rejected by some providers, so both stand.
 		assert.deepEqual(schemaOf(create.parameters), {
@@ -92,7 +96,11 @@ describe("the name a tool is registered under", () => {
 	it("keeps a name within 64 characters, ending it with 8 hex digits of its own", () => {
 		const long = createMcpToolName("github", "x".repeat(80));
 		assert.equal(long.length, 64);
-		assert.match(long, /^mcp__github__x+_[0-9a-f]{8}$/, "the suffix is the name's hash, so it is the same on every boot");
+		assert.match(
+			long,
+			/^mcp__github__x+_[0-9a-f]{8}$/,
+			"the suffix is the name's hash, so it is the same on every boot",
+		);
 		assert.equal(long, createMcpToolName("github", "x".repeat(80)), "two boots agree about the name");
 	});
 
@@ -163,7 +171,11 @@ describe("the boot", () => {
 		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: starting });
 		try {
 			assert.equal(attempts, 2, "the boot asked twice");
-			assert.deepEqual(await deferred(runtime), ["mcp__github__issues_create", SEARCH_TOOL_NAME], "the tools arrived");
+			assert.deepEqual(
+				await deferred(runtime),
+				["mcp__github__issues_create", SEARCH_TOOL_NAME],
+				"the tools arrived",
+			);
 			assert.deepEqual(integrationStatus().get("github"), { connected: true, tools: 2, error: null });
 		} finally {
 			await runtime.close();
@@ -307,7 +319,11 @@ describe("the boot", () => {
 		});
 		try {
 			await turn(runtime);
-			assert.deepEqual(server.calls, [{ name: "issues.search", args: { query: "bug" } }], "the model's arguments reach the server");
+			assert.deepEqual(
+				server.calls,
+				[{ name: "issues.search", args: { query: "bug" } }],
+				"the model's arguments reach the server",
+			);
 			const [result] = (await toolResults(runtime)).filter((entry) => entry.name === SEARCH_TOOL_NAME);
 			const text = result?.text ?? "";
 			// The head is where a result starts and the tail is where it ends, and the two the model most needs are the
@@ -315,7 +331,10 @@ describe("the boot", () => {
 			assert.match(text, /^START-MARKER/, "the beginning survived");
 			assert.match(text, /END-MARKER$/, "and so did the end");
 			assert.match(text, /\[… \d+ of 30022 bytes dropped: this is the start and the end of a longer result …\]/);
-			assert.ok(Buffer.byteLength(text) <= 20 * 1024, `${Buffer.byteLength(text)} bytes is more than the 20 KB a declared call may spend`);
+			assert.ok(
+				Buffer.byteLength(text) <= 20 * 1024,
+				`${Buffer.byteLength(text)} bytes is more than the 20 KB a declared call may spend`,
+			);
 			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
 			assert.ok(!text.includes("x".repeat(11_000)), "the middle did not land in the transcript");
 			assert.equal(result?.isError, false);
@@ -351,7 +370,15 @@ describe("the integrations route", () => {
 			assert.equal(answer.status, 200);
 			const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
 			assert.deepEqual(body.integrations, [
-				{ name: "github", enabled: true, hasTools: true, hasTrigger: false, connected: true, tools: 2, error: null },
+				{
+					name: "github",
+					enabled: true,
+					hasTools: true,
+					hasTrigger: false,
+					connected: true,
+					tools: 2,
+					error: null,
+				},
 			]);
 		} finally {
 			await mason.close();

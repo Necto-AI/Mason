@@ -3,8 +3,7 @@
  * (`docs["pi.live"]`, `docs["pi.inbox"]`, `docs["pi.usage"]`) plus what the runtime was opened with. The last part of
  * the module is the operator's view instead of the reader's: the prompt-cache report of a finished run.
  */
-import type { ConversationView } from "@earendil-works/pi-durable";
-import type { InboxState, LiveState, UsageState } from "@earendil-works/pi-durable";
+import type { ConversationView, InboxState, LiveState, UsageState } from "@earendil-works/pi-durable";
 import type { AgentStatus, HookSummary, RunStatus } from "../shared/contract.ts";
 import type { IntegrationSummary } from "./integration-status.ts";
 
@@ -81,10 +80,7 @@ const RUN_STATUS_WORDS: Record<RunStatus, string> = {
  * The integrations are the caller's: `integration-status.ts` holds this boot's findings, and passing them in keeps the
  * sentence a pure function of what was found.
  */
-export function statusLine(
-	view: ConversationView | undefined,
-	integrations: readonly IntegrationSummary[],
-): string {
+export function statusLine(view: ConversationView | undefined, integrations: readonly IntegrationSummary[]): string {
 	const queued = queuedSubmissions(view);
 	const connected = integrations.filter((entry) => entry.enabled && entry.connected).map((entry) => entry.name);
 	const unreachable = integrations.filter((entry) => entry.error !== null).length;

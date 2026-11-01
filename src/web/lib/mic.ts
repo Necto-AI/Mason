@@ -79,7 +79,10 @@ function join(chunks: readonly Float32Array[]): Float32Array<ArrayBuffer> {
 	return samples;
 }
 
-async function resampleTo16k(samples: Float32Array<ArrayBuffer>, sourceRate: number): Promise<Float32Array<ArrayBuffer>> {
+async function resampleTo16k(
+	samples: Float32Array<ArrayBuffer>,
+	sourceRate: number,
+): Promise<Float32Array<ArrayBuffer>> {
 	if (sourceRate === SAMPLE_RATE || samples.length === 0) return samples;
 	const length = Math.max(1, Math.round((samples.length * SAMPLE_RATE) / sourceRate));
 	const offline = new OfflineAudioContext(1, length, SAMPLE_RATE);

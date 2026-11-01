@@ -23,19 +23,19 @@ import {
 	type Registry,
 	type Storage,
 } from "@earendil-works/pi-durable";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
-import { createRuntimeEnvManager, sshTargetFromEnv, type RuntimeEnvManager } from "./env.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { Memory } from "./extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
-import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
+import { builtinHooks, HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
-import { builtinHooks, HooksManager } from "./hooks.ts";
+import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { readRoster } from "./roster.ts";
 
 /**
@@ -201,10 +201,7 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions): Prom
 }
 
 /** Opens storage, the harness, and the root conversation; resumes any run a previous process left unfinished. */
-export async function openAgentRuntime(
-	context: Context,
-	options: OpenAgentRuntimeOptions = {},
-): Promise<AgentRuntime> {
+export async function openAgentRuntime(context: Context, options: OpenAgentRuntimeOptions = {}): Promise<AgentRuntime> {
 	// The agent's home: its soul, its profile, its log, its skills, its state, and the directory it works in, in the two
 	// halves the deployment mounts separately. Created once, and never overwritten. The workspace is its own directory,
 	// not the code's: an agent that can edit the program that runs it is a different product.
@@ -304,7 +301,8 @@ export async function openAgentRuntime(
 				models,
 				registry,
 				settings,
-				env: async (target) => envManager.envFor({ conversationId: String(target.conversationId), cwd: target.cwd }),
+				env: async (target) =>
+					envManager.envFor({ conversationId: String(target.conversationId), cwd: target.cwd }),
 				...(options.onReport === undefined ? {} : { onReport: options.onReport }),
 			},
 			context,
@@ -445,11 +443,7 @@ async function openSqliteStorage(path: string): Promise<Storage> {
  * integration the operator switched off from ever being switched on again. The message names the file, the integration
  * and the hook, because all three are what a person has to change.
  */
-function assertTriggersHaveHooks(
-	integrations: Record<string, Integration>,
-	hooks: HooksManager,
-	path: string,
-): void {
+function assertTriggersHaveHooks(integrations: Record<string, Integration>, hooks: HooksManager, path: string): void {
 	for (const [name, integration] of Object.entries(integrations)) {
 		if (!integration.enabled) continue;
 		const hook = integration.trigger?.hook;

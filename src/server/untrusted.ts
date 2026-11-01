@@ -43,7 +43,9 @@ export function fenceUntrusted(payload: string): string {
 	// so nothing in the payload can look like the boundary.
 	const defused = capped
 		.split("\n")
-		.map((line) => (line.trim() === CLOSE || line.trim() === UNTRUSTED_OPEN ? `(marker in payload) ${line.trim()}` : line))
+		.map((line) =>
+			line.trim() === CLOSE || line.trim() === UNTRUSTED_OPEN ? `(marker in payload) ${line.trim()}` : line,
+		)
 		.join("\n");
 	return `${UNTRUSTED_OPEN}\n${defused}\n${CLOSE}`;
 }

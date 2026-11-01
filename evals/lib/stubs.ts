@@ -83,16 +83,12 @@ export function StubTools(scenario: Scenario, roots: readonly string[] = []) {
 	 * silently resolves those to the wrong directory looks to the model like a missing file.
 	 */
 	async function readInside(allowed: readonly string[], path: string): Promise<string | undefined> {
-		const candidates = isAbsolute(path)
-			? [resolve(path)]
-			: [...allowed].reverse().map((root) => resolve(root, path));
+		const candidates = isAbsolute(path) ? [resolve(path)] : [...allowed].reverse().map((root) => resolve(root, path));
 		for (const target of candidates) {
 			if (!allowed.some((root) => !relative(root, target).startsWith(".."))) continue;
 			try {
 				return await readFile(target, "utf8");
-			} catch {
-				continue;
-			}
+			} catch {}
 		}
 		return undefined;
 	}
@@ -105,7 +101,7 @@ export function StubTools(scenario: Scenario, roots: readonly string[] = []) {
 			edits: Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() })),
 		}),
 		replay: "unsafe",
-		execute: async (args: unknown) => {
+		execute: async (_args: unknown) => {
 			return text("Edited.");
 		},
 	});

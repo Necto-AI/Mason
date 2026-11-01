@@ -118,8 +118,7 @@ export function readEnvelope(raw: Buffer): EventEnvelope | { error: string } {
 	const kind = fields.kind;
 	if (typeof kind !== "string" || !KIND_TOKEN.test(kind)) {
 		return {
-			error:
-				'"kind" must be a short token — letters, digits and "." "_" ":" "-", starting with a letter or a digit, at most 64 characters — such as "issue.opened", "push" or "chat.message", with no spaces or newlines',
+			error: '"kind" must be a short token — letters, digits and "." "_" ":" "-", starting with a letter or a digit, at most 64 characters — such as "issue.opened", "push" or "chat.message", with no spaces or newlines',
 		};
 	}
 	const payload = fields.payload;

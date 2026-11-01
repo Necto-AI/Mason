@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { housePaths, type HousePaths } from "../src/server/house.ts";
+import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { addPerson, findPerson, normalizeName, readRoster, removePerson } from "../src/server/roster.ts";
 import { NAME_MAX } from "../src/shared/contract.ts";
 
@@ -63,7 +63,7 @@ describe("the roster file", () => {
 		assert.deepEqual(
 			roster.people.map((person) => person.name),
 			["Ilya"],
-			"one person, one spelling: the transcript cannot say \"ilya\" and \"Ilya\" are two speakers",
+			'one person, one spelling: the transcript cannot say "ilya" and "Ilya" are two speakers',
 		);
 		// A claim is looked up the same way, so the join screen accepts how someone types their own name.
 		assert.equal(findPerson(roster, "ILYA")?.name, "Ilya");

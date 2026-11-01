@@ -17,9 +17,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonObject, Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
+	type FauxResponseStep,
 	fauxAssistantMessage,
 	fauxProvider,
-	type FauxResponseStep,
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
@@ -31,6 +31,8 @@ import {
 	type SettledSubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
+import { projectTranscript } from "../src/server/projection.ts";
+import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 import {
 	DELIVERY_REMINDER,
 	hookDeliveryReminder,
@@ -38,8 +40,6 @@ import {
 	MESSAGE_TOOL,
 	WIDGET_TOOL,
 } from "../src/shared/contract.ts";
-import { projectTranscript } from "../src/server/projection.ts";
-import { openAgentRuntime, type AgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -76,7 +76,14 @@ function recorder(steps: readonly FauxResponseStep[]): {
 	const queue: FauxResponseStep[] = steps.map((step) => {
 		return (context) => {
 			requests.push([...context.messages] as Message[]);
-			return typeof step === "function" ? step(context, undefined, { callCount: 0, deferredFetchCount: 0, cancelledDeferred: [] }, undefined as never) : step;
+			return typeof step === "function"
+				? step(
+						context,
+						undefined,
+						{ callCount: 0, deferredFetchCount: 0, cancelledDeferred: [] },
+						undefined as never,
+					)
+				: step;
 		};
 	});
 	return { steps: queue, requests };
@@ -238,11 +245,7 @@ function temporary(): Promise<string> {
 
 test("a turn that answers in prose is reminded, and the reminder never reaches the reader", async () => {
 	const directory = await temporary();
-	const script = recorder([
-		said("The standup moved to nine."),
-		deliver("Standup moved to nine."),
-		said("Done."),
-	]);
+	const script = recorder([said("The standup moved to nine."), deliver("Standup moved to nine."), said("Done.")]);
 	const { settled, transcript, requests } = await runScripted(directory, script);
 
 	assert.equal(settled.status, "done");
@@ -400,8 +403,16 @@ test("a hooked turn refuses send_to_user, and names the tool that reaches the ch
 	assert.equal(settled.status, "done");
 	const refusal = answerTo(entries, "sent");
 	assert.equal(refusal.isError, true, "the call was refused, not answered with a delivery");
-	assert.match(refusal.text, /send_to_user cannot reach the reader in this turn/, "the refusal says what does not happen");
-	assert.match(refusal.text, /the call rejects/, "code mode reads an error result as a rejection, and the text says so");
+	assert.match(
+		refusal.text,
+		/send_to_user cannot reach the reader in this turn/,
+		"the refusal says what does not happen",
+	);
+	assert.match(
+		refusal.text,
+		/the call rejects/,
+		"code mode reads an error result as a rejection, and the text says so",
+	);
 	assert.match(refusal.text, new RegExp(CHAT_TOOL), "and names the tool that does reach the chat");
 	assert.match(refusal.text, /the chat the payload names/, "and says which chat to answer in");
 });
@@ -431,14 +442,20 @@ test("a hooked turn that only calls send_to_user is reminded with the chat's too
 	assert.equal(requests.length, 4, "the refusal, the reminder, and the answer it produced");
 	const reminder = requests[2]?.at(-1) as { role?: string; content?: unknown } | undefined;
 	assert.equal(reminder?.role, "user");
-	assert.equal(reminder?.content, hookDeliveryReminder(CHAT_TOOL), "the reminder names the tool that reaches the chat");
+	assert.equal(
+		reminder?.content,
+		hookDeliveryReminder(CHAT_TOOL),
+		"the reminder names the tool that reaches the chat",
+	);
 	assert.match(String(reminder?.content), new RegExp(CHAT_TOOL));
 });
 
 test("a console turn still delivers with send_to_user while a chat-facing hook exists", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
-	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?", [chatFace()]);
+	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?", [
+		chatFace(),
+	]);
 
 	assert.equal(settled.status, "done");
 	assert.equal(answerTo(entries, "sent").isError, false, "the console turn's delivery is not refused");

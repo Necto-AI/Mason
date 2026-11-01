@@ -82,9 +82,7 @@ async function judge(stored: Stored): Promise<Verdict> {
 		"# What the agent did",
 		trace.toolCalls.length === 0
 			? "(no tool calls)"
-			: trace.toolCalls
-					.map((call) => `- ${call.name} ${JSON.stringify(call.args).slice(0, 240)}`)
-					.join("\n"),
+			: trace.toolCalls.map((call) => `- ${call.name} ${JSON.stringify(call.args).slice(0, 240)}`).join("\n"),
 		"",
 		"# Programmatic checks",
 		stored.checks.map((entry) => `- ${entry.pass ? "pass" : "FAIL"} ${entry.name} ${entry.detail}`).join("\n"),
