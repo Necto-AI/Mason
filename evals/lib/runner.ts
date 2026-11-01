@@ -5,23 +5,23 @@
  * sees, and `delivery`. Everything expensive or unpredictable is replaced: tools answer from the scenario, and the home
  * is a temp directory that no other test or eval can see.
  */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
-import { projectTranscript } from "../../src/server/projection.ts";
-import { isDeliveryReminder } from "../../src/shared/contract.ts";
-import { formatPrompt } from "../../src/server/hooks.ts";
-import { openAgentRuntime } from "../../src/server/runtime.ts";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
 import { Memory } from "../../src/server/extensions/memory.ts";
 import { GenerateSandboxedUiExtension } from "../../src/server/extensions/sandboxed-ui.ts";
-import { housePaths, HOUSE_ENTRIES, logPathFor, type HousePaths } from "../../src/server/house.ts";
+import { formatPrompt } from "../../src/server/hooks.ts";
+import { HOUSE_ENTRIES, type HousePaths, housePaths, logPathFor } from "../../src/server/house.ts";
+import { projectTranscript } from "../../src/server/projection.ts";
 import { Prompt } from "../../src/server/prompt.ts";
-import { StubTools } from "./stubs.ts";
+import { openAgentRuntime } from "../../src/server/runtime.ts";
+import { isDeliveryReminder } from "../../src/shared/contract.ts";
 import type { Scenario, Trace } from "./scenario.ts";
+import { StubTools } from "./stubs.ts";
 
 export interface RunOptions {
 	readonly model: { provider: string; modelId: string };

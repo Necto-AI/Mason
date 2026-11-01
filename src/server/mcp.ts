@@ -27,17 +27,17 @@
  */
 import { createHash } from "node:crypto";
 import type { JsonValue } from "@earendil-works/chord";
+import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import {
 	type CallToolResult,
 	type LlmContent,
 	McpClient,
+	type Tool as McpTool,
 	type McpTransport,
 	StreamableHttpTransport,
-	type Tool as McpTool,
 	toLlmContent,
 } from "@earendil-works/pi-mcp";
-import { defineExtension, defineTool, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
-import { Type, type TUnsafe } from "typebox";
+import { type TUnsafe, Type } from "typebox";
 import { integrationStatus } from "./integration-status.ts";
 import type { Integration } from "./integrations.ts";
 
@@ -225,9 +225,7 @@ function createMcpTool(integration: string, client: McpClient, tool: McpTool, na
  * A result short enough to fit is returned untouched, block for block.
  */
 function headAndTail(content: readonly LlmContent[]): LlmContent[] {
-	const text = content
-		.flatMap((item) => (item.type === "text" ? [item.text] : []))
-		.join("\n");
+	const text = content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
 	const bytes = Buffer.from(text, "utf8");
 	if (bytes.length <= MCP_OUTPUT_MAX_BYTES) return [...content];
 	// Two newlines around the marker, and the marker written with the largest number it can carry (`dropped <= total`),
@@ -290,7 +288,7 @@ type Reach =
 			readonly required: boolean;
 			readonly client: McpClient;
 			readonly listed: readonly McpTool[];
-		}
+	  }
 	| { readonly name: string; readonly required: boolean; readonly error: string };
 
 /**

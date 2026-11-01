@@ -40,7 +40,10 @@ describe("the cache line", () => {
 			cacheLine({ input: 0, cacheRead: 24_000 }, "run-9"),
 			"[cache] run=run-9 in=24000 cacheRead=24000 hit=100.0 miss=0",
 		);
-		assert.equal(cacheLine({ input: 1, cacheRead: 2 }, "run-9"), "[cache] run=run-9 in=3 cacheRead=2 hit=66.7 miss=1");
+		assert.equal(
+			cacheLine({ input: 1, cacheRead: 2 }, "run-9"),
+			"[cache] run=run-9 in=3 cacheRead=2 hit=66.7 miss=1",
+		);
 	});
 
 	it("treats an absent field as zero", () => {
@@ -92,7 +95,10 @@ describe("the ledger a run is measured against", () => {
 
 /** A view with a run in flight, so the reporter treats the next idle frame as the end of that run. */
 function busyView(runId: string, ledger: unknown): ConversationView {
-	return { entries: [], docs: { "pi.usage": ledger, "pi.live": { run: { taskId: runId } } } } as unknown as ConversationView;
+	return {
+		entries: [],
+		docs: { "pi.usage": ledger, "pi.live": { run: { taskId: runId } } },
+	} as unknown as ConversationView;
 }
 
 /** The same conversation with nothing running. */

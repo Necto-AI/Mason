@@ -19,11 +19,11 @@ import { after, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { readCommand, readEnvelope, verifySignature } from "../src/server/events.ts";
+import { type HousePaths, housePaths } from "../src/server/house.ts";
+import { EVENT_BODY_MAX_BYTES } from "../src/server/limits.ts";
 import type { RunningServer } from "../src/server/main.ts";
 import { startServer } from "../src/server/main.ts";
-import { readCommand, readEnvelope, verifySignature } from "../src/server/events.ts";
-import { housePaths, type HousePaths } from "../src/server/house.ts";
-import { EVENT_BODY_MAX_BYTES } from "../src/server/limits.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
 import { isBusy, queuedSubmissions } from "../src/server/status.ts";
 import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
@@ -198,7 +198,10 @@ describe("the event signature", () => {
 	it("refuses one changed byte, another secret, and a header that is not sha256=<32 bytes hex>", () => {
 		const raw = Buffer.from(JSON.stringify(envelope()));
 		const signed = signature(telegramSecret, raw.toString());
-		assert.equal(verifySignature(telegramSecret, Buffer.from(raw.toString().replace("opened", "edited")), signed), false);
+		assert.equal(
+			verifySignature(telegramSecret, Buffer.from(raw.toString().replace("opened", "edited")), signed),
+			false,
+		);
 		assert.equal(verifySignature(docsSecret, raw, signed), false);
 		assert.equal(verifySignature(telegramSecret, raw, undefined), false);
 		assert.equal(verifySignature(telegramSecret, raw, "sha1=deadbeef"), false);
@@ -214,7 +217,12 @@ describe("the envelope", () => {
 
 	it("reads v1, and ignores keys it does not know", () => {
 		const body = envelope({ at: "the sender's clock is not evidence", integration: "telegram" });
-		assert.deepEqual(read(body), { v: 1, id: "issue-1421-opened", kind: "issue.opened", payload: "Ilya opened issue #1421" });
+		assert.deepEqual(read(body), {
+			v: 1,
+			id: "issue-1421-opened",
+			kind: "issue.opened",
+			payload: "Ilya opened issue #1421",
+		});
 	});
 
 	it("refuses a version mason does not know", () => {
@@ -273,7 +281,12 @@ describe("the envelope", () => {
 
 	it("accepts a token kind such as issue.opened", () => {
 		const result = read(envelope({ kind: "issue.opened" }));
-		assert.deepEqual(result, { v: 1, id: "issue-1421-opened", kind: "issue.opened", payload: "Ilya opened issue #1421" });
+		assert.deepEqual(result, {
+			v: 1,
+			id: "issue-1421-opened",
+			kind: "issue.opened",
+			payload: "Ilya opened issue #1421",
+		});
 	});
 
 	it("refuses an over-long payload rather than truncating it", () => {
@@ -340,7 +353,9 @@ describe("the event door", () => {
 		await writeIntegrations(paths);
 		const server = await serve(paths);
 		try {
-			const body = JSON.stringify(envelope({ payload: "Ilya opened issue #1421: the picker forgets the last name." }));
+			const body = JSON.stringify(
+				envelope({ payload: "Ilya opened issue #1421: the picker forgets the last name." }),
+			);
 			const answer = await deliver(server, "telegram", body);
 			assert.equal(answer.status, 202);
 			const { submissionId } = (await answer.json()) as { submissionId?: unknown };
@@ -349,7 +364,11 @@ describe("the event door", () => {
 			const entries = await hookEntries(server.server.runtime);
 			assert.equal(entries.length, 1, "one delivery is one fire");
 			const text = entries[0]?.text ?? "";
-			assert.match(text, /\[begin untrusted payload/, "the payload is fenced as data, not spliced in as instructions");
+			assert.match(
+				text,
+				/\[begin untrusted payload/,
+				"the payload is fenced as data, not spliced in as instructions",
+			);
 			assert.ok(text.includes("Ilya opened issue #1421"), "the sender's words reach the model");
 			assert.match(text, /\[end untrusted payload\]/);
 		} finally {
@@ -370,7 +389,11 @@ describe("the event door", () => {
 				["no header", await deliver(server, "telegram", body, null)],
 			] as const) {
 				assert.equal(answer.status, 401, what);
-				assert.deepEqual(await answer.json(), { error: "unauthorized" }, `${what} says nothing about which half failed`);
+				assert.deepEqual(
+					await answer.json(),
+					{ error: "unauthorized" },
+					`${what} says nothing about which half failed`,
+				);
 			}
 			assert.equal((await hookEntries(server.server.runtime)).length, 0, "nothing was parsed into a fire");
 		} finally {
@@ -410,7 +433,11 @@ describe("the event door", () => {
 		const first = await serve(paths);
 		try {
 			assert.equal((await deliver(first, "telegram", body)).status, 202);
-			assert.equal((await deliver(first, "telegram", body)).status, 202, "a redelivery is acknowledged, not refused");
+			assert.equal(
+				(await deliver(first, "telegram", body)).status,
+				202,
+				"a redelivery is acknowledged, not refused",
+			);
 			assert.equal((await hookEntries(first.server.runtime)).length, 1, "the durable log admitted it once");
 		} finally {
 			await first.close();
@@ -443,7 +470,11 @@ describe("the event door", () => {
 			assert.equal((await settledHookEntries(server.server.runtime, 2)).length, 2, "two senders, two events");
 
 			// The same integration naming the same delivery again is still that one fire.
-			assert.equal((await deliver(server, "telegram", body)).status, 202, "a redelivery is acknowledged, not refused");
+			assert.equal(
+				(await deliver(server, "telegram", body)).status,
+				202,
+				"a redelivery is acknowledged, not refused",
+			);
 			assert.equal((await hookEntries(server.server.runtime)).length, 2, "and adds nothing to the transcript");
 		} finally {
 			await server.close();
@@ -458,7 +489,11 @@ describe("the event door", () => {
 			const body = JSON.stringify(envelope({ kind: "issue.opened", payload: "Ilya opened issue #1421" }));
 			assert.equal((await deliver(server, "telegram", body)).status, 202);
 			const [entry] = await settledHookEntries(server.server.runtime, 1);
-			assert.equal(entry?.data.kind, "issue.opened", "the transcript says what happened, for the reader and for the log");
+			assert.equal(
+				entry?.data.kind,
+				"issue.opened",
+				"the transcript says what happened, for the reader and for the log",
+			);
 			assert.match(entry?.text ?? "", /Event: issue\.opened/, "and the model is told without parsing the prose");
 		} finally {
 			await server.close();
@@ -489,7 +524,11 @@ describe("the event door", () => {
 			const answer = await deliver(server, "telegram", body, null);
 			assert.equal(answer.status, 413);
 			assert.deepEqual(await answer.json(), { error: "payload too large", maxBytes: EVENT_BODY_MAX_BYTES });
-			assert.equal((await hookEntries(server.server.runtime)).length, 0, "an over-long body is dropped, never truncated");
+			assert.equal(
+				(await hookEntries(server.server.runtime)).length,
+				0,
+				"an over-long body is dropped, never truncated",
+			);
 		} finally {
 			await server.close();
 		}
@@ -577,7 +616,9 @@ describe("the event door", () => {
 
 			const status = await fetch(`${server.base}/api/status`);
 			assert.equal(status.status, 401, "an event sender cannot read the transcript");
-			const withToken = await fetch(`${server.base}/api/status`, { headers: { authorization: `Bearer ${server.token}` } });
+			const withToken = await fetch(`${server.base}/api/status`, {
+				headers: { authorization: `Bearer ${server.token}` },
+			});
 			assert.equal(withToken.status, 200, "the reading door still answers its owner");
 		} finally {
 			await server.close();
@@ -658,7 +699,10 @@ describe("a command at the door", () => {
 			assert.equal(status.status, 200);
 			const { handled, reply } = (await status.json()) as { handled?: unknown; reply?: unknown };
 			assert.equal(handled, true);
-			assert.match(String(reply), /^idle: nothing queued; no integration connected; nothing unreachable since boot$/);
+			assert.match(
+				String(reply),
+				/^idle: nothing queued; no integration connected; nothing unreachable since boot$/,
+			);
 
 			// Neither of them is a turn: a command that fired a hook would leave an entry, and a chat is not a wake-up.
 			assert.equal((await hookEntries(server.server.runtime)).length, 0);
@@ -734,7 +778,12 @@ describe("a command at the door", () => {
 		try {
 			// `docs` declares no commands at all, so even a word mason knows is the sender's own business.
 			for (const body of [command("stop", "chat-1"), command("start", "chat-2"), command("stopp", "chat-3")]) {
-				const answer = await deliver(server, "docs", JSON.stringify(body), signature(docsSecret, JSON.stringify(body)));
+				const answer = await deliver(
+					server,
+					"docs",
+					JSON.stringify(body),
+					signature(docsSecret, JSON.stringify(body)),
+				);
 				assert.equal(answer.status, 200, JSON.stringify(body));
 				assert.deepEqual(await answer.json(), { handled: false }, "the relay is told to send the message it has");
 			}
@@ -780,7 +829,11 @@ describe("a command at the door", () => {
 			const again = await deliver(server, "telegram", body);
 			assert.equal(again.status, 200);
 			assert.deepEqual(await again.json(), { handled: true, reply: "" });
-			assert.deepEqual(await commandEntries(server.server.runtime), [{ command: "stop" }], "one claim for two deliveries");
+			assert.deepEqual(
+				await commandEntries(server.server.runtime),
+				[{ command: "stop" }],
+				"one claim for two deliveries",
+			);
 			// The same id at another door is another command: an id is unique within its integration, not across them.
 			const elsewhere = JSON.stringify(command("stop", "chat-7"));
 			const other = await deliver(server, "pager", elsewhere, signature(pagerSecret, elsewhere));
@@ -856,7 +909,11 @@ describe("a command at the door", () => {
 				const message = error instanceof Error ? error.message : String(error);
 				assert.ok(message.includes(paths.integrations), `the refusal names the file: ${message}`);
 				assert.match(message, /"stopp"/);
-				assert.match(message, /stop, compact, clear, status/, "the refusal names the whole set, so the fix is one line");
+				assert.match(
+					message,
+					/stop, compact, clear, status/,
+					"the refusal names the whole set, so the fix is one line",
+				);
 				return true;
 			},
 		);

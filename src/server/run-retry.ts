@@ -97,7 +97,10 @@ export function readRunOutcome(view: ConversationView | undefined): {
 export class RunRetrySupervisor {
 	readonly #fire: (error: string) => Promise<void> | void;
 	readonly #options: Required<RunRetryOptions>;
-	readonly #timer: { set: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>; clear: (handle: ReturnType<typeof setTimeout>) => void };
+	readonly #timer: {
+		set: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+		clear: (handle: ReturnType<typeof setTimeout>) => void;
+	};
 	#handledErrorId: string | undefined;
 	#attempts = 0;
 	#pending: ReturnType<typeof setTimeout> | undefined;

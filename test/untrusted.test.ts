@@ -82,7 +82,14 @@ describe("untrusted payloads", () => {
 
 	it("leaves a payload-less fire alone", () => {
 		const text = formatPrompt(
-			{ id: "tick", name: "Tick", description: "tick", enabled: true, fireCount: 0, promptTemplate: "Nothing to report." },
+			{
+				id: "tick",
+				name: "Tick",
+				description: "tick",
+				enabled: true,
+				fireCount: 0,
+				promptTemplate: "Nothing to report.",
+			},
 			undefined,
 			"2026-10-20T10:00:00.000Z",
 		);

@@ -10,22 +10,22 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import type { PromptSection } from "@earendil-works/pi-durable";
+import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
 import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, renderSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import { ensureHouse, housePaths } from "../src/server/house.ts";
-import { setIntegrations, type Integration } from "../src/server/integrations.ts";
-import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
+import { type Integration, setIntegrations } from "../src/server/integrations.ts";
 import {
 	DEFAULT_SOUL,
-	Prompt,
 	GENERATIVE_UI_POINTER,
 	INTEGRATIONS_POINTER,
 	PROMPT_SECTIONS,
-	TEAM_GUIDELINES,
+	Prompt,
 	promptSectionKeys,
+	TEAM_GUIDELINES,
 } from "../src/server/prompt.ts";
+import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
 
@@ -142,8 +142,16 @@ test("DEFAULT_SOUL is short: it is the first thing in every prompt", () => {
 
 test("the team section says how a message names its author, and what no prefix means", async () => {
 	const rendered = await renderSection(sectionOf("team"));
-	assert.equal(rendered, `<team>\n${TEAM_GUIDELINES}\n</team>`, "the section is the constant, tagged like its neighbours");
-	assert.match(TEAM_GUIDELINES, /starts with "\[from <name>\] "/, "the convention is the prefix itself, and no example");
+	assert.equal(
+		rendered,
+		`<team>\n${TEAM_GUIDELINES}\n</team>`,
+		"the section is the constant, tagged like its neighbours",
+	);
+	assert.match(
+		TEAM_GUIDELINES,
+		/starts with "\[from <name>\] "/,
+		"the convention is the prefix itself, and no example",
+	);
 	assert.match(TEAM_GUIDELINES, /no such prefix has no author/, "an unnamed device and a trigger are not attributed");
 	// It is paid for in every turn: four lines of prose, no list, no example beyond the prefix.
 	assert.ok(TEAM_GUIDELINES.length < 400, `the team section is ${TEAM_GUIDELINES.length} characters`);
@@ -296,12 +304,18 @@ test("the skills section picks up a skill written after the first render", async
 		const paths = housePaths();
 		await mkdir(paths.skillsDir, { recursive: true });
 		await mkdir(join(paths.skillsDir, "first"), { recursive: true });
-		await writeFile(join(paths.skillsDir, "first", "SKILL.md"), "---\nname: first\ndescription: The first one.\n---\n");
+		await writeFile(
+			join(paths.skillsDir, "first", "SKILL.md"),
+			"---\nname: first\ndescription: The first one.\n---\n",
+		);
 		const before = (await renderSection(sectionOf("skills"))) ?? "";
 		assert.match(before, /first/, "the skill that was there is indexed");
 
 		await mkdir(join(paths.skillsDir, "second"), { recursive: true });
-		await writeFile(join(paths.skillsDir, "second", "SKILL.md"), "---\nname: second\ndescription: The second one.\n---\n");
+		await writeFile(
+			join(paths.skillsDir, "second", "SKILL.md"),
+			"---\nname: second\ndescription: The second one.\n---\n",
+		);
 		// A directory's mtime moves when an entry is added; the probe sees it on the next render, in the same turn.
 		const after = (await renderSection(sectionOf("skills"))) ?? "";
 		assert.match(after, /second/, "the skill written a moment ago is indexed");
@@ -568,17 +582,18 @@ test("the skills index follows a description edited in place", async () => {
 
 test("an empty home renders no skills section at all", async () => {
 	const empty = await tempDir("mason-skills-empty-");
-	assert.equal(renderSkills(await discoverSkills(toolMachine, [empty, empty], BACKGROUND_CONTEXT)), undefined, "nothing to say, so nothing is said");
+	assert.equal(
+		renderSkills(await discoverSkills(toolMachine, [empty, empty], BACKGROUND_CONTEXT)),
+		undefined,
+		"nothing to say, so nothing is said",
+	);
 });
 
 /**
  * The integration list is one snapshot filled at boot (`setIntegrations`): a test sets it and puts back the empty one a
  * process that never configured a home has.
  */
-async function withIntegrations(
-	integrations: Record<string, Integration>,
-	run: () => Promise<void>,
-): Promise<void> {
+async function withIntegrations(integrations: Record<string, Integration>, run: () => Promise<void>): Promise<void> {
 	setIntegrations(integrations);
 	try {
 		await run();
@@ -624,7 +639,11 @@ test("the integrations section is one sorted name and purpose per enabled tool f
 				"sorted by name, and nothing on the line but the name and what the integration is for",
 			);
 			assert.match(rendered ?? "", /tool_search/, "a name here reaches a tool only through tool_search");
-			assert.doesNotMatch(rendered ?? "", /Never a tool|Turned off/, "a disabled or trigger-only integration is absent");
+			assert.doesNotMatch(
+				rendered ?? "",
+				/Never a tool|Turned off/,
+				"a disabled or trigger-only integration is absent",
+			);
 			assert.doesNotMatch(rendered ?? "", /mcp__|issues_create|8082/, "no tool names, no urls, no schemas");
 		},
 	);
@@ -633,7 +652,9 @@ test("the integrations section is one sorted name and purpose per enabled tool f
 test("the integrations section is absent when no integration is enabled with a tools face", async () => {
 	for (const integrations of [
 		{},
-		{ old: { enabled: false, description: "Off", tools: { url: "http://mason-old:8080/mcp" } } satisfies Integration },
+		{
+			old: { enabled: false, description: "Off", tools: { url: "http://mason-old:8080/mcp" } } satisfies Integration,
+		},
 		{
 			activity: {
 				enabled: true,
@@ -716,11 +737,7 @@ test("the prompt is one registry: no other extension brings a section, and the o
  * may read (its skills), and nothing about the machinery that runs it.
  */
 test("the prompt never points the agent at pi's docs or at its own source", async () => {
-	const rendered = (
-		await Promise.all(
-			PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection)),
-		)
-	)
+	const rendered = (await Promise.all(PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection))))
 		.filter((text) => text !== undefined)
 		.join("\n");
 	assert.ok(rendered.length > 0);

@@ -9,14 +9,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { AgentStatus, QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { connectAgent, type AgentConnection } from "./client.ts";
+import { type AgentConnection, connectAgent } from "./client.ts";
 import { Composer } from "./components/Composer.tsx";
 import { JumpPill } from "./components/JumpPill.tsx";
 import { Picker } from "./components/Picker.tsx";
 import { SessionBar } from "./components/SessionBar.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { useFollower } from "./lib/follower.ts";
-import { probeSession, screenFor, type BrowserSession, socketUrl } from "./lib/session.ts";
+import { type BrowserSession, probeSession, screenFor, socketUrl } from "./lib/session.ts";
 import type { WidgetBridge } from "./lib/websandbox-loader.ts";
 import { createWorkingMachine } from "./lib/working.ts";
 import "./styles/tokens.css";
@@ -96,7 +96,8 @@ function Unpaired({ reason }: { readonly reason: "unpaired" | "unreachable" }) {
 						</>
 					) : (
 						<p>
-							The page loaded but <code>/api/session</code> did not answer. Is the server running, on this address?
+							The page loaded but <code>/api/session</code> did not answer. Is the server running, on this
+							address?
 						</p>
 					)}
 				</div>

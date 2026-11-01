@@ -41,7 +41,10 @@ export interface WirePerson {
  * whitespace, and not empty after trimming. Inner spaces stay, because a Russian full name has them.
  */
 export function normalizeName(raw: string): string | undefined {
-	const trimmed = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+	const trimmed = raw
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 	if (trimmed === "") return undefined;
 	if (trimmed.length > NAME_MAX) return undefined;
 	if (/[[\]]/.test(trimmed)) return undefined;
