@@ -227,11 +227,19 @@ deploy/deploy.sh                 # main, on the host named by DEPLOY_HOST (defau
 DEPLOY_HOST=rpi deploy/deploy.sh v0.1.0
 ```
 
-It checks out the ref on the host, builds, brings the stack up, waits for `/api/health`, and then checks that the
-containers it is looking at were created after the build started. That last check is the point. `podman compose up -d
---build` has finished a build and left the old process running — an image that exists, a container that never restarted,
-and a failure that surfaces later as an integration the agent cannot reach. A container older than the build is a
-deployment that did not happen, and the script fails on it instead of printing "done".
+It checks out the ref on the host, moves `vendor/pi` to the commit that ref pins, builds, brings the stack up, waits for
+`/api/health`, and then checks that the containers it is looking at were created after the build started. Two of those
+steps are there because their absence is invisible in the log.
+
+The submodule step (`deploy/submodules.sh`, streamed over ssh so an update uses the logic it is deploying rather than the
+copy already on the host) prints the `vendor/pi` commit next to the checkout's, repairs a checkout whose `vendor/pi/.git`
+is a gitfile pointing at a repository that is not there, and refuses when the working tree cannot be made to match the
+pin. Without it the image is built from the previous pi and carries today's tag (issue #84).
+
+The last check is the point of the script. `podman compose up -d --build` has finished a build and left the old process
+running — an image that exists, a container that never restarted, and a failure that surfaces later as an integration
+the agent cannot reach. A container older than the build is a deployment that did not happen, and the script fails on it
+instead of printing "done".
 
 What it does not do: touch `deploy/.env` (an update changes code, never credentials), run a migration, or roll back. The
 checkout is left on the ref you asked for, so the way back is the previous tag and the same script.
