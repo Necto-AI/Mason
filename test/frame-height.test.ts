@@ -5,13 +5,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-	clampHeight,
 	CONTENT_MAX,
+	clampHeight,
 	isFullscreenEcho,
 	isRestoreEcho,
 	mergeMeasuredHeight,
-	placeholderHeight,
 	PLACEHOLDER_DEFAULT,
+	placeholderHeight,
 	restoreHeight,
 	streamingCeiling,
 } from "../src/web/lib/frame-height.ts";

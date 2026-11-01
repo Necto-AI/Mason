@@ -14,9 +14,14 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
-import { openAgentRuntime, type AgentRuntime, type OpenAgentRuntimeOptions, type ResolvedModel } from "../src/server/runtime.ts";
 import { currentHouse, logPathFor } from "../src/server/house.ts";
 import { projectTranscript } from "../src/server/projection.ts";
+import {
+	type AgentRuntime,
+	type OpenAgentRuntimeOptions,
+	openAgentRuntime,
+	type ResolvedModel,
+} from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -148,7 +153,11 @@ describe("durable harness + pi-env", () => {
 			// Both writes land on the agent's half, through the daemon: the log by `remember`, the profile by `write`.
 			toolCall("remember", { fact: "Budgets are reviewed on Fridays." }, "r"),
 			// The agent's half of the home `openFor` opens: the profile is written where the prompt will read it.
-			toolCall("write", { path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" }, "w"),
+			toolCall(
+				"write",
+				{ path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" },
+				"w",
+			),
 			toolCall("send_to_user", { message: "Noted." }, "d"),
 			fauxAssistantMessage(fauxText("Noted.")),
 			// A second turn, so the prompt is rendered again: the profile written above is now the agent's memory.
@@ -159,15 +168,27 @@ describe("durable harness + pi-env", () => {
 		try {
 			const conversation = await runtime.conversation();
 			assert.equal(
-				(await (await conversation.submit({ type: "input", content: "Remember the review day." }, BACKGROUND_CONTEXT)).wait(BACKGROUND_CONTEXT)).status,
+				(
+					await (
+						await conversation.submit({ type: "input", content: "Remember the review day." }, BACKGROUND_CONTEXT)
+					).wait(BACKGROUND_CONTEXT)
+				).status,
 				"done",
 			);
 			const remembered = await readFile(logPathFor(currentHouse()), "utf8");
-			assert.match(remembered, /^- \d\d:\d\d — Budgets are reviewed on Fridays\.$/m, "the log is the one the tool machine wrote");
+			assert.match(
+				remembered,
+				/^- \d\d:\d\d — Budgets are reviewed on Fridays\.$/m,
+				"the log is the one the tool machine wrote",
+			);
 			assert.ok(existsSync(join(currentHouse().agentDir, ".git")), "and the commit happened where the files are");
 
 			assert.equal(
-				(await (await conversation.submit({ type: "input", content: "Anything else?" }, BACKGROUND_CONTEXT)).wait(BACKGROUND_CONTEXT)).status,
+				(
+					await (
+						await conversation.submit({ type: "input", content: "Anything else?" }, BACKGROUND_CONTEXT)
+					).wait(BACKGROUND_CONTEXT)
+				).status,
 				"done",
 			);
 			// The next turn's prompt is read through the same environment: what `write` put on the agent's half is what
@@ -176,7 +197,11 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			assert.match(system, /Denis prefers short answers\./, "the profile written through the environment is in the prompt");
+			assert.match(
+				system,
+				/Denis prefers short answers\./,
+				"the profile written through the environment is in the prompt",
+			);
 		} finally {
 			await runtime.close();
 		}
@@ -186,7 +211,12 @@ describe("durable harness + pi-env", () => {
 		const directory = await tempDir("pda-env-isolation-");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
-			toolCall("bash", { command: 'echo "secret=${MASON_ENV_LEAK_TEST:-absent}"; echo "path=${PATH:+set}"' }, "probe"),
+			toolCall(
+				"bash",
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: the shell expands these, and the test asserts it does not
+				{ command: 'echo "secret=${MASON_ENV_LEAK_TEST:-absent}"; echo "path=${PATH:+set}"' },
+				"probe",
+			),
 			toolCall("send_to_user", { message: "Probed the environment." }, "probed"),
 			fauxAssistantMessage(fauxText("Nothing else to report.")),
 		]);
@@ -367,9 +397,10 @@ describe("durable harness + pi-env", () => {
 		const { access, faux } = fauxAccess();
 		faux.setResponses([fauxAssistantMessage(fauxText("Never delivered."))]);
 		const runtime = await openFor(directory, access, { extensions: [Blocker] });
-		const submission = await (
-			await runtime.conversation()
-		).submit({ type: "input", content: "Work on it." }, BACKGROUND_CONTEXT);
+		const submission = await (await runtime.conversation()).submit(
+			{ type: "input", content: "Work on it." },
+			BACKGROUND_CONTEXT,
+		);
 		await blocked.promise;
 		await runtime.close();
 
@@ -381,7 +412,10 @@ describe("durable harness + pi-env", () => {
 		]);
 		const reopened = await openFor(directory, restartedAccess);
 		try {
-			const handle = await reopened.harness.submission(submission.id, withAbortSignal(AbortSignal.timeout(30_000), BACKGROUND_CONTEXT));
+			const handle = await reopened.harness.submission(
+				submission.id,
+				withAbortSignal(AbortSignal.timeout(30_000), BACKGROUND_CONTEXT),
+			);
 			assert.equal((await handle?.wait(BACKGROUND_CONTEXT))?.status, "done");
 
 			const entries = await readEntries(reopened);

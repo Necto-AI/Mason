@@ -23,7 +23,15 @@ export interface TranscriptProps {
 	readonly connection: string;
 }
 
-export function Transcript({ transcript, queued, working, person, onWithdraw, bridgeFor, connection }: TranscriptProps) {
+export function Transcript({
+	transcript,
+	queued,
+	working,
+	person,
+	onWithdraw,
+	bridgeFor,
+	connection,
+}: TranscriptProps) {
 	const empty = transcript.length === 0 && queued.length === 0;
 	return (
 		<div id="transcript" className={empty ? "empty" : ""} data-testid="transcript" data-connection={connection}>
@@ -37,11 +45,28 @@ export function Transcript({ transcript, queued, working, person, onWithdraw, br
 					case "user":
 						return <UserRow key={item.id} text={item.text} author={item.author} person={person} />;
 					case "delivered":
-						return <DeliveredRow key={item.id} text={item.text} failed={item.failed === true} streaming={item.streaming === true} />;
+						return (
+							<DeliveredRow
+								key={item.id}
+								text={item.text}
+								failed={item.failed === true}
+								streaming={item.streaming === true}
+							/>
+						);
 					case "widget":
-						return <WidgetCard key={item.id} callId={item.id} content={item.content} streaming={item.streaming} bridgeFor={bridgeFor} />;
+						return (
+							<WidgetCard
+								key={item.id}
+								callId={item.id}
+								content={item.content}
+								streaming={item.streaming}
+								bridgeFor={bridgeFor}
+							/>
+						);
 					case "notice":
 						return <NoticeRow key={item.id} text={item.text} />;
+					default:
+						return null;
 				}
 			})}
 			{working === undefined ? null : <WorkingRow label={working} />}

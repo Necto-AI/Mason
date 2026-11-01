@@ -12,6 +12,9 @@ import { StreamText } from "../lib/stream-text.tsx";
 /** Markdown the model already finished writing. */
 function MarkdownText({ text }: { text: string }) {
 	const html = useMemo(() => renderMarkdown(text), [text]);
+	// The only writer of this string is `renderMarkdown`, whose sanitiser drops `javascript:` and `data:` hrefs. Raw HTML
+	// in the model's markdown is the open question tracked in #92.
+	// biome-ignore lint/security/noDangerouslySetInnerHtml: single writer and sanitised, see #92
 	return <div className="text markdown" data-testid="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 

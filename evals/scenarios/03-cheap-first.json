@@ -1,31 +1,24 @@
 {
-  "id": "cheap-first",
-  "about": "A question the model already knows: answer it, do not spend a tool on it.",
-  "home": {
-    "soul.md": "You are mason, Denis's personal assistant. Prefer what you already know before you reach for a tool.\n"
-  },
-  "turns": [
-    {
-      "text": "How many days does October have? Answer in one line."
-    }
-  ],
-  "expect": {
-    "calls": {
-      "send_to_user": {
-        "min": 1,
-        "max": 1
-      }
-    },
-    "absentTools": [
-      "bash",
-      "read",
-      "write",
-      "edit"
-    ],
-    "text": [
-      "31"
-    ],
-    "maxTools": 0,
-    "maxInputTokens": 10000
-  }
+	"id": "cheap-first",
+	"about": "A question the model already knows: answer it, do not spend a tool on it.",
+	"home": {
+		"soul.md": "You are mason, Denis's personal assistant. Prefer what you already know before you reach for a tool.\n"
+	},
+	"turns": [
+		{
+			"text": "How many days does October have? Answer in one line."
+		}
+	],
+	"expect": {
+		"calls": {
+			"send_to_user": {
+				"min": 1,
+				"max": 1
+			}
+		},
+		"absentTools": ["bash", "read", "write", "edit"],
+		"text": ["31"],
+		"maxTools": 0,
+		"maxInputTokens": 10000
+	}
 }

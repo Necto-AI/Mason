@@ -41,7 +41,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -364,6 +364,7 @@ export async function appendFact(
 			// `mkdir -p` the day's directory, create the heading only if it is not there yet, then append the line. The
 			// heading uses `noclobber`, so the create is atomic: two `remember` calls in one turn run concurrently, and
 			// a read-modify-write of the whole file would let the later writer drop the earlier fact.
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not a template
 			'f=$1; mkdir -p "${f%/*}" && { set -o noclobber; printf "# %s\\n\\n" "$2" > "$f"; } 2>/dev/null; printf "%s" "$3" >> "$f"',
 			"mason-log",
 			path,

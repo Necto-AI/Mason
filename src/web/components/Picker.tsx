@@ -66,6 +66,7 @@ export function Picker({ roster }: PickerProps) {
 						</ul>
 					)}
 					{failure === undefined ? null : (
+						// biome-ignore lint/a11y/useSemanticElements: a styled paragraph, not the result of a calculation
 						<p className="join-failed" role="status" data-testid="picker-failed">
 							{failure}
 						</p>

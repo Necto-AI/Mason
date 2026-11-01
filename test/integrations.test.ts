@@ -11,21 +11,21 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { after, describe, it } from "node:test";
-import { housePaths, type HousePaths } from "../src/server/house.ts";
+import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
 	commandsFor,
+	type Integration,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
 	triggerFor,
 	writeIntegration,
-	type Integration,
 } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
 import type { McpTransportFactory } from "../src/server/mcp.ts";
@@ -147,14 +147,18 @@ describe("the integration list on disk", () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
-			JSON.stringify({ integrations: { github: { enabled: true, tools: { url: "http://mason-github:8082/mcp" } } } }),
+			JSON.stringify({
+				integrations: { github: { enabled: true, tools: { url: "http://mason-github:8082/mcp" } } },
+			}),
 		);
 		assert.match(await refusal(paths), /no "description": it is the only thing the model is told about it/);
 
 		await writeRaw(
 			paths,
 			JSON.stringify({
-				integrations: { github: { enabled: true, description: "   ", tools: { url: "http://mason-github:8082/mcp" } } },
+				integrations: {
+					github: { enabled: true, description: "   ", tools: { url: "http://mason-github:8082/mcp" } },
+				},
 			}),
 		);
 		assert.match(await refusal(paths), /empty "description"/);
@@ -173,7 +177,9 @@ describe("the integration list on disk", () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
-			JSON.stringify({ integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp", required: "yes" } } } }),
+			JSON.stringify({
+				integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp", required: "yes" } } },
+			}),
 		);
 		assert.match(await refusal(paths), /"tools.required" that is not true or false/);
 
@@ -192,23 +198,24 @@ describe("the integration list on disk", () => {
 
 		await writeRaw(
 			paths,
-			JSON.stringify({ integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(31) } } } }),
+			JSON.stringify({
+				integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(31) } } },
+			}),
 		);
 		assert.match(await refusal(paths), /shorter than 32 characters/);
 
 		await writeRaw(
 			paths,
-			JSON.stringify({ integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(32) } } } }),
+			JSON.stringify({
+				integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(32) } } },
+			}),
 		);
 		assert.equal((await readIntegrations(paths)).integrations.github?.trigger?.hook, "github-activity");
 	});
 
 	it("refuses a command mason does not have, naming the whole set", async () => {
 		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({ integrations: { github: { ...github, commands: ["stop", "restart"] } } }),
-		);
+		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: ["stop", "restart"] } } }));
 		const message = await refusal(paths);
 		assert.ok(message.includes(paths.integrations), `the refusal names the file: ${message}`);
 		assert.match(message, /"restart"/);
@@ -378,7 +385,11 @@ describe("the integration command", () => {
 			() => integration(paths.home, "secret", "telegram", "--hook", "morning-brief"),
 			/already has a trigger/,
 		);
-		await writeIntegration(paths, "docs", { enabled: true, description: "The docs", tools: { url: "http://mason-docs:8080/mcp" } });
+		await writeIntegration(paths, "docs", {
+			enabled: true,
+			description: "The docs",
+			tools: { url: "http://mason-docs:8080/mcp" },
+		});
 		await assert.rejects(() => integration(paths.home, "secret", "docs"), /--hook/);
 
 		// The list and the refusal name the hook and never the secret.
@@ -513,8 +524,16 @@ describe("the vocabulary a trigger may issue", () => {
 		};
 		assert.deepEqual(commandsFor(integrations, "telegram"), ["stop", "status"]);
 		assert.deepEqual(commandsFor(integrations, "silent"), [], "an absent list is no vocabulary at all");
-		assert.deepEqual(commandsFor(integrations, "off"), [], "a switched-off entry's door is nowhere, so its words are too");
-		assert.deepEqual(commandsFor(integrations, "no-trigger"), [], "a declaration with no secret to spend it with grants nothing");
+		assert.deepEqual(
+			commandsFor(integrations, "off"),
+			[],
+			"a switched-off entry's door is nowhere, so its words are too",
+		);
+		assert.deepEqual(
+			commandsFor(integrations, "no-trigger"),
+			[],
+			"a declaration with no secret to spend it with grants nothing",
+		);
 		assert.deepEqual(commandsFor(integrations, "off-and-no-trigger"), []);
 		assert.deepEqual(commandsFor(integrations, "nobody"), []);
 	});
@@ -528,7 +547,11 @@ describe("the integrations route", () => {
 			JSON.stringify({
 				integrations: {
 					github,
-					docs: { enabled: false, description: "The internal documentation server", tools: { url: "http://mason-docs:8080/mcp" } },
+					docs: {
+						enabled: false,
+						description: "The internal documentation server",
+						tools: { url: "http://mason-docs:8080/mcp" },
+					},
 				},
 			}),
 		);
@@ -538,7 +561,11 @@ describe("the integrations route", () => {
 			assert.equal((await fetch(server.url)).status, 401, "the route is the owner's, like the rest of the API");
 
 			const integrations = await reported(server.url, server.token);
-			assert.deepEqual(integrations.map((entry) => entry.name), ["docs", "github"], "sorted by name");
+			assert.deepEqual(
+				integrations.map((entry) => entry.name),
+				["docs", "github"],
+				"sorted by name",
+			);
 			assert.deepEqual(integrations[1], {
 				name: "github",
 				enabled: true,
@@ -594,7 +621,15 @@ describe("the integrations route", () => {
 					tools: 0,
 					error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no container in a test',
 				},
-				{ name: "github", enabled: true, hasTools: true, hasTrigger: false, connected: true, tools: 2, error: null },
+				{
+					name: "github",
+					enabled: true,
+					hasTools: true,
+					hasTrigger: false,
+					connected: true,
+					tools: 2,
+					error: null,
+				},
 			]);
 		} finally {
 			await server.close();

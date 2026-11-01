@@ -16,13 +16,13 @@
  * to the reader, then what the agent knows (skills, who it works for), then what it can build.
  */
 import type { Context } from "@earendil-works/chord";
-import { defineExtension, section, type PromptSection } from "@earendil-works/pi-durable";
+import { defineExtension, type PromptSection, section } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { CODEMODE_SECTION } from "./extensions/codemode.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
 import { currentIntegrations } from "./integrations.ts";
-import { readResidentFile, type ResidentInput } from "./resident.ts";
+import { type ResidentInput, readResidentFile } from "./resident.ts";
 import { UNTRUSTED_RULE } from "./untrusted.ts";
 
 /**

@@ -14,8 +14,8 @@ import { readdirSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { McpTransport } from "@earendil-works/pi-mcp";
-import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import { createCodemode } from "../src/server/extensions/codemode.ts";
+import { MESSAGE_TOOL } from "../src/shared/contract.ts";
 import {
 	boot,
 	declared,
@@ -52,7 +52,9 @@ function watched(inner: McpTransport): { transport: McpTransport; closes: () => 
 
 describe("a script is the second way in", () => {
 	it("calls a deferred tool the model was never offered, and the server's text comes back", async () => {
-		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ISSUE-412: search is slow" }] }));
+		const server = await fakeServer([SEARCH_TOOL], () => ({
+			content: [{ type: "text", text: "ISSUE-412: search is slow" }],
+		}));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
@@ -115,10 +117,17 @@ describe("a script is the second way in", () => {
 			assert.ok(script.includes(answer), `the script's result carries all ${answer.length} characters`);
 			assert.match(direct, /^START-MARKER/, "the model kept the beginning");
 			assert.match(direct, /END-MARKER$/, "and the end, which head-only truncation would have dropped");
-			assert.match(direct, /bytes dropped: this is the start and the end of a longer result/, "and is told what went");
+			assert.match(
+				direct,
+				/bytes dropped: this is the start and the end of a longer result/,
+				"and is told what went",
+			);
 			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
 			assert.ok(!direct.includes("x".repeat(11_000)), "the middle is what went");
-			assert.ok(Buffer.byteLength(direct) <= 20 * 1024, `${Buffer.byteLength(direct)} bytes is more than the 20 KB cap`);
+			assert.ok(
+				Buffer.byteLength(direct) <= 20 * 1024,
+				`${Buffer.byteLength(direct)} bytes is more than the 20 KB cap`,
+			);
 			assert.deepEqual(
 				server.calls.map((call) => call.name),
 				["issues.search", "issues.search"],

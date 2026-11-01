@@ -9,8 +9,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { MESSAGE_TOOL, withAuthor, type AgentStatus } from "../src/shared/contract.ts";
 import { projectQueued, projectTranscript } from "../src/server/projection.ts";
+import { type AgentStatus, MESSAGE_TOOL, withAuthor } from "../src/shared/contract.ts";
 import { createWorkingMachine, TOOL_LABEL_HOLD_MS } from "../src/web/lib/working.ts";
 
 type Entry = Record<string, unknown>;
@@ -33,7 +33,9 @@ function call(name: string, args: Record<string, unknown>, id: string) {
 }
 
 function result(id: number, toolCallId: string, text: string, isError = false): Entry {
-	return entry(id, "pi.tool-result", [{ role: "toolResult", toolCallId, toolName: "bash", content: [{ type: "text", text }], isError }]);
+	return entry(id, "pi.tool-result", [
+		{ role: "toolResult", toolCallId, toolName: "bash", content: [{ type: "text", text }], isError },
+	]);
 }
 
 describe("the transcript the client is sent", () => {
@@ -48,7 +50,10 @@ describe("the transcript the client is sent", () => {
 					{ type: "text", text: "Working notes, not a message." },
 				]),
 				result(4, "leaky", "response included hunter2", false),
-				assistant(5, [{ type: "text", text: "Notes again." }, call(MESSAGE_TOOL, { message: "The deploy is healthy." }, "sent")]),
+				assistant(5, [
+					{ type: "text", text: "Notes again." },
+					call(MESSAGE_TOOL, { message: "The deploy is healthy." }, "sent"),
+				]),
 				result(6, "sent", "delivered", false),
 			]),
 		);
@@ -89,7 +94,12 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "app.hook", [{ role: "user", content: "[EVENT HOOK: Morning brief]" }], {
-					data: { hookId: "morning-brief", hookName: "Morning brief", firedAt: "2026-10-20T09:00:00.000Z", payload: "go" },
+					data: {
+						hookId: "morning-brief",
+						hookName: "Morning brief",
+						firedAt: "2026-10-20T09:00:00.000Z",
+						payload: "go",
+					},
 				}),
 				assistant(2, [call(MESSAGE_TOOL, { message: "Morning: three things need you." }, "m1")]),
 				result(3, "m1", "delivered"),
@@ -123,9 +133,7 @@ describe("the transcript the client is sent", () => {
 	it("sends a widget as the artifact it is, never as the call that built it", () => {
 		const transcript = projectTranscript(
 			viewOf([
-				assistant(1, [
-					call("generateSandboxedUi", { html: ["<p>hello</p>"], jsFunctions: "() => hunter2" }, "w1"),
-				]),
+				assistant(1, [call("generateSandboxedUi", { html: ["<p>hello</p>"], jsFunctions: "() => hunter2" }, "w1")]),
 				result(2, "w1", "rendered", false),
 			]),
 		);
@@ -141,7 +149,10 @@ describe("the transcript the client is sent", () => {
 	it("says a run failed without the machine's reason", () => {
 		const transcript = projectTranscript(
 			viewOf([
-				assistant(1, [{ type: "text", text: "partial" }], { stopReason: "error", errorMessage: "usage limit reached" }),
+				assistant(1, [{ type: "text", text: "partial" }], {
+					stopReason: "error",
+					errorMessage: "usage limit reached",
+				}),
 			]),
 		);
 		assert.deepEqual(transcript, [
@@ -153,7 +164,12 @@ describe("the transcript the client is sent", () => {
 	it("streams the message of the round in flight, and does not repeat it once committed", () => {
 		const streaming = projectTranscript(
 			viewOf([], {
-				"pi.live": { generation: { attempt: 1, message: { role: "assistant", content: [call(MESSAGE_TOOL, { message: "Half a sen" }, "m1")] } } },
+				"pi.live": {
+					generation: {
+						attempt: 1,
+						message: { role: "assistant", content: [call(MESSAGE_TOOL, { message: "Half a sen" }, "m1")] },
+					},
+				},
 			}),
 		);
 		assert.deepEqual(streaming, [{ kind: "delivered", id: "m1", text: "Half a sen", streaming: true }]);
@@ -163,7 +179,15 @@ describe("the transcript the client is sent", () => {
 			viewOf(
 				[assistant(1, [call(MESSAGE_TOOL, { message: "Half a sentence." }, "m1")]), result(2, "m1", "delivered")],
 				{
-					"pi.live": { generation: { attempt: 1, message: { role: "assistant", content: [call(MESSAGE_TOOL, { message: "Half a sentence." }, "m1")] } } },
+					"pi.live": {
+						generation: {
+							attempt: 1,
+							message: {
+								role: "assistant",
+								content: [call(MESSAGE_TOOL, { message: "Half a sentence." }, "m1")],
+							},
+						},
+					},
 				},
 			),
 		);
@@ -324,7 +348,9 @@ describe("the queue the client is sent", () => {
 
 	it("marks an input the inbox already turned into an entry as no longer withdrawable", () => {
 		const queued = projectQueued(
-			viewOf([], { "pi.inbox": { items: [{ id: 7, mode: "followUp", content: "done", entry: { kind: "pi.user" } }] } }),
+			viewOf([], {
+				"pi.inbox": { items: [{ id: 7, mode: "followUp", content: "done", entry: { kind: "pi.user" } }] },
+			}),
 		);
 		assert.equal(queued[0]?.withdrawable, false);
 	});
@@ -345,7 +371,10 @@ describe("the working line", () => {
 
 	it("names the latest tool call of the round and nothing else about it", () => {
 		const { machine } = started();
-		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");
+		assert.equal(
+			machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })),
+			"working: bash",
+		);
 		assert.equal(
 			machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash", "edit"] })),
 			"working: edit",
@@ -355,7 +384,10 @@ describe("the working line", () => {
 	it("keeps a tool that finished in milliseconds on the line long enough to read", () => {
 		const { clock, machine } = started();
 		const generating = status({ runStatus: "generating", busy: true });
-		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })), "working: bash");
+		assert.equal(
+			machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["bash"] })),
+			"working: bash",
+		);
 		clock.at += 30;
 		// The tool returned after 30 ms; the reader still sees the name it has only just been shown.
 		assert.equal(machine.label(generating), "working: bash");
@@ -380,7 +412,10 @@ describe("the working line", () => {
 		clock.at += 30;
 		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working: bash");
 		clock.at += 30;
-		assert.equal(machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["edit"] })), "working: edit");
+		assert.equal(
+			machine.label(status({ runStatus: "running_tools", busy: true, runningTools: ["edit"] })),
+			"working: edit",
+		);
 		clock.at += 30;
 		assert.equal(machine.label(status({ runStatus: "generating", busy: true })), "working: edit");
 	});
