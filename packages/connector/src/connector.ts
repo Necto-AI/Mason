@@ -231,6 +231,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 	let flushing: Promise<void> | undefined;
 	/** Seeded from the store on first use, then monotonic in memory: a read-modify-write per call hands two calls one seq. */
 	let nextSeq: number | undefined;
+	let seeding: Promise<void> | undefined;
 	const inflight = new Map<string, Promise<Send<unknown>>>();
 	const delivering = new Map<string, Promise<DeliveryAck>>();
 	const asking = new Map<string, Promise<InteractionAck>>();
@@ -631,15 +632,30 @@ export function createConnector(config: ConnectorConfig): Connector {
 		}
 	}
 
+	/**
+	 * Read the highest sequence the store already holds, once, behind one promise.
+	 *
+	 * Two calls that arrive together both see an empty journal; seeding inside the same await is what keeps them from
+	 * both writing `seq: 1`, and the increment below is synchronous, so one of them takes the next number.
+	 */
+	async function seedSeq(): Promise<void> {
+		if (nextSeq !== undefined) return;
+		seeding ??= (async () => {
+			const all = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
+			nextSeq = Math.max(
+				nextSeq ?? 0,
+				all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0),
+			);
+		})();
+		await seeding;
+	}
+
 	/** Write the call down before it goes on the wire. Undone only by a claim or a final refusal. */
 	async function journal(method: string, key: string, params: Record<string, unknown>): Promise<void> {
 		const existing = await config.store.read<OutboxEntry>(NAMESPACE.outbox, key);
 		if (existing !== undefined) return;
-		if (nextSeq === undefined) {
-			const all = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
-			nextSeq = all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0);
-		}
-		nextSeq += 1;
+		await seedSeq();
+		nextSeq = (nextSeq ?? 0) + 1;
 		await config.store.write(NAMESPACE.outbox, key, { seq: nextSeq, method, key, params } satisfies OutboxEntry);
 	}
 
@@ -664,9 +680,10 @@ export function createConnector(config: ConnectorConfig): Connector {
 		const ordered = [...pending].sort((left, right) => left.value.seq - right.value.seq);
 		const stalled = new Set<string>();
 		for (const entry of ordered) {
-			const { method, key, params } = entry.value;
+			const { method, params } = entry.value;
 			if (stalled.has(method)) continue;
-			const outcome = await deliver(method, key, params as Record<string, unknown>);
+			// Through `send`, so a call already in flight from a direct call shares its promise instead of going twice.
+			const outcome = await send(method, params as Record<string, unknown>);
 			if (outcome.status === "pending") {
 				stalled.add(method);
 				continue;
