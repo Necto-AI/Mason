@@ -27,15 +27,22 @@ unreachable. Maintenance fixes only, no features.
 _Avoid_: dashboard, admin UI, frontend
 
 **apiary**:
-The separate project that will be mason's rich client and its multi-agent future: it reads the wire contract and adds
-bots, clients and orchestration above the backend. Out of scope here.
-_Avoid_: the app, mason's client (it is one of several)
+The separate project that is mason's rich client and the control plane for a fleet: it reads the wire contract, shows
+several bots, and organises and observes them. It is not the message bus — bots talk through ACP. Out of scope here.
+_Avoid_: the app, mason's client (it is one of several), the router
 
 ## The bot
 
 **bot**:
-One deployed mason: one identity, one home, one conversation, one set of tools.
+One deployed mason: one identity, one home, one conversation, one set of tools, and one profession — its soul, skills,
+routines and integration grants are chosen for that job. A second profession is a second deployment.
 _Avoid_: agent, instance, assistant (an *agent* in pi's sense is a conversation's resolved prompt and tool set)
+
+**application bot**:
+The bot this repository is built for: it finds, evaluates and tracks internships and fellowships, prepares the
+applications and drafts, and stops for Denis's explicit approval before it submits anything. Its plan is
+`docs/APPLICATION-PLAN.md`.
+_Avoid_: the assistant, the pilot
 
 **soul**:
 The bot's job and personality — what it is for, how it speaks, what it declines. Set by whoever deploys it.
@@ -44,6 +51,19 @@ _Avoid_: persona, system prompt, SYSTEM.md
 **profile**:
 Durable facts about the person the bot works for, kept current by the bot itself.
 _Avoid_: user memory, memory, context
+
+## The fleet
+
+**fleet**:
+Several separately deployed mason bots that may talk to each other. One container hosts one root bot conversation; a
+second bot is a second container with its own home.
+_Avoid_: team (that is the arrangement apiary shows), group, cluster
+
+**ACP**:
+Agent Communication Protocol: the standard peer-communication boundary between separately deployed bots, and not the
+editor-facing Agent Client Protocol. It is carried by the deployments and independent of whether they share a VM;
+mason's own code grows no peer registry or router for it (`docs/FLEET-PLAN.md`).
+_Avoid_: calling it mason's protocol, or the ACP an editor speaks
 
 ## The home
 
@@ -191,14 +211,16 @@ The people present in one bot's conversation. mason has a room.
 _Avoid_: team, channel
 
 **team**:
-Bots organised to work together, each with a profession. apiary has teams; mason does not.
-_Avoid_: room, group, fleet
+Several bots arranged to work together, each with a profession, as apiary shows them. The deployment word is **fleet**;
+a team is the arrangement, not the containers.
+_Avoid_: room, group, or **fleet** when you mean the deployments
 
 ## Workers
 
 **worker**:
 A conversation owned by one tool call, given a narrow job and a small context, that returns a report. A tool, not
-a peer: it has no home, no name in the room, and no way to speak to anyone.
+a peer: it has no home, no name in the room, no way to speak to anyone, and no ACP link. It is never a mason
+deployment.
 _Avoid_: subagent (that is the API), helper, child bot, delegate
 
 **agent definition**:
