@@ -127,7 +127,8 @@ export async function handleOperatorRequest(
  * The pattern stops at the opening quote on purpose. The name is the one value an operator types freely, and it may hold
  * a `"`, a newline or anything else: a pattern that tried to read the name back would classify exactly the refusal it is
  * meant to carry as a server bug. What is matched is the prefix every `refusal()` in `integrations.ts` and
- * `connectors.ts` emits, and nothing else in the tree phrases an error that way. A `PanelError` never reaches this.
+ * `connectors.ts` emits; the only other sites that phrase an error that way are the boot's hook check
+ * (`runtime.ts`) and the CLI (`scripts/integration.ts`), and neither reaches this catch. A `PanelError` never does.
  */
 function isOperatorFacing(error: unknown): error is Error {
 	if (!(error instanceof Error)) return false;
