@@ -1,5 +1,5 @@
 /**
- * `send_to_user` is the one channel the agent's words reach the reader through, so the registration facts the
+ * `reply` is the one channel the agent's words reach the reader through, so the registration facts the
  * durability rules depend on are pinned here: the replay policy, the unconditional registration, and the fact that
  * `execute()` delivers by returning.
  */
@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { Delivery, sendToUserTool } from "../src/server/extensions/delivery.ts";
+import { Delivery, replyTool } from "../src/server/extensions/delivery.ts";
 import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.ts";
 import { Prompt } from "../src/server/prompt.ts";
 import {
@@ -29,17 +29,17 @@ import {
  */
 const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode"]);
 
-test("send_to_user is replay-unsafe, so a restart never delivers the same message twice", () => {
-	assert.equal(sendToUserTool.name, "send_to_user");
+test("reply is replay-unsafe, so a restart never delivers the same message twice", () => {
+	assert.equal(replyTool.name, "reply");
 	// Explicit in the registration, though it is pi's default: an interrupted call settles as an `interrupted`
 	// error result instead of rerunning, and a rerun would send the reader the message a second time.
-	assert.equal(sendToUserTool.replay, "unsafe");
+	assert.equal(replyTool.replay, "unsafe");
 });
 
 test("the delivery extension rides in the base extension list, not behind a toggle", () => {
 	assert.deepEqual(
 		Delivery.tools?.map((tool) => tool.name),
-		["send_to_user"],
+		["reply"],
 	);
 	assert.ok(
 		BASE_EXTENSIONS.some((extension) => extension.name === Delivery.name),
@@ -50,7 +50,7 @@ test("the delivery extension rides in the base extension list, not behind a togg
 test("the tool descriptions say the rule the refusal enforces: call it directly, never from inside a script", () => {
 	// The refusal is the backstop for a model that sends from a script anyway; the description is what asks it not to,
 	// so the sentence the refusal answers is pinned here, for both tools that reach the reader.
-	assert.match(sendToUserTool.description, /never from inside a script/);
+	assert.match(replyTool.description, /never from inside a script/);
 	assert.match(generateSandboxedUiTool.description, /never from inside a script/);
 });
 
@@ -106,7 +106,7 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 				"the missing base names are appended in base order, and the stored order survives",
 			);
 			assert.ok(
-				agent.tools.some((tool) => tool.name === sendToUserTool.name),
+				agent.tools.some((tool) => tool.name === replyTool.name),
 				"the model is offered the one way it can reach the reader",
 			);
 		} finally {
@@ -196,71 +196,222 @@ test("a selection that is already complete is not written to", async () => {
 });
 
 /**
- * The corner of the tool's api those calls need: the call's ID, and the transcript read the turn's reader is decided
- * from. `input` is the message that started the turn — absent, as a resumed turn's would be, reads as the console.
+ * A turn's transcript, as `execute` reads it: `entries` oldest first, and whatever the tool appends is recorded.
+ *
+ * The tool's two jobs are both about what the transcript says — which entry started the turn, and which entry the call
+ * leaves behind — so the fake is a log rather than a stub: an assertion reads the entry the reply committed, not a
+ * return value alone.
  */
-function apiFor(callId: string, input?: string): never {
-	return { callId, conversationId: 1, commit: async () => input } as never;
+interface FakeEntry {
+	id: number;
+	kind: string;
+	model?: unknown[];
+	data?: unknown;
 }
 
-test("execute only returns: the committed call is the delivery", async () => {
-	// A model-issued call: its own ID, with no `/` in it, so a script's refusal does not apply.
-	const result = await sendToUserTool.execute({ message: "Standup moved to nine." }, apiFor("call-7"), {} as never);
-	assert.deepEqual(result, { output: [{ type: "text", text: "delivered" }], details: { length: 22 } });
-	assert.equal(result.isError, undefined);
-	assert.equal(result.control, undefined);
-});
+function apiFor(
+	turn: { readonly callId: string; readonly entries?: readonly FakeEntry[] },
+	appended: unknown[] = [],
+): never {
+	return {
+		callId: turn.callId,
+		conversationId: 1,
+		commit: async (run: (tx: unknown) => Promise<unknown>) =>
+			run({
+				scanEntries: async () => ({ items: [...(turn.entries ?? [])].reverse(), next: undefined }),
+				appendEntry: async (_conversationId: number, draft: unknown) => {
+					appended.push(draft);
+					return { id: appended.length, ...(draft as object) };
+				},
+			}),
+	} as never;
+}
+
+/** A person's words in the operator console: an ordinary `pi.user` entry. */
+function consoleTurn(text: string): FakeEntry[] {
+	return [{ id: 1, kind: "pi.user", model: [{ role: "user", content: text }] }];
+}
+
+/** A person's words through a connector: the origin is in the entry's data. */
+function connectorTurn(text: string): FakeEntry[] {
+	return [
+		{
+			id: 1,
+			kind: "app.connector",
+			model: [{ role: "user", content: text }],
+			data: { origin: { connector: "telegram", externalConversationId: "-1001234" }, person: "Denis" },
+		},
+	];
+}
+
+/** A fire: an `app.hook` entry, carrying an origin only when the fire named a conversation. */
+function hookTurn(text: string, origin?: Record<string, string>): FakeEntry[] {
+	return [
+		{
+			id: 1,
+			kind: "app.hook",
+			model: [{ role: "user", content: text }],
+			data: {
+				hookId: "team-chat",
+				hookName: "Team chat message",
+				payload: "hi",
+				firedAt: "now",
+				...(origin === undefined ? {} : { origin }),
+			},
+		},
+	];
+}
 
 /** The text of a result, as the model reads it: the only channel a refusal has. */
 function outputText(output: readonly { readonly type: string; readonly text?: string }[] | undefined): string {
 	return (output ?? []).flatMap((item) => (item.type === "text" ? [item.text ?? ""] : [])).join("");
 }
 
-test("a call made from inside a script is refused, and told where the message has to go", async () => {
-	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
-	const result = await sendToUserTool.execute({ message: "Standup moved to nine." }, apiFor("call-7/1"), {} as never);
-	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
-	assert.match(outputText(result.output), /cannot deliver from inside a script/);
-	assert.match(outputText(result.output), /send it with send_to_user directly/, "the model is told what to do");
-});
+/** The one integration a connector reply can be routed to; every other test in this file boots a home with none. */
+const TELEGRAM = {
+	enabled: true,
+	connector: {
+		user: {
+			actors: { "8811": "Denis" },
+			conversations: [{ externalConversationId: "-1001234", kind: "room" }],
+			unattributed: false,
+		},
+		state: [],
+		trustMarkers: false,
+	},
+} as const;
 
-test("a hook with no chat tool answers in the console, and the result says nobody was reached", async () => {
-	// A schedule, a repository event, a retry: the hook names no message tool because there is no chat to answer in. The
-	// call is a real delivery — the console is the only reader such a turn has — and "delivered" would read as "a person
-	// has this", which is false and was exactly the sentence that hid the bug in a chat.
-	const input = "[EVENT HOOK: Morning brief]\nWrite the brief and send it with send_to_user.";
-	const result = await sendToUserTool.execute(
-		{ message: "Morning: three things need you." },
-		apiFor("call-10", input),
-		{} as never,
-	);
-	assert.notEqual(result.isError, true, "the console is a reader, so this is not a refusal");
-	const text = outputText(result.output);
-	assert.match(text, /delivered to the operator console/);
-	assert.match(text, /no message reached a person/);
-	assert.match(text, /read when somebody opens the console/);
-});
-
-test("a person typing in the console still gets one word back", async () => {
-	const result = await sendToUserTool.execute(
-		{ message: "Standup moved." },
-		apiFor("call-11", "Move standup."),
+test("a console turn is delivered by the entry the call commits", async () => {
+	const appended: unknown[] = [];
+	const result = await replyTool.execute(
+		{ message: "Standup moved to nine." },
+		apiFor({ callId: "call-7", entries: consoleTurn("Move standup.") }, appended),
 		{} as never,
 	);
 	assert.equal(result.isError, undefined);
-	assert.equal(outputText(result.output), "delivered");
+	assert.equal(outputText(result.output), "delivered to the operator console");
+	// The commit is the delivery: one `app.reply` entry, no target, no origin — the transcript is the medium.
+	assert.deepEqual(appended, [
+		{
+			kind: "app.reply",
+			data: { deliveryId: "reply:call-7", blocks: [{ type: "text", text: "Standup moved to nine." }] },
+		},
+	]);
 });
 
-test("in a turn an event hook started, the delivery is refused with the tool that reaches the chat", async () => {
-	// The reader is in a chat, and the turn's input is the one that says so: the tool reads it, not a flag.
-	const result = await sendToUserTool.execute(
-		{ message: "Привет!" },
-		apiFor("call-9", "[EVENT HOOK: Team chat message]\nAnswer it in its chat with mcp__telegram__send_message."),
+test("a connector turn is queued to its origin, under the id the entry and the stream share", async () => {
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	setIntegrations({ telegram: TELEGRAM as never });
+	try {
+		const appended: unknown[] = [];
+		const result = await replyTool.execute(
+			{ message: "Nothing until Thursday." },
+			apiFor({ callId: "call-8", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
+			{} as never,
+		);
+		assert.equal(outputText(result.output), 'queued for delivery to telegram "-1001234"');
+		assert.deepEqual(appended, [
+			{
+				kind: "app.reply",
+				data: {
+					deliveryId: "reply:call-8",
+					blocks: [{ type: "text", text: "Nothing until Thursday." }],
+					target: { connector: "telegram", externalConversationId: "-1001234" },
+					origin: { connector: "telegram", externalConversationId: "-1001234" },
+				},
+			},
+		]);
+	} finally {
+		setIntegrations({});
+	}
+});
+
+test("a fire that named its conversation answers in it, and one that did not records the work and reaches nobody", async () => {
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	setIntegrations({ telegram: TELEGRAM as never });
+	try {
+		const withOrigin: unknown[] = [];
+		const answered = await replyTool.execute(
+			{ message: "on it" },
+			apiFor(
+				{
+					callId: "call-9",
+					entries: hookTurn("[EVENT HOOK: Team chat message]", {
+						connector: "telegram",
+						externalConversationId: "-1001234",
+					}),
+				},
+				withOrigin,
+			),
+			{} as never,
+		);
+		assert.equal(outputText(answered.output), 'queued for delivery to telegram "-1001234"');
+		assert.ok((withOrigin[0] as { data: { target?: unknown } }).data.target !== undefined);
+	} finally {
+		setIntegrations({});
+	}
+
+	// A schedule, a repository event, a retry: the fire names no conversation, so no medium carries the words. The entry
+	// is still committed — the work is recorded — and the result says nobody was reached rather than claiming a delivery.
+	const appended: unknown[] = [];
+	const orphan = await replyTool.execute(
+		{ message: "Morning: three things need you." },
+		apiFor({ callId: "call-10", entries: hookTurn("[EVENT HOOK: Morning brief]") }, appended),
 		{} as never,
 	);
-	assert.equal(result.isError, true, "nothing was delivered in the console's name");
-	assert.match(outputText(result.output), /cannot reach the reader in this turn/);
-	assert.match(outputText(result.output), /the call rejects/, "code mode reads it as a rejection, and it says so");
-	assert.match(outputText(result.output), /mcp__telegram__send_message/, "it names the tool that does reach them");
-	assert.match(outputText(result.output), /the chat the payload names/, "and the chat to answer in");
+	assert.notEqual(orphan.isError, true);
+	const text = outputText(orphan.output);
+	assert.match(text, /nobody was reached/);
+	assert.match(text, /in the transcript/);
+	assert.equal(appended.length, 1, "the work is recorded even when nobody is reached");
+	assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined);
+});
+
+test("a named target is used for a turn that has no origin, and a room the entry does not permit is refused", async () => {
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	setIntegrations({ telegram: TELEGRAM as never });
+	try {
+		const appended: unknown[] = [];
+		const sent = await replyTool.execute(
+			{ message: "the brief", to: { connector: "telegram", conversation: "-1001234" } },
+			apiFor({ callId: "call-11", entries: hookTurn("[EVENT HOOK: Morning brief]") }, appended),
+			{} as never,
+		);
+		assert.equal(outputText(sent.output), 'queued for delivery to telegram "-1001234"');
+		assert.deepEqual((appended[0] as { data: { target?: unknown } }).data.target, {
+			connector: "telegram",
+			externalConversationId: "-1001234",
+		});
+
+		const refused = await replyTool.execute(
+			{ message: "elsewhere", to: { connector: "telegram", conversation: "-1009999" } },
+			apiFor({ callId: "call-12", entries: hookTurn("[EVENT HOOK: Morning brief]") }),
+			{} as never,
+		);
+		assert.match(outputText(refused.output), /cannot deliver:/);
+		assert.match(outputText(refused.output), /not granted the conversation/);
+	} finally {
+		setIntegrations({});
+	}
+});
+
+test("a turn with no input at all is read as the console's, as a resumed one is", async () => {
+	const result = await replyTool.execute(
+		{ message: "Resuming." },
+		apiFor({ callId: "call-13", entries: [] }),
+		{} as never,
+	);
+	assert.equal(outputText(result.output), "delivered to the operator console");
+});
+
+test("a call made from inside a script is refused, and told where the message has to go", async () => {
+	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
+	const result = await replyTool.execute(
+		{ message: "Standup moved to nine." },
+		apiFor({ callId: "call-7/1", entries: consoleTurn("Move standup.") }),
+		{} as never,
+	);
+	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
+	assert.match(outputText(result.output), /cannot deliver from inside a script/);
+	assert.match(outputText(result.output), /call reply from the turn/, "the model is told what to do");
 });

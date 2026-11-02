@@ -10,7 +10,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { projectQueued, projectTranscript } from "../src/server/projection.ts";
-import { type AgentStatus, MESSAGE_TOOL, withAuthor } from "../src/shared/contract.ts";
+import {
+	type AgentStatus,
+	CONNECTOR_ENTRY_KIND,
+	DELIVERY_ENTRY_KIND,
+	REPLY_ENTRY_KIND,
+	REPLY_TOOL,
+	withAuthor,
+} from "../src/shared/contract.ts";
 import { createWorkingMachine, TOOL_LABEL_HOLD_MS } from "../src/web/lib/working.ts";
 
 type Entry = Record<string, unknown>;
@@ -38,12 +45,24 @@ function result(id: number, toolCallId: string, text: string, isError = false): 
 	]);
 }
 
+/** One committed reply, as `reply` writes it: the entry is the delivery, not the call that asked for it. */
+function replyEntry(id: number, deliveryId: string, text: string, extra: Record<string, unknown> = {}): Entry {
+	return entry(id, REPLY_ENTRY_KIND, [], { data: { deliveryId, blocks: [{ type: "text", text }], ...extra } });
+}
+
+/** One acknowledgement, as the outbox records it. */
+function ackEntry(id: number, deliveryId: string, status: string, detail?: string): Entry {
+	return entry(id, DELIVERY_ENTRY_KIND, [], {
+		data: { deliveryId, status, ...(detail === undefined ? {} : { detail }) },
+	});
+}
+
 describe("the transcript the client is sent", () => {
 	it("carries the reader's words and the message the agent sent, and nothing else", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Check the deploy." }]),
-				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "send_to_user" }] }]),
+				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "reply" }] }]),
 				assistant(3, [
 					{ type: "thinking", thinking: "The token is hunter2." },
 					call("bash", { command: "curl -H 'authorization: Bearer hunter2' example.invalid" }, "leaky"),
@@ -52,14 +71,16 @@ describe("the transcript the client is sent", () => {
 				result(4, "leaky", "response included hunter2", false),
 				assistant(5, [
 					{ type: "text", text: "Notes again." },
-					call(MESSAGE_TOOL, { message: "The deploy is healthy." }, "sent"),
+					call(REPLY_TOOL, { message: "The deploy is healthy." }, "sent"),
 				]),
 				result(6, "sent", "delivered", false),
+				replyEntry(7, "reply:sent", "The deploy is healthy."),
+				ackEntry(8, "reply:sent", "delivered"),
 			]),
 		);
 		assert.deepEqual(transcript, [
 			{ kind: "user", id: "1", text: "Check the deploy." },
-			{ kind: "delivered", id: "sent", text: "The deploy is healthy." },
+			{ kind: "delivered", id: "reply:sent", text: "The deploy is healthy." },
 		]);
 		// The property, said once over the whole payload: no secret, no reasoning, no call.
 		const wire = JSON.stringify(transcript);
@@ -69,23 +90,30 @@ describe("the transcript the client is sent", () => {
 		assert.ok(!wire.includes("Working notes"), "no assistant prose crosses the wire");
 	});
 
-	it("keeps a message whose result failed, and says it may not have arrived", () => {
+	it("keeps a message whose delivery is uncertain, and says it may not have arrived", () => {
 		const transcript = projectTranscript(
 			viewOf([
-				assistant(1, [call(MESSAGE_TOOL, { message: "Standup moved." }, "m1")]),
-				result(2, "m1", "interrupted", true),
+				entry(1, "pi.user", [{ role: "user", content: "Move standup." }]),
+				replyEntry(2, "reply:m1", "Standup moved."),
+				ackEntry(3, "reply:m1", "uncertain", "the vendor timed out after the send"),
 			]),
 		);
-		assert.deepEqual(transcript, [{ kind: "delivered", id: "m1", text: "Standup moved.", failed: true }]);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Move standup." },
+			{ kind: "delivered", id: "reply:m1", text: "Standup moved." },
+			{
+				kind: "notice",
+				id: "delivery:reply:m1",
+				text: "This message may not have reached the chat: the connector could not tell whether it was sent.",
+			},
+		]);
+		// The connector's own sentence is data from outside: the reader gets the coarse line, not the vendor's words.
+		assert.ok(!JSON.stringify(transcript).includes("vendor timed out"));
 	});
 
 	it("drops a message with nothing in it rather than rendering an empty bubble", () => {
 		const transcript = projectTranscript(
-			viewOf([
-				assistant(1, [call(MESSAGE_TOOL, { message: "   " }, "blank")]),
-				assistant(2, [call(MESSAGE_TOOL, { message: "\u200b" }, "zero-width")]),
-				assistant(3, [call(MESSAGE_TOOL, {}, "missing")]),
-			]),
+			viewOf([replyEntry(1, "reply:blank", "   "), replyEntry(2, "reply:zero-width", "\u200b")]),
 		);
 		assert.deepEqual(transcript, []);
 	});
@@ -101,11 +129,10 @@ describe("the transcript the client is sent", () => {
 						payload: "go",
 					},
 				}),
-				assistant(2, [call(MESSAGE_TOOL, { message: "Morning: three things need you." }, "m1")]),
-				result(3, "m1", "delivered"),
+				replyEntry(2, "reply:m1", "Morning: three things need you."),
 			]),
 		);
-		assert.deepEqual(transcript, [{ kind: "delivered", id: "m1", text: "Morning: three things need you." }]);
+		assert.deepEqual(transcript, [{ kind: "delivered", id: "reply:m1", text: "Morning: three things need you." }]);
 		// The schedule, its payload and the prompt it built stay on the server.
 		const wire = JSON.stringify(transcript);
 		for (const leak of ["Morning brief", "app.hook", "EVENT HOOK", "firedAt"]) {
@@ -113,16 +140,35 @@ describe("the transcript the client is sent", () => {
 		}
 	});
 
+	it("shows a person's words that arrived through a connector, with the name the server attributed", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, CONNECTOR_ENTRY_KIND, [{ role: "user", content: "[from Denis] what is on my calendar" }], {
+					data: {
+						origin: { connector: "telegram", externalConversationId: "-1001234" },
+						person: "Denis",
+					},
+				}),
+				replyEntry(2, "reply:m1", "Nothing until Thursday."),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "what is on my calendar", author: "Denis" },
+			{ kind: "delivered", id: "reply:m1", text: "Nothing until Thursday." },
+		]);
+		// The origin is where a reply goes, not something the reader is shown.
+		assert.ok(!JSON.stringify(transcript).includes("telegram"));
+	});
+
 	it("leaves no row for a command a chat asked for, or for a compaction", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "app.command", [], { data: { command: "stop", requestId: "telegram:42" } }),
 				entry(2, "pi.compaction", [{ role: "user", content: "Summary so far: the deadline moved." }]),
-				assistant(3, [call(MESSAGE_TOOL, { message: "Stopped." }, "m1")]),
-				result(4, "m1", "delivered"),
+				replyEntry(3, "reply:m1", "Stopped."),
 			]),
 		);
-		assert.deepEqual(transcript, [{ kind: "delivered", id: "m1", text: "Stopped." }]);
+		assert.deepEqual(transcript, [{ kind: "delivered", id: "reply:m1", text: "Stopped." }]);
 		// The command that started it, who asked, and the summary that replaced older turns stay on the server.
 		const wire = JSON.stringify(transcript);
 		for (const leak of ["app.command", "telegram:42", "compaction", "deadline moved"]) {
@@ -167,31 +213,25 @@ describe("the transcript the client is sent", () => {
 				"pi.live": {
 					generation: {
 						attempt: 1,
-						message: { role: "assistant", content: [call(MESSAGE_TOOL, { message: "Half a sen" }, "m1")] },
+						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sen" }, "m1")] },
 					},
 				},
 			}),
 		);
-		assert.deepEqual(streaming, [{ kind: "delivered", id: "m1", text: "Half a sen", streaming: true }]);
+		assert.deepEqual(streaming, [{ kind: "delivered", id: "reply:m1", text: "Half a sen", streaming: true }]);
 
-		// The same call, now committed with its result: one item, not two.
+		// The entry has landed while the call is still in flight: one item, not two, and it is the committed one.
 		const committed = projectTranscript(
-			viewOf(
-				[assistant(1, [call(MESSAGE_TOOL, { message: "Half a sentence." }, "m1")]), result(2, "m1", "delivered")],
-				{
-					"pi.live": {
-						generation: {
-							attempt: 1,
-							message: {
-								role: "assistant",
-								content: [call(MESSAGE_TOOL, { message: "Half a sentence." }, "m1")],
-							},
-						},
+			viewOf([replyEntry(1, "reply:m1", "Half a sentence.")], {
+				"pi.live": {
+					generation: {
+						attempt: 1,
+						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sentence." }, "m1")] },
 					},
 				},
-			),
+			}),
 		);
-		assert.deepEqual(committed, [{ kind: "delivered", id: "m1", text: "Half a sentence." }]);
+		assert.deepEqual(committed, [{ kind: "delivered", id: "reply:m1", text: "Half a sentence." }]);
 	});
 
 	it("sends nothing for the round that only worked", () => {
@@ -229,16 +269,17 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Anything new?" }]),
-				assistant(2, [{ type: "text", text: "Notes." }, call(MESSAGE_TOOL, { message: "Nothing new." }, "m1")], {
+				assistant(2, [{ type: "text", text: "Notes." }, call(REPLY_TOOL, { message: "Nothing new." }, "m1")], {
 					stopReason: "toolUse",
 				}),
 				result(3, "m1", "delivered"),
-				assistant(4, [{ type: "text", text: "Nothing else to report." }], { stopReason: "stop" }),
+				replyEntry(4, "reply:m1", "Nothing new."),
+				assistant(5, [{ type: "text", text: "Nothing else to report." }], { stopReason: "stop" }),
 			]),
 		);
 		assert.deepEqual(transcript, [
 			{ kind: "user", id: "1", text: "Anything new?" },
-			{ kind: "delivered", id: "m1", text: "Nothing new." },
+			{ kind: "delivered", id: "reply:m1", text: "Nothing new." },
 		]);
 	});
 });

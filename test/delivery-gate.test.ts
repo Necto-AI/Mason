@@ -1,7 +1,7 @@
 /**
  * The reader never gets silence for an answer.
  *
- * `send_to_user` is a tool, so calling it is the model's choice and the prompt is only advice. These tests pin the
+ * `reply` is a tool, so calling it is the model's choice and the prompt is only advice. These tests pin the
  * guarantee behind the advice: a turn that ends with nothing delivered continues once with a reminder, and a second
  * silent answer shows the reader a notice instead of nothing. The reminder itself is never part of the transcript.
  *
@@ -33,13 +33,7 @@ import {
 import { Type } from "typebox";
 import { projectTranscript } from "../src/server/projection.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import {
-	DELIVERY_REMINDER,
-	hookDeliveryReminder,
-	isDeliveryReminder,
-	MESSAGE_TOOL,
-	WIDGET_TOOL,
-} from "../src/shared/contract.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL, WIDGET_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -60,7 +54,7 @@ function said(text: string): FauxResponseStep {
 
 /** A message the reader sees. */
 function deliver(message: string, id = "sent"): FauxResponseStep {
-	return fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message }, { id })], { stopReason: "toolUse" });
+	return fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message }, { id })], { stopReason: "toolUse" });
 }
 
 function call(name: string, arguments_: JsonObject, id: string): FauxResponseStep {
@@ -129,7 +123,7 @@ async function runTurn(
 	}
 }
 
-/** A turn a person started in the console: the only case where `send_to_user` is the reader. */
+/** A turn a person started in the console: the only case where `reply` is the reader. */
 function runScripted(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -159,20 +153,6 @@ function runFired(
 		fires += 1;
 		return runtime.hooks.fire("team-chat", { payload, requestId: `delivery-gate:${fires}` });
 	});
-}
-
-/** The tools face of the integration behind the hook: one tool that answers a chat, under mason's MCP name. */
-const CHAT_TOOL = "mcp__telegram__send_message";
-
-function chatFace(name = CHAT_TOOL): Extension {
-	const tool = defineTool({
-		name,
-		description: "Send a message to a chat.",
-		parameters: Type.Object({ chat_id: Type.String(), text: Type.String() }),
-		replay: "unsafe",
-		execute: async ({ text }) => ({ output: [{ type: "text", text: "sent" }], details: { length: text.length } }),
-	});
-	return defineExtension({ name: "chat-face", tools: [tool] });
 }
 
 /** What a call answered: the text the model read, and whether it was refused (which code mode turns into a rejection). */
@@ -225,7 +205,7 @@ function scriptedDelivery(answers: NestedAnswer[]): Extension {
 			const nested =
 				widget === true
 					? await api.executeTool(WIDGET_TOOL, { css: "body { color: red }", html: ["<p>hi</p>"] }, context)
-					: await api.executeTool(MESSAGE_TOOL, { message: message ?? "" }, context);
+					: await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
 			answers.push({
 				isError: nested.isError,
 				text: typeof nested.structuredOutput === "string" ? nested.structuredOutput : "",
@@ -344,7 +324,7 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 	assert.equal(answers.length, 1, "the script made one nested call");
 	assert.equal(answers[0]?.isError, true, "the nested delivery was refused, not delivered");
 	assert.match(answers[0]?.text ?? "", /cannot deliver from inside a script/, "the refusal says what went wrong");
-	assert.match(answers[0]?.text ?? "", /send it with send_to_user directly/, "and what to do instead");
+	assert.match(answers[0]?.text ?? "", /call reply from the turn/, "and what to do instead");
 	assert.equal(reminded(requests), true, "the refusal is not a delivery, so the turn is still silent to the gate");
 	assert.equal(requests.length, 4, "the reminder added one round, and no more");
 	assert.deepEqual(
@@ -385,113 +365,95 @@ test("a widget built from inside a script is refused the same way", async () => 
 /**
  * The other reader: a turn an event hook started.
  *
- * The person is in a chat, and `send_to_user` writes into a console they are not looking at. It used to answer
- * "delivered" there, which the gate counted, so a turn could close believing it had spoken while nothing left the
- * machine. These tests pin the fix on both sides of it: the call is refused with the tool that does reach the chat, the
- * gate counts that tool and not `send_to_user`, and the reminder names it.
+ * A fire carries an origin when the sender could name a conversation, and `reply` targets it: the person is in a chat,
+ * and the model never names the chat's own tool. A fire with no origin — a schedule, a retry — records the reply and
+ * says nobody was reached. Either way the gate counts the same call, because there is one operation and not two.
  */
-test("a hooked turn refuses send_to_user, and names the tool that reaches the chat", async () => {
+test("a hooked turn answers with reply, and the gate counts the call", async () => {
 	const directory = await temporary();
-	const script = recorder([
-		deliver("Привет!"),
-		said("Written down."),
-		call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"),
-		said("Done."),
-	]);
-	const { settled, entries } = await runFired(directory, script, [chatFace()]);
-
-	assert.equal(settled.status, "done");
-	const refusal = answerTo(entries, "sent");
-	assert.equal(refusal.isError, true, "the call was refused, not answered with a delivery");
-	assert.match(
-		refusal.text,
-		/send_to_user cannot reach the reader in this turn/,
-		"the refusal says what does not happen",
-	);
-	assert.match(
-		refusal.text,
-		/the call rejects/,
-		"code mode reads an error result as a rejection, and the text says so",
-	);
-	assert.match(refusal.text, new RegExp(CHAT_TOOL), "and names the tool that does reach the chat");
-	assert.match(refusal.text, /the chat the payload names/, "and says which chat to answer in");
-});
-
-test("a hooked turn that answers with the chat's own tool is not reminded", async () => {
-	const directory = await temporary();
-	const script = recorder([call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"), said("Done.")]);
-	const { settled, requests, entries } = await runFired(directory, script, [chatFace()]);
+	const script = recorder([deliver("Привет!"), said("Done.")]);
+	const { settled, requests, entries, transcript } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");
 	assert.equal(requests.length, 2, "the model's own turn, and nothing added to it");
-	assert.equal(reminded(requests), false, "no reminder was offered: the chat's tool is the delivery here");
-	assert.equal(answerTo(entries, "tele").text, "sent", "the chat's tool ran as the model called it");
+	assert.equal(reminded(requests), false, "the reply is the delivery, in a hooked turn as anywhere else");
+	assert.equal(answerTo(entries, "sent").isError, false, "the call was not refused");
+	assert.match(answerTo(entries, "sent").text, /nobody was reached/, "a fire with no conversation says so");
+	assert.deepEqual(
+		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
+		["Привет!"],
+		"the console still reads what the turn recorded",
+	);
 });
 
-test("a hooked turn that only calls send_to_user is reminded with the chat's tool", async () => {
+test("a fire that named its conversation routes the reply back to it", async () => {
 	const directory = await temporary();
-	const script = recorder([
-		deliver("Привет!"),
-		said("Written down."),
-		call(CHAT_TOOL, { chat_id: "719008451", text: "Привет!" }, "tele"),
-		said("Done."),
-	]);
-	const { settled, requests } = await runFired(directory, script, [chatFace()]);
+	const script = recorder([deliver("Привет!"), said("Done.")]);
+	const telegram = {
+		enabled: true,
+		connector: {
+			user: {
+				actors: { "8811": "Denis" },
+				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
+				unattributed: false,
+			},
+			state: [],
+			trustMarkers: false,
+		},
+	};
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	const { settled, entries } = await runTurn(directory, script, [], async (runtime) => {
+		// The operator's configuration, as the boot would have it: the reply can only name a connector that exists.
+		setIntegrations({ telegram: telegram as never });
+		fires += 1;
+		return runtime.hooks.fire("team-chat", {
+			payload: "Привет",
+			requestId: `delivery-gate:routed:${fires}`,
+			origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m1" },
+		});
+	});
+	try {
+		assert.equal(settled.status, "done");
+		const reply = entries.find((entry) => entry.kind === "app.reply");
+		assert.deepEqual((reply?.data as { target?: unknown }).target, {
+			connector: "telegram",
+			externalConversationId: "-1001234",
+		});
+		const hook = entries.find((entry) => entry.kind === "app.hook");
+		assert.deepEqual((hook?.data as { origin?: unknown }).origin, {
+			connector: "telegram",
+			externalConversationId: "-1001234",
+			externalMessageId: "m1",
+		});
+	} finally {
+		setIntegrations({});
+	}
+});
+
+test("a hooked turn that says nothing is reminded, and the reminder names reply", async () => {
+	const directory = await temporary();
+	const script = recorder([said("I will look into it."), deliver("Привет!"), said("Done.")]);
+	const { settled, requests } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 4, "the refusal, the reminder, and the answer it produced");
-	const reminder = requests[2]?.at(-1) as { role?: string; content?: unknown } | undefined;
+	assert.equal(requests.length, 3, "one reminder, one answer, no more");
+	const reminder = requests[1]?.at(-1) as { role?: string; content?: unknown } | undefined;
 	assert.equal(reminder?.role, "user");
-	assert.equal(
-		reminder?.content,
-		hookDeliveryReminder(CHAT_TOOL),
-		"the reminder names the tool that reaches the chat",
-	);
-	assert.match(String(reminder?.content), new RegExp(CHAT_TOOL));
+	assert.equal(reminder?.content, DELIVERY_REMINDER, "the same reminder, because there is the same one tool");
+	assert.match(String(reminder?.content), /`reply`/);
 });
 
-test("a console turn still delivers with send_to_user while a chat-facing hook exists", async () => {
+test("a console turn still delivers with reply while a chat-facing hook exists", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
-	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?", [
-		chatFace(),
-	]);
+	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?");
 
 	assert.equal(settled.status, "done");
 	assert.equal(answerTo(entries, "sent").isError, false, "the console turn's delivery is not refused");
-	assert.equal(answerTo(entries, "sent").text, "delivered", "and still answers exactly what it always did");
+	assert.equal(answerTo(entries, "sent").text, "delivered to the operator console");
 	assert.equal(requests.length, 2, "no reminder: the console is this turn's reader");
 	assert.deepEqual(
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Standup moved to nine."],
 	);
-});
-
-test("a second integration's hook is answered by its own message tool", async () => {
-	const directory = await temporary();
-	// Nothing in the delivery tool names this one: the hook's instruction does, and that is where both sides read it.
-	const MATRIX = "mcp__matrix__send_message";
-	const hook = {
-		id: "matrix-chat",
-		name: "Matrix message",
-		description: "A message in the team's Matrix room.",
-		enabled: true,
-		promptTemplate: `A message arrived in the room. Answer it with ${MATRIX}, in the room the payload names.\n{{payload}}`,
-	};
-	const script = recorder([
-		deliver("Hello"),
-		said("Written down."),
-		call(MATRIX, { chat_id: "!abc:matrix", text: "Hello" }, "matrix"),
-		said("Done."),
-	]);
-	const { settled, entries, requests } = await runTurn(directory, script, [chatFace(MATRIX)], async (runtime) => {
-		runtime.hooks.define(hook);
-		return runtime.hooks.fire(hook.id, { payload: "Hello", requestId: "matrix-fire" });
-	});
-
-	assert.equal(settled.status, "done");
-	assert.match(answerTo(entries, "sent").text, new RegExp(MATRIX), "the refusal names the tool this hook's chat uses");
-	assert.equal(answerTo(entries, "matrix").isError, false, "and the gate counted it, so the turn could answer");
-	assert.equal(requests.length, 4);
-	assert.equal(requests[2]?.at(-1)?.content, hookDeliveryReminder(MATRIX), "the reminder names it too");
 });

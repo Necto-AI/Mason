@@ -39,7 +39,7 @@ import { housePaths } from "../../src/server/house.ts";
 import type { Integration } from "../../src/server/integrations.ts";
 import type { McpTransportFactory } from "../../src/server/mcp.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../../src/server/runtime.ts";
-import { MESSAGE_TOOL } from "../../src/shared/contract.ts";
+import { REPLY_TOOL } from "../../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -234,7 +234,7 @@ export function resultFor(results: { name: string; isError: boolean; text: strin
 export function scriptThenSpeak(code: string): FauxResponseStep[] {
 	return [
 		fauxAssistantMessage([fauxToolCall("codemode", { code }, { id: "script" })], { stopReason: "toolUse" }),
-		fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message: "Done." }, { id: "sent" })], {
+		fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Done." }, { id: "sent" })], {
 			stopReason: "toolUse",
 		}),
 		fauxAssistantMessage(fauxText("Nothing else to report.")),

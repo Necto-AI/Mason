@@ -31,8 +31,8 @@ import type { ResolvedModel } from "../src/server/runtime.ts";
 import {
 	AgentService,
 	type AgentStatus,
-	MESSAGE_TOOL,
 	type QueuedItem,
+	REPLY_TOOL,
 	type TranscriptItem,
 } from "../src/shared/contract.ts";
 
@@ -258,13 +258,13 @@ describe("chord client <-> server", () => {
 		const { agent, state } = client;
 		try {
 			await agent.ready;
-			// A turn delivers before it ends: the answer and the `send_to_user` call are one message, and the turn closes
+			// A turn delivers before it ends: the answer and the `reply` call are one message, and the turn closes
 			// with a working note.
 			client.faux.setResponses([
 				fauxAssistantMessage(
 					[
 						fauxText("Hello from the agent."),
-						fauxToolCall(MESSAGE_TOOL, { message: "Hello from the agent." }, { id: "hello" }),
+						fauxToolCall(REPLY_TOOL, { message: "Hello from the agent." }, { id: "hello" }),
 					],
 					{ stopReason: "toolUse" },
 				),
@@ -295,7 +295,9 @@ describe("chord client <-> server", () => {
 			// after the answer.
 			assert.deepEqual(
 				entries(state.serverView).map((entry) => entry.kind),
-				["pi.user", "pi.system", "pi.assistant", "pi.tool-result", "pi.assistant"],
+				// The reply's own entry sits between the call that asked for it and that call's result: the entry is the
+				// delivery, so it is part of what the turn leaves behind.
+				["pi.user", "pi.system", "pi.assistant", "app.reply", "pi.tool-result", "pi.assistant"],
 			);
 			assert.ok(state.runStatuses.includes("generating"), `saw generating: ${state.runStatuses.join(",")}`);
 			assert.equal(state.agentStatus?.runStatus, "idle");
@@ -315,7 +317,7 @@ describe("chord client <-> server", () => {
 				fauxAssistantMessage(
 					[
 						fauxText("Slow command finished."),
-						fauxToolCall(MESSAGE_TOOL, { message: "Slow command finished." }, { id: "slow-done" }),
+						fauxToolCall(REPLY_TOOL, { message: "Slow command finished." }, { id: "slow-done" }),
 					],
 					{ stopReason: "toolUse" },
 				),
@@ -478,7 +480,7 @@ describe("chord client <-> server", () => {
 					return fauxAssistantMessage(
 						[
 							fauxText("Back on. All three wishes done."),
-							fauxToolCall(MESSAGE_TOOL, { message: "Back on. All three wishes done." }, { id: "batched" }),
+							fauxToolCall(REPLY_TOOL, { message: "Back on. All three wishes done." }, { id: "batched" }),
 						],
 						{ stopReason: "toolUse" },
 					);
@@ -636,7 +638,7 @@ describe("chord client <-> server", () => {
 		try {
 			await agent.ready;
 			// A turn with everything the reader must not see: reasoning, a tool call with a secret in its arguments, a
-			// tool result with a secret in its output, and prose that is working notes. One `send_to_user`, then the note
+			// tool result with a secret in its output, and prose that is working notes. One `reply`, then the note
 			// that closes the turn.
 			faux.setResponses([
 				fauxAssistantMessage(
@@ -650,10 +652,13 @@ describe("chord client <-> server", () => {
 					],
 					{ stopReason: "toolUse" },
 				),
-				fauxAssistantMessage([
-					fauxText("Working notes: the endpoint answered with token hunter2."),
-					fauxToolCall(MESSAGE_TOOL, { message: "The endpoint is up." }, { id: "sent" }),
-				]),
+				fauxAssistantMessage(
+					[
+						fauxText("Working notes: the endpoint answered with token hunter2."),
+						fauxToolCall(REPLY_TOOL, { message: "The endpoint is up." }, { id: "sent" }),
+					],
+					{ stopReason: "toolUse" },
+				),
 				fauxAssistantMessage(fauxText("Nothing else to report.")),
 			]);
 
@@ -837,7 +842,7 @@ describe("chord client <-> server", () => {
 			await agent.ready;
 			client.faux.setResponses([
 				fauxAssistantMessage(
-					[fauxText("On it."), fauxToolCall(MESSAGE_TOOL, { message: "On it." }, { id: "on-it" })],
+					[fauxText("On it."), fauxToolCall(REPLY_TOOL, { message: "On it." }, { id: "on-it" })],
 					{ stopReason: "toolUse" },
 				),
 				fauxAssistantMessage(fauxText("Nothing else to report.")),
