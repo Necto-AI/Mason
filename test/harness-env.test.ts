@@ -279,11 +279,11 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			// The section names both readers, because it is resident in every turn: the console^s tool, and the fact that
-			// a hooked turn answers with the tool its instruction names.
-			assert.match(system, /words reach them through a delivery call/);
-			assert.match(system, /In the operator console that call is `reply`/);
-			assert.match(system, /the hook's instruction names the tool that answers there/);
+			// The section names the one operation and both of its targets, because it is resident in every turn: `reply`,
+			// which goes back where the turn came from, and `to` for the turn that has no origin.
+			assert.match(system, /words reach them through `reply`/);
+			assert.match(system, /A reply returns to wherever the turn came from/);
+			assert.match(system, /name it with `reply`'s `to`/);
 		} finally {
 			await runtime.close();
 		}
