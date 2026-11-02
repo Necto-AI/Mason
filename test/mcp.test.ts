@@ -32,10 +32,12 @@ import {
 	REQUIRED_GITHUB,
 	SEARCH_SCRIPT,
 	SEARCH_TOOL,
+	SILENT_TOOL,
 	scriptThenSpeak,
 	temporaryDirectory,
 	transports,
 	turn,
+	UNKNOWN_MARKER_TOOL,
 } from "./support/mcp.ts";
 
 /** A script that searches and hands back every name it found, as one line. */
@@ -157,6 +159,69 @@ describe("a script asks the catalog", () => {
 		}
 	});
 
+	it("reads a tool that said nothing, or said a word mason does not know, as one that needs approval", async () => {
+		const server = await fakeServer([SILENT_TOOL, UNKNOWN_MARKER_TOOL], () => ({ content: [] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
+		try {
+			// The catalog's answer is the only source of a marker, so the default lives here rather than in a decision table.
+			assert.equal((await runtime.mcp.describe("github", "issues.close"))?.approval, "required", "no marker at all");
+			assert.equal((await runtime.mcp.describe("github", "issues.lock"))?.approval, "required", "an unknown word");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("answers a call for a tool that went away with the rediscovery step, and sends nothing", async () => {
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, {
+			integrations: { github: GITHUB },
+			transport: () => server.transport,
+			steps: [...scriptThenSpeak(NAMES_SCRIPT), ...scriptThenSpeak(CALL_GONE_SCRIPT)],
+		});
+		try {
+			await turn(runtime, "What is there?");
+			// The server redeploys without the tool the next script knows by heart.
+			server.announce([ISSUE_TOOL]);
+			assert.ok(
+				await until(async () => (await catalogNames(runtime)).join(",") === "github/issues.create"),
+				"the notice refreshed the catalog",
+			);
+			await turn(runtime, "Call the search you remember.");
+			const script = outputOf((await scriptResults(runtime)).at(-1) ?? "");
+			assert.match(script, /is not offered any more/, "the call said the tool is gone");
+			assert.match(script, /mcp_describe/, "and named the rediscovery step");
+			assert.deepEqual(server.calls, [], "nothing reached the server");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("keeps the effect tool replay-unsafe and the two reads replay-safe", async () => {
+		// The one line that decides what a crash does to an MCP call: a second `issues/create` is the failure this
+		// registration exists to avoid, and a re-read costs nothing.
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [] }));
+		const catalog = await openMcpCatalog({
+			integrations: { github: GITHUB },
+			openTransport: () => server.transport,
+			log: () => {},
+		});
+		try {
+			const byName = new Map(catalog.tools.map((tool) => [tool.name, tool]));
+			assert.equal(byName.get(MCP.call)?.replay, "unsafe");
+			assert.equal(byName.get(MCP.search)?.replay, "safe");
+			assert.equal(byName.get(MCP.describe)?.replay, "safe");
+			assert.deepEqual(
+				byName.get(MCP.call)?.callers,
+				["tools"],
+				"a script reaches it; the model is never offered it",
+			);
+		} finally {
+			await catalog.close();
+		}
+	});
+
 	it("sees a tool that appeared and forgets one that went, inside one conversation", async () => {
 		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
 		const directory = await temporaryDirectory();
@@ -272,6 +337,10 @@ function outputOf(result: string): string {
 	const at = result.indexOf(marker);
 	return at === -1 ? result : result.slice(at + marker.length);
 }
+
+/** A script that calls a tool by name, the way a script that learned it in an earlier turn would. */
+const CALL_GONE_SCRIPT = `const r = await tools.mcp_call({ integration: "github", tool: "issues.search", arguments: { query: "bug" } });
+return r.content[0].text;`;
 
 /** A script that describes the tool, then calls the version a previous turn learned. */
 const STALE_SCRIPT = `const result = await tools.mcp_call({

@@ -13,7 +13,7 @@
  *
  * Usage: `restart-child.ts <directory>`; the directory holds `house/`, `data/` and the two files it writes.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -55,8 +55,11 @@ if (pending === 0) {
 	process.exit(2);
 }
 const [request] = await runtime.permissions.pending();
-process.stdout.write(
-	`${JSON.stringify({ submissionId: submission.id, permissionId: request?.permissionId, tool: request?.tool })}\n`,
+// Written to a file rather than stdout: the boot logs on stdout too, and a hand-off that a log line can corrupt is a
+// hand-off that fails on the day the logger gains a line.
+writeFileSync(
+	join(directory, "child.json"),
+	JSON.stringify({ submissionId: submission.id, permissionId: request?.permissionId, tool: request?.tool }),
 );
 // The crash: no close, no flush. The parent answers, and recovery finds the call where this process left it.
 process.exit(9);

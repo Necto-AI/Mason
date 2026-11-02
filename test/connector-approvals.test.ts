@@ -145,6 +145,112 @@ describe("a question the gateway asks", () => {
 		}
 	});
 
+	it("lets the owner answer through the HTTP route when no connector surface can", async () => {
+		// The owner's own door: the admin panel's route without the panel (#103). It is how a question is settled when the
+		// approver is not on a connector at all, and the answer has to have the same effect as one from a socket.
+		const asked: InteractionRequestParams[] = [];
+		const served = await serveConnector({ steps: elsewhereTurns("the numbers are in") });
+		const base = `http://127.0.0.1:${served.server.port}/api/permissions`;
+		try {
+			const connected = await connectConnector(served, {
+				handlers: {
+					onInteraction: (params) => {
+						asked.push(params);
+						return { delivered: false, detail: "this surface cannot show approvals" };
+					},
+				},
+			});
+			try {
+				await say(connected, "send it to my phone");
+				await until(async () => asked.length === 1, "the question");
+				const listed = await fetch(base, {
+					headers: { authorization: `Bearer ${served.server.pairingToken}` },
+				});
+				assert.equal(listed.status, 200);
+				const body = (await listed.json()) as { permissions: { permissionId: string; tool: { name: string } }[] };
+				assert.deepEqual(
+					body.permissions.map((request) => request.permissionId),
+					[asked[0]!.permissionId],
+					"the owner sees the question the connector could not show",
+				);
+				assert.equal(body.permissions[0]?.tool.name, "reply");
+
+				const answered = await fetch(`${base}/${asked[0]!.permissionId}`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${served.server.pairingToken}`, "content-type": "application/json" },
+					body: JSON.stringify({ answer: "allow" }),
+				});
+				assert.equal(answered.status, 200);
+				assert.deepEqual(await answered.json(), { settled: true });
+				await until(async () => connected.deliveries.length === 1, "the delivery after the owner's answer");
+
+				const again = await fetch(`${base}/${asked[0]!.permissionId}`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${served.server.pairingToken}`, "content-type": "application/json" },
+					body: JSON.stringify({ answer: "deny" }),
+				});
+				assert.equal(again.status, 409, "the first answer is the answer");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
+	it("keeps a question pending when the surface could not show it, and asks again on the next socket", async () => {
+		const asked: InteractionRequestParams[] = [];
+		const served = await serveConnector({ steps: [...elsewhereTurns("hello"), ...elsewhereTurns("hello")] });
+		try {
+			// A surface with nowhere to put an approval: the reply to the request says so, and nothing is recorded — a
+			// question is owed while it is pending, so the next flush (and the next socket) asks again.
+			const offline = await connectConnector(served, {
+				handlers: {
+					onInteraction: (params) => {
+						asked.push(params);
+						return { delivered: false, detail: "this chat cannot show an approval" };
+					},
+				},
+			});
+			await say(offline, "send it to my phone");
+			await until(async () => asked.length === 1, "the first attempt");
+			await offline.close();
+			const found = await entriesOf(served.server);
+			const question = found.find((entry) => entry.kind === PERMISSION_ENTRY_KIND);
+			assert.ok(question !== undefined, "the question stayed pending");
+			assert.equal(
+				found.filter((entry) => entry.kind === PERMISSION_ANSWER_ENTRY_KIND).length,
+				0,
+				"an undelivered question is not an answer and not a denial",
+			);
+
+			const online = await connectConnector(served, {
+				handlers: {
+					onInteraction: (params) => {
+						asked.push(params);
+						return { delivered: true };
+					},
+				},
+			});
+			try {
+				await served.server.connectors.flush();
+				await until(async () => asked.length === 2, "the question on the new socket");
+				assert.equal(asked[1]?.permissionId, asked[0]?.permissionId, "the same question, not a second one");
+				const settled = await online.connector.answer({
+					permissionId: asked[1]!.permissionId,
+					answer: "allow",
+					by: { externalActorId: "8811" },
+				});
+				assert.deepEqual(settled, { settled: true });
+				await until(async () => online.deliveries.length === 1, "the delivery after the late answer");
+			} finally {
+				await online.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
 	it("answers an id nobody is waiting on with the protocol's own refusal", async () => {
 		const served = await serveConnector();
 		try {

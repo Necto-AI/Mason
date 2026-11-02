@@ -99,6 +99,9 @@ return { length: r.content[0].text.length, starts: r.content[0].text.slice(0, 12
 			assert.match(script, /"length":30022/, "the script received every character the server sent");
 			assert.match(script, /START-MARKER/, "both ends of it, unchanged");
 			assert.match(script, /END-MARKER/);
+			// And the turn pays for the script's own value, not for the 30 KB behind it: a result that carried the answer
+			// instead would still match every assertion above.
+			assert.ok(script.length < 1_000, `the transcript holds the summary, not the payload: ${script.length} bytes`);
 			assert.deepEqual(
 				server.calls.map((call) => call.name),
 				["issues.search"],

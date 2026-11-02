@@ -36,7 +36,7 @@ import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../../s
 import { REPLY_TOOL } from "../../src/shared/contract.ts";
 
 /** The three tools a script uses to reach a server: the whole of what the registry carries about MCP. */
-export const MCP = { search: "mcp_search", describe: "mcp_describe", call: "mcp_call" } as const;
+export { MCP_TOOL as MCP } from "../../src/server/mcp.ts";
 
 /** The key and the two words of the marker a tool declares its effect with. */
 export const APPROVAL_META_KEY = "dev.mason/approval";
@@ -78,6 +78,16 @@ export const ISSUE_TOOL: McpTool = {
 
 /** The same effect, declared as one that always needs approval. */
 export const GUARDED_TOOL: McpTool = { ...ISSUE_TOOL, _meta: { [APPROVAL_META_KEY]: "required" } };
+
+/** A tool that said nothing about its effect: whatever the connector's markers are worth, this one is `required`. */
+export const SILENT_TOOL: McpTool = { ...ISSUE_TOOL, name: "issues.close", _meta: undefined };
+
+/** A tool that declared a word the protocol does not have: the same answer, for the same reason. */
+export const UNKNOWN_MARKER_TOOL: McpTool = {
+	...ISSUE_TOOL,
+	name: "issues.lock",
+	_meta: { [APPROVAL_META_KEY]: "maybe" },
+};
 
 export interface FakeServer {
 	/** The client end of the pair: what the boot's transport factory hands back. */

@@ -79,6 +79,7 @@ import {
 } from "./limits.ts";
 import {
 	answerOf,
+	keepEarliest,
 	mayAnswer,
 	type PermissionAnswer,
 	type PermissionBook,
@@ -1069,6 +1070,10 @@ export class ConnectorSession {
 	 * not an error: they may have been shown the question, and "you are not the one who answers this" is information.
 	 */
 	async #answer(params: InteractionAnswerParams): Promise<InteractionAnswerResult> {
+		// Budgeted with the other state-mutating methods: an answer folds the transcript twice (the find, then the commit's
+		// own read), which is bounded work per frame, not free work. `stop` reuses this same class without a field of its
+		// own, and so does this: the door's classes are the ones the handshake advertises.
+		this.#spend("control", CONNECTOR_CONTROL_LIMIT);
 		const permissionId = params?.permissionId;
 		if (typeof permissionId !== "string" || permissionId === "") {
 			throw refused(ERROR_CODE.invalidRequest, "mason/interaction.answer needs a permissionId", {
@@ -1095,9 +1100,13 @@ export class ConnectorSession {
 						: `already answered${found.answer.by === undefined ? "" : ` by ${found.answer.by}`}`,
 			};
 		}
-		const authority = mayAnswer(found.request, grant, {
-			...(params.by?.externalActorId === undefined ? {} : { externalActorId: params.by.externalActorId }),
-		});
+		const authority = mayAnswer(
+			found.request,
+			{ ...grant, connector: this.name },
+			{
+				...(params.by?.externalActorId === undefined ? {} : { externalActorId: params.by.externalActorId }),
+			},
+		);
 		if (!authority.ok) return { settled: false, reason: authority.reason };
 		const settled = await this.#permissions.answer(permissionId, params.answer, authority.by);
 		this.#log(
@@ -1282,6 +1291,9 @@ export class ConnectorSession {
 	 */
 	async requestInteraction(params: InteractionRequestParams): Promise<InteractionAck | undefined> {
 		if (this.closed || !this.ready) return undefined;
+		// The handshake is a ceiling (SPEC §4.1d): a surface that did not ask for approvals is not asked for them. The
+		// question stays owed, so nothing is lost — the owner's route and a later socket can still settle it.
+		if (!this.#capabilities.includes("approvals")) return undefined;
 		if (this.#asked.has(params.permissionId)) return undefined;
 		try {
 			const answer = await this.#request(METHOD.interactionRequest, params, DELIVERY_TIMEOUT_MS);
@@ -1369,7 +1381,8 @@ function foldQuestions(entries: readonly EntryRecord[]): {
 		const request = requestOf(entry);
 		if (request !== undefined) requests.set(request.permissionId, request);
 		const answer = answerOf(entry);
-		if (answer !== undefined && !answers.has(answer.permissionId)) answers.set(answer.permissionId, answer);
+		// The same rule the book reads by — earliest `at` wins — so the two folds cannot disagree about a double answer.
+		if (answer !== undefined) keepEarliest(answers, answer);
 	}
 	return { requests, answers };
 }

@@ -765,8 +765,10 @@ decision itself is a pure function of the call, the turn's origin and `service/i
 - `mcp_call` is decided by the tool's own `_meta["dev.mason/approval"]`, read from the catalog: `deny` rules refuse,
   `ask` rules ask, `required` asks, and `not_required` is allowed only when the operator trusted that connector's markers
   (`connector.trustMarkers`) or an `allow` rule names the tool. The precedence is the ceiling — `deny` beats `ask` beats
-  `allow`, and no marker can loosen a rule. A tool the catalog no longer has is let through so its own rediscovery result
-  is the one the caller reads.
+  `allow`, and no marker can loosen a rule. The marker is *asked for*, not remembered: the gateway resolves it with the
+  same live read `mcp_call` uses, which reconnects a server that dropped and re-lists it, and **a tool nobody can see
+  right now is refused, not run**. An integration that was unreachable at boot is exactly the case this is for: it is
+  allowed to come up late, and the first call it gets is decided against what it says now.
 - Everything mason ships is allowed: the tools are the bot's own body, and gating `bash` is a policy question (#97, #103),
   not a marker one.
 
@@ -781,7 +783,12 @@ question is routed to a surface only when the person who asked is the approver t
 through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an `app.permission-answer` entry:
 `allow`, `deny`, or `cancelled` when `/stop` ended the wait. The first authorized answer settles the request, a later one
 changes nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an
-administrative act (#103), not a chat button. A denial reaches the caller as a structured result —
+administrative act (#103), not a chat button. The owner's route answers the same two shapes it holds:
+`GET /api/permissions` is `{"permissions":[{"permissionId","tool","reason","answers","askedAt","askedBy","approver","origin"}]}`
+(oldest first), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
+`{"settled":true}` with `200`, or `409` with `{"settled":false,"reason"}` when the request had already settled. It records
+the roster name the device joined with, or `owner` when the device never named one: the route is behind the owner's
+credential, so the credential is the identity. A denial reaches the caller as a structured result —
 `{"denied":true,"tool":"mcp_call","operation":"github/issues.create","reason":"…","execute":"not run"}` — so a script
 can branch on it and the model reads it as the failure it is. An offline approver leaves the request pending rather
 than silently denying it: the tool task waits, the reader sees the turn working, and `stop` is what ends it.
