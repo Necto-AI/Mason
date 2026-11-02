@@ -669,6 +669,18 @@ async function handleConnectorRequest(
 		return true;
 	}
 	const name = auth.identity.name;
+	// Which of the two endpoints, and whether this request is one mason will act on — settled before the budget is
+	// charged, so a wrong verb or an unknown path costs the connector nothing. The event door makes the same trade.
+	const base = `${CONNECTOR_PATH}/attachments`;
+	const uploading = url.pathname === base;
+	if (!uploading && !url.pathname.startsWith(`${base}/`)) {
+		notFound(response);
+		return true;
+	}
+	if (request.method !== (uploading ? "POST" : "GET")) {
+		json(response, 405, { error: "method not allowed" });
+		return true;
+	}
 	const wait = fires.take(`connector:attachment:${name}`, ATTACHMENT_LIMIT);
 	if (wait !== undefined) {
 		response.writeHead(429, {
@@ -685,12 +697,7 @@ async function handleConnectorRequest(
 		);
 		return true;
 	}
-	const base = `${CONNECTOR_PATH}/attachments`;
-	if (url.pathname === base) {
-		if (request.method !== "POST") {
-			json(response, 405, { error: "method not allowed" });
-			return true;
-		}
+	if (uploading) {
 		const raw = await readRawBodyCapped(request, attachments.maxBytes);
 		if (raw === undefined) {
 			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
@@ -713,14 +720,6 @@ async function handleConnectorRequest(
 			return true;
 		}
 		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
-		return true;
-	}
-	if (!url.pathname.startsWith(`${base}/`)) {
-		notFound(response);
-		return true;
-	}
-	if (request.method !== "GET") {
-		json(response, 405, { error: "method not allowed" });
 		return true;
 	}
 	const contentId = decodeURIComponent(url.pathname.slice(base.length + 1));

@@ -51,7 +51,9 @@ export const ROSTER = { people: [{ name: "Denis", addedAt: "2026-11-01T00:00:00.
  * One connector with all three faces, and one entry with only tools, so a test can prove a face the operator did not
  * grant is named `inactive` rather than silently missing.
  */
-export function integrationsFile(options: { readonly unattributed?: boolean } = {}): unknown {
+export function integrationsFile(
+	options: { readonly unattributed?: boolean; readonly second?: boolean } = {},
+): unknown {
 	return {
 		integrations: {
 			telegram: {
@@ -75,6 +77,22 @@ export function integrationsFile(options: { readonly unattributed?: boolean } = 
 					state: ["status", "presence", "projection"],
 				},
 			},
+			// A second user-face connector, off by default: the outbox claims the door reads owed replies for every open
+			// socket, and a test with one connector cannot tell a per-connector pass from a whole-door one.
+			...(options.second === true
+				? {
+						slack: {
+							enabled: true,
+							connector: {
+								user: {
+									actors: { "777": "Denis" },
+									conversations: [{ externalConversationId: "777", kind: "person" }],
+								},
+								state: ["status"],
+							},
+						},
+					}
+				: {}),
 			"alarm-only": {
 				enabled: true,
 				connector: { events: { hooks: { "alarm.ringing": "workspace-check" } } },
@@ -85,10 +103,14 @@ export function integrationsFile(options: { readonly unattributed?: boolean } = 
 }
 
 /** A home laid out for a connector: roster, integrations and a minted credential. */
-export async function connectorHome(options: { readonly unattributed?: boolean } = {}): Promise<{
+export async function connectorHome(
+	options: { readonly unattributed?: boolean; readonly second?: boolean } = {},
+): Promise<{
 	readonly paths: HousePaths;
 	readonly directory: string;
 	readonly credential: string;
+	/** Set when the file carries the second user-face entry. */
+	readonly secondCredential?: string;
 }> {
 	const directory = await temporaryDirectory();
 	const paths = housePaths(join(directory, "house"));
@@ -96,7 +118,9 @@ export async function connectorHome(options: { readonly unattributed?: boolean }
 	await writeFile(paths.roster, JSON.stringify(ROSTER), { mode: 0o600 });
 	await writeFile(paths.integrations, JSON.stringify(integrationsFile(options)), { mode: 0o600 });
 	const { credential } = await mintConnectorCredential(paths.home, "telegram");
-	return { paths, directory, credential };
+	if (options.second !== true) return { paths, directory, credential };
+	const second = await mintConnectorCredential(paths.home, "slack");
+	return { paths, directory, credential, secondCredential: second.credential };
 }
 
 /**

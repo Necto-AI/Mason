@@ -68,6 +68,72 @@ describe("a committed reply", () => {
 		}
 	});
 
+	it("reaches the other connector while a slow acknowledgement holds the outbox", async () => {
+		// Two connectors, one slow ack. The outbox is one pass over every open socket, so a reply committed for the second
+		// connector while the first is mid-ack must still be sent — a pass that keeps the first caller's name strands it.
+		const home = await connectorHome({ second: true });
+		const served = await serveConnector({ home, steps: replyTurns(["to telegram", "to slack"]) });
+		try {
+			const telegram: Array<{ deliveryId: string; text: string }> = [];
+			const slack: Array<{ deliveryId: string; text: string }> = [];
+			const first = await connectConnector(served, {
+				deliveries: telegram,
+				handlers: {
+					onDelivery: async (params) => {
+						await new Promise((resolve) => setTimeout(resolve, 700));
+						telegram.push({ deliveryId: params.deliveryId, text: "to telegram" });
+						return { status: "delivered" };
+					},
+				},
+			});
+			const second = await connectConnector(served, {
+				name: "slack",
+				credential: home.secondCredential,
+				faces: {
+					user: {
+						actors: [{ externalActorId: "777", displayName: "Denis" }],
+						conversations: [{ externalConversationId: "777", kind: "person" }],
+						capabilities: ["text"],
+					},
+				},
+				deliveries: slack,
+			});
+			try {
+				assert.equal(
+					(
+						await first.connector.submit({
+							origin: { connector: "telegram", externalConversationId: "8811" },
+							actor: { externalActorId: "8811" },
+							content: [{ type: "text", text: "first" }],
+						})
+					).status,
+					"accepted",
+				);
+				assert.equal(
+					(
+						await second.connector.submit({
+							origin: { connector: "slack", externalConversationId: "777" },
+							actor: { externalActorId: "777" },
+							content: [{ type: "text", text: "second" }],
+						})
+					).status,
+					"accepted",
+				);
+				// Both replies are owed. The second arrives while the first connector's send is still unanswered.
+				await until(() => slack.length === 1, "the second connector's reply");
+				assert.equal(slack[0]?.text, "to slack");
+				await until(() => telegram.length === 1, "the first connector's reply");
+				assert.equal(telegram[0]?.text, "to telegram");
+				await until(async () => (await acks(served)).length === 2, "both acknowledgements");
+			} finally {
+				await first.close();
+				await second.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
 	it("is resent after a reconnect under the same id, and the connector's own ledger answers duplicate", async () => {
 		const served = await serveConnector({ steps: replyTurns(["a message that may have left"]) });
 		try {
