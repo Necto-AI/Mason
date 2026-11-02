@@ -11,6 +11,7 @@
 			"test/**",
 			"scripts/**",
 			"evals/**",
+			"packages/**",
 			"!vendor",
 			"!node_modules",
 			"!dist",
