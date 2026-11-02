@@ -282,11 +282,18 @@ export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<Mc
 		return scored.slice(0, Math.max(1, searchOptions?.limit ?? SEARCH_LIMIT)).map((entry) => entry.tool);
 	}
 
-	/** One tool as it stands. A server that dropped is reconnected first, which is what makes the answer current. */
+	/**
+	 * One tool as it stands, or `undefined` when the server cannot say right now.
+	 *
+	 * A server that dropped is reconnected first, and the answer only counts if the reconnect worked: a listing left
+	 * behind by a connection that is gone is not what the service says now, and a marker read from it could be one the
+	 * service tightened while it was away.
+	 */
 	async function describe(integration: string, tool: string): Promise<DiscoveredTool | undefined> {
 		const server = servers.get(integration);
 		if (server === undefined) return undefined;
 		await server.ensure();
+		if (!server.connected) return undefined;
 		return server.find(tool);
 	}
 

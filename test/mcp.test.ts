@@ -314,6 +314,25 @@ describe("a script asks the catalog", () => {
 			await runtime.close();
 		}
 	});
+
+	it("answers nothing about a tool while the server that listed it is away", async () => {
+		// The listing outlives the connection on purpose — a reconnect reuses it — so `describe` has to refuse it: a marker
+		// read from here is a marker for a service that may have tightened it while it was gone.
+		const server = await fakeServer([ISSUE_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
+		try {
+			assert.equal(
+				(await runtime.mcp.describe("github", "issues.create"))?.approval,
+				"not_required",
+				"listed while live",
+			);
+			await server.close();
+			assert.equal(await runtime.mcp.describe("github", "issues.create"), undefined, "and nothing while it is down");
+		} finally {
+			await runtime.close();
+		}
+	});
 });
 
 /** The text of each `codemode` result in the transcript, in order: what a script handed back. */

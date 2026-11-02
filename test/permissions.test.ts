@@ -23,9 +23,11 @@ import {
 	approverFor,
 	decide,
 	type HookCommitter,
+	keepEarliest,
 	type MarkerReading,
 	mayAnswer,
 	PERMISSION_ANSWER_ENTRY_KIND,
+	type PermissionAnswer,
 	PermissionBook,
 	type PermissionInputs,
 	type PermissionRequest,
@@ -294,6 +296,29 @@ async function lastScript(runtime: Awaited<ReturnType<typeof boot>>): Promise<st
 }
 
 describe("the book", () => {
+	it("settles a duplicate answer the same way whichever order it is read in", () => {
+		// The book reads newest-first and the door reads oldest-first, so an exact tie has to be broken by what the answer
+		// does rather than by which page it landed on: otherwise one side says deny and the call runs anyway.
+		const deny: PermissionAnswer = { permissionId: "p", answer: "deny", at: 7 };
+		const allow: PermissionAnswer = { permissionId: "p", answer: "allow", at: 7 };
+		const cancelled: PermissionAnswer = { permissionId: "p", answer: "cancelled", at: 7 };
+		for (const order of [
+			[allow, deny],
+			[deny, allow],
+			[allow, cancelled],
+			[cancelled, allow],
+		] as const) {
+			const settled = new Map<string, PermissionAnswer>();
+			for (const answer of order) keepEarliest(settled, answer);
+			assert.notEqual(settled.get("p")?.answer, "allow", order.map((answer) => answer.answer).join(","));
+		}
+		// And an earlier answer still beats a later one, which is the rule itself.
+		const earlier = new Map<string, PermissionAnswer>();
+		keepEarliest(earlier, { permissionId: "p", answer: "allow", at: 1 });
+		keepEarliest(earlier, { permissionId: "p", answer: "deny", at: 2 });
+		assert.equal(earlier.get("p")?.answer, "allow");
+	});
+
 	it("drops the waiter it registered when the answer is already in the log", async () => {
 		// The recovery path this gateway advertises: the answer was written, the process died before the intent, and the
 		// next hook reads the answer on its first pass. The waiter registered before that read has nothing to wait for, and
@@ -331,6 +356,48 @@ describe("the book", () => {
 			controller.abort(new Error("Task 1 invocation has ended"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			assert.deepEqual(unhandled, [], "the abandoned waiter is gone, not failing in the background");
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+});
+
+describe("the book", () => {
+	it("does not fail into nothing when the turn is stopped while the answer is being read", async () => {
+		// The ordering the handled-at-birth marker exists for: `/stop` lands while the fold is still reading, so the waiter
+		// is already rejected by the time the read comes back with the answer the previous process wrote. Abandoning that
+		// promise used to be an unhandled rejection, and an unhandled rejection takes the process down.
+		const book = new PermissionBook();
+		const request: PermissionRequest = {
+			permissionId: "perm_1",
+			tool: { name: "mcp_call", connector: "github", tool: "issues.create" },
+			arguments: { title: "Pager" },
+			reason: "the service declares that its effect needs approval",
+			answers: ["allow", "deny"],
+			askedAt: 1,
+		};
+		const entry = {
+			kind: PERMISSION_ANSWER_ENTRY_KIND,
+			data: { permissionId: "perm_1", answer: "allow", by: "Denis", at: 2 },
+		};
+		const controller = new AbortController();
+		const api: HookCommitter = {
+			conversationId: 1 as unknown as HookCommitter["conversationId"],
+			commit: async (change) => {
+				controller.abort(new Error("Task 1 invocation has ended"));
+				await change({ scanEntries: async () => ({ items: [entry] }) } as never);
+			},
+		};
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const answer = await book.ask(api, request, { abortSignal: controller.signal } as never);
+			assert.equal(answer.answer, "allow", "the answer written before the stop is still the answer");
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			assert.deepEqual(unhandled, [], "the stopped waiter did not reject into nothing");
 		} finally {
 			process.off("unhandledRejection", onUnhandled);
 		}
