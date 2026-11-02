@@ -785,7 +785,7 @@ through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an
 changes nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an
 administrative act (#103), not a chat button. The owner's route answers the same two shapes it holds:
 `GET /api/permissions` is `{"permissions":[{"permissionId","tool","arguments","reason","answers","askedAt","approver","origin"}]}`
-(oldest first, `askedAt` an ISO string), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
+(oldest first, `askedAt` an ISO string, or `null` when the entry carried no clock), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
 `{"settled":true}` with `200`, or `409` with `{"settled":false,"reason"}` when the request had already settled. It records
 the roster name the device joined with, or `owner` when the device never named one: the route is behind the owner's
 credential, so the credential is the identity. A denial reaches the caller as a structured result —

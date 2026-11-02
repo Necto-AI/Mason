@@ -604,10 +604,30 @@ function apiReader(api: HookCommitter, context: Context): Reader {
 
 /** The transcript as a page reader, from a conversation handle: the routes and the connector's answer path. */
 /** Hold the earliest answer for an id: the first one to be written is the one that settled the request. */
+/**
+ * Hold the earliest answer for an id: the first one to be written is the one that settled the request.
+ *
+ * A tie is broken toward the answer that does less — `cancelled` before `deny` before `allow` — because the two folds
+ * read the transcript in opposite directions (newest-first here, oldest-first at the door), and a timestamp equal to the
+ * millisecond would otherwise settle one way in the book and the other way where the call runs.
+ */
 export function keepEarliest(answers: Map<string, PermissionAnswer>, answer: PermissionAnswer): void {
 	const held = answers.get(answer.permissionId);
-	if (held === undefined || answer.at < held.at) answers.set(answer.permissionId, answer);
+	if (held === undefined || answer.at < held.at) {
+		answers.set(answer.permissionId, answer);
+		return;
+	}
+	if (answer.at === held.at && ANSWER_WEIGHT[answer.answer] < ANSWER_WEIGHT[held.answer]) {
+		answers.set(answer.permissionId, answer);
+	}
 }
+
+/** Which answer wins a tie: the one that grants less. */
+const ANSWER_WEIGHT: Readonly<Record<PermissionAnswer["answer"], number>> = {
+	cancelled: 0,
+	deny: 1,
+	allow: 2,
+};
 
 function conversationReader(conversation: Conversation): Reader {
 	return (limit, cursor) => conversation.entries({}, limit, cursor, BACKGROUND_CONTEXT);
