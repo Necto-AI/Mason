@@ -37,7 +37,7 @@ between two VMs. That is the trade the operator accepted for cheaper infrastruct
 configured, and it changes nothing about the existing execution boundary — `service/` stays out of the guest, and
 credentials and service-owned state never enter it (`docs/adr/0002-split-home.md`).
 
-**ACP does not care which topology is in use.** Bots use the same peer protocol whether they share a VM or have one
+**A2A does not care which topology is in use.** Bots use the same peer protocol whether they share a VM or have one
 each; the protocol is the deployment's boundary, the VM is the isolation boundary, and the two are independent
 (`docs/FLEET-PLAN.md`).
 
@@ -65,7 +65,7 @@ each; the protocol is the deployment's boundary, the VM is the isolation boundar
   choice of VM membership once sharing exists.
 - `docs/research/agent-computers.md` and `docs/research/README.md` keep their findings and gain one dated line saying
   which way the decision went.
-- `docs/FLEET-PLAN.md` is where the deployment shape lives: one container per bot, ACP between them, an optional shared
+- `docs/FLEET-PLAN.md` is where the deployment shape lives: one container per bot, A2A between them, an optional shared
   VM named in one manifest.
 - No code changes here. There is no Firecracker code, no supervisor and no guest image in the tree.
   [#20](https://github.com/DenisSud/mason/issues/20) is the execution-target seam, [#65](https://github.com/DenisSud/mason/issues/65)

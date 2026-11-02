@@ -4,7 +4,7 @@
 > the time). This is the technical plan for mason itself: what it does today, what is missing between here and "an agent
 > that is genuinely useful when nobody is watching", and the order to build it in. The other plans lean on this one:
 > [`ENV-PLAN.md`](ENV-PLAN.md) is the computer the bot works on, [`FLEET-PLAN.md`](FLEET-PLAN.md) is several bots and
-> ACP, [`APIARY-PLAN.md`](APIARY-PLAN.md) is how a person organises them, [`APPLICATION-PLAN.md`](APPLICATION-PLAN.md)
+> A2A, [`APIARY-PLAN.md`](APIARY-PLAN.md) is how a person organises them, [`APPLICATION-PLAN.md`](APPLICATION-PLAN.md)
 > is the first bot's job and [`MVP-PLAN.md`](MVP-PLAN.md) is how it is proved.
 
 ## Where mason is today
@@ -181,7 +181,7 @@ leave alone, and 6 is the precondition for a second bot holding a board.
 ## Open questions this plan does not answer
 
 1. **One mason per person or per bot? — answered.** One bot per deployment: one home, one container, one identity, and
-   several bots are a fleet that speaks ACP ([`FLEET-PLAN.md`](FLEET-PLAN.md),
+   several bots are a fleet that speaks A2A ([`FLEET-PLAN.md`](FLEET-PLAN.md),
    [`adr/0001`](adr/0001-mason-defines-one-bot.md)). A second person sharing one bot's home is a separate decision and
    not required for a specialist bot.
 2. **How much of the prompt is per-interface?** Capabilities replace prose, but a chat and a console still differ in

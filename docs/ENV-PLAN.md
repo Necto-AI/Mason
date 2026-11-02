@@ -86,8 +86,8 @@ reads a mounted path is shared with the neighbours in a way it is not between tw
 line, and the existing execution boundary is unchanged: `service/` never enters any guest, shared or not
 (`docs/adr/0002-split-home.md`, [`FLEET-PLAN.md`](FLEET-PLAN.md)).
 
-**ACP is independent of this.** Two bots use the same peer protocol whether they share a VM or have their own; the VM is
-the isolation boundary and ACP is the communication boundary, and neither changes the other
+**A2A is independent of this.** Two bots use the same peer protocol whether they share a VM or have their own; the VM is
+the isolation boundary and A2A is the communication boundary, and neither changes the other
 ([`FLEET-PLAN.md`](FLEET-PLAN.md)).
 
 ## Snapshot discipline
@@ -163,7 +163,7 @@ second bot to be worth it.
 | 2 | **Live host directories** | The file service for the repositories and the vault — NFS/SMB on the TAP or a vsock service — read-write where it should be, with the coherence questions (Obsidian, SQLite plugins) written down as known limits | editing a note on the host is visible in the guest in under a second, and `git status` agrees in both |
 | 3 | **Sleep and wake** | Idle detection, snapshot-then-stop, wake on submission, the resume hook, the two log lines | a week of use with the machine asleep most of the time, and no turn waiting more than 400 ms to be woken |
 | 4 | **In the stack** | `mason-env` becomes `mason-vm` in `deploy/`: the supervisor beside the server, one image per bot, the volumes as block devices | `deploy/deploy.sh` brings up a stack whose tool machine is a VM, and the same test suite passes |
-| 5 | **A configurable shared VM** | The target becomes a choice: per-bot VM or a named group in one VM; the supervisor owns groups; the manifest says which bots share one and what that means | two bots run in one VM, each with its own home and ACP address, and moving one back to its own VM is a configuration change |
+| 5 | **A configurable shared VM** | The target becomes a choice: per-bot VM or a named group in one VM; the supervisor owns groups; the manifest says which bots share one and what that means | two bots run in one VM, each with its own home and A2A address, and moving one back to its own VM is a configuration change |
 | 6 | **Per-arch** | Build the guest image and `pi-env` for aarch64, so the rpi is a target | the stack runs on the rpi, asleep most of the day |
 
 Milestone 0 is worth doing regardless of the rest: it is a week of work and it turns "a container with a shell" into "a

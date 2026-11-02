@@ -1,6 +1,6 @@
 # mason defines one bot; apiary defines a team
 
-> **Amended 2026-11-02** — a bot has one profession, and peers speak ACP rather than apiary carrying the message; see
+> **Amended 2026-11-02** — a bot has one profession, and peers speak A2A rather than apiary carrying the message; see
 > the amendment at the end. The split itself is unchanged.
 
 mason is one bot — an identity, a home, a toolset, a way of reaching a person — and a worker is one of its tools. A
@@ -21,7 +21,7 @@ whom) does not belong in mason, no matter how natural it looks in a prompt.
 - **mason organises its own work, not other bots'.** Triage → delegate to a worker → answer the person stays; a
   supervisor over peers does not.
 
-## Amendment, 2026-11-02: a bot has one profession, and peers speak ACP
+## Amendment, 2026-11-02: a bot has one profession, and peers speak A2A
 
 Two things changed around this rule. The rule itself did not.
 
@@ -33,11 +33,13 @@ It is not a general assistant with a role label, and a second profession is a se
 **Peer communication is no longer apiary's alone.** The rule above still holds: mason grows no peer discovery, no
 registry, no router and no cross-agent message store. A list of accepted peers is operator configuration read like
 `integrations.json`; it is not a registry. What changed is who carries a message between two bots. It is not apiary and not a
-custom envelope: separately deployed mason bots talk through the Agent Communication Protocol, a standard boundary
-that the deployments carry (`docs/FLEET-PLAN.md`). apiary organises and observes the fleet, shows what a delegation did,
-and is still not the bus. ACP is independent of the execution-environment topology — two bots use it whether they share
+custom envelope: separately deployed mason bots talk through A2A, the Agent2Agent Protocol, a standard boundary that the
+deployments carry (`docs/FLEET-PLAN.md`). This amendment first named the Agent Communication Protocol; that protocol
+merged into A2A under the Linux Foundation in August 2025, so A2A is what the decision points at. apiary organises and
+observes the fleet, shows what a delegation did,
+and is still not the bus. A2A is independent of the execution-environment topology — two bots use it whether they share
 one VM or have their own — and the shared-VM case is one operating-system trust domain, so it is an isolation
 simplification, not a security one (`docs/adr/0009-firecracker-first-then-a-shared-vm.md`).
 
-**A worker is still not a peer.** It gets no ACP link, no home and no identity to be addressed by. The test for whether
+**A worker is still not a peer.** It gets no A2A link, no home and no identity to be addressed by. The test for whether
 something belongs here is unchanged: if it needs to know about another bot, it is the fleet's business.

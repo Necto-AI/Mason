@@ -72,7 +72,7 @@ boot for every wake-up, and would lose every long-lived process the agent starte
   ([`adr/0009-firecracker-first-then-a-shared-vm.md`](adr/0009-firecracker-first-then-a-shared-vm.md)).
 - **Stage 2 makes the target configurable.** The same document gains the choice of VM membership: a bot's own VM, or a
   named group of bots sharing one. Sharing is an option, not a default, and the bots in one VM share one operating-system
-  trust domain even though their homes and conversations stay distinct. ACP is unaffected either way
+  trust domain even though their homes and conversations stay distinct. A2A is unaffected either way
   ([`FLEET-PLAN.md`](FLEET-PLAN.md)).
 
 **Decided (Denis, 2026-10-20): a fork reuses the conversation's machine. No snapshot is taken for a fork and no copy of

@@ -28,11 +28,12 @@ submission. A later bot may be a chief of staff; that is a second deployment, no
 and a small context, that returns a report: browser work is worker-owned, and a worker has no home, no roster name and
 no peer identity of its own.
 
-### Several bots are separately deployed, and peers speak ACP
+### Several bots are separately deployed, and peers speak A2A
 
-A **fleet** is several mason bots, each its own container with its own home. They talk through the Agent Communication
-Protocol — a standard boundary, not a protocol mason invents — and apiary organises and observes the fleet without
-being its message bus (`docs/FLEET-PLAN.md`). ACP is independent of the execution-environment topology: two bots use
+A **fleet** is several mason bots, each its own container with its own home. They talk through the Agent2Agent Protocol
+(A2A), a standard boundary rather than a protocol mason invents, and apiary organises and observes the fleet without
+being its message bus (`docs/FLEET-PLAN.md`). A2A absorbed the Agent Communication Protocol in August 2025, which is why
+it is the boundary and not one option among two. A2A is independent of the execution-environment topology: two bots use
 the same peer protocol whether they share a VM or have separate VMs. Mason's code grows no peer discovery, no router
 and no cross-agent message store for this; the fleet's transport belongs to the deployments, and the peers a bot will
 answer are a list a person wrote (`docs/FLEET-PLAN.md`).
@@ -44,7 +45,7 @@ not a requirement, and bots that share a VM share one operating-system trust dom
 directories require a network or vsock file service, and VM networking and snapshots need host privileges designed
 explicitly.
 
-None of this is implemented: there is no ACP client, no fleet manifest and no VM in the tree, and this specification
+None of this is implemented: there is no A2A client, no fleet manifest and no VM in the tree, and this specification
 does not add them. It fixes the product direction the plans and issues execute.
 
 
