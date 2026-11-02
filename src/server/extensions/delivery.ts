@@ -22,17 +22,8 @@
  * of into the transcript, so nothing reaches the reader while the script is told it did. The entry is the delivery, and
  * a script cannot write one that a reader sees; the refusal says what to do instead.
  */
-import type { Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
-import {
-	type ConversationId,
-	type Cursor,
-	defineExtension,
-	defineTool,
-	GenerationTask,
-	hook,
-	type ToolExecutionApi,
-} from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import {
 	DELIVERY_REMINDER,
@@ -43,13 +34,12 @@ import {
 } from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
-	isInputEntry,
 	type ReplyRecord,
 	type ReplyTarget,
 	reachableTarget,
+	readTurnOrigin,
 	type TurnOrigin,
 	targetOfOrigin,
-	turnOriginOfEntry,
 } from "../replies.ts";
 import { nestedRefusal } from "./nested.ts";
 
@@ -89,34 +79,6 @@ interface ChosenTarget {
 	readonly target?: ReplyTarget;
 	/** A hooked turn with no origin: the words are recorded, and no medium carries them. */
 	readonly nobodyReached?: true;
-}
-
-/** How far back a turn's input can be — a round of tool calls is one entry each, and a page always ends. */
-const TURN_INPUT_PAGE = 128;
-const TURN_INPUT_MAX_PAGES = 16;
-
-/**
- * The turn this call belongs to, read from the transcript.
- *
- * A tool cannot see the request that made its call, so this reads the newest input entry — the same entry the delivery
- * gate reads — rather than trusting the model to remember where the turn came from. Scanning pages because a long turn
- * can outgrow one page of entries; sixteen pages of 128 is far past any turn this agent writes.
- */
-async function readTurnOrigin(api: ToolExecutionApi, context: Context): Promise<TurnOrigin> {
-	const conversationId: ConversationId = api.conversationId;
-	return api.commit(async (tx) => {
-		let cursor: Cursor | undefined;
-		for (let page = 0; page < TURN_INPUT_MAX_PAGES; page += 1) {
-			const scanned = await tx.scanEntries({ conversationId, order: "descending" }, TURN_INPUT_PAGE, cursor);
-			// Descending, so the first input in the page is the newest one in the transcript.
-			for (const entry of scanned.items) {
-				if (isInputEntry(entry)) return turnOriginOfEntry(entry);
-			}
-			if (scanned.next === undefined) break;
-			cursor = scanned.next;
-		}
-		return { kind: "console" };
-	}, context);
 }
 
 /** The text of a message: a plain string, or its text blocks joined. Reasoning and calls are not text. */

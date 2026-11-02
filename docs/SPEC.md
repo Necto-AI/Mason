@@ -288,8 +288,8 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui`, `tool-search` — is what every conversation gets, and two more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face and the boot reached it, and `codemode`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5). `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when there is no tool face to reach, so a build with no integration has exactly the surface it had before MCP existed. The per-boot pair belongs to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
-- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a console turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when this boot reached a tools face, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui`, `tool-search` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5). `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a console turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode`, then `permissions` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
@@ -722,10 +722,76 @@ the process's sliding-window limiter (`src/server/limits.ts`); `stop` has a budg
 connector that spent its minute on compactions can still stop the turn they were about. Every refusal is
 `mason.rate_limited` with `retryAfterMs`, capped at a minute.
 
-**What is not here yet.** The permission gateway and live MCP discovery are #102, the admin panel and the one-way
-migration are #103, and the removal of the HMAC event door and the old Telegram relay is #104. Until #104, the old door
-still fires hooks with no origin, so a turn it starts records its reply and reaches nobody — the honest state of a
-half-migrated deployment, and the reason the connector's own path is the one to build on.
+**The question.** `connector/interaction.request` is the connector's shape of an approval, and `mason/interaction.answer`
+settles it: see §4.1e for what is asked, who may answer, and what happens to the call that is waiting. Neither is a
+second way to speak — an answer is not a submission, and a question is not a reply.
+
+**What is not here yet.** The admin panel and the one-way migration are #103, and the removal of the HMAC event door and
+the old Telegram relay is #104. Until #103, an owner answers a question through `GET`/`POST /api/permissions` (§4.1e),
+which is the panel's route without the panel. Until #104, the old door still fires hooks with no origin, so a turn it
+starts records its reply and reaches nobody — the honest state of a half-migrated deployment, and the reason the
+connector's own path is the one to build on.
+
+### 4.1e The tool catalog and the permission gateway
+
+Two mechanisms, one seam: a script asks what a service can do *now*, and every call — direct or nested — is decided
+before it runs. `src/server/mcp.ts` owns the first, `src/server/permissions.ts` the second.
+
+**The catalog is live, and it is not a tool list.** `mcp` registers three tools, `mcp_search`, `mcp_describe` and
+`mcp_call`, and they are `callers: ["tools"]`: a script reaches them, the model is never offered them, and `tool_search`
+has nothing of MCP's to promote. Nothing a server says enters the registry, so the `codemode` section, the declared tool
+list and the deferred list are the same bytes on every turn of one build — a redeploy, a reconnect or a changed schema
+moves nothing the prompt is built from. `mcp_search` matches words against names and descriptions (an empty query lists
+one integration); `mcp_describe` answers `{integration, tool, description, approval, version, inputSchema}`;
+`mcp_call` sends `{integration, tool, arguments, version}` to the server.
+
+**Freshness has three parts.** A server that sends `notifications/tools/list_changed` is re-listed, once per burst, and
+`/api/integrations` follows. A server that dropped is reconnected by the next question asked of it, so a container's
+restart is noticed without a restart of mason. And `version` is a hash of the definition as it was listed: a call that
+names a version the server has since replaced is refused with the step that fixes it — *look again, then retry with what
+is there now* — rather than run against something the caller never saw. A tool that is gone is refused the same way. An
+in-flight call is never replayed: `mcp_call` is `replay: "unsafe"`, so a restart settles it as interrupted instead of
+sending a second `issues/create`; the two reads are safe, because asking the same question again is asking the same
+question. A call that did not answer says it may or may not have run, and is not retried.
+
+**One gateway.** `permissions` installs a `beforeTool` hook on `ToolTask` — the only seam that sees a model-issued call
+and a script's nested call with the same shape, and it runs *before the call's intent is committed*. That ordering is
+what makes an approval survive a restart: a task that dies while waiting has committed no intent, so recovery re-enters
+the phase, the hook reads the answer that was written down, and only then does the call get an intent and execute. The
+decision itself is a pure function of the call, the turn's origin and `service/integrations.json`:
+
+- `reply` to the turn's own origin is allowed; a reply naming another conversation asks, because sending words somewhere
+  else is a person's decision.
+- `mcp_call` is decided by the tool's own `_meta["dev.mason/approval"]`, read from the catalog: `deny` rules refuse,
+  `ask` rules ask, `required` asks, and `not_required` is allowed only when the operator trusted that connector's markers
+  (`connector.trustMarkers`) or an `allow` rule names the tool. The precedence is the ceiling — `deny` beats `ask` beats
+  `allow`, and no marker can loosen a rule. The marker is *asked for*, not remembered: the gateway resolves it with the
+  same live read `mcp_call` uses, which reconnects a server that dropped and re-lists it, and **a tool nobody can see
+  right now is refused, not run**. An integration that was unreachable at boot is exactly the case this is for: it is
+  allowed to come up late, and the first call it gets is decided against what it says now.
+- Everything mason ships is allowed: the tools are the bot's own body, and gating `bash` is a policy question (#97, #103),
+  not a marker one.
+
+A missing marker or a word mason does not know is `required`. That is the honest default — a server that said nothing
+about an operation has not said it is safe — and it means an existing integration whose server declares no markers
+starts asking for every call until its tools declare one or the operator trusts the entry.
+
+**A question is a transcript entry.** An `ask` writes an `app.permission` entry with the permission id, the tool, the
+arguments, the reason, the two answers, the roster name the words are attributed to, and the origin, and waits. The
+question is routed to a surface only when the person who asked is the approver the operator configured
+(`connector.user.approver`) on the connector that carried the turn; otherwise it stays pending and the owner answers it
+through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an `app.permission-answer` entry:
+`allow`, `deny`, or `cancelled` when `/stop` ended the wait. The first authorized answer settles the request, a later one
+changes nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an
+administrative act (#103), not a chat button. The owner's route answers the same two shapes it holds:
+`GET /api/permissions` is `{"permissions":[{"permissionId","tool","arguments","reason","answers","askedAt","approver","origin"}]}`
+(oldest first, `askedAt` an ISO string, or `null` when the entry carried no clock), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
+`{"settled":true}` with `200`, or `409` with `{"settled":false,"reason"}` when the request had already settled. It records
+the roster name the device joined with, or `owner` when the device never named one: the route is behind the owner's
+credential, so the credential is the identity. A denial reaches the caller as a structured result —
+`{"denied":true,"tool":"mcp_call","operation":"github/issues.create","reason":"…","execute":"not run"}` — so a script
+can branch on it and the model reads it as the failure it is. An offline approver leaves the request pending rather
+than silently denying it: the tool task waits, the reader sees the turn working, and `stop` is what ends it.
 
 ### 4.2 Bridging the Conversation View to Chord State on the Server
 

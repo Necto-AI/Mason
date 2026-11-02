@@ -288,6 +288,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		workspaceDir: runtime.workspaceDir,
 		attachments,
 		limiter: fires,
+		permissions: runtime.permissions,
 		home: house.home,
 	});
 
@@ -614,6 +615,44 @@ async function handleRequest(
 		return json(response, 200, { person: { name: chosen.name } });
 	}
 
+	// The owner's own door to the permission gateway. `GET` lists what is waiting — the request, why it was asked and
+	// who could answer it — and `POST /api/permissions/<id>` answers one. It is the admin panel's route (#103) rather
+	// than a chat: approval authority is a grant, and answering a question is not a conversation.
+	if (url.pathname === "/api/permissions") {
+		if (request.method !== undefined && request.method !== "GET")
+			return json(response, 405, { error: "method not allowed" });
+		return json(response, 200, { permissions: await openPermissions(runtime) });
+	}
+	if (url.pathname.startsWith("/api/permissions/")) {
+		if ((request.method ?? "GET") !== "POST") return json(response, 405, { error: "method not allowed" });
+		// A malformed escape is a junk id, not a broken server: `decodeURIComponent` throws on `%zz`, and that throw would
+		// reach the handler's catch as a 500 with a stack in the log.
+		let permissionId: string;
+		try {
+			permissionId = decodeURIComponent(url.pathname.slice("/api/permissions/".length));
+		} catch {
+			return json(response, 404, { error: "no such request" });
+		}
+		if (permissionId === "") return json(response, 404, { error: "no such request" });
+		const text = await readBodyCapped(request);
+		if (text === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ error: "payload too large", maxBytes: JSON_BODY_MAX_BYTES }));
+			return;
+		}
+		const asked = parseJsonObject(text).answer;
+		if (asked !== "allow" && asked !== "deny") {
+			return json(response, 400, { error: 'the body is {"answer":"allow"} or {"answer":"deny"}' });
+		}
+		const found = await runtime.permissions.find(permissionId);
+		if (found.request === undefined) return json(response, 404, { error: "no such request" });
+		// The owner answers as themselves: this route is behind the owner's credential, so there is no name to check and
+		// nobody else's answer to honour. A device that joined with a roster name is recorded under it; one that has not
+		// joined answers as `owner`, the route itself being the identity.
+		const settled = await runtime.permissions.answer(permissionId, asked, person?.name ?? "owner");
+		return json(response, settled.settled ? 200 : 409, settled);
+	}
+
 	if (url.pathname === "/api/status") {
 		const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
 		const status = deriveAgentStatus(view, {
@@ -722,7 +761,14 @@ async function handleConnectorRequest(
 		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
 		return true;
 	}
-	const contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
+	// A malformed escape is a content id nobody uploaded, which is the same answer as one this connector did not upload.
+	let contentId: string;
+	try {
+		contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
+	} catch {
+		notFound(response);
+		return true;
+	}
 	const read = await attachments.read(name, contentId);
 	if (read.status === "expired") {
 		response.writeHead(410, { "content-type": "application/json; charset=utf-8" });
@@ -873,6 +919,26 @@ function retryOptionsFromEnv(): { delaysMs?: number[]; maxAttempts?: number } {
 		// failed run failed.
 		...(Number.isFinite(attempts) && attempts >= 0 ? { maxAttempts: attempts } : {}),
 	};
+}
+
+/**
+ * The pending questions, as `/api/permissions` answers them: what a person needs to decide, and nothing of the trace.
+ *
+ * `approver` is who could answer it through their own connector; a request without one is one only this route can settle,
+ * which is the state an offline approver leaves behind.
+ */
+async function openPermissions(runtime: AgentRuntime): Promise<unknown[]> {
+	const pending = await runtime.permissions.pending();
+	return pending.map((request) => ({
+		permissionId: request.permissionId,
+		tool: request.tool,
+		arguments: request.arguments ?? null,
+		reason: request.reason,
+		answers: request.answers,
+		approver: request.approver ?? null,
+		origin: request.origin ?? null,
+		askedAt: request.askedAt === 0 ? null : new Date(request.askedAt).toISOString(),
+	}));
 }
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {

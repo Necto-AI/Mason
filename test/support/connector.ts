@@ -71,6 +71,9 @@ export function integrationsFile(
 						// The operator's ceiling on what this connector may claim it renders, and the one narrowing the
 						// handshake applies to the connector's own list.
 						capabilities: ["text", "markdown", "files", "approvals", "streaming"],
+						// Who answers this connector's permission requests: the person its mapped actor speaks for, so a
+						// question goes back to the surface it came from. The ceiling is the operator's, not the medium's.
+						approver: "Denis",
 						...(options.unattributed === true ? { unattributed: true } : {}),
 					},
 					events: { hooks: { "chat.message": "team-chat" } },
@@ -234,7 +237,7 @@ export async function connectConnector(
 		readonly heartbeatMs?: number;
 	} = {},
 ): Promise<ConnectedConnector> {
-	const deliveries = options.deliveries ?? [];
+	const deliveries: Array<{ deliveryId: string; text: string }> = options.deliveries ?? [];
 	const connector = createConnector({
 		name: options.name ?? "telegram",
 		version: "0.0.0-test",

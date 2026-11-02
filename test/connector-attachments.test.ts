@@ -71,11 +71,14 @@ describe("the attachment endpoint", () => {
 				});
 				assert.equal(expired.status, 410);
 
-				// A malformed id is the same `404` a foreign one gets.
-				const malformed = await fetch(`${served.base}/api/connector/attachments/not-an-id`, {
-					headers: { authorization: `Bearer ${served.credential}` },
-				});
-				assert.equal(malformed.status, 404);
+				// A malformed id is the same `404` a foreign one gets — including an id that is not decodable at all, which
+				// used to throw out of the handler and answer a `500` with a stack in the log.
+				for (const id of ["not-an-id", "%zz"]) {
+					const malformed = await fetch(`${served.base}/api/connector/attachments/${id}`, {
+						headers: { authorization: `Bearer ${served.credential}` },
+					});
+					assert.equal(malformed.status, 404, id);
+				}
 			} finally {
 				await connected.close();
 			}
