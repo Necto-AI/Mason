@@ -398,6 +398,11 @@ class McpServer {
 		return [...this.#listed.values()];
 	}
 
+	/** Whether a client is open right now: an answer read while this is false came from the last listing, not the server. */
+	get connected(): boolean {
+		return this.#client !== undefined;
+	}
+
 	/** One tool, as the catalog knows it right now. */
 	find(tool: string): DiscoveredTool | undefined {
 		return this.#listed.get(tool);
