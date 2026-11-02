@@ -1,17 +1,18 @@
 /**
  * Who may talk to mason.
  *
- * One owner, a few named credentials, and every entry point proving it: the Chord socket and `/api/*`. A
+ * One owner, a few named credentials, and every entry point proving it: `/api/*` and the connector's socket. A
  * token is minted once (`npm run token -- add --label phone`), shown once, and stored as a hash in
  * `~/.mason/service/config.json` (mode 0600) — that file is exactly the kind of thing that ends up pasted into a bug report,
  * so it must not hold a live credential.
  *
  * Three gates, answering different questions:
  *
- * - the **token** says *which device* is calling, so a lost phone is revoked without breaking the browser;
- * - the **Origin** check says *which page* opened the socket. A page on `evil.example` cannot read this origin's
- *   storage, so it cannot learn a credential; the check is the belt to that pair of braces, and it also stops a page
- *   from opening a socket at all. Native app clients send no `Origin` and pass on their token alone;
+ * - the **token** says *which device* is calling, and which operator grants it carries (`shared/admin.ts`), so a lost
+ *   phone is revoked without breaking the browser;
+ * - the **Origin** check says *which page* made the request. A page on `evil.example` cannot read this origin's
+ *   storage, so it cannot learn a credential; the check is the belt to that pair of braces. Native app clients send no
+ *   `Origin` and pass on their token alone;
  * - the **session cookie** says *this browser already paired*. The token is a bootstrap credential: it is spent once
  *   in a URL and exchanged for a signed cookie, so the long-lived thing a page's scripts can reach holds no secret.
  *   The cookie names a token id, so revoking the token kills its sessions in the same breath.

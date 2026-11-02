@@ -255,7 +255,7 @@ export interface EventHookConfig {
   4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
      - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Every way in does, and the event door puts the integration's name inside the key. Exact, and permanent, so a redelivery days later is the same fire.
      - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
-     - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
+     - Anything else is a **gesture** — a hook fired from the panel's Hooks page, the run supervisor, a caller with no `requestId` — and `gestureRequestId()` gives each its own random key: a press is an intent, so two presses are two fires, and a fire after a restart cannot collide with one from before it.
      A fire that names its delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
   5. A hook trigger steers: `whenBusyFor("hook")` places it in the turn in flight, and pi-durable puts it at the boundary after the tool round that is running, so a message arriving mid-work is read by that work. The case that decided it: a chat message cancelling the poster the agent was rebuilding sat queued for twenty-eight minutes and the poster went out anyway. A hook that asks for a follow-up gets one, because a routine whose report has nothing to interrupt for says so at the submit (`src/server/admission.ts`).
   6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The reply is one Mason-owned call, `reply` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript — the newest input entry that is not the gate's own reminder — and targets it. No template names a vendor's tool: what a fire's instruction says is where its words came from, not which tool a medium exposes. A hook whose fire carried no origin — the morning brief, `github-activity`, a retry — records the reply and answers the model with the sentence that nobody was reached, because a message nobody received is the failure this arrangement exists to avoid. A fire whose origin is outside the entry's granted conversations is refused at admission (`mason.conversation_not_permitted`), and one that names another connector than the socket it arrived on is `mason.invalid_request`.
@@ -752,6 +752,10 @@ is only a `map` because the durable record already holds everything the trace is
 the files the commands write, and reads `integrations.json` from disk beside the boot's snapshot so the page can say
 `restartRequired` when they differ.
 
+**Two script routes carry one area each.** `GET /api/status` and `GET /api/integrations` predate the panel and answer
+the same two areas for a caller that asks one question with curl: the first is behind `conversation`, the second behind
+`admin`, so a device cannot read through them what its state would not carry.
+
 **Why HTTP and not a socket.** The panel is a control plane: it is read while the agent works, and an operator is not
 typing into it. A poll every 2.5 seconds (paused while the tab is hidden) costs one committed read per tick, keeps the
 server's only socket reserved for the thing that genuinely needs to push — a connector — and means a dropped request
@@ -812,7 +816,7 @@ renders it with the same sandbox, the same preview and the same fullscreen contr
 `widgets.css`). What it does not have is a way to send: a prompt typed inside a widget has no reader to arrive at from
 here, and the bridge answers that instead of dropping the click.
 
-### 4.4 Failure handling: the run supervisor and the Retry control
+### 4.4 Failure handling: the run supervisor and the retry hook
 
 Three layers, because a provider outage has three different timescales.
 
@@ -834,15 +838,15 @@ Three layers, because a provider outage has three different timescales.
    The schedule is deliberately slower than the in-run retries: **15s, 60s, 5min, 15min** (four attempts, ~20 minutes
    in total), overridable with `PDA_RUN_RETRY_DELAYS_MS` and `PDA_RUN_RETRY_ATTEMPTS`. The budget resets the moment an
    answer succeeds, and a pending re-fire is dropped as soon as the reader submits anything — their input leads.
-3. **On demand, the reader retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
+3. **On demand, the operator retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
    schedules it; the prompt tells the agent to resume from where it stopped instead of starting over, with the failure
-   text appended as the payload. The client's **Retry** control (`data-testid="retry-run"`) fires the same hook with
-   the error lines it shows, and disappears once anything follows the failed turn. Its prompt explains the durable
-   promise in the terms the reader needs: *the task is still open*.
+   text appended as the payload. The panel's Hooks page fires the same hook (the console's own Retry control went with
+   the console, #103), and the hook's prompt explains the durable promise in the terms the reader needs: *the task is
+   still open*.
 
 What durability does and does not promise, in one line: the conversation, the run, the subscriptions and the hook
 state survive a **process** restart — kill the server mid-tool and it resumes the run in place — while a provider
-outage that outlasts every retry budget leaves a failed turn, which the supervisor and the Retry control now pick up
+outage that outlasts every retry budget leaves a failed turn, which the supervisor and the retry hook now pick up
 again.
 
 ## 5. Milestone 3 Specification: the Widget Tool and Its Artifact Contract

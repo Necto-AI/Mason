@@ -2,7 +2,7 @@
  * The operator panel's server: one grant-gated API for the things a person administers by hand.
  *
  * The panel itself is a browser application (`src/web/admin/`), and this file is the whole of what it can do. Two rules
- * shape it, both from `docs/SPEC.md` §4.5 and #99's decisions:
+ * shape it, both from `docs/SPEC.md` §4.2/§4.3 and #99's decisions:
  *
  * 1. **Conversation and administration are different powers.** A device's grants (`auth.ts`) decide which keys its
  *    `/api/admin/state` answer carries and which writes it may make. Administration never implies the trace, and the
@@ -126,7 +126,7 @@ export async function handleOperatorRequest(
  */
 function isOperatorFacing(error: unknown): error is Error {
 	if (!(error instanceof Error)) return false;
-	return /: integration "[a-z0-9-]*" /.test(error.message) || /is not JSON|has no "integrations"/.test(error.message);
+	return /: integration "[^"]*" /.test(error.message) || /is not JSON|has no "integrations"/.test(error.message);
 }
 
 async function handleAdmin(
@@ -566,7 +566,7 @@ function grantsFrom(value: unknown): OperatorGrant[] {
 	return grants;
 }
 
-/** The controls the console used to offer. `stop` and `compact` are conversation powers; `clear` loses context. */
+/** The controls an operator still has: the conversation's stop and compact, and nothing that loses the context. */
 async function control(
 	body: Record<string, unknown>,
 	deps: OperatorDeps,
@@ -587,12 +587,7 @@ async function control(
 		);
 		return { action, done: true };
 	}
-	if (action === "clear") {
-		requireGrant(grants, "admin");
-		await conversation.reset(typeof body.handoff === "string" ? body.handoff : undefined, BACKGROUND_CONTEXT);
-		return { action, done: true };
-	}
-	throw new PanelError(400, 'the body is {"action":"stop"}, "compact" or "clear"');
+	throw new PanelError(400, 'the body is {"action":"stop"} or {"action":"compact"}');
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */
