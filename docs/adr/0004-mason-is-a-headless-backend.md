@@ -1,6 +1,6 @@
 # mason is a headless backend; interfaces attach to it
 
-**Status:** Accepted
+**Status:** Accepted; the console it kept is superseded by ADR-0011
 
 **Date:** 2026-10-26
 
@@ -46,7 +46,8 @@ reader would have been sent it, entry by entry, which is what a projection bug a
 debugged with; it is the fallback when the tunnel is down and the chat is gone; it keeps `projection.ts` and the Chord
 contract exercised continuously, in `test/projection.test.ts` and `test/chord-e2e.test.ts`; and it is the one worked
 example of the contract's consumer side that apiary can read. Freezing it loses nothing that a maintenance fix cannot
-restore, and keeping it costs a page that does not change.
+restore, and keeping it costs a page that does not change. *(The connector cutover removed the premise for this
+paragraph: see ADR-0011, which replaced the console with an operator panel that cannot speak.)*
 
 ## Decision
 

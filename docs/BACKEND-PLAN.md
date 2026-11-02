@@ -16,7 +16,7 @@ Verified on the deployed instance, not remembered:
 | Durable agent | `@earendil-works/pi-durable` with a log-backed conversation, submissions with idempotency, `whenBusy` (`followUp` / `steer` / `reject`), abort, reset, compact |
 | Triggers | Five builtin hooks (`team-chat`, `retry`, …) plus an HMAC-signed event door that fires the hook its trigger names, or issues one of the commands its entry declares |
 | Integrations | ADR-0003: a service with a tools face (MCP over Streamable HTTP), a trigger face (HMAC), or both. Telegram is the first one, with auto-reconnect, a per-chat send queue and a typing indicator |
-| Surfaces | Chord over WebSocket for live replication and methods; the operator console (frozen) reads a projection of the transcript and never the conversation |
+| Surfaces | Connectors for people, and the operator panel (`GET /api/admin/state`, grant-gated) reading a projection of the transcript — never the conversation; the console and its Chord socket are gone (ADR-0011) |
 | Tool machine | `pi-env` daemon in a second container, reached over SSH, `RemoteExecutionEnv` on the harness side |
 | Auth | Owner token → `HttpOnly` session cookie; `Origin` checked; `/api/health` and the signed event door are the only paths outside it |
 | Deployment | `deploy/`: compose files, an env image, a per-deployment `.env`, `deploy.sh` with image-id verification |

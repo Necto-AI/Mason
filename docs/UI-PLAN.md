@@ -1,3 +1,8 @@
+> **Superseded in part.** The console this file planned was removed in #103
+> (`docs/adr/0011-the-panel-is-a-control-plane.md`), together with its Chord socket. The widget card, its sandbox,
+> the markdown renderer and the rendering decisions behind them survive in the operator panel; the shell, the
+> composer, the transcript layout and the session bar do not. The file stays as the record of the port from apiary.
+
 # UI Plan — Chat Area (apiary look, pi-durable backend)
 
 Status: draft for review. Scope: chat area only. Author: agent, 2026-10-14.
