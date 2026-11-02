@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Bundles the browser client (`src/web/main.tsx`) into `dist/web/`, copying `index.html` beside it.
+// Bundles the operator panel (`src/web/admin/main.tsx`) into `dist/web/`, copying `index.html` beside it.
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -14,9 +14,9 @@ await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 
 const result = await esbuild.build({
-	entryPoints: [join(src, "main.tsx")],
+	entryPoints: [join(src, "admin", "main.tsx")],
 	bundle: true,
-	outfile: join(outdir, "main.js"),
+	outfile: join(outdir, "admin.js"),
 	format: "esm",
 	platform: "browser",
 	target: ["es2022"],
@@ -41,8 +41,12 @@ const cssFile = (result.metafile?.outputs ? Object.keys(result.metafile.outputs)
 	path.endsWith(".css"),
 );
 // esbuild writes the extracted CSS beside the bundle but never links it: the HTML must, and this catches drift.
-const linked = html.match(/<link[^>]+href="\.\/(main\.css)"[^>]*>/);
-if (linked === null) throw new Error("src/web/index.html does not link the bundled stylesheet (./main.css)");
+const linked = html.match(/<link[^>]+href="\.\/(admin\.css)"[^>]*>/);
+if (linked === null) throw new Error("src/web/index.html does not link the bundled stylesheet (./admin.css)");
+// The bundle and the sheet are the two files the shell names; a name that drifts here is a blank page in a browser.
+const scripted = html.match(/<script[^>]+src="\.\/(admin\.js)"[^>]*>/);
+if (scripted === null) throw new Error("src/web/index.html does not load the bundled script (./admin.js)");
 await writeFile(join(outdir, "index.html"), html);
-if (cssFile === undefined && existsSync(join(outdir, "main.css"))) throw new Error("stylesheet emitted but not linked");
-console.log(`web client -> ${outdir} (${cssFile ?? "no css"})`);
+if (cssFile === undefined && existsSync(join(outdir, "admin.css")))
+	throw new Error("stylesheet emitted but not linked");
+console.log(`operator panel -> ${outdir} (${cssFile ?? "no css"})`);
