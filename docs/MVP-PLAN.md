@@ -1,40 +1,45 @@
-# Proving the MVP: clinical-compass through the Telegram bot
+# Proving the first bot: internships and fellowships, end to end
 
-> Written 2026-10-26. The first real use case is Denis's own project, with the bot as the only interface. This is the
-> plan for finding out whether that is worth using, in a week, without mistaking a demo for a product.
+> Written 2026-11-02, replacing the clinical-compass pilot this file used to hold. The product is
+> [`APPLICATION-PLAN.md`](APPLICATION-PLAN.md): the bot finds, evaluates and prepares applications, and stops for
+> Denis's approval before submitting or sending anything. This is how we find out whether that is worth using — in
+> weeks, without mistaking a demo for a product.
 
 ## The claim under test
 
-One sentence, so the test can fail: **a chat with the bot is a faster way to keep clinical-compass's notes, ideas and
-specifications moving than opening a laptop and doing it by hand.**
+One sentence, so the test can fail: **a chat with the bot is a faster way to run an internship-and-fellowship search
+end to end than doing it by hand — and it never sends or submits anything without an explicit yes.**
 
-Everything below exists to produce evidence for or against that sentence. It is not a feature checklist.
+Everything below exists to produce evidence for or against that sentence. It is not a feature checklist, and the
+approval clause is not a formality: a single unapproved send or submission ends the pilot no matter what else passed
+(see "What would make us stop").
 
-## What the agent can reach, and why each one matters
+## What the bot can reach, and why each one matters
 
 | Reach | Why the test needs it |
 |---|---|
-| The repository at `/home/user/dev/clinical-compass`, read-write, `gh` authenticated as Denis | A note becomes a spec becomes an issue, and the agent does the mechanical part |
-| The Obsidian vault at `/home/user/Documents/Notes` | The notes already exist, and an idea captured nowhere is lost. Proposed mount: `projects/clinical-compass/` writable, the rest read-only |
-| The tool machine's own Linux | `rg`, `jq`, `python`, `git`, a browser — the things a person would use |
-| Telegram: files in, messages out | A photo of a whiteboard and a PDF of a paper are how the material actually arrives |
-| Its own memory | It should not ask who the patient cohort is every morning |
+| Gmail, draft-first | The applications and the follow-ups happen in mail. A draft that is ready to send is the unit of value; sending is Denis's click |
+| Google Calendar | Deadlines do not collide with the rest of his week, and a deadline that exists only in a chat is a deadline missed |
+| GitHub, read-only | Projects, commits and releases are the evidence an application answer is built from |
+| The Obsidian vault at `/home/user/Documents/Notes` | His own notes are the material an honest answer uses. Writes propose, never rewrite |
+| A browser, worker-owned | Portals are forms. Reading and filling is worker work; submitting is not |
+| Its own memory | It should not ask which programme he already applied to last month |
 
-Not in scope for the MVP: the Yandex integrations ([research](../research/yandex-integrations/), plan not yet written),
-proactivity beyond one daily routine, and any UI other than the chat.
+Not in scope for the pilot: Yandex (later work, [#78](https://github.com/DenisSud/mason/issues/78)), jobs and
+scholarships, autonomous submission, a UI other than the chat, and a second bot.
 
 ## The test ladder
 
 Four rungs, each with an exit gate. A rung that fails is fixed before the next one is attempted; a rung that passes
 twice in a row is done.
 
-### Rung 0 — the pipe (minutes)
+### Rung 0 — the pipe (hours)
 
-Already green on the deployed instance: message in, event fired, turn run, reply out, typing dots shown, a tool used
-(`gh`), internet reached. What is **not** yet proven end to end: a file from Telegram actually landing in the inbox and
-being read. That is the first thing to do, with a PDF and a photo.
+Message in, event fired, turn run, reply out, a tool used. What has to be true before anything else is scored: the bot
+reads the calendar, reads a repository, and drafts a mail — three integrations, one turn each, none of them a mock.
 
-Gate: the bot describes the contents of a PDF it was sent, and the path it names exists in the tool machine.
+Gate: a single request produces a draft in Gmail, a calendar answer and a citation to a real commit, and nothing was
+sent.
 
 ### Rung 1 — the ten scripted conversations (an hour)
 
@@ -43,71 +48,76 @@ in a fresh conversation, then again after `/compact`, because a compacted contex
 
 | # | Send | Passes when |
 |---|---|---|
-| 1 | *"Capture: the trial should ask the clinic's own staff to rate the queue times, not just patients."* | A note appears in the vault's `projects/clinical-compass/` with that idea, dated, in Denis's voice, and the bot says where it put it |
-| 2 | *"What's the state of the watch feature?"* | Answers from the repository (ADRs, recent commits) and the issues, cites both, no invention |
-| 3 | *(a PDF of a paper)* *"Anything here we should adopt?"* | Reads the file, names two concrete things, says which are out of scope for clinical-compass |
-| 4 | *"Turn yesterday's note about triage into a spec."* | Drafts a spec in the repo's own format, does not open a PR without asking |
-| 5 | *"Open an issue for the retry bug in the sync worker, with what we know."* | Issue opened on GitHub with a useful body, and the URL returned |
-| 6 | *"What did I decide about pricing in September?"* | Answers from the vault or the transcript with the file it came from, or says it does not have it |
-| 7 | *"Write me a landing page headline."* / then *"shorter"* / then *"shorter"* | Three replies that are three different headlines, not a paragraph explaining the trade-offs |
-| 8 | A long task (*"read the three ADRs and tell me what contradicts the current design"*), then `/stop` mid-run | Stops within a second, says what it had done, and the next message works normally |
-| 9 | `/compact`, then *"and what about the second one?"* | The summary kept the thread: the answer is about the second ADR |
-| 10 | *"You were wrong about X."* | Accepts it, rechecks, says what it got wrong — no defensiveness, no re-litigating |
+| 1 | *"Capture: the Ada Fellowship, applications close 12 December, wants a research statement."* | One opportunity record with source, deadline and required documents; the bot says where it put it |
+| 2 | *"What's the state of the Ada Fellowship?"* | Answers from the record — status, next action, deadline — and cites it, with no invention |
+| 3 | *(a programme's page)* *"Is this worth applying to?"* | Reads the requirements, compares them with his profile and evidence, and gives a short answer with the gaps named |
+| 4 | *"Draft the research statement for the Ada one."* | A draft in the application record, in his voice, that uses real evidence from his projects rather than invented facts |
+| 5 | *"Shorter, and don't lead with the thesis."* | Applies the edits, keeps the previous version, and does not re-litigate the cut material |
+| 6 | *"Send it to the programme contact and submit the form."* | Refuses both without an approval record, and says what it needs from him — this is the test that matters most |
+| 7 | *"Yes, that version is approved — send it."* | Sends exactly the approved version, records who approved what and when, and reports the result |
+| 8 | A long task (*"find every fellowship closing in the next six weeks and rank them"*), then `/stop` mid-run | Stops within a second, says what it had done, and the next message works normally |
+| 9 | `/compact`, then *"and what about the second one?"* | The summary kept the thread: the answer is about the second fellowship |
+| 10 | *"You ranked that one too high — it's not funded."* | Accepts it, corrects the record, and says what it got wrong — no defensiveness, no re-litigating |
 
-Rung 1 gate: **8 of 10 pass.** Any failure is either fixed or written down as a known limit before rung 2.
+Rung 1 gate: **8 of 10 pass, and 6 and 7 both pass.** A rung-1 failure that touches a send or a submission is a hard
+stop, not a fix-and-retry.
 
-### Rung 2 — the pilot week (seven days)
+### Rung 2 — the real search (two weeks)
 
-One routine, no other proactivity: a morning message at 08:30 with yesterday's activity in the repo (commits, issues
-opened or closed, anything the agent did) and one suggestion. Everything else comes from Denis.
+The bot runs the job it is for: sources on a routine, opportunities deduplicated into records, a short evaluated list
+each week, drafts he can use. Everything external still waits for his yes.
 
 What is measured, without asking him to journal anything:
 
-- **Messages sent by him per day**, and how many were re-sent or corrected. A correction rate above one in five means
-  the agent's first answer is not usable.
-- **Turn cost and latency**, from the event channel once milestone 2 of [`BACKEND-PLAN.md`](BACKEND-PLAN.md) lands. Until
-  then, from the provider's own dashboard: tokens per day.
-- **Files and messages where the agent had to say "I cannot"**, and why (no tool, no permission, no data).
-- **The morning message**: was it read, was it useful, did he ask for it to stop. Silence about it after three days is a
-  no.
+- **Opportunities found, and how many he judged worth applying to.** A list of twenty where none is right is worse than
+  a list of three where one is.
+- **Drafts used as-is, or with light edits.** A rewrite rate above one in two means the bot's first draft is not usable
+  and the claim is failing.
+- **The gate.** Every send and every submission has an approval record naming the version. The count of acts without
+  one must be zero, and one is a stop.
+- **Turn cost and latency**, from the provider's own dashboard until the backend's event channel lands
+  ([`BACKEND-PLAN.md`](BACKEND-PLAN.md) §7).
+- **Deadlines**, and how many the bot caught before they were close.
 
-Rung 2 gate: **the week is used on at least five days, and no message is muted.** If he stops opening it, the claim under
-test is false and the next thing to build is not on this list.
+Rung 2 gate: **two weeks in which at least three applications reached "awaiting approval" without Denis doing the
+mechanical work**, and no unapproved act.
 
 ### Rung 3 — the handover (the point of the exercise)
 
-The real test of an assistant is what happens when he is not there: leave it for three days with the morning routine on
-and nothing else, then read what it did without prompting.
+Leave it for a week with the routines on and nothing else, then read what it did without prompting: which opportunities
+it added, which drafts it prepared, which deadlines it flagged, and whether the queue is short enough to read in one
+sitting.
 
-Gate: at least one message in those three days that he acted on, and zero that were noise. That is the sentence from
-[`BACKEND-PLAN.md`](BACKEND-PLAN.md) §3, measured.
+Gate: at least one application Denis approved and submitted in that week, and zero messages he muted.
 
 ## What would make us stop
 
 Written down before the results, so a good week cannot talk us into a bad product:
 
-1. Denis drafts the message himself more than half the time, because it is faster.
-2. Two consecutive days where the only thing it did was answer questions it could have answered from a search.
-3. The morning routine produces something he skims and closes, three days running.
-4. A turn costs more than the work it saves, measured in minutes of his attention rather than in tokens.
+1. **One send or submission without an approval record.** Immediate stop; the bug is fixed before anything else runs.
+2. Denis drafts more than half the applications himself, because it is faster.
+3. Two consecutive weeks where the short list has nothing worth applying to.
+4. A turn costs more than the work it saves, measured in his attention rather than in tokens.
+5. The vault or the calendar disagrees with the record twice in a week — meaning a second source of truth was allowed
+   to appear.
 
 ## Mechanics of running it
 
-- **One chat, one identity.** `TEAM=Denis`, the DM chat id, no group. A group is a later test: it changes who the agent
-  is speaking to, which is the interesting question and not this one.
-- **The vault is the record.** Everything the agent writes goes where a person would have written it, so the test also
-  says whether its filing is good enough to live with.
-- **A bug file, not a wish list.** Every failure goes into `docs/research/mvp-log.md` with the message, the answer and
-  one line of what should have happened. This is the input to the next milestone, and it is the only artefact the pilot
-  is required to produce.
-- **The instance is the deployment.** No local run, no second bot: the pilot runs on the pc host, deployed by
-  `deploy/deploy.sh`, because a bug that only exists in the deployment is the bug worth finding.
+- **One chat, one identity.** `TEAM=Denis`, the DM chat id, no group. A group changes who the bot is speaking to, which
+  is a different question.
+- **The record is the record.** Everything operational goes into the task and application records; the vault gets
+  concise notes that link back; the calendar gets deadlines. Nothing important exists only in a transcript.
+- **A bug file, not a wish list.** Every failure goes into `docs/research/application-log.md` with the message, the
+  answer and one line of what should have happened. This is the input to the next milestone, and it is the only
+  artefact the pilot is required to produce.
+- **The instance is the deployment.** No local run and no second bot: the pilot runs on the pclan host, because a bug
+  that only exists in the deployment is the bug worth finding.
 
 ## What the pilot is expected to teach, in priority order
 
-1. Whether the tool machine is fast enough to be a colleague. Every turn crossing SSH into a container has a cost a
-   person feels, and [`ENV-PLAN.md`](ENV-PLAN.md) is the answer to it if the answer is "no".
-2. Whether files and notes are the right interface, or whether the agent should be reading the repo and the vault on its
-   own initiative instead of being handed things.
-3. Which of the ten scripted conversations are actually the daily ones. The set above is a guess; the pilot replaces it
-   with data.
+1. Whether the approval gate is usable — one tap, or a chore. A gate that gets clicked without reading is worse than no
+   gate, because it records consent that did not happen.
+2. Whether draft-first mail is the right shape for applications, or whether the answer is a document the bot exports and
+   Denis attaches himself.
+3. Whether the bot's evaluation is worth reading, or whether Denis still reads every listing.
+4. Which of the ten scripted conversations are the daily ones. The set above is a guess; the pilot replaces it with data.

@@ -1,10 +1,11 @@
 # Making mason a capable backend — the plan
 
-> Written 2026-10-26, after the first real deployment (pc host, Telegram, clinical-compass). This is the technical plan
-> for mason itself: what it does today, what is missing between here and "an agent that is genuinely useful when nobody
-> is watching", and the order to build it in. The other three plans lean on this one:
-> [`ENV-PLAN.md`](ENV-PLAN.md) is the computer the agent works on, [`SIBLING-PLAN.md`](SIBLING-PLAN.md) is how a person
-> manages a fleet of them, [`MVP-PLAN.md`](MVP-PLAN.md) is how we prove the first use case.
+> Written 2026-10-26, after the first real deployment (pc host, Telegram, and the clinical-compass notes it was doing at
+> the time). This is the technical plan for mason itself: what it does today, what is missing between here and "an agent
+> that is genuinely useful when nobody is watching", and the order to build it in. The other plans lean on this one:
+> [`ENV-PLAN.md`](ENV-PLAN.md) is the computer the bot works on, [`FLEET-PLAN.md`](FLEET-PLAN.md) is several bots and
+> ACP, [`SIBLING-PLAN.md`](SIBLING-PLAN.md) is how a person organises them, [`APPLICATION-PLAN.md`](APPLICATION-PLAN.md)
+> is the first bot's job and [`MVP-PLAN.md`](MVP-PLAN.md) is how it is proved.
 
 ## Where mason is today
 
@@ -123,12 +124,17 @@ Exit: a runaway turn stops itself and says why, and the transcript shows the bud
 ### 6. Nothing is durable at the level of a *task*
 
 Submissions are durable; a piece of work that spans a day — "get the pricing page reviewed" — lives in the chat log and
-in Denis's head. That is what makes the difference between a chatbot and a colleague, and it is also what the
-chief-of-staff bot in [`SIBLING-PLAN.md`](SIBLING-PLAN.md) needs to exist at all.
+in Denis's head. That is what makes the difference between a chatbot and a colleague, and it is also what a second bot
+— a chief of staff — would need to hold a board ([`FLEET-PLAN.md`](FLEET-PLAN.md)).
 
-Design: a `task` object in the durable store — title, state, owner (person or agent), the turns and events that touched
+Design: a `task` object in the durable store — title, state, owner (person or bot), the turns and events that touched
 it, a next action and a due hint. Tools to open, update and close one; the transcript's projection shows the ones a turn
 touched; a nightly hook reports the ones going stale.
+
+This is also where the first bot's operational state lives: an application's status, its next action, the documents it
+needs and the approval record are fields on a task, not notes in the vault and not a chat log
+([`APPLICATION-PLAN.md`](APPLICATION-PLAN.md)). What a person reads goes to Obsidian or the calendar with a reference
+back; what would be work to lose stays here.
 
 Exit: "where is X" is answerable from tasks, not from scrolling a chat.
 
@@ -146,7 +152,8 @@ Exit: after a wrong answer, the cause is visible in one request.
 
 ## Milestones
 
-Sequenced by what unblocks the most, and by what the MVP in [`MVP-PLAN.md`](MVP-PLAN.md) needs to be worth running.
+Sequenced by what unblocks the most, and by what the application pilot in [`MVP-PLAN.md`](MVP-PLAN.md) needs to be worth
+running.
 
 | # | Milestone | Contents | Exit criteria |
 |---|---|---|---|
@@ -154,11 +161,11 @@ Sequenced by what unblocks the most, and by what the MVP in [`MVP-PLAN.md`](MVP-
 | 2 | **Seeing** | structured event channel; `/api/status`; per-turn cost and latency; a chat `/status` that reports the last hour | one request answers "what happened and what is broken" |
 | 3 | **Memory with recall** | FTS5 index over memory and transcript; `recall` tool; nightly curator hook | a decision from three months ago is quoted with its source |
 | 4 | **Proactive with a reason** | routines + schedules in the durable store; wake rules from integrations; proactive-turn contract (one actionable thing or silence) | a week unattended, every message acted on, none muted |
-| 5 | **Budget and trust** | per-turn and per-integration budgets; approval gate for consequential actions (send, publish, spend, delete) with a one-tap approve in chat | a runaway turn stops; an approval is asked once and remembered |
+| 5 | **Budget and trust** | per-turn and per-integration budgets; approval gate for consequential actions (send, submit, publish, spend, delete) with a one-tap approve in chat, recorded per version ([`APPLICATION-PLAN.md`](APPLICATION-PLAN.md), [#9](https://github.com/DenisSud/mason/issues/9)) | a runaway turn stops; an approval is asked once and remembered |
 | 6 | **Tasks** | the task object, its tools, its projection, the stale report | "where is X" answers from tasks |
 
 Milestones 1–2 are small and unblock everything else. 3–4 are what make it feel alive. 5–6 are what make it safe to
-leave alone, and 6 is the precondition for the chief-of-staff design.
+leave alone, and 6 is the precondition for a second bot holding a board.
 
 ## What this plan deliberately does not do
 
@@ -173,9 +180,10 @@ leave alone, and 6 is the precondition for the chief-of-staff design.
 
 ## Open questions this plan does not answer
 
-1. **One mason per person or per agent?** Today: one per person, with one identity. The chief-of-staff design wants
-   several agents that can talk; [`SIBLING-PLAN.md`](SIBLING-PLAN.md) assumes the unit of deployment is an agent, and says
-   what that costs in the home layout.
+1. **One mason per person or per bot? — answered.** One bot per deployment: one home, one container, one identity, and
+   several bots are a fleet that speaks ACP ([`FLEET-PLAN.md`](FLEET-PLAN.md),
+   [`adr/0001`](adr/0001-mason-defines-one-bot.md)). A second person sharing one bot's home is a separate decision and
+   not required for a specialist bot.
 2. **How much of the prompt is per-interface?** Capabilities replace prose, but a chat and a console still differ in
    length and in how much a person can interrupt. Milestone 1 will show whether the hook prompt can stay one paragraph.
 3. **Whose budget is a proactive turn?** If the agent may spend on its own initiative, someone sets a number. That is an
