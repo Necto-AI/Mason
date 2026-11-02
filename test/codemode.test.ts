@@ -15,7 +15,7 @@ import { describe, it } from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { McpTransport } from "@earendil-works/pi-mcp";
 import { createCodemode } from "../src/server/extensions/codemode.ts";
-import { MESSAGE_TOOL } from "../src/shared/contract.ts";
+import { REPLY_TOOL } from "../src/shared/contract.ts";
 import {
 	boot,
 	declared,
@@ -100,7 +100,7 @@ describe("a script is the second way in", () => {
 				fauxAssistantMessage([fauxToolCall(SEARCH_TOOL_NAME, { query: "bug" }, { id: "search" })], {
 					stopReason: "toolUse",
 				}),
-				fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message: "Found some." }, { id: "sent" })], {
+				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Found some." }, { id: "sent" })], {
 					stopReason: "toolUse",
 				}),
 				fauxAssistantMessage(fauxText("Nothing else to report.")),

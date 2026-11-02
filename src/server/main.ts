@@ -21,6 +21,7 @@ import {
 	withAuthor,
 } from "../shared/contract.ts";
 import { whenBusyFor } from "./admission.ts";
+import { ATTACHMENT_LIMIT, AttachmentStore } from "./attachments.ts";
 import {
 	authenticate,
 	createTokenStore,
@@ -31,9 +32,11 @@ import {
 	type TokenRecord,
 	type TokenStore,
 } from "./auth.ts";
+import { commandTarget, runCommand } from "./commands.ts";
+import { CONNECTOR_PATH, type ConnectorDoor, createConnectorDoor } from "./connector.ts";
+import { authenticateConnector } from "./connectors.ts";
 import {
 	COMMAND_KIND,
-	type CommandName,
 	commandRequestId,
 	EVENT_SIGNATURE_HEADER,
 	EVENTS_PATH,
@@ -61,7 +64,9 @@ import { projectQueued, projectTranscript } from "./projection.ts";
 import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
 import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
 import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
-import { createCacheReporter, deriveAgentStatus, isBusy, queuedSubmissions, statusLine } from "./status.ts";
+import { createCacheReporter, deriveAgentStatus } from "./status.ts";
+
+export { type CommandTarget, commandTarget, runCommand } from "./commands.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -90,6 +95,12 @@ export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly hostname?: string;
 	/** Directory holding the built client (`index.html`, `main.js`, `main.css`). */
 	readonly webDir?: string;
+	/**
+	 * The attachment store's bounds. Defaults are the protocol's (25 MiB, a day); a test that has to cross the cap or wait
+	 * for an expiry sets them small rather than writing 25 MB or sleeping a day.
+	 */
+	readonly attachmentBytes?: number;
+	readonly attachmentTtlMs?: number;
 }
 
 export interface RunningServer {
@@ -102,6 +113,8 @@ export interface RunningServer {
 	 * hash. Absent on a restart: the plaintext is shown once and never stored.
 	 */
 	readonly pairingToken: string | undefined;
+	/** The connector door, for a test that reads its live sessions rather than driving a socket. */
+	readonly connectors: ConnectorDoor;
 	close(): Promise<void>;
 }
 
@@ -258,17 +271,45 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const house = currentHouse();
 	const store = createTokenStore(house.home);
 	const { token: pairingToken } = await ensureToken(house.home);
-	// One limiter for the process: its budget is what this process may spend, so it is shared across requests.
+	// One limiter for the process: its budget is what this process may spend, so it is shared across requests. The
+	// connector classes beside it are keyed per connector, so one sender's minute is never another's.
 	const fires = createFireLimiter();
+	// Uploaded bytes and the ids that point at them. Durable, in the home's data half: a restart between an upload and the
+	// submission that references it is the moment a resend happens.
+	const attachments = new AttachmentStore({
+		dataDir: runtime.dataDir,
+		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
+		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
+	});
+	// The connector door: one JSON-RPC socket per connector, the state mirrors and the reply outbox. Opened before the
+	// listener so a delivery cannot be owed before there is anything to send it with.
+	const connectors = await createConnectorDoor({
+		runtime,
+		workspaceDir: runtime.workspaceDir,
+		attachments,
+		limiter: fires,
+		home: house.home,
+	});
 
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir, store, fires, house).catch((error: unknown) => {
+		handleRequest(request, response, runtime, webDir, store, fires, house, attachments).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
 		});
 	});
-	const sockets = new WebSocketServer({ server });
+	// Two socket servers behind one listener, routed by path: the browser's Chord link, and a connector's JSON-RPC door.
+	// `noServer` so neither owns the HTTP server's upgrade event, which is where the path is read.
+	const sockets = new WebSocketServer({ noServer: true });
+	const connectorSockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+	server.on("upgrade", (request, socket, head) => {
+		const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+		const target = pathname === CONNECTOR_PATH ? connectorSockets : sockets;
+		target.handleUpgrade(request, socket, head, (client) => target.emit("connection", client, request));
+	});
+	connectorSockets.on("connection", (socket, request) => {
+		void connectors.attach(socket, request);
+	});
 	// A socket is the reader: no credential, no owner. Chord closes the link itself when the principal is `undefined`.
 	acceptWebSockets(sockets, host, {
 		principal: async (request): Promise<Principal | undefined> => {
@@ -338,13 +379,19 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		runtime,
 		host,
 		pairingToken,
+		connectors,
 		async close() {
 			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
 			await runWatch.stop();
+			// The door first: it stops the state watch and closes every connector socket, and a delivery that arrives during
+			// shutdown should not start an outbox flush against a runtime that is about to close.
+			await connectors.close();
 			// `WebSocketServer.close()` only calls back once every client has gone, and a browser holds its socket
 			// open: terminate the clients first, or shutdown waits forever.
 			for (const client of sockets.clients) client.terminate();
+			for (const client of connectorSockets.clients) client.terminate();
 			await new Promise<void>((closed) => sockets.close(() => closed()));
+			await new Promise<void>((closed) => connectorSockets.close(() => closed()));
 			await new Promise<void>((closed) => {
 				server.close(() => closed());
 				server.closeAllConnections();
@@ -352,144 +399,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			await host.close();
 			await runtime.close();
 		},
-	};
-}
-
-/**
- * What a command acts on, apart from the door: the three conversation methods the console already calls, the claim that
- * makes an envelope id an identity, whether the conversation is busy, and the line `status` answers.
- *
- * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
- * without a provider, a turn or a second of waiting. The six methods are the whole of what a command may do, so a new
- * command means changing this interface as well as the vocabulary in `events.ts`.
- */
-export interface CommandTarget {
-	abort(): Promise<void>;
-	clear(): Promise<void>;
-	compact(instructions: string | undefined): Promise<void>;
-	status(): Promise<string>;
-	/**
-	 * Whether the conversation is working or has anything waiting — the same two facts `/status` reads out of the view.
-	 * `/clear` asks because a reset is not display-only: it queues behind a running turn, so this is the difference
-	 * between "cleared" and "the answer you just cleared is still coming".
-	 */
-	busy(): Promise<boolean>;
-	/**
-	 * Claims this command's id in the durable log, and answers whether the claim is new. A redelivery finds the claim and
-	 * is answered with nothing at all, so nothing runs twice.
-	 */
-	claim(requestId: string, command: CommandName, argument: string | undefined): Promise<boolean>;
-}
-
-/** What the three commands that change something answer a chat, in one word each: the person knows what happened. */
-const ONE_WORD: Record<"stop" | "compact" | "clear", string> = {
-	stop: "stopped",
-	compact: "compacted",
-	clear: "cleared",
-};
-
-/** What `/clear` answers when the reset is queued behind a turn: the person is told what is going to happen, not asked. */
-const CLEARING_AFTER_TURN = "clearing after this turn";
-
-/**
- * One declared command, run once per envelope id, and the line the chat gets back — or nothing at all when the log
- * already held this command's id, which is the caller's cue to say `already ran` and answer with an empty reply.
- *
- * The dedupe is the durable log's own: a command's request id is admitted like a fire's, and the log never forgets one,
- * so a redelivery after a restart answers what it answered instead of stopping a second turn or clearing a conversation
- * that has moved on. `status` is not claimed, because it changes nothing and a claim would be a record of something that
- * did not happen: a retried question is still a question.
- *
- * **Where the claim sits is a trade, and it differs per command — deliberately.** `stop` aborts first and claims second:
- * `abort` is idempotent, so stopping a turn that is already stopped costs nothing, where claiming first would turn a
- * *failed* abort into a permanent "stopped" — the log would hold a stop that never happened, and no redelivery could
- * retry it because the id was already spent. `clear` and `compact` claim first: a repeated clear throws away a
- * conversation that has moved on and a repeated compact spends a second model call, so a redelivery that does nothing is
- * the better half of that trade. The abort is not gated on its claim — only the reply is; tidying the three into one rule
- * breaks one of them whichever rule you pick.
- *
- * Nothing here waits for a running turn: `abort`, `reset` and `compact` are the conversation's own methods, and the claim
- * is a display-only entry, which the log appends at once even mid-run — `/stop` is the whole point of that. `clear` is the
- * one that is not display-only: the reset is a write the log queues behind the turn, which is why the answer says it is
- * queueing rather than pretending the conversation is already empty.
- */
-export async function runCommand(
-	target: CommandTarget,
-	requestId: string,
-	command: CommandName,
-	argument: string | undefined,
-): Promise<string | undefined> {
-	switch (command) {
-		case "status":
-			return target.status();
-		case "stop": {
-			// The act comes first and nothing is gated on the claim, so a redelivery that reached here before its own first
-			// delivery finished did no harm — the turn is stopped either way. The claim's answer decides the reply alone.
-			await target.abort();
-			return (await target.claim(requestId, command, argument)) ? ONE_WORD.stop : undefined;
-		}
-		case "compact": {
-			if (!(await target.claim(requestId, command, argument))) return undefined;
-			await target.compact(argument);
-			return ONE_WORD.compact;
-		}
-		case "clear": {
-			if (!(await target.claim(requestId, command, argument))) return undefined;
-			// Asked before the act, because the question is "will the reset land now, or behind the turn?" — a reset submits a
-			// write with `head: "self"`, which is not display-only, so on a busy conversation it queues in the inbox and returns
-			// at once. Either way the reset happens; only the answer differs, and "cleared" over a conversation that is still
-			// delivering the answer it was told to forget is a lie the person watches come true.
-			const busy = await target.busy();
-			await target.clear();
-			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
-		}
-		default: {
-			// Every name in `COMMAND_NAMES` has an arm above, and this line is what makes a fifth one a compile error rather
-			// than a command that answers nothing.
-			const unhandled: never = command;
-			throw new Error(`no arm for command ${String(unhandled)}`);
-		}
-	}
-}
-
-/** The entry a command leaves behind: the record that makes its id an identity, and the trace of what a chat asked for. */
-const COMMAND_ENTRY_KIND = "app.command";
-
-/** The real target: the root conversation the console drives, the durable log that remembers a command's id, and the
- * status line this boot derives. */
-async function commandTarget(runtime: AgentRuntime): Promise<CommandTarget> {
-	const conversation = await runtime.conversation();
-	return {
-		abort: () => conversation.abort(BACKGROUND_CONTEXT),
-		clear: () => conversation.reset(undefined, BACKGROUND_CONTEXT),
-		compact: async (instructions) => {
-			await conversation.compact(instructions, BACKGROUND_CONTEXT);
-		},
-		status: async () =>
-			statusLine(await runtime.viewSnapshot(BACKGROUND_CONTEXT), integrationSummaries(currentIntegrations())),
-		busy: async () => {
-			const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
-			return isBusy(view) || queuedSubmissions(view) > 0;
-		},
-		// One commit: the lookup, the entry and the submission that names it are the claim, so two deliveries of one id
-		// cannot both find it absent. The entry carries no model content, which is what makes it display-only — the log
-		// appends it at once instead of queueing it behind the turn the command is about.
-		claim: (requestId, command, argument) =>
-			conversation.commit(async (tx) => {
-				if ((await tx.submissionByRequest(conversation.id, requestId)) !== undefined) return false;
-				const entry = await tx.appendEntry(conversation.id, {
-					kind: COMMAND_ENTRY_KIND,
-					data: { command, ...(argument === undefined ? {} : { argument }) },
-				});
-				await tx.createSubmission({
-					conversationId: conversation.id,
-					requestId,
-					type: "write",
-					status: "done",
-					entry: entry.id,
-				});
-				return true;
-			}, BACKGROUND_CONTEXT),
 	};
 }
 
@@ -501,6 +410,7 @@ async function handleRequest(
 	store: TokenStore,
 	fires: FireLimiter,
 	house: HousePaths,
+	attachments: AttachmentStore,
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 	// Every response carries these, refusals and static files alike: the shell has no inline script of its own, and a
@@ -518,6 +428,11 @@ async function handleRequest(
 			return;
 		}
 	}
+
+	// The connector's own door: its socket's upgrade is routed elsewhere, but the attachment endpoints are HTTP and are
+	// authenticated by the connector's credential rather than the owner's token. Handled before the gate below, because
+	// an owner token is not a connector credential and a connector credential is not a token.
+	if (await handleConnectorRequest(request, response, url, attachments, fires, house)) return;
 
 	// Everything under `/api` is the owner's, except two doors that cannot present a token: the liveness probe, and
 	// the event door, which is authenticated by the sender's own HMAC below (src/server/events.ts) and can do exactly one
@@ -719,6 +634,130 @@ async function handleRequest(
 	if (url.pathname === "/api/health") return json(response, 200, { status: health, root: String(runtime.rootId) });
 
 	return serveStatic(response, webDir, url.pathname);
+}
+
+/**
+ * The connector's HTTP endpoints: `POST /api/connector/attachments` and `GET /api/connector/attachments/<contentId>`.
+ *
+ * Authenticated as the connector (`authenticateConnector`), never as the owner, and answered with the protocol's own
+ * statuses: `413` over the cap, `410` for an id that expired, `404` for one this connector did not upload — which is the
+ * same answer a malformed id gets, because whether another connector's id exists is not a sender's business. The budget
+ * is the connector's attachment class, separate from its submissions, fires and controls.
+ */
+async function handleConnectorRequest(
+	request: IncomingMessage,
+	response: ServerResponse,
+	url: URL,
+	attachments: AttachmentStore,
+	fires: FireLimiter,
+	house: HousePaths,
+): Promise<boolean> {
+	if (url.pathname !== CONNECTOR_PATH && !url.pathname.startsWith(`${CONNECTOR_PATH}/`)) return false;
+	// `/api/connector` itself is a WebSocket. An HTTP request there is a client that forgot how the door works.
+	if (url.pathname === CONNECTOR_PATH) {
+		notFound(response);
+		return true;
+	}
+	const auth = await authenticateConnector(request, house.home, currentIntegrations());
+	if (!auth.ok) {
+		console.warn(`[connector] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
+		response.writeHead(401, {
+			"content-type": "application/json; charset=utf-8",
+			"www-authenticate": 'Bearer realm="mason-connector"',
+		});
+		response.end(JSON.stringify({ code: "mason.not_authenticated", message: "a connector credential is required" }));
+		return true;
+	}
+	const name = auth.identity.name;
+	// Which of the two endpoints, and whether this request is one mason will act on — settled before the budget is
+	// charged, so a wrong verb or an unknown path costs the connector nothing. The event door makes the same trade.
+	const base = `${CONNECTOR_PATH}/attachments`;
+	const uploading = url.pathname === base;
+	if (!uploading && !url.pathname.startsWith(`${base}/`)) {
+		notFound(response);
+		return true;
+	}
+	if (request.method !== (uploading ? "POST" : "GET")) {
+		json(response, 405, { error: "method not allowed" });
+		return true;
+	}
+	const wait = fires.take(`connector:attachment:${name}`, ATTACHMENT_LIMIT);
+	if (wait !== undefined) {
+		response.writeHead(429, {
+			"content-type": "application/json; charset=utf-8",
+			"retry-after": String(wait),
+		});
+		response.end(
+			JSON.stringify({
+				code: "mason.rate_limited",
+				message: `this connector has spent its ${ATTACHMENT_LIMIT}-a-minute attachment budget`,
+				retryable: true,
+				retryAfterMs: Math.min(wait * 1000, 60_000),
+			}),
+		);
+		return true;
+	}
+	if (uploading) {
+		const raw = await readRawBodyCapped(request, attachments.maxBytes);
+		if (raw === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(
+				JSON.stringify({
+					code: "mason.invalid_request",
+					message: `that upload is over ${attachments.maxBytes} bytes`,
+				}),
+			);
+			return true;
+		}
+		const filename = headerValue(request, "x-mason-filename");
+		const meta = await attachments.save(name, raw, {
+			mimeType: headerValue(request, "content-type"),
+			...(filename === undefined ? {} : { name: safeFilename(filename) }),
+		});
+		if (meta === undefined) {
+			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+			response.end(JSON.stringify({ code: "mason.invalid_request", message: "that upload is over the cap" }));
+			return true;
+		}
+		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
+		return true;
+	}
+	const contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
+	const read = await attachments.read(name, contentId);
+	if (read.status === "expired") {
+		response.writeHead(410, { "content-type": "application/json; charset=utf-8" });
+		response.end(JSON.stringify({ code: "mason.invalid_request", message: "that content id expired" }));
+		return true;
+	}
+	if (read.status === "missing") {
+		notFound(response);
+		return true;
+	}
+	response.writeHead(200, {
+		"content-type": read.attachment.meta.mimeType,
+		"content-length": String(read.attachment.meta.size),
+		"cache-control": "no-store",
+		...(read.attachment.meta.name === undefined
+			? {}
+			: { "x-mason-filename": encodeURIComponent(read.attachment.meta.name) }),
+	});
+	response.end(read.attachment.bytes);
+	return true;
+}
+
+/** A filename from a header, decoded and reduced to a name: it is shown and written, never used as a path. */
+function safeFilename(value: string): string | undefined {
+	let decoded: string;
+	try {
+		decoded = decodeURIComponent(value);
+	} catch {
+		return undefined;
+	}
+	const name = decoded
+		.replace(/[\u0000-\u001f\u007f/\\]+/g, "_")
+		.trim()
+		.slice(0, 120);
+	return name === "" ? undefined : name;
 }
 
 /**

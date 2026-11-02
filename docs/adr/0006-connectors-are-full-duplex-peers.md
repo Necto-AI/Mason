@@ -1,6 +1,6 @@
 # A connector is a full-duplex peer; mason is the only thing in the middle
 
-**Status:** Proposed
+**Status:** Accepted, amended 2026-11-02 (what #101 shipped, and the two places it simplified this proposal)
 
 **Date:** 2026-10-26
 
@@ -98,3 +98,38 @@ boot-time check rather than a runtime guess.
 
 **Why not `mirrors: true`.** If one boolean meant "send everywhere", the first bug would be a direct message arriving in a
 team channel and the second would be the same person notified twice in two apps for one thought. Two acts, two words.
+
+## Amendment, 2026-11-02: what shipped, and where it differs
+
+`#101` built the server half of this decision (`src/server/connector.ts`, `src/server/connectors.ts`,
+`src/server/replies.ts`, `docs/SPEC.md` §4.1d). Three things are as proposed and worth naming because they are the load
+bearing ones:
+
+1. **One reply operation.** `send_to_user` is gone; `reply` is the only call a turn makes to reach a reader, and no
+   prompt or hook instruction names a vendor's tool. The projection reads the `app.reply` entry rather than the call, so
+   a streamed message and a committed one cannot become two rows.
+2. **The origin is structured, never prose.** A submission is an `app.connector` entry carrying its origin; a fire that
+   named a conversation carries one on its `app.hook` entry. The tool reads the newest input entry from the transcript,
+   which is what makes routing survive a restart, a compaction and a queued steer.
+3. **The credential follows the entry.** One Mason-issued credential per connector, hashed in `config.json`, read on
+   every upgrade; a revoke lands on the next connection. It opens the socket and the attachment endpoints and nothing
+   else.
+
+Two places where the implementation is simpler than this document proposed, both deliberate:
+
+- **No declared reply tool.** §2 above said `reply` dispatches to the origin connector's declared reply tool. What
+  shipped is the protocol's own delivery: the reply is committed, and the outbox sends `connector/delivery.final` with a
+  `deliveryId` and an acknowledgement. A connector declares no tool for it, because a tool name is the one thing the
+  protocol exists to keep out of the model's mouth, and the delivery already has a durable identity and an honest
+  `uncertain` answer. The vendor's message tool remains available as an ordinary MCP tool for extra actions, subject to
+  the permission gateway in `#102`.
+- **No delivery fan-out, and no `also`.** The amendment below proposed one, with a `speaks` guard. v1 of the protocol
+  says a reply reaches one target and a projection subscriber displays it without causing a send, so the `also` list
+  and its guard have nothing to guard yet. Fan-out would be a protocol change, and the place to argue for it is a
+  connector protocol major, not an entry's field.
+
+Still owed by later slices: the per-entry `prompt` section (§3) waits for the admin panel (`#103`), which is where an
+operator writes it; the tools face's live discovery and the permission gateway are `#102`; and the HMAC event door and
+the old Telegram relay are removed in `#104`. Until then the old door's fires carry no origin, so a turn it starts
+records its reply and reaches nobody — the honest state of a half-migrated deployment, and the reason the connector is
+the path to build on.

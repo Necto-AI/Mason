@@ -6,13 +6,23 @@ import { hostNamed, method, remote } from "@earendil-works/chord";
 import { Type } from "typebox";
 
 /**
- * The names the server and the client have to spell the same way: the tool whose calls are the messages the reader
- * sees, and the entry kind a proactive hook trigger is placed as. Spelled once here, so a rename cannot land on one
- * side of the wire only.
+ * The names the server and the client have to spell the same way: the one tool whose call is a reply, and the entry
+ * kinds the transcript is made of. Spelled once here, so a rename cannot land on one side of the wire only.
+ *
+ * `reply` is mason's own operation, not a vendor's: it targets the origin a turn came from — the connector that carried
+ * the words — and the operator console when there is none. No prompt names a vendor tool, and the projection reads the
+ * entry the reply commits rather than the call that made it.
  */
-export const MESSAGE_TOOL = "send_to_user";
+export const REPLY_TOOL = "reply";
 export const WIDGET_TOOL = "generateSandboxedUi";
+/** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
+/** A person's words that arrived through a connector, carrying the origin a reply goes back to. */
+export const CONNECTOR_ENTRY_KIND = "app.connector";
+/** One committed reply: the outbox record, and what the reader sees as a delivered message. */
+export const REPLY_ENTRY_KIND = "app.reply";
+/** What became of one reply: the acknowledgement, durable, so a restart neither resends nor forgets it. */
+export const DELIVERY_ENTRY_KIND = "app.delivery";
 
 /**
  * What the delivery gate says to the model when a turn ends with nothing sent.
@@ -20,26 +30,15 @@ export const HOOK_ENTRY_KIND = "app.hook";
  * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry that
  * reads as one: the reader never sees the reminder, only the answer it produces.
  *
- * There are two of them, because a turn has two possible readers. This one is the operator console, where `send_to_user`
- * is the only channel there is; `hookDeliveryReminder()` is a turn an event hook started, whose reader is a chat reached
- * by that integration's own tool. Both open with the same sentence up to the name of the tool that was not called —
- * `isDeliveryReminder()` reads either — so the projection and the gate agree about what is a nudge and what is a person.
+ * One reminder, because there is one operation: `reply` reaches whoever the turn came from, and a turn nobody is
+ * waiting on says so in its result rather than being answered in another tool's name.
  */
-export const DELIVERY_REMINDER = `${deliveryReminderOpening(MESSAGE_TOOL)} Send the answer now with \`${MESSAGE_TOOL}\`, in the words the user should read.`;
-
-/**
- * What the gate says to a turn whose reader is reached by the hook's own tool rather than `send_to_user`: the same
- * silence, with the one tool that ends it named. `send_to_user` is named too, because that is the call the model
- * actually made, and a reminder that did not say why it reached nobody would be read as a retry of it.
- */
-export function hookDeliveryReminder(tool: string): string {
-	return `${deliveryReminderOpening(tool)} This turn came from an event hook, and the chat it answers is reached by \`${tool}\` alone: \`${MESSAGE_TOOL}\` writes to the operator console, never to that person. Send the answer now with \`${tool}\`, in the chat the payload names, in the words the person should read.`;
-}
+export const DELIVERY_REMINDER = `${deliveryReminderOpening(REPLY_TOOL)} Send the answer now with \`${REPLY_TOOL}\`, in the words the reader should see.`;
 
 /**
  * Whether a user message is the gate's own nudge rather than something a person typed.
  *
- * The opening sentence is the tell, and it is one sentence for both shapes: a person's own line that merely begins with
+ * The opening sentence is the tell, and it is one sentence for every shape: a person's own line that merely begins with
  * the marker is not a reminder, so nothing anybody typed is dropped from their transcript.
  */
 export function isDeliveryReminder(text: string): boolean {
@@ -49,7 +48,7 @@ export function isDeliveryReminder(text: string): boolean {
 const DELIVERY_REMINDER_OPENING =
 	/^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
 
-/** The sentence both reminders open with: what did not happen, in the name of the tool that did not happen with. */
+/** The sentence the reminder opens with: what did not happen, in the name of the tool that did not happen with. */
 function deliveryReminderOpening(tool: string): string {
 	return `[delivery] That turn ended without a \`${tool}\` call, so nothing reached the reader: not your answer, not
 your notes, nothing at all.`;
@@ -154,7 +153,7 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`send_to_user`), the widgets it built for them, and a coarse notice when a run failed. A trigger leaves no row of
+ * (`reply`), the widgets it built for them, and a coarse notice when a run failed. A trigger leaves no row of
  * its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
  * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
  * a trace endpoint can expose them later, deliberately and separately.
