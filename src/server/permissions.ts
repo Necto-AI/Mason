@@ -322,7 +322,13 @@ export class PermissionBook {
 	/** Every question still waiting for an answer, oldest first. What `/api/permissions` answers. */
 	async pending(): Promise<PermissionRequest[]> {
 		const folded = await this.#fold(conversationReader(this.#attached()));
-		return [...folded.requests.values()].filter((request) => !folded.answers.has(request.permissionId));
+		return (
+			[...folded.requests.values()]
+				.filter((request) => !folded.answers.has(request.permissionId))
+				// The fold reads newest-first (that is where a recent question is), so the queue is turned around here: the
+				// route's contract is a queue, and a question that has waited longest is the one a person answers first.
+				.sort((left, right) => left.askedAt - right.askedAt)
+		);
 	}
 
 	/** The pending question with this id, or the answer that settled it. */
@@ -491,6 +497,11 @@ export class PermissionBook {
 			settle = resolve;
 			fail = reject;
 		});
+		// A waiter can be abandoned: the answer was already in the log, or the turn ended before it was ever awaited. A
+		// promise with a rejection handler attached never reports an unhandled rejection, so it marks itself handled here
+		// and the caller that does await it still sees the error. Without this, an abandoned waiter rejected at the end of
+		// the invocation and took the process down — the exact crash the answered-in-log branch also guards against.
+		void promise.catch(() => {});
 		waiters.add(waiter);
 		// A signal that already fired: the turn was stopped between the call's admission and this wait.
 		if (signal?.aborted === true) {

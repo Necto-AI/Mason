@@ -761,7 +761,14 @@ async function handleConnectorRequest(
 		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
 		return true;
 	}
-	const contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
+	// A malformed escape is a content id nobody uploaded, which is the same answer as one this connector did not upload.
+	let contentId: string;
+	try {
+		contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
+	} catch {
+		notFound(response);
+		return true;
+	}
 	const read = await attachments.read(name, contentId);
 	if (read.status === "expired") {
 		response.writeHead(410, { "content-type": "application/json; charset=utf-8" });
