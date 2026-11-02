@@ -23,11 +23,11 @@ import {
 
 /**
  * Every extension a boot installs unconditionally, in order: the base list, then the ones `openAgentRuntime` builds per
- * boot — code mode here, since this home has no integration. `openRuntime` below writes nothing to a tools face, so the
- * per-boot part is code mode alone; it is named rather than assumed, and the runtime's own list is what is asserted
- * against, so a base extension added later is covered without a second list going stale.
+ * boot — code mode and the permission gateway here, since this home has no integration. `openRuntime` below writes
+ * nothing to a tools face, so the per-boot part is those two; they are named rather than assumed, and the runtime's own
+ * list is what is asserted against, so a base extension added later is covered without a second list going stale.
  */
-const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode"]);
+const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode", "permissions"]);
 
 test("reply is replay-unsafe, so a restart never delivers the same message twice", () => {
 	assert.equal(replyTool.name, "reply");

@@ -40,8 +40,10 @@ import {
 	type ErrorCode,
 	type HelloRequest,
 	type HelloResult,
+	type InteractionAck,
 	type InteractionAnswerParams,
 	type InteractionAnswerResult,
+	type InteractionRequestParams,
 	type Limits,
 	METHOD,
 	type Origin,
@@ -75,6 +77,15 @@ import {
 	CONNECTOR_SUBMISSION_LIMIT,
 	type FireLimiter,
 } from "./limits.ts";
+import {
+	answerOf,
+	mayAnswer,
+	type PermissionAnswer,
+	type PermissionBook,
+	type PermissionRequest,
+	requestOf,
+	surfaceFor,
+} from "./permissions.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { type ReplyRecord, replyRecordOf, targetOfOrigin, turnOriginOf } from "./replies.ts";
 import { findPerson, readRoster } from "./roster.ts";
@@ -158,6 +169,8 @@ export interface ConnectorDoorOptions {
 	readonly attachments: AttachmentStore;
 	/** One limiter for the process, shared with the attachment routes: a class budget is the connector's, not a socket's. */
 	readonly limiter: FireLimiter;
+	/** The pending permission questions: what this door sends to an approver's surface, and what an answer settles. */
+	readonly permissions: PermissionBook;
 	readonly log?: (line: string) => void;
 	readonly now?: () => number;
 	/** How the door picks the config a socket is authenticated against. A test reads the home it booted. */
@@ -255,6 +268,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			workspaceDir: options.workspaceDir,
 			attachments: options.attachments,
 			limiter: options.limiter,
+			permissions: options.permissions,
 			log,
 			now: options.now ?? Date.now,
 			view: () => latest,
@@ -287,8 +301,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 				dirty = false;
 				const view = latest;
 				if (view === undefined) return;
-				const owed = owedReplies(view, sessions);
-				for (const [session, records] of owed) {
+				for (const [session, records] of owedReplies(view, sessions)) {
 					for (const record of records) {
 						if (session.closed) break;
 						try {
@@ -302,6 +315,15 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 									(error instanceof Error ? error.message : String(error)),
 							);
 						}
+					}
+				}
+				// The questions, after the replies: a person who was asked to approve something should have seen the message
+				// that explains what for. Nothing is recorded per question — it is owed while it is pending, which is the
+				// transcript's own answer.
+				for (const [session, requests] of owedQuestions(view, sessions)) {
+					for (const request of requests) {
+						if (session.closed) break;
+						await sendQuestion(session, request);
 					}
 				}
 			} while (dirty);
@@ -340,6 +362,59 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			owed.push([session, records]);
 		}
 		return owed;
+	}
+
+	/**
+	 * The committed questions each open session still owes: pending, routed to it, unanswered.
+	 *
+	 * The route is derived here from the file the boot read, not from anything the request recorded, so a connector that
+	 * became the approver (or stopped being one) is followed without the pending request being rewritten.
+	 */
+	function owedQuestions(
+		view: ConversationView,
+		open: ReadonlyMap<string, ConnectorSession>,
+	): Array<[ConnectorSession, PermissionRequest[]]> {
+		const folded = foldQuestions((view.entries ?? []) as readonly EntryRecord[]);
+		const integrations = currentIntegrations();
+		const byConnector = new Map<string, PermissionRequest[]>();
+		for (const request of folded.requests.values()) {
+			if (folded.answers.has(request.permissionId)) continue;
+			const surface = surfaceFor(request, integrations);
+			if (surface === undefined) continue;
+			const list = byConnector.get(surface.connector) ?? [];
+			list.push(request);
+			byConnector.set(surface.connector, list);
+		}
+		const owed: Array<[ConnectorSession, PermissionRequest[]]> = [];
+		for (const [name, requests] of byConnector) {
+			const session = open.get(name);
+			if (session === undefined || session.closed || !session.ready) continue;
+			owed.push([session, requests]);
+		}
+		return owed;
+	}
+
+	/** One `connector/interaction.request`. An undelivered one stays owed: the next pass asks again. */
+	async function sendQuestion(session: ConnectorSession, request: PermissionRequest): Promise<void> {
+		const origin = request.origin;
+		if (origin === undefined) return;
+		const params: InteractionRequestParams = {
+			permissionId: request.permissionId,
+			tool: request.tool,
+			arguments: request.arguments,
+			reason: request.reason,
+			answers: request.answers,
+			origin,
+			blocks: [{ type: "text", text: questionText(request) }],
+		};
+		const ack = await session.requestInteraction(params);
+		if (ack === undefined) {
+			log(`[connector] ${session.name}: the question ${request.permissionId} was not acknowledged; it stays owed`);
+			return;
+		}
+		log(
+			`[connector] ${session.name}: the question ${request.permissionId} ${ack.delivered ? "reached the approver" : `was not shown (${ack.detail ?? "no surface"})`}`,
+		);
 	}
 
 	/** One `connector/delivery.final`, and its acknowledgement written down — whatever it says, including `uncertain`. */
@@ -382,6 +457,7 @@ interface SessionOptions {
 	readonly workspaceDir: string;
 	readonly attachments: AttachmentStore;
 	readonly limiter: FireLimiter;
+	readonly permissions: PermissionBook;
 	readonly log: (line: string) => void;
 	readonly now: () => number;
 	readonly view: () => ConversationView | undefined;
@@ -417,6 +493,7 @@ export class ConnectorSession {
 	readonly #workspaceDir: string;
 	readonly #attachments: AttachmentStore;
 	readonly #limiter: FireLimiter;
+	readonly #permissions: PermissionBook;
 	readonly #log: (line: string) => void;
 	readonly #now: () => number;
 	readonly #view: () => ConversationView | undefined;
@@ -424,6 +501,8 @@ export class ConnectorSession {
 	readonly #pending = new Map<string, Pending>();
 	#idle: ReturnType<typeof setTimeout>;
 	readonly #delivering = new Set<string>();
+	/** The questions this socket already handed over: a reconnect is a new socket and asks what nobody answered again. */
+	readonly #asked = new Set<string>();
 	readonly #streaming = new Map<string, { readonly callId: string; readonly text: string }>();
 	#scopes: readonly StateScope[] = [];
 	#capabilities: readonly Capability[] = [];
@@ -441,6 +520,7 @@ export class ConnectorSession {
 		this.#workspaceDir = options.workspaceDir;
 		this.#attachments = options.attachments;
 		this.#limiter = options.limiter;
+		this.#permissions = options.permissions;
 		this.#log = options.log;
 		this.#now = options.now;
 		this.#view = options.view;
@@ -982,9 +1062,11 @@ export class ConnectorSession {
 	/**
 	 * One person's answer to one pending permission request.
 	 *
-	 * Approval is #102's gateway; what exists here is the correlation. A permission id nobody is waiting on is the
-	 * protocol's `mason.unknown_permission`, and an answer that arrives after the request settled is `settled: false` —
-	 * there is no "always allow", and a late answer changes nothing.
+	 * Three outcomes, and the difference between them is the whole of the authority model. An id nobody is waiting on is
+	 * `mason.unknown_permission`, because a typo and a stale id are the same mistake from the connector's side. An answer
+	 * that arrives after the request settled is `settled: false` — there is no "always allow", and a late answer changes
+	 * nothing. And an actor who is not the approver this connector is configured with is `settled: false` with the reason,
+	 * not an error: they may have been shown the question, and "you are not the one who answers this" is information.
 	 */
 	async #answer(params: InteractionAnswerParams): Promise<InteractionAnswerResult> {
 		const permissionId = params?.permissionId;
@@ -996,10 +1078,32 @@ export class ConnectorSession {
 		if (params.answer !== "allow" && params.answer !== "deny") {
 			throw refused(ERROR_CODE.invalidRequest, `${String(params.answer)} is not an answer`, { field: "answer" });
 		}
-		if (this.#grant.user === undefined) throw refused(ERROR_CODE.faceNotGranted, "this connector holds no user face");
-		// No gateway is installed in this slice: every id is unknown, and saying so is the honest answer rather than a
-		// `settled: false` that reads like a settled request.
-		throw refused(ERROR_CODE.unknownPermission, `${permissionId} is not pending`);
+		const grant = this.#grant.user;
+		if (grant === undefined) throw refused(ERROR_CODE.faceNotGranted, "this connector holds no user face");
+		const found = await this.#permissions.find(permissionId);
+		if (found.request === undefined) {
+			// A request this build never wrote, or one that has already been answered and pruned by a compaction: both are
+			// "not pending", and neither is worth a `settled: false` that reads like a live question.
+			throw refused(ERROR_CODE.unknownPermission, `${permissionId} is not pending`);
+		}
+		if (found.answer !== undefined) {
+			return {
+				settled: false,
+				reason:
+					found.answer.answer === "cancelled"
+						? "the call was cancelled before it was answered"
+						: `already answered${found.answer.by === undefined ? "" : ` by ${found.answer.by}`}`,
+			};
+		}
+		const authority = mayAnswer(found.request, grant, {
+			...(params.by?.externalActorId === undefined ? {} : { externalActorId: params.by.externalActorId }),
+		});
+		if (!authority.ok) return { settled: false, reason: authority.reason };
+		const settled = await this.#permissions.answer(permissionId, params.answer, authority.by);
+		this.#log(
+			`[connector] ${this.name}: ${permissionId} ${settled.settled ? params.answer : "not settled"} by ${authority.by}`,
+		);
+		return settled;
 	}
 
 	/* ------------------------------------------------------------------------------------------------------------ */
@@ -1169,6 +1273,32 @@ export class ConnectorSession {
 		}
 	}
 
+	/**
+	 * One `connector/interaction.request`, answered by whether the surface took it.
+	 *
+	 * Nothing is written down for it: a question is owed while it is pending, and the pending set is the transcript's. A
+	 * socket that already handed this one over does not repeat it — a flush runs on every commit — and a reconnect is a
+	 * new socket, so a question the last one never got an answer for is asked again.
+	 */
+	async requestInteraction(params: InteractionRequestParams): Promise<InteractionAck | undefined> {
+		if (this.closed || !this.ready) return undefined;
+		if (this.#asked.has(params.permissionId)) return undefined;
+		try {
+			const answer = await this.#request(METHOD.interactionRequest, params, DELIVERY_TIMEOUT_MS);
+			if (!isInteractionAck(answer)) {
+				return {
+					delivered: false,
+					detail: "the connector answered the question with something that is not an acknowledgement",
+				};
+			}
+			if (answer.delivered) this.#asked.add(params.permissionId);
+			return answer;
+		} catch (error) {
+			this.#log(`[connector] ${this.name}: the question ${params.permissionId} unanswered (${errorText(error)})`);
+			return undefined;
+		}
+	}
+
 	/* ------------------------------------------------------------------------------------------------------------ */
 	/* Budget, framing                                                                                              */
 	/* ------------------------------------------------------------------------------------------------------------ */
@@ -1223,6 +1353,42 @@ export class ConnectorSession {
 		}
 		pending.resolve(frame.result);
 	}
+}
+
+/**
+ * Every question and the first answer to it, in the order the transcript holds them. The door reads this to know what it
+ * still owes, and the same fold is what the gateway's book answers a restart with.
+ */
+function foldQuestions(entries: readonly EntryRecord[]): {
+	readonly requests: Map<string, PermissionRequest>;
+	readonly answers: Map<string, PermissionAnswer>;
+} {
+	const requests = new Map<string, PermissionRequest>();
+	const answers = new Map<string, PermissionAnswer>();
+	for (const entry of entries) {
+		const request = requestOf(entry);
+		if (request !== undefined) requests.set(request.permissionId, request);
+		const answer = answerOf(entry);
+		if (answer !== undefined && !answers.has(answer.permissionId)) answers.set(answer.permissionId, answer);
+	}
+	return { requests, answers };
+}
+
+/** The sentence a person reads beside the question, in the words of the thing they are approving. */
+function questionText(request: PermissionRequest): string {
+	const what =
+		request.tool.connector === undefined || request.tool.tool === undefined
+			? request.tool.name
+			: `${request.tool.connector}: ${request.tool.tool}`;
+	return `Approve ${what}? ${request.reason}. Answer allow or deny — this answer covers this call only.`;
+}
+
+function isInteractionAck(value: unknown): value is InteractionAck {
+	if (typeof value !== "object" || value === null) return false;
+	const ack = value as Record<string, unknown>;
+	if (typeof ack.delivered !== "boolean") return false;
+	if (ack.surface !== undefined && typeof ack.surface !== "string") return false;
+	return ack.detail === undefined || typeof ack.detail === "string";
 }
 
 /** Write one acknowledgement down as its own entry: the outbox's record that this delivery is no longer owed. */

@@ -1,225 +1,63 @@
 /**
- * An integration's tools: reached once at boot, registered as deferred, and reached by the model only through
- * `tool_search`.
+ * An integration's tools face: a live catalog a script asks, and a registry that does not move when a server does.
  *
- * Everything here runs against a fake MCP server on an in-memory transport, injected through the boot's
- * `mcpTransport` seam: no test dials a port, so a test can describe a server that offers two tools, one that is still
- * coming up, or one that is down without a container existing.
+ * Everything here runs against a fake MCP server on an in-memory transport, injected through the boot's `mcpTransport`
+ * seam: no test dials a port, so a test can describe a server that offers two tools, one that is still coming up, one
+ * that redeployed mid-conversation, or one that is down without a container existing.
  *
- * The two facts worth pinning are the ones a person cannot see from the code: that a connected integration does not
- * change what the model is offered (the deferred list is the whole point), and that the tools are still reachable
- * once asked for (a deferred tool nobody can load is a tool that does not exist).
+ * The facts worth pinning are the ones a person cannot see from the code: that a connected server changes nothing the
+ * model is offered and nothing `tool_search` can promote, that a script sees the catalog as it stands rather than as it
+ * stood at boot, and that a call naming a definition that has since changed is refused with the step that fixes it.
  */
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import type { Tool as McpTool } from "@earendil-works/pi-mcp";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { housePaths } from "../src/server/house.ts";
 import { integrationStatus } from "../src/server/integration-status.ts";
 import { startServer } from "../src/server/main.ts";
-import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
-import { REPLY_TOOL } from "../src/shared/contract.ts";
+import { type McpTransportFactory, openMcpCatalog } from "../src/server/mcp.ts";
 import {
 	boot,
+	callable,
+	catalogNames,
 	declared,
 	deferred,
 	downTransport,
 	fakeServer,
 	GITHUB,
 	ISSUE_TOOL,
+	MCP,
 	REQUIRED_GITHUB,
+	SEARCH_SCRIPT,
 	SEARCH_TOOL,
-	SEARCH_TOOL_NAME,
+	scriptThenSpeak,
 	temporaryDirectory,
-	toolResults,
+	transports,
 	turn,
 } from "./support/mcp.ts";
 
-/** The schema as a provider reads it: the declared object, not the marker `Type.Unsafe` keeps out of the JSON. */
-function schemaOf(parameters: unknown): Record<string, unknown> {
-	return JSON.parse(JSON.stringify(parameters)) as Record<string, unknown>;
+/** A script that searches and hands back every name it found, as one line. */
+const NAMES_SCRIPT = `const found = await tools.mcp_search({ query: "" });
+return found.map((entry) => entry.integration + "/" + entry.tool).join(",");`;
+
+/** A script that describes one tool and hands back the version. */
+const VERSION_SCRIPT = `const full = await tools.mcp_describe({ integration: "github", tool: "issues.search" });
+return full.version;`;
+
+/** Poll `ready` until it holds: an announcement is a frame the client reads a moment later, not a synchronous call. */
+async function until(ready: () => Promise<boolean>): Promise<boolean> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		if (await ready()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return ready();
 }
 
-describe("what a server offers", () => {
-	it("registers each tool as mcp__<integration>__<tool>, with the server's description and schema", async () => {
-		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
-		const mcp = await connectIntegrations({
-			integrations: { github: GITHUB },
-			openTransport: () => server.transport,
-			log: () => {},
-		});
-		assert.deepEqual(
-			mcp.tools.map((tool) => tool.name),
-			["mcp__github__issues_create", SEARCH_TOOL_NAME],
-			"the integration's name and the tool's, with dots made into underscores",
-		);
-		const [create] = mcp.tools;
-		assert.equal(
-			create.description,
-			"Open an issue in a repository",
-			"the server's own words, because the model reads them",
-		);
-		// An MCP tool's schema is JSON Schema, declared as it arrived: a property the server named is the property the
-		// model is asked for, and an object schema without `properties` is rejected by some providers, so both stand.
-		assert.deepEqual(schemaOf(create.parameters), {
-			type: "object",
-			properties: { title: { type: "string" } },
-			required: ["title"],
-		});
-		assert.equal(create.deferred, true, "deferred is what keeps a server's forty schemas out of the prefix");
-		assert.equal(mcp.extension?.name, "mcp");
-		assert.deepEqual(integrationStatus().get("github"), { connected: true, tools: 2, error: null });
-	});
-
-	it("fills in the object shape a server may leave out", async () => {
-		const bare: McpTool = { name: "ping", inputSchema: {} };
-		const server = await fakeServer([bare], () => ({ content: [] }));
-		const mcp = await connectIntegrations({
-			integrations: { github: GITHUB },
-			openTransport: () => server.transport,
-			log: () => {},
-		});
-		assert.deepEqual(schemaOf(mcp.tools[0]?.parameters), { type: "object", properties: {} });
-		// No description on the server: the name is the only true thing left to say about it.
-		assert.equal(mcp.tools[0]?.description, "ping");
-	});
-});
-
-describe("the name a tool is registered under", () => {
-	it("turns everything outside [A-Za-z0-9_] into _, so a script can call it too", () => {
-		assert.equal(createMcpToolName("my-docs", "issues.list"), "mcp__my_docs__issues_list");
-		assert.equal(createMcpToolName("github", "a.b-c d"), "mcp__github__a_b_c_d");
-	});
-
-	it("keeps a name within 64 characters, ending it with 8 hex digits of its own", () => {
-		const long = createMcpToolName("github", "x".repeat(80));
-		assert.equal(long.length, 64);
-		assert.match(
-			long,
-			/^mcp__github__x+_[0-9a-f]{8}$/,
-			"the suffix is the name's hash, so it is the same on every boot",
-		);
-		assert.equal(long, createMcpToolName("github", "x".repeat(80)), "two boots agree about the name");
-	});
-
-	it("gives two tools that sanitize to one name distinct names, rather than one tool", async () => {
-		const dash = createMcpToolName("github", "a-b");
-		assert.equal(dash, "mcp__github__a_b");
-		const suffixed = createMcpToolName("github", "a_b", (name) => name === dash);
-		assert.notEqual(suffixed, dash);
-		assert.match(suffixed, /_[0-9a-f]{8}$/);
-
-		// The same through the registry, which is where it matters: a collision would silently drop a tool.
-		const server = await fakeServer(
-			[
-				{ name: "a-b", inputSchema: { type: "object", properties: {} } },
-				{ name: "a_b", inputSchema: { type: "object", properties: {} } },
-			],
-			() => ({ content: [] }),
-		);
-		const mcp = await connectIntegrations({
-			integrations: { github: GITHUB },
-			openTransport: () => server.transport,
-			log: () => {},
-		});
-		const names = mcp.tools.map((tool) => tool.name);
-		assert.equal(new Set(names).size, 2, "both tools exist");
-		assert.deepEqual(names[0], "mcp__github__a_b");
-	});
-});
-
-describe("the boot", () => {
-	it("connects nothing when no integration has a tools face, so the surface is the one before MCP", async () => {
-		const directory = await temporaryDirectory();
-		const mcp = await connectIntegrations({ integrations: { github: { enabled: true } }, log: () => {} });
-		assert.deepEqual(mcp.tools, []);
-		assert.equal(mcp.extension, undefined, "nothing to reach means nothing installed, not an empty extension");
-		const runtime = await boot(directory);
-		try {
-			assert.ok(!(await declared(runtime)).some((name) => name.startsWith("mcp__")));
-			assert.ok(!(await deferred(runtime)).some((name) => name.startsWith("mcp__")));
-		} finally {
-			await runtime.close();
-		}
-	});
-
-	it("counts an integration without a tools face as nothing to connect, and a disabled one as not its business", async () => {
-		const mcp = await connectIntegrations({
-			integrations: {
-				activity: { enabled: true, trigger: { hook: "github-activity", secret: "s".repeat(32) } },
-				docs: { enabled: false, description: "Docs", tools: { url: "http://mason-docs:8080/mcp" } },
-			},
-			openTransport: downTransport,
-			log: () => {},
-		});
-		assert.deepEqual(mcp.tools, [], "a disabled integration is not attempted at all");
-		assert.equal(integrationStatus().size, 0, "nothing was tried, so nothing has health");
-	});
-
-	it("tries a server that refused once more, so a container still starting is not a boot without its tools", async () => {
-		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
-		let attempts = 0;
-		const starting: McpTransportFactory = () => {
-			attempts += 1;
-			// The port a container has not bound yet: the first attempt is refused, the one 250 ms later is not.
-			if (attempts === 1) throw new Error("connect ECONNREFUSED mason-github:8082");
-			return server.transport;
-		};
-		const directory = await temporaryDirectory();
-		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: starting });
-		try {
-			assert.equal(attempts, 2, "the boot asked twice");
-			assert.deepEqual(
-				await deferred(runtime),
-				["mcp__github__issues_create", SEARCH_TOOL_NAME],
-				"the tools arrived",
-			);
-			assert.deepEqual(integrationStatus().get("github"), { connected: true, tools: 2, error: null });
-		} finally {
-			await runtime.close();
-		}
-	});
-
-	it("logs one line about an unreachable optional integration, records it, and goes on without its tools", async () => {
-		const lines: string[] = [];
-		const mcp = await connectIntegrations({
-			integrations: { github: GITHUB },
-			openTransport: downTransport,
-			log: (line) => lines.push(line),
-		});
-		assert.deepEqual(mcp.tools, []);
-		assert.equal(lines.length, 1, "one line per integration, whatever it took to give up on it");
-		assert.match(lines[0] ?? "", /github/);
-		assert.match(lines[0] ?? "", /no container in a test/);
-		assert.deepEqual(integrationStatus().get("github"), {
-			connected: false,
-			tools: 0,
-			error: 'MCP integration "github" at http://mason-github:8082/mcp: no container in a test',
-		});
-
-		// The same through the real boot: it starts, and the tools a person configured are simply absent.
-		const directory = await temporaryDirectory();
-		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: downTransport });
-		try {
-			assert.ok(!(await declared(runtime)).some((name) => name.startsWith("mcp__")));
-			assert.equal(integrationStatus().get("github")?.connected, false);
-		} finally {
-			await runtime.close();
-		}
-	});
-
-	it("refuses the boot for an integration whose config says it is required, naming it", async () => {
-		const directory = await temporaryDirectory();
-		await assert.rejects(
-			() => boot(directory, { integrations: { github: REQUIRED_GITHUB }, transport: downTransport }),
-			(error: Error) => /integration "github" is required/.test(error.message),
-			"an operator who said the team cannot work without it gets a refusal, not a quiet loss",
-		);
-	});
-
-	it("offers the same tools with an integration connected as without one", async () => {
+describe("the registry does not move when a server does", () => {
+	it("offers the model the same tools with a server connected as without one", async () => {
 		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
 		const connectedDirectory = await temporaryDirectory();
 		const bareDirectory = await temporaryDirectory();
@@ -230,12 +68,16 @@ describe("the boot", () => {
 		const bare = await boot(bareDirectory);
 		try {
 			assert.deepEqual(await declared(connected), await declared(bare), "a connected server costs no prefix");
-			// Code mode is in both lists: it is installed at boot whatever any integration offers, so the surface moves once,
-			// in the commit that added it, and never when a container appears.
-			assert.ok((await declared(connected)).includes("codemode"), "code mode is offered either way");
-			assert.ok((await declared(bare)).includes("codemode"));
-			assert.deepEqual(await deferred(connected), ["mcp__github__issues_create", SEARCH_TOOL_NAME]);
-			assert.deepEqual(await deferred(bare), []);
+			assert.deepEqual(await deferred(connected), await deferred(bare), "and nothing to load with tool_search");
+			assert.ok(!(await deferred(connected)).some((name) => name.startsWith("mcp")), "nothing of MCP's to promote");
+			// A script's catalog, though, is the server's: the three tools are callable and never offered.
+			assert.deepEqual(
+				(await callable(connected)).filter((name) => name.startsWith("mcp_")).sort(),
+				[MCP.call, MCP.describe, MCP.search],
+				"the script's whole MCP surface is three stable tools",
+			);
+			assert.ok(!(await callable(bare)).some((name) => name.startsWith("mcp")), "no server, no catalog");
+			assert.deepEqual(await catalogNames(connected), ["github/issues.create", "github/issues.search"]);
 		} finally {
 			await connected.close();
 			await bare.close();
@@ -257,90 +99,276 @@ describe("the boot", () => {
 			persist: true,
 		});
 		try {
-			assert.deepEqual(
-				await declared(second),
-				before,
-				"the selection was repaired, and what the model is offered did not move",
-			);
-			assert.ok((await deferred(second)).includes(SEARCH_TOOL_NAME), "an existing home gets the capability");
+			assert.deepEqual(await declared(second), before, "the selection was repaired, and nothing offered moved");
+			assert.ok((await callable(second)).includes(MCP.search), "an existing home gets the catalog");
 		} finally {
 			await second.close();
 		}
 	});
+});
 
-	it("lets tool_search find a deferred tool by its description, and declares it on the next request", async () => {
-		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
+describe("a script asks the catalog", () => {
+	it("searches, describes and calls, with the server's own schema and the version it answered", async () => {
+		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({
+			content: [{ type: "text", text: "ISSUE-412: search is slow" }],
+		}));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
 			transport: () => server.transport,
-			// The model asks for a capability it was not offered, then speaks. The second request is the one that must
-			// carry the tool.
-			steps: [
-				fauxAssistantMessage([fauxToolCall("tool_search", { query: "search issues by text" }, { id: "load" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Search is ready." }, { id: "sent" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage(fauxText("Nothing else to report.")),
-			],
+			steps: scriptThenSpeak(SEARCH_SCRIPT),
 		});
 		try {
-			assert.ok(!(await declared(runtime)).includes(SEARCH_TOOL_NAME), "not offered before it is asked for");
 			await turn(runtime);
-			assert.ok((await declared(runtime)).includes(SEARCH_TOOL_NAME), "loaded, and recorded on the branch");
-			const [loaded] = (await toolResults(runtime)).filter((result) => result.name === "tool_search");
-			assert.match(loaded?.text ?? "", new RegExp(SEARCH_TOOL_NAME));
+			assert.match(await scriptText(runtime), /ISSUE-412: search is slow/, "the script read the server's own text");
+			assert.deepEqual(
+				server.calls,
+				[{ name: "issues.search", args: { query: "bug" } }],
+				"the script's arguments reached the server, and only they did",
+			);
+		} finally {
+			await runtime.close();
+		}
+
+		// The descriptor a script reads: what the tool is, how it is marked, and the shape it takes. A second server, because
+		// the first pair belongs to the runtime above and one transport is one connection.
+		const other = await fakeServer([SEARCH_TOOL], () => ({ content: [] }));
+		const catalog = await openMcpCatalog({
+			integrations: { github: GITHUB },
+			openTransport: () => other.transport,
+			log: () => {},
+		});
+		try {
+			const found = await catalog.search("search issues");
+			assert.deepEqual(
+				found.map((tool) => `${tool.integration}/${tool.name}`),
+				["github/issues.search"],
+			);
+			const described = await catalog.describe("github", "issues.search");
+			assert.equal(described?.approval, "not_required", "the marker the server declared");
+			assert.deepEqual(described?.inputSchema, {
+				type: "object",
+				properties: { query: { type: "string" } },
+			});
+			assert.match(described?.version ?? "", /^[0-9a-f]{16}$/, "a version is the definition's identity");
+			assert.equal(await catalog.describe("github", "issues.merge"), undefined, "a tool nobody offers");
+		} finally {
+			await catalog.close();
+		}
+	});
+
+	it("sees a tool that appeared and forgets one that went, inside one conversation", async () => {
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, {
+			integrations: { github: GITHUB },
+			transport: () => server.transport,
+			steps: [...scriptThenSpeak(NAMES_SCRIPT), ...scriptThenSpeak(NAMES_SCRIPT)],
+		});
+		try {
+			await turn(runtime, "What is there?");
+			const first = await scriptResults(runtime);
+			assert.equal(outputOf(first[0] ?? ""), "github/issues.search", "one tool, one conversation");
+
+			// The server redeploys: a tool arrives, a tool goes, and it says so.
+			server.announce([ISSUE_TOOL]);
+			assert.ok(
+				await until(async () => (await catalogNames(runtime)).join(",") === "github/issues.create"),
+				"the notice refreshed what the catalog answers",
+			);
+
+			await turn(runtime, "And now?");
+			const second = await scriptResults(runtime);
+			assert.equal(outputOf(second[1] ?? ""), "github/issues.create", "the script read the list as it stands");
 		} finally {
 			await runtime.close();
 		}
 	});
 
-	it("keeps both ends of a 30 KB result and drops the middle, naming the bytes it dropped", async () => {
-		const answer = `START-MARKER${"x".repeat(30_000)}END-MARKER`;
-		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: answer }] }));
+	it("refuses a call that names a version the server has since replaced, and names the rediscovery step", async () => {
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
 			transport: () => server.transport,
-			steps: [
-				fauxAssistantMessage([fauxToolCall("tool_search", { query: "search issues by text" }, { id: "load" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage([fauxToolCall(SEARCH_TOOL_NAME, { query: "bug" }, { id: "search" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Found some." }, { id: "sent" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage(fauxText("Nothing else to report.")),
-			],
+			steps: [...scriptThenSpeak(VERSION_SCRIPT), ...scriptThenSpeak(STALE_SCRIPT)],
 		});
 		try {
-			await turn(runtime);
-			assert.deepEqual(
-				server.calls,
-				[{ name: "issues.search", args: { query: "bug" } }],
-				"the model's arguments reach the server",
-			);
-			const [result] = (await toolResults(runtime)).filter((entry) => entry.name === SEARCH_TOOL_NAME);
-			const text = result?.text ?? "";
-			// The head is where a result starts and the tail is where it ends, and the two the model most needs are the
-			// ones a head-only truncation would lose: what this asserts is that both survived and the middle did not.
-			assert.match(text, /^START-MARKER/, "the beginning survived");
-			assert.match(text, /END-MARKER$/, "and so did the end");
-			assert.match(text, /\[… \d+ of 30022 bytes dropped: this is the start and the end of a longer result …\]/);
+			await turn(runtime, "Which version is this?");
+			const version = outputOf((await scriptResults(runtime))[0] ?? "").trim();
+			assert.match(version, /^[0-9a-f]{16}$/, "the first turn learned the version");
+
+			// The same name, another definition: what a redeploy that changed a schema looks like.
+			server.announce([
+				{
+					...SEARCH_TOOL,
+					description: "Search issues by text, and only open ones unless told otherwise",
+					inputSchema: { type: "object", properties: { query: { type: "string" }, open: { type: "boolean" } } },
+				},
+			]);
 			assert.ok(
-				Buffer.byteLength(text) <= 20 * 1024,
-				`${Buffer.byteLength(text)} bytes is more than the 20 KB a declared call may spend`,
+				await until(async () => (await runtime.mcp.describe("github", "issues.search"))?.version !== version),
+				"the catalog saw the replacement",
 			);
-			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
-			assert.ok(!text.includes("x".repeat(11_000)), "the middle did not land in the transcript");
-			assert.equal(result?.isError, false);
+
+			await turn(runtime, "Call it the way you learned it.");
+			const script = await scriptResults(runtime);
+			const stale = script[1] ?? "";
+			assert.match(stale, /was redefined since you looked/, "the call said what happened");
+			assert.match(stale, /mcp_describe/, "and named the step that fixes it");
+			assert.deepEqual(server.calls, [], "nothing ran against a definition the caller never saw");
 		} finally {
 			await runtime.close();
 		}
+	});
+
+	it("reconnects a server that dropped, and says so while it is down", async () => {
+		const first = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
+		const second = await fakeServer([ISSUE_TOOL], () => ({ content: [{ type: "text", text: "ok" }] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, {
+			integrations: { github: GITHUB },
+			transport: transports(first, second),
+		});
+		try {
+			assert.deepEqual(await catalogNames(runtime), ["github/issues.search"]);
+			await first.close();
+			assert.ok(
+				await until(async () => integrationStatus().get("github")?.connected === false),
+				"the route reports a server that went away",
+			);
+			// The next look reconnects: a container that restarted is not a restart of mason.
+			assert.deepEqual(await catalogNames(runtime), ["github/issues.create"]);
+			assert.equal(integrationStatus().get("github")?.connected, true);
+		} finally {
+			await runtime.close();
+		}
+	});
+});
+
+/** The text of each `codemode` result in the transcript, in order: what a script handed back. */
+async function scriptResults(runtime: Awaited<ReturnType<typeof boot>>): Promise<string[]> {
+	const conversation = await runtime.conversation();
+	const page = await conversation.entries({}, 1000, undefined, BACKGROUND_CONTEXT);
+	// Newest first, so `[0]` is the first turn and the last index is the one just run.
+	return [...page.items].reverse().flatMap((entry) => {
+		const message = entry.kind === "pi.tool-result" ? entry.model?.[0] : undefined;
+		if (message?.role !== "toolResult" || message.toolName !== "codemode") return [];
+		return [message.content.map((block) => (block.type === "text" ? block.text : "")).join("")];
+	});
+}
+
+/** The last script's text, which is the one the turn just ran. */
+async function scriptText(runtime: Awaited<ReturnType<typeof boot>>): Promise<string> {
+	return (await scriptResults(runtime)).at(-1) ?? "";
+}
+
+/**
+ * The value a script returned, out of the result's prose: `Script completed`, the wall time, and then `Output:` with what
+ * the script handed back. The header is the vendor's, so a test reads past it rather than around it.
+ */
+function outputOf(result: string): string {
+	const marker = "\nOutput:\n";
+	const at = result.indexOf(marker);
+	return at === -1 ? result : result.slice(at + marker.length);
+}
+
+/** A script that describes the tool, then calls the version a previous turn learned. */
+const STALE_SCRIPT = `const result = await tools.mcp_call({
+  integration: "github",
+  tool: "issues.search",
+  arguments: { query: "bug" },
+  version: "0000000000000000",
+});`;
+
+describe("the boot", () => {
+	it("connects nothing when no integration has a tools face, so the surface is the one before MCP", async () => {
+		const directory = await temporaryDirectory();
+		const catalog = await openMcpCatalog({ integrations: { github: { enabled: true } }, log: () => {} });
+		assert.deepEqual(catalog.tools, []);
+		assert.equal(catalog.extension, undefined, "nothing to reach means nothing installed, not an empty extension");
+		const runtime = await boot(directory);
+		try {
+			assert.ok(!(await declared(runtime)).some((name) => name.startsWith("mcp")));
+			assert.ok(!(await callable(runtime)).some((name) => name.startsWith("mcp")));
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("counts an integration without a tools face as nothing to connect, and a disabled one as not its business", async () => {
+		const catalog = await openMcpCatalog({
+			integrations: {
+				activity: { enabled: true, trigger: { hook: "github-activity", secret: "s".repeat(32) } },
+				docs: { enabled: false, description: "Docs", tools: { url: "http://mason-docs:8080/mcp" } },
+			},
+			openTransport: downTransport,
+			log: () => {},
+		});
+		assert.deepEqual(catalog.tools, [], "a disabled integration is not attempted at all");
+		assert.equal(integrationStatus().size, 0, "nothing was tried, so nothing has health");
+	});
+
+	it("tries a server that refused once more, so a container still starting is not a boot without its tools", async () => {
+		const server = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
+		let attempts = 0;
+		const starting: McpTransportFactory = () => {
+			attempts += 1;
+			// The port a container has not bound yet: the first attempt is refused, the one 250 ms later is not.
+			if (attempts === 1) throw new Error("connect ECONNREFUSED mason-github:8082");
+			return server.transport;
+		};
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: starting });
+		try {
+			assert.equal(attempts, 2, "the boot asked twice");
+			assert.deepEqual(await catalogNames(runtime), ["github/issues.create", "github/issues.search"]);
+			assert.deepEqual(integrationStatus().get("github"), { connected: true, tools: 2, error: null });
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("logs one line about an unreachable optional integration, records it, and goes on without its tools", async () => {
+		const lines: string[] = [];
+		const catalog = await openMcpCatalog({
+			integrations: { github: GITHUB },
+			openTransport: downTransport,
+			log: (line) => lines.push(line),
+		});
+		assert.deepEqual(
+			catalog.tools.map((tool) => tool.name),
+			[MCP.search, MCP.describe, MCP.call],
+			"the three tools are registered whatever answered: the surface does not depend on a container",
+		);
+		assert.equal(lines.length, 1, "one line per integration, whatever it took to give up on it");
+		assert.match(lines[0] ?? "", /github/);
+		assert.match(lines[0] ?? "", /no container in a test/);
+		assert.deepEqual(integrationStatus().get("github"), {
+			connected: false,
+			tools: 0,
+			error: 'MCP integration "github" at http://mason-github:8082/mcp: no container in a test',
+		});
+
+		// The same through the real boot: it starts, the catalog answers nothing, and the route says why.
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: downTransport });
+		try {
+			assert.deepEqual(await catalogNames(runtime), []);
+			assert.equal(integrationStatus().get("github")?.connected, false);
+			assert.ok((await callable(runtime)).includes(MCP.search), "the tools are there; the server is not");
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("refuses the boot for an integration whose config says it is required, naming it", async () => {
+		const directory = await temporaryDirectory();
+		await assert.rejects(
+			() => boot(directory, { integrations: { github: REQUIRED_GITHUB }, transport: downTransport }),
+			(error: Error) => /integration "github" is required/.test(error.message),
+			"an operator who said the team cannot work without it gets a refusal, not a quiet loss",
+		);
 	});
 });
 
