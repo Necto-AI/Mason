@@ -27,6 +27,7 @@ import type { IncomingMessage } from "node:http";
 import { basename, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView, EntryRecord } from "@earendil-works/pi-durable";
+import { ConversationBusy } from "@earendil-works/pi-durable";
 import {
 	type Capability,
 	CONTROL_OPS,
@@ -91,6 +92,9 @@ const IDLE_TIMEOUT_MS = 60_000;
 
 /** How long a delivery acknowledgement may take before the reply stays owed and is resent on the next opportunity. */
 const DELIVERY_TIMEOUT_MS = 15_000;
+
+/** How long a connector told its submission was refused mid-turn should wait before trying again: one turn's worth. */
+const BUSY_RETRY_MS = 5_000;
 
 /** State and delivery share one counter: `seq` is monotonic per socket, and a delivery is not a second stream. */
 type Seq = number;
@@ -167,7 +171,7 @@ export interface ConnectorDoor {
 	 */
 	attach(socket: WebSocket, request: IncomingMessage): Promise<void>;
 	/** Send what a connector is owed now — after a connect, and after every view change. */
-	flush(name?: string): Promise<void>;
+	flush(): Promise<void>;
 	/** The live session for a connector, if it has one: what #102's permission gateway asks for a surface. */
 	session(name: string): ConnectorSession | undefined;
 	close(): Promise<void>;
@@ -263,13 +267,17 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		// A connector that reconnects is owed everything its last socket never acknowledged. After the handshake: nothing
 		// is sent on a socket that has not said who it is.
 		created.onReady = () => {
-			void flush(name);
+			void flush();
 		};
 		for (const text of early) created.receive(text);
 	}
 
-	/** Send the replies a connector is owed, in the order they were committed. One flush at a time, coalesced. */
-	async function flush(name?: string): Promise<void> {
+	/**
+	 * Send every reply an open connector is owed, in the order they were committed. One flush at a time, coalesced: a
+	 * flush asked for while one is running is a rerun of the whole door, never a second pass for one connector — the
+	 * replies a connector is owed are read from the transcript, so the pass that runs last is the one that is right.
+	 */
+	async function flush(): Promise<void> {
 		if (flushing !== undefined) {
 			dirty = true;
 			return flushing;
@@ -279,11 +287,21 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 				dirty = false;
 				const view = latest;
 				if (view === undefined) return;
-				const owed = owedReplies(view, sessions, name);
+				const owed = owedReplies(view, sessions);
 				for (const [session, records] of owed) {
 					for (const record of records) {
 						if (session.closed) break;
-						await sendFinal(session, record);
+						try {
+							await sendFinal(session, record);
+						} catch (error) {
+							// The connector has the message but the acknowledgement could not be written down. Leaving it owed
+							// is the honest answer: the next pass resends it under the same id and the connector's ledger
+							// answers `duplicate`. Throwing would abandon every other connector's reply mid-pass.
+							log(
+								`[connector] ${session.name}: ${record.deliveryId} could not be recorded: ` +
+									(error instanceof Error ? error.message : String(error)),
+							);
+						}
 					}
 				}
 			} while (dirty);
@@ -297,7 +315,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	function owedReplies(
 		view: ConversationView,
 		open: ReadonlyMap<string, ConnectorSession>,
-		only?: string,
 	): Array<[ConnectorSession, ReplyRecord[]]> {
 		const entries = (view.entries ?? []) as readonly EntryRecord[];
 		const acknowledged = new Set<string>();
@@ -312,7 +329,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			const record = replyRecordOf(entry);
 			if (record?.target === undefined || acknowledged.has(record.deliveryId)) continue;
 			const name = record.target.connector;
-			if (only !== undefined && name !== only) continue;
 			const list = byConnector.get(name) ?? [];
 			list.push(record);
 			byConnector.set(name, list);
@@ -717,30 +733,27 @@ export class ConnectorSession {
 		}
 		this.#spend("submission", CONNECTOR_SUBMISSION_LIMIT);
 		const content = await this.#userInput(params, person);
-		const submission = await this.#conversation.submit(
-			{
-				type: "input",
-				requestId,
-				content,
-				entry: {
-					kind: CONNECTOR_ENTRY_KIND,
-					data: {
-						origin: {
-							connector: origin.connector,
-							externalConversationId: origin.externalConversationId,
-							...(origin.externalMessageId === undefined ? {} : { externalMessageId: origin.externalMessageId }),
-							...(origin.externalActorId === undefined ? {} : { externalActorId: origin.externalActorId }),
-						},
-						...(person === undefined ? {} : { person }),
-						...(params.approver === true && person !== undefined ? { approver: true } : {}),
+		const submission = await this.#submitInput({
+			type: "input",
+			requestId,
+			content,
+			entry: {
+				kind: CONNECTOR_ENTRY_KIND,
+				data: {
+					origin: {
+						connector: origin.connector,
+						externalConversationId: origin.externalConversationId,
+						...(origin.externalMessageId === undefined ? {} : { externalMessageId: origin.externalMessageId }),
+						...(origin.externalActorId === undefined ? {} : { externalActorId: origin.externalActorId }),
 					},
+					...(person === undefined ? {} : { person }),
+					...(params.approver === true && person !== undefined ? { approver: true } : {}),
 				},
-				...(params.mode === "steer" || params.mode === "followUp" || params.mode === "reject"
-					? { whenBusy: params.mode }
-					: {}),
 			},
-			BACKGROUND_CONTEXT,
-		);
+			...(params.mode === "steer" || params.mode === "followUp" || params.mode === "reject"
+				? { whenBusy: params.mode }
+				: {}),
+		});
 		const record = await submission.status(BACKGROUND_CONTEXT);
 		this.#log(
 			`[connector] ${this.name}: submission ${submissionId} from ${person ?? "nobody"}` +
@@ -751,6 +764,27 @@ export class ConnectorSession {
 			id: submissionId,
 			...(record.entry === undefined ? {} : { entryId: String(record.entry) }),
 		};
+	}
+
+	/**
+	 * `submit`, with the refusal a connector's own `mode: "reject"` asks for mapped to the code it is.
+	 *
+	 * `whenBusy: "reject"` is the connector saying it would rather be told than queued, so the answer is a refusal it can
+	 * act on — not `mason.internal`, which is the one code a client reads as a bug in mason.
+	 */
+	async #submitInput(draft: Parameters<Conversation["submit"]>[0]) {
+		try {
+			return await this.#conversation.submit(draft, BACKGROUND_CONTEXT);
+		} catch (error) {
+			if (error instanceof ConversationBusy) {
+				throw refused(
+					ERROR_CODE.queueOverflow,
+					"the conversation is in the middle of a turn and this submission asked to be refused rather than queued",
+					{ retryable: true, retryAfterMs: BUSY_RETRY_MS },
+				);
+			}
+			throw error;
+		}
 	}
 
 	/** The roster name this actor maps to, or `undefined` when it maps to nobody the room still holds. */
