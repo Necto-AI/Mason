@@ -1,7 +1,7 @@
 /**
  * The operator panel's wire: what a granted device is sent, and what it writes back.
  *
- * The panel is a browser application served by mason (`docs/SPEC.md` §4.5), and this file is the one place its shape is
+ * The panel is a browser application served by mason (`docs/SPEC.md` §4.2/§4.3), and this file is the one place its shape is
  * spelled. Both sides import it — the server builds these values, the panel renders them — so a renamed field cannot
  * land on one side of the wire only. Nothing here imports a node module: the panel bundles this file into the browser.
  *

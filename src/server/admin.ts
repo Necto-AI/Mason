@@ -122,11 +122,16 @@ export async function handleOperatorRequest(
 
 /**
  * Whether an error is one the panel should show verbatim: the config readers' refusals name the path and the entry,
- * and they all phrase it the same way (`<path>: integration "<name>" …`). A `PanelError` never reaches this.
+ * and they all phrase it the same way (`<path>: integration "<name>" …`).
+ *
+ * The pattern stops at the opening quote on purpose. The name is the one value an operator types freely, and it may hold
+ * a `"`, a newline or anything else: a pattern that tried to read the name back would classify exactly the refusal it is
+ * meant to carry as a server bug. What is matched is the prefix every `refusal()` in `integrations.ts` and
+ * `connectors.ts` emits, and nothing else in the tree phrases an error that way. A `PanelError` never reaches this.
  */
 function isOperatorFacing(error: unknown): error is Error {
 	if (!(error instanceof Error)) return false;
-	return /: integration "[^"]*" /.test(error.message) || /is not JSON|has no "integrations"/.test(error.message);
+	return /: integration "/.test(error.message) || /is not JSON|has no "integrations"/.test(error.message);
 }
 
 async function handleAdmin(
