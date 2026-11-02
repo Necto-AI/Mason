@@ -61,9 +61,13 @@ does not add them. It fixes the product direction the plans and issues execute.
 ├── vendor/
 │   ├── pi/                            # Local clone of upstream earendil-works/pi (v1.2.0, built)
 │   └── open-intelligent-ui/           # Local clone of CopilotKit/OpenIntelligentUI
+├── packages/
+│   ├── protocol/                      # @mason/protocol: the connector wire contract, v1 (schema + prose)
+│   └── connector/                     # @mason/connector: the connector SDK + the fake-mason conformance suite
 ├── scripts/
 │   ├── link-vendor.mjs                # Symlinks vendor packages into node_modules/
 │   ├── build-web.mjs                  # esbuild bundler for src/web -> dist/web
+│   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
 │   └── token.ts                       # `npm run token -- add|list|revoke`: the credentials that may connect
 ├── skills/
 │   └── generative-ui/SKILL.md         # The widget manual: the prompt carries only the pointer (§3.5)

@@ -31,8 +31,13 @@
       ],
       "@earendil-works/pi-env": ["./vendor/pi/packages/env/src/index.ts"],
       "@earendil-works/pi-coding-agent": ["./vendor/pi/packages/coding-agent/dist/index.d.ts"],
+      "@mason/protocol": ["./packages/protocol/src/index.ts"],
+      "@mason/connector": ["./packages/connector/src/index.ts"],
+      "@mason/connector/testkit": ["./packages/connector/src/testkit/index.ts"],
+      "@mason/connector/store/memory": ["./packages/connector/src/store-memory.ts"],
+      "@mason/connector/store/sqlite": ["./packages/connector/src/store-sqlite.ts"],
     }
   },
-  "include": ["src/**/*", "test/**/*", "scripts/**/*"],
+  "include": ["src/**/*", "test/**/*", "scripts/**/*", "packages/**/*"],
   "exclude": ["node_modules", "dist", "vendor"]
 }
