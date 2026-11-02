@@ -228,6 +228,9 @@ export function createConnector(config: ConnectorConfig): Connector {
 	let flushTimer: ReturnType<typeof setTimeout> | undefined;
 	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	let scopes: readonly StateScope[] = config.state ?? [];
+	let flushing: Promise<void> | undefined;
+	/** Seeded from the store on first use, then monotonic in memory: a read-modify-write per call hands two calls one seq. */
+	let nextSeq: number | undefined;
 	const inflight = new Map<string, Promise<Send<unknown>>>();
 	const delivering = new Map<string, Promise<DeliveryAck>>();
 	const asking = new Map<string, Promise<InteractionAck>>();
@@ -479,7 +482,9 @@ export function createConnector(config: ConnectorConfig): Connector {
 		const every = config.heartbeatMs ?? 20_000;
 		if (every <= 0) return;
 		const timer = setInterval(() => {
-			void beat();
+			void beat().catch((error: unknown) => {
+				logger.error("the heartbeat threw", { error: describe(error) });
+			});
 		}, every);
 		timer.unref?.();
 		heartbeatTimer = timer;
@@ -501,7 +506,9 @@ export function createConnector(config: ConnectorConfig): Connector {
 		const wait = Math.min(Math.max(inMs, 10), 60_000);
 		const timer = setTimeout(() => {
 			flushTimer = undefined;
-			void flushOutbox();
+			void flushOutbox().catch((error: unknown) => {
+				logger.error("the retry threw", { error: describe(error) });
+			});
 		}, wait);
 		timer.unref?.();
 		flushTimer = timer;
@@ -628,9 +635,12 @@ export function createConnector(config: ConnectorConfig): Connector {
 	async function journal(method: string, key: string, params: Record<string, unknown>): Promise<void> {
 		const existing = await config.store.read<OutboxEntry>(NAMESPACE.outbox, key);
 		if (existing !== undefined) return;
-		const all = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
-		const seq = all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0) + 1;
-		await config.store.write(NAMESPACE.outbox, key, { seq, method, key, params } satisfies OutboxEntry);
+		if (nextSeq === undefined) {
+			const all = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
+			nextSeq = all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0);
+		}
+		nextSeq += 1;
+		await config.store.write(NAMESPACE.outbox, key, { seq: nextSeq, method, key, params } satisfies OutboxEntry);
 	}
 
 	/**
@@ -640,6 +650,15 @@ export function createConnector(config: ConnectorConfig): Connector {
 	 * messages against each other, and must not keep a `stop` behind it.
 	 */
 	async function flushOutbox(): Promise<void> {
+		if (flushing !== undefined) return flushing;
+		const running = drainOutbox().finally(() => {
+			flushing = undefined;
+		});
+		flushing = running;
+		return running;
+	}
+
+	async function drainOutbox(): Promise<void> {
 		if (peer === undefined || !peer.open) return;
 		const pending = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
 		const ordered = [...pending].sort((left, right) => left.value.seq - right.value.seq);

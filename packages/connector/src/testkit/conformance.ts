@@ -57,6 +57,8 @@ export interface ConformanceFixture {
 	readonly handlers?: Partial<ConnectorHandlers>;
 	readonly store?: ConnectorStore;
 	readonly state?: readonly StateScope[];
+	/** How often to ping while idle. The suite leaves it at the protocol's 20 s unless a case needs to see one. */
+	readonly heartbeatMs?: number;
 }
 
 /** Everything the suite saw, recorded around the fixture's own handlers. */
@@ -220,6 +222,7 @@ export async function open(fixture: ConformanceFixture): Promise<ConformanceCont
 		fetch: mason.fetch,
 		requestTimeoutMs: 2_000,
 		reconnect: { initialMs: 1, maxMs: 10, factor: 2 },
+		...(fixture.heartbeatMs === undefined ? {} : { heartbeatMs: fixture.heartbeatMs }),
 		...(fixture.state === undefined ? {} : { state: fixture.state }),
 	};
 	const connector = createConnector(config);
@@ -544,6 +547,50 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
+			name: "heartbeat/an idle socket is pinged and mason answers",
+			async run({ fixture }) {
+				const mason = createFakeMason({ connector: fixture.name, granted: grantsOf(fixture) });
+				mason.start();
+				const connector = createConnector({
+					name: fixture.name,
+					version: "0.0.0-fixture",
+					url: mason.url,
+					credential: "test-credential",
+					faces: declarationOf(fixture),
+					store: new MemoryStore(),
+					link: mason.link,
+					fetch: mason.fetch,
+					requestTimeoutMs: 1_000,
+					heartbeatMs: 20,
+					reconnect: { initialMs: 1, maxMs: 5 },
+				});
+				try {
+					await connector.start();
+					await waitFor(() => mason.pings() >= 1, "a keepalive was answered", 2_000);
+					equal(connector.status().connected, true, "the socket after a keepalive");
+				} finally {
+					await connector.stop().catch(() => {});
+					mason.stop();
+				}
+			},
+		},
+		{
+			name: "budget/a refusal for budget is retried after the wait mason asked for",
+			needs: ["user"],
+			async run({ connector, mason, fixture }) {
+				mason.exhaust("submissions");
+				const outcome = await connector.submit({
+					origin: originOf(fixture),
+					...(actorOf(fixture) === undefined ? {} : { actor: actorOf(fixture) }),
+					content: [{ type: "text", text: "once the minute is over" }],
+					submissionId: "budget-1",
+				});
+				equal(outcome.status, "pending", "a call refused for budget");
+				await waitFor(() => mason.submissions.length === 1, "the retry landed", 3_000);
+				equal(mason.submissions[0]?.submissionId, "budget-1", "the id the retry carried");
+			},
+		},
+		{
 			name: "delivery/a reply reaches the origin and is acknowledged once",
 			needs: ["user"],
 			async run({ mason, observed, fixture }) {
@@ -719,14 +766,20 @@ export function conformanceCases(): readonly ConformanceCase[] {
 		{
 			name: "attachments/a file over the cap is refused before it is sent",
 			needs: ["user"],
-			async run({ connector }) {
+			async run({ connector, mason }) {
 				const big = new Uint8Array(2_000_000);
+				const before = mason.attachmentPosts();
 				const refused = await connector.attachments.upload(big).then(
 					() => undefined,
 					(error: unknown) => error,
 				);
 				if (!(refused instanceof AttachmentError)) fail("attachments", "an oversized file was not refused");
 				equal(refused.status, 413, "the refusal status");
+				equal(
+					mason.attachmentPosts(),
+					before,
+					"uploads that reached mason: the cap is the client's, before a byte",
+				);
 			},
 		},
 		{
