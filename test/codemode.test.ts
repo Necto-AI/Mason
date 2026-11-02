@@ -1,10 +1,10 @@
 /**
- * Code mode: the second way the model reaches a tool it was not offered, and the one that reads a whole result.
+ * Code mode: the way the model reaches an MCP tool at all, and the one that reads a whole result.
  *
- * `tool_search` promotes a deferred tool into the declared list, which appends to the prompt prefix; a script calls the
- * same tool without declaring it and can hand the model only what matters. So the two facts worth pinning are that a
- * script really does reach an undeclared tool, and that the same server answer arrives whole at a script and bounded at
- * the model — one server, two callers, one result.
+ * MCP does not enter the declared tool list — no server's schema is a declared tool, and `tool_search` has nothing of
+ * MCP's to promote — so a script is the only path to a service. That makes two facts worth pinning: a script reaches a
+ * tool the model was never offered, and the same server answer arrives whole at the script while the turn pays for one
+ * line of output rather than for 200 KB of it.
  *
  * Everything runs against a fake MCP server on an in-memory transport and the real QuickJS sandbox: the sandbox is the
  * thing under test, so it is never stubbed, and no test dials a port.
@@ -12,10 +12,8 @@
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { McpTransport } from "@earendil-works/pi-mcp";
 import { createCodemode } from "../src/server/extensions/codemode.ts";
-import { REPLY_TOOL } from "../src/shared/contract.ts";
 import {
 	boot,
 	declared,
@@ -24,7 +22,6 @@ import {
 	resultFor,
 	SEARCH_SCRIPT,
 	SEARCH_TOOL,
-	SEARCH_TOOL_NAME,
 	scriptThenSpeak,
 	temporaryDirectory,
 	toolResults,
@@ -51,7 +48,7 @@ function watched(inner: McpTransport): { transport: McpTransport; closes: () => 
 }
 
 describe("a script is the second way in", () => {
-	it("calls a deferred tool the model was never offered, and the server's text comes back", async () => {
+	it("calls a tool the model was never offered, and the server's text comes back", async () => {
 		const server = await fakeServer([SEARCH_TOOL], () => ({
 			content: [{ type: "text", text: "ISSUE-412: search is slow" }],
 		}));
@@ -62,7 +59,10 @@ describe("a script is the second way in", () => {
 			steps: scriptThenSpeak(SEARCH_SCRIPT),
 		});
 		try {
-			assert.ok(!(await declared(runtime)).includes(SEARCH_TOOL_NAME), "the model was never offered this tool");
+			assert.ok(
+				!(await declared(runtime)).some((name) => name.startsWith("mcp")),
+				"the model was never offered this tool, or any of MCP's",
+			);
 			await turn(runtime);
 			const script = resultFor(await toolResults(runtime), "codemode");
 			assert.match(script, /Script completed/);
@@ -73,7 +73,7 @@ describe("a script is the second way in", () => {
 				"the script's arguments reached the server, and only they did",
 			);
 			assert.ok(
-				!(await declared(runtime)).includes(SEARCH_TOOL_NAME),
+				!(await declared(runtime)).some((name) => name.startsWith("mcp")),
 				"reaching it from a script declared nothing: the prefix did not grow",
 			);
 		} finally {
@@ -81,57 +81,31 @@ describe("a script is the second way in", () => {
 		}
 	});
 
-	it("gets the whole result, both ends and all, while a model-issued call to the same tool is bounded by the middle", async () => {
-		// A result past what a declared call may show, with a marker at each end: the model keeps both ends and loses the
-		// middle, and a script that filtered nothing still has every byte.
+	it("gets every byte of a 30 KB answer, and the turn pays for one number", async () => {
+		// A result past what any declared call could carry, with a marker at each end: the script receives the whole thing,
+		// and what reaches the transcript is the script's own value — the whole point of a program between them.
 		const answer = `START-MARKER${"x".repeat(30_000)}END-MARKER`;
 		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [{ type: "text", text: answer }] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, {
 			integrations: { github: GITHUB },
 			transport: () => server.transport,
-			steps: [
-				// The same server, two callers: a script that hands the text back, then the model asking for the tool
-				// through tool_search and calling it itself.
-				...scriptThenSpeak(SEARCH_SCRIPT).slice(0, 1),
-				fauxAssistantMessage([fauxToolCall("tool_search", { query: "search issues by text" }, { id: "load" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage([fauxToolCall(SEARCH_TOOL_NAME, { query: "bug" }, { id: "search" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Found some." }, { id: "sent" })], {
-					stopReason: "toolUse",
-				}),
-				fauxAssistantMessage(fauxText("Nothing else to report.")),
-			],
+			steps: scriptThenSpeak(`const r = await tools.mcp_call({ integration: "github", tool: "issues.search", arguments: { query: "bug" } });
+return { length: r.content[0].text.length, starts: r.content[0].text.slice(0, 12), ends: r.content[0].text.slice(-10) };`),
 		});
 		try {
 			await turn(runtime);
-			const results = await toolResults(runtime);
-			const script = resultFor(results, "codemode");
-			const direct = resultFor(results, SEARCH_TOOL_NAME);
-
-			// The script's own text, which the sandbox hands back whole: the bound is on what the model is shown, not on
-			// what a program receives as `structuredOutput`.
-			assert.ok(script.includes(answer), `the script's result carries all ${answer.length} characters`);
-			assert.match(direct, /^START-MARKER/, "the model kept the beginning");
-			assert.match(direct, /END-MARKER$/, "and the end, which head-only truncation would have dropped");
-			assert.match(
-				direct,
-				/bytes dropped: this is the start and the end of a longer result/,
-				"and is told what went",
-			);
-			// Each end is about half the cap, so no run longer than that can be contiguous: the middle is what went.
-			assert.ok(!direct.includes("x".repeat(11_000)), "the middle is what went");
-			assert.ok(
-				Buffer.byteLength(direct) <= 20 * 1024,
-				`${Buffer.byteLength(direct)} bytes is more than the 20 KB cap`,
-			);
+			const script = resultFor(await toolResults(runtime), "codemode");
+			assert.match(script, /"length":30022/, "the script received every character the server sent");
+			assert.match(script, /START-MARKER/, "both ends of it, unchanged");
+			assert.match(script, /END-MARKER/);
+			// And the turn pays for the script's own value, not for the 30 KB behind it: a result that carried the answer
+			// instead would still match every assertion above.
+			assert.ok(script.length < 1_000, `the transcript holds the summary, not the payload: ${script.length} bytes`);
 			assert.deepEqual(
 				server.calls.map((call) => call.name),
-				["issues.search", "issues.search"],
-				"one server, two callers, and the script's call came first",
+				["issues.search"],
+				"one server, one caller, one call",
 			);
 		} finally {
 			await runtime.close();

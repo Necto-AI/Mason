@@ -229,6 +229,35 @@ One of the four things a connector may mirror — `status`, `presence`, `project
 yields a shape from the whitelist; nothing yields the conversation.
 _Avoid_: subscription, channel
 
+**tool catalog**:
+What one service offers *now*: each tool's own name, description, JSON Schema and approval marker, read from the server
+and never registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never
+offered it, so a server that redeploys does not move the prompt.
+_Avoid_: tool list, tool surface (that is the face's name, not its contents), MCP tools (that is what a catalog holds)
+
+**approval marker**:
+The `dev.mason/approval` value an MCP tool declares in its `_meta`, `required` or `not_required`. The connector author
+writes it because the service knows the operation's effect; missing or unknown means `required`.
+_Avoid_: annotation (MCP's own, which is a claim and not authority), risk level, permission
+
+**permission request**:
+A committed question about one call: its permission id, the tool and arguments, the reason, and who may answer. It is an
+`app.permission` entry, sent to an approver's surface as `connector/interaction.request`, and it outlives the process
+that asked.
+_Avoid_: approval prompt, confirmation dialog, ask
+
+**permission answer**:
+The one answer that settles a request — `allow`, `deny`, or `cancelled` when `stop` ended the wait. It is an
+`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow". It records the roster
+name of the person who gave it; `owner` is the name an answer from `/api/permissions` carries when the device has not
+joined as anyone, because there the owner's credential is the identity.
+_Avoid_: grant, consent, vote
+
+**approver**:
+The roster person a connector's entry names in `connector.user.approver`, and the only actor whose answer settles a
+request that came through it. Approval authority is a grant, separate from the ability to speak.
+_Avoid_: admin, owner (that is the operator, who answers through `/api/permissions`), moderator
+
 **operator control plane**:
 The separate administrative contract for credentials, connector entries, roster, and global configuration. It is not
 a privilege a conversational connector receives.

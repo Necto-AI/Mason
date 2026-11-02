@@ -224,6 +224,10 @@ The answer to that call only says whether a surface that can answer it was reach
 
 `delivered: false` leaves the approval **visibly pending**. It never denies it.
 
+A surface is asked only if it negotiated the `approvals` capability at the handshake — the handshake is a ceiling, and a
+client that did not ask for approvals has nowhere to put one. The question is not lost by it: it stays pending for the
+owner's route and for the next socket that did ask.
+
 The answer arrives as its own call, from whoever is authorized, and applies **once**:
 
 ```json
@@ -332,7 +336,9 @@ message that never arrived, and pretending otherwise is how a person gets the sa
 ## Budgets
 
 Every class is budgeted separately per connector, so a flood in one cannot starve the others: submissions, fires,
-controls, attachments. `stop` and `cancel` have their own budget beside the rest. A refusal is `mason.rate_limited` with
+controls, attachments. `stop` and `cancel` have their own budget beside the rest, and `mason/interaction.answer` is a
+control: it is the same kind of thing (one word that settles one thing), and it spends the control class rather than
+carrying a field of its own. A refusal is `mason.rate_limited` with
 `retryAfterMs`, and the connector waits that long, capped at a minute so one wrong number cannot park a message for an
 hour — a wait, not a verdict.
 

@@ -34,7 +34,8 @@ import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
-import { connectIntegrations, type McpTransportFactory } from "./mcp.ts";
+import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
+import { createPermissions, type PermissionBook } from "./permissions.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { readRoster } from "./roster.ts";
 
@@ -100,6 +101,10 @@ export interface AgentRuntime {
 	readonly dataDir: string;
 	readonly hooks: HooksManager;
 	readonly env: RuntimeEnvManager;
+	/** What the integrations' tools faces offer right now: the catalog `mcp_search` reads and the gateway asks about markers. */
+	readonly mcp: McpCatalog;
+	/** The pending permission questions: what the connector door sends and `/api/permissions` answers. */
+	readonly permissions: PermissionBook;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
 	/** `false` when the model access is the offline faux provider, so the UI can say so. */
@@ -211,10 +216,11 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// and a file that cannot be read is refused here rather than leaving the process with fewer tools than the operator
 	// configured and no way to notice.
 	setIntegrations((await readIntegrations(house)).integrations);
-	// The tools face of every enabled integration, reached here and nowhere else: `install()` publishes immediately and
-	// `selectExtensions` runs on every preparation, so a deferred list that was settled after the harness opened would be
-	// a surface that could still change under a running turn. A boot with no tools face connects nothing.
-	const mcp = await connectIntegrations({
+	// The tools face of every enabled integration, reached here and nowhere else. What the servers offer is a catalog, not
+	// a tool list: `mcp` registers three stable tools that ask the servers what they have now, so a container that
+	// restarts, redeploys or redefines a tool mid-conversation moves nothing the prompt is built from. A boot with no
+	// tools face connects nothing and installs nothing.
+	const mcp = await openMcpCatalog({
 		integrations: currentIntegrations(),
 		...(options.mcpTransport === undefined ? {} : { openTransport: options.mcpTransport }),
 	});
@@ -222,6 +228,10 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// across boots would refuse the next runtime in the same process. It is the other way the model reaches a tool it
 	// was not offered (`tool_search` is the first), and the one that can read a whole result.
 	const codemode = createCodemode();
+	// The permission gateway, per boot: one `beforeTool` hook in front of every direct and nested call, a book of pending
+	// questions, and the catalog it reads `dev.mason/approval` from. It is bound to the root conversation below, before
+	// anything can run.
+	const permissions = createPermissions({ integrations: () => currentIntegrations(), catalog: mcp });
 	// Everything below opens something that outlives the line that made it — a hook timer, a socket to an MCP server, a
 	// sandbox, an execution daemon — and a boot that refuses must not leave any of it running. There is one list, written
 	// in the order things were opened, and the success path and the unwind path both close it in reverse: a resource
@@ -266,10 +276,12 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(options.extensions ?? []),
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
+			permissions.extension,
 		];
 		const unconditional = unconditionalExtensionNames([
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
 			codemode.extension.name,
+			permissions.extension.name,
 		]);
 		const registry: Registry = createRegistry();
 		for (const extension of extensionList) registry.install(extension);
@@ -319,6 +331,9 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
 		// had connected. A failed repair is a failed guarantee, so the server does not start with it.
 		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
+		// Nothing may run a turn before the book can answer it: a permission request is a transcript entry, and every
+		// reader of it — the hook, the door, the routes — reads through this conversation.
+		permissions.attach(root);
 		hooks.start();
 		// Picks up a run the last process left unfinished.
 		harness.resume();
@@ -329,6 +344,8 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			dataDir,
 			hooks,
 			env: envManager,
+			mcp,
+			permissions: permissions.book,
 			workspaceDir,
 			model: ref,
 			modelIsFaux: faux,

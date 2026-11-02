@@ -312,6 +312,33 @@ describe("the server's door", () => {
 		}
 	});
 
+	it("puts the permission routes behind the same gate, and answers a shape a caller can act on", async () => {
+		const { server } = await openServer();
+		const base = `http://127.0.0.1:${server.port}/api/permissions`;
+		try {
+			assert.equal((await fetch(base)).status, 401, "the pending questions are the owner's");
+			const listed = await fetch(base, { headers: { authorization: `Bearer ${server.pairingToken}` } });
+			assert.equal(listed.status, 200);
+			assert.deepEqual(await listed.json(), { permissions: [] }, "nothing is waiting on a fresh home");
+
+			const refused = await fetch(base, {
+				method: "GET",
+				headers: { authorization: "Bearer mason_not_a_token_at_all" },
+			});
+			assert.equal(refused.status, 401);
+
+			// A POST for an id nobody asked about is the route's `404`, not a `500` and not a silent success.
+			const unknown = await fetch(`${base}/perm_nothing`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${server.pairingToken}`, "content-type": "application/json" },
+				body: JSON.stringify({ answer: "allow" }),
+			});
+			assert.equal(unknown.status, 404);
+		} finally {
+			await server.close();
+		}
+	});
+
 	it("refuses /api from a foreign origin even with the right token", async () => {
 		const { server } = await openServer();
 		try {
