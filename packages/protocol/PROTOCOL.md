@@ -333,7 +333,8 @@ message that never arrived, and pretending otherwise is how a person gets the sa
 
 Every class is budgeted separately per connector, so a flood in one cannot starve the others: submissions, fires,
 controls, attachments. `stop` and `cancel` have their own budget beside the rest. A refusal is `mason.rate_limited` with
-`retryAfterMs`, and the connector waits exactly that long — a `429` is a wait, not a verdict.
+`retryAfterMs`, and the connector waits that long, capped at a minute so one wrong number cannot park a message for an
+hour — a wait, not a verdict.
 
 ## Versioning
 

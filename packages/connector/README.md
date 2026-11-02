@@ -51,9 +51,9 @@ const outcome = await connector.submit({
 - **A call is journaled before it goes on the wire.** `submit`, `fire`, `control` and `answer` write themselves into the
   store first, so a socket that dies mid-flight is a resend of the same id rather than a second logical operation.
   `status: "pending"` means exactly that: the act is durable and unfinished, and `flush()` or a reconnect sends it again.
-- **A delivery is answered once.** The ledger is persisted, so a resend under the same `deliveryId` is `duplicate` even
-  across a restart. That is the whole of at-least-once delivery: mason keeps resending, and the connector refuses to send
-  twice.
+- **A delivery is answered once.** The ledger is persisted, so a resend under the same `deliveryId` is answered from it
+  even across a restart: a `delivered` one is `duplicate`, and one whose outcome could not be known is `uncertain` again.
+  That is the whole of at-least-once delivery: mason keeps resending, and the connector refuses to send twice.
 - **A handler that throws is `uncertain`, not retried.** If the send may have left, nobody knows. Guessing loses or
   duplicates a message, so the SDK reports the uncertainty and a person decides.
 - **Nothing else is durable.** State frames are applied as they arrive; a gap is a resync, not a patch. Streaming
