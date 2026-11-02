@@ -1,0 +1,32 @@
+{
+	"name": "@mason/protocol",
+	"version": "1.0.0",
+	"description": "The mason connector protocol, v1: language-neutral JSON Schema plus the TypeScript view of the same shapes.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./schema": "./schemas/protocol.v1.json",
+		"./package.json": "./package.json"
+	},
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"schemas",
+		"PROTOCOL.md",
+		"README.md"
+	],
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"build": "tsc -p tsconfig.build.json"
+	},
+	"engines": {
+		"node": ">=22.6"
+	}
+}

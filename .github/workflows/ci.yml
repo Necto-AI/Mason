@@ -36,3 +36,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run build:web
       - run: npm test
+      - run: npm run test:packages
+      # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
+      # an SDK, and this is the only check that says so.
+      - run: npm run prove:connector
