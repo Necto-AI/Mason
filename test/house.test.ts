@@ -638,6 +638,65 @@ test("migrateHouse() refuses a history that already holds the service half", asy
 	assert.match(doctor.stderr, /predates this fix/, "and prints the reason rather than a stack trace");
 });
 
+test("doctor -- migrate stamps grants on a credential that predates them, once", async () => {
+	// The home is already split — the layout needs nothing — so this is the half of the migration the panel added:
+	// a config.json written before a device had grants. Running the command an operator runs is the whole point.
+	const home = await tempDir("mason-house-grants-");
+	const paths = housePaths(home);
+	await mkdir(paths.serviceDir, { recursive: true, mode: 0o700 });
+	await writeFile(
+		paths.config,
+		JSON.stringify({
+			tokens: [
+				{
+					id: "tok_0ld",
+					label: "browser",
+					sha256: "a".repeat(64),
+					createdAt: "2026-01-01T00:00:00.000Z",
+				},
+				{
+					id: "tok_n3w",
+					label: "phone",
+					sha256: "b".repeat(64),
+					createdAt: "2026-02-01T00:00:00.000Z",
+					grants: ["conversation"],
+				},
+			],
+			sessionKey: "s".repeat(43),
+		}),
+		"utf8",
+	);
+	const doctor = async () => {
+		try {
+			const result = await run(
+				process.execPath,
+				["--conditions=source", "--experimental-strip-types", "scripts/doctor.ts", "migrate"],
+				{ cwd: REPO_ROOT, env: { ...process.env, MASON_HOME: home } },
+			);
+			return { code: 0, stdout: result.stdout };
+		} catch (error) {
+			const failure = error as { code: number; stdout: string };
+			return { code: failure.code, stdout: failure.stdout };
+		}
+	};
+	const first = await doctor();
+	assert.equal(first.code, 0, "an old credential is not a refusal");
+	assert.match(first.stdout, /tok_0ld \(browser\) had no grants: stamped conversation, admin, approve/);
+	const config = JSON.parse(await readFile(paths.config, "utf8")) as {
+		tokens: { id: string; grants?: string[] }[];
+	};
+	const byId = new Map(config.tokens.map((record) => [record.id, record]));
+	assert.deepEqual(byId.get("tok_0ld")?.grants, ["conversation", "admin", "approve"]);
+	assert.deepEqual(byId.get("tok_n3w")?.grants, ["conversation"], "a narrowed device stays narrowed");
+
+	// The second run is the same command on a home that has caught up: nothing is printed, nothing is written.
+	const before = await readFile(paths.config, "utf8");
+	const second = await doctor();
+	assert.equal(second.code, 0);
+	assert.doesNotMatch(second.stdout, /stamped/);
+	assert.equal(await readFile(paths.config, "utf8"), before);
+});
+
 test("migrateHouse() repairs a home whose tainted history is moved out of it, and the key stays gone", async (t) => {
 	// The history holds the service half; the files are already out of `agent/`, so the repository is the whole problem.
 	const home = await abandonedFirstVersionHome(t, { withServiceFiles: false });

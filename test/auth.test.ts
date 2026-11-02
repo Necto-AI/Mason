@@ -246,27 +246,6 @@ function refused(url: string, headers: Record<string, string> = {}): Promise<voi
 	});
 }
 
-/** The first frame a server sends a fresh client: chord's `hello`. */
-function opens(url: string, headers: Record<string, string> = {}): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const socket = new WebSocket(url, { headers });
-		const timer = setTimeout(() => {
-			socket.terminate();
-			reject(new Error(`socket ${url} sent nothing`));
-		}, 5_000);
-		socket.on("message", (data) => {
-			clearTimeout(timer);
-			socket.terminate();
-			resolve(String(data));
-		});
-		socket.on("close", () => {
-			clearTimeout(timer);
-			reject(new Error(`socket ${url} was refused`));
-		});
-		socket.on("error", reject);
-	});
-}
-
 describe("the server's door", () => {
 	async function openServer(): Promise<{ server: RunningServer; home: string }> {
 		const directory = await mkdtemp(join(tmpdir(), "pda-auth-server-"));
@@ -356,21 +335,15 @@ describe("the server's door", () => {
 		}
 	});
 
-	it("closes the socket unless the client is paired and same-origin", async () => {
+	it("opens no socket on any path but the connector's", async () => {
 		const { server } = await openServer();
 		const base = `ws://127.0.0.1:${server.port}/`;
 		try {
-			await refused(base);
-			await refused(`${base}?token=mason_wrong_token_here`);
-			await refused(`${base}?token=${server.pairingToken}`, { origin: "https://evil.example" });
-			// The drive-by from the security review: a page on another origin, with no token it could not have.
+			// The console's link is gone with the console (#103). An upgrade anywhere but the connector's own path is
+			// closed rather than answered: a door that is not there does not offer a handshake first.
+			await refused(`${base}?token=${server.pairingToken}`);
 			await refused(base, { origin: "https://evil.example" });
-
-			assert.match(await opens(`${base}?token=${server.pairingToken}`), /"hello"/);
-			assert.match(
-				await opens(`${base}?token=${server.pairingToken}`, { origin: `http://127.0.0.1:${server.port}` }),
-				/"hello"/,
-			);
+			await refused(`${base}some-other-path`);
 		} finally {
 			await server.close();
 		}
@@ -405,7 +378,11 @@ describe("the server's door", () => {
 			const session = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie } });
 			assert.equal(session.status, 200);
 			const [record] = await listTokens(home);
-			assert.deepEqual(await session.json(), { device: { id: record?.id, label: record?.label }, roster: [] });
+			assert.deepEqual(await session.json(), {
+				device: { id: record?.id, label: record?.label },
+				grants: ["conversation", "admin", "approve"],
+				joined: false,
+			});
 
 			// A link that is not one of ours is not a session: the shell still loads, unpaired.
 			const wrong = await fetch(`http://127.0.0.1:${port}/?token=mason_wrong_token_here`, { redirect: "manual" });
@@ -421,84 +398,30 @@ describe("the server's door", () => {
 		return (setCookie.split(";")[0] as string).trim();
 	}
 
-	/** Claim a name off the roster the way the join screen does, keeping the cookie the answer sets. */
-	async function claim(
-		port: number,
-		cookie: string,
-		name: string,
-	): Promise<{ readonly status: number; readonly cookie?: string; readonly body: unknown }> {
-		const response = await fetch(`http://127.0.0.1:${port}/api/join`, {
-			method: "POST",
-			headers: { cookie, "content-type": "application/json" },
-			body: JSON.stringify({ name }),
-		});
-		const setCookie = response.headers.getSetCookie().join("\n");
-		return {
-			status: response.status,
-			...(setCookie === "" ? {} : { cookie: cookieOf(setCookie) }),
-			body: (await response.json()) as unknown,
-		};
-	}
-
-	/** What `/api/session` says this browser is. */
-	async function session(
-		port: number,
-		cookie: string,
-	): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
-		const response = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie } });
-		return { status: response.status, body: (await response.json()) as Record<string, unknown> };
-	}
-
-	it("joins a paired browser to a name on the roster, then stops handing it the list", async () => {
+	it("honours a cookie that names a person from before the join screen, and refuses a removed one", async () => {
 		const { server, home } = await openServer();
 		const port = server.port as number;
 		try {
 			const device = cookieOf(await pair(port, server.pairingToken as string));
 			assert.equal((await addPerson(housePaths(home), "Ilya")).ok, true);
-
-			// Before anyone claims a name, the list is what the shell needs: everyone on the roster, spelled the roster's way.
-			const offered = await fetch(`http://127.0.0.1:${port}/api/join`, { headers: { cookie: device } });
-			assert.deepEqual(await offered.json(), { people: [{ name: "Ilya" }] });
-			assert.deepEqual((await session(port, device)).body.roster, [{ name: "Ilya" }]);
-
-			// A new entry point is not the open one, and a claim is checked against the roster rather than trusted.
-			assert.equal((await fetch(`http://127.0.0.1:${port}/api/join`)).status, 401);
-			assert.equal((await claim(port, device, "Nobody")).status, 404);
-
-			const joined = await claim(port, device, "Ilya");
-			assert.equal(joined.status, 200);
-			assert.deepEqual(joined.body, { person: { name: "Ilya" } });
-
-			const named = await session(port, joined.cookie as string);
-			assert.equal(named.status, 200);
-			assert.deepEqual(named.body.person, { name: "Ilya" });
-			assert.equal(named.body.roster, undefined, "a browser that speaks for someone has no use for the list");
+			// A cookie signed before #103 — the console let a browser claim a name, and those sessions outlive the screen
+			// they came from. The server still checks the claim against the roster on every request.
+			const key = (await readConfig(home)).sessionKey as string;
 			const [record] = await listTokens(home);
-			assert.deepEqual(
-				named.body.device,
-				{ id: record?.id, label: record?.label },
-				"joining keeps the device the browser was paired as: a name is a place, not a new credential",
-			);
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("refuses a person who has been removed, on the next request and the next handshake", async () => {
-		const { server, home } = await openServer();
-		const port = server.port as number;
-		try {
-			const device = cookieOf(await pair(port, server.pairingToken as string));
-			await addPerson(housePaths(home), "Ilya");
-			const named = (await claim(port, device, "Ilya")).cookie as string;
-			assert.equal((await session(port, named)).status, 200);
+			const named = cookieOf(`mason_session=${sealSession(key, (record as { id: string }).id, "Ilya")}; Path=/`);
+			const session = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie: named } });
+			assert.equal(session.status, 200);
+			const body = (await session.json()) as Record<string, unknown>;
+			assert.deepEqual(body.person, { name: "Ilya" });
+			assert.equal(body.joined, true);
 
 			assert.equal(await removePerson(housePaths(home), "Ilya"), true);
-			const after = await session(port, named);
+			const after = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie: named } });
 			assert.equal(after.status, 401, "a name off the roster is not a place in the room, cookie or no cookie");
-			assert.deepEqual(after.body, { error: "not on the roster" });
-			// The person is fixed at handshake, so a socket that already speaks carries on: the next connection is refused.
-			await refused(`ws://127.0.0.1:${port}/`, { cookie: named });
+			assert.deepEqual(await after.json(), { error: "not on the roster" });
+
+			// The join route itself is gone: a page cannot claim a name any more, so a stale client cannot invent one.
+			assert.equal((await fetch(`http://127.0.0.1:${port}/api/join`, { headers: { cookie: device } })).status, 404);
 		} finally {
 			await server.close();
 		}
@@ -515,25 +438,12 @@ describe("the server's door", () => {
 			const csp = shell.headers.get("content-security-policy") ?? "";
 			assert.match(csp, /frame-ancestors 'none'/);
 			assert.match(csp, /default-src 'self'/);
-			assert.match(csp, new RegExp(`connect-src 'self' ws://127\\.0\\.0\\.1:${server.port}`));
+			assert.match(csp, /connect-src 'self' /, "the panel polls this origin and nothing else");
 
 			for (const path of ["/api/health", "/api/status"]) {
 				const response = await fetch(`http://127.0.0.1:${server.port}${path}`);
 				assert.equal(response.headers.get("x-frame-options"), "DENY", `${path} carries the headers too`);
 			}
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("authenticates a socket with the cookie a browser would send", async () => {
-		const { server } = await openServer();
-		const base = `ws://127.0.0.1:${server.port}/`;
-		try {
-			const cookie = ((await pair(server.port, server.pairingToken as string)).split(";")[0] as string).trim();
-			assert.match(await opens(base, { cookie }), /"hello"/);
-			assert.match(await opens(base, { cookie, origin: `http://127.0.0.1:${server.port}` }), /"hello"/);
-			await refused(base, { cookie, origin: "https://evil.example" });
 		} finally {
 			await server.close();
 		}

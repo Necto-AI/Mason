@@ -31,6 +31,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { networkInterfaces } from "node:os";
+import { isOperatorGrant, type OperatorGrant } from "../shared/admin.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { housePaths } from "./house.ts";
 
@@ -42,7 +43,15 @@ export interface TokenRecord {
 	/** SHA-256 of the token, hex. Never the token. */
 	readonly sha256: string;
 	readonly createdAt: string;
+	/**
+	 * What this device may read and do in the panel. Absent on a record written before grants existed, which is why every
+	 * reader goes through `grantsOf`: a file that predates this key grants nothing until the operator migrates it.
+	 */
+	readonly grants?: readonly OperatorGrant[];
 }
+
+/** Whether a grant set covers a power. Re-exported here so a reader of the credential file needs one import. */
+export { grantsOf, hasGrant, OPERATOR_GRANTS } from "../shared/admin.ts";
 
 /** `~/.mason/service/config.json`. Unknown keys are preserved: this file grows with the agent. */
 export interface MasonConfig {
@@ -135,8 +144,17 @@ async function ensureSessionKey(home: string): Promise<string> {
 	return key;
 }
 
-/** Mint a token for one device. The plaintext is in the return value and nowhere else. */
-export async function mintToken(home: string, label: string): Promise<MintedToken> {
+/**
+ * Mint a token for one device. The plaintext is in the return value and nowhere else.
+ *
+ * The default is the panel's read-only reading of the conversation: the narrowest grant that still shows the device
+ * something. Administration and approval are asked for explicitly, by the command or by the panel.
+ */
+export async function mintToken(
+	home: string,
+	label: string,
+	grants: readonly OperatorGrant[] = ["conversation"],
+): Promise<MintedToken> {
 	const config = await readConfig(home);
 	const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
 	const record: TokenRecord = {
@@ -144,10 +162,31 @@ export async function mintToken(home: string, label: string): Promise<MintedToke
 		label: label.trim() === "" ? "device" : label.trim(),
 		sha256: digest(token),
 		createdAt: new Date().toISOString(),
+		grants: grants.filter(isOperatorGrant),
 	};
 	await ensureSessionKey(home);
 	await writeConfig(home, { ...(await readConfig(home)), tokens: [...readTokens(config), record] });
 	return { token, record };
+}
+
+/**
+ * Rewrite one credential's grants. `undefined` when there is no such id: a typo must not read as a change. The file is
+ * read per request, so a narrowing lands on the next one — including on the device being narrowed.
+ */
+export async function setTokenGrants(
+	home: string,
+	id: string,
+	grants: readonly OperatorGrant[],
+): Promise<TokenRecord | undefined> {
+	const config = await readConfig(home);
+	const existing = readTokens(config).find((record) => record.id === id);
+	if (existing === undefined) return undefined;
+	const record: TokenRecord = { ...existing, grants: grants.filter(isOperatorGrant) };
+	await writeConfig(home, {
+		...config,
+		tokens: readTokens(config).map((entry) => (entry.id === id ? record : entry)),
+	});
+	return record;
 }
 
 /** Remove one credential. `false` when no such id: a typo must not read as a successful revoke. */
@@ -157,6 +196,41 @@ export async function revokeToken(home: string, id: string): Promise<boolean> {
 	if (remaining.length === readTokens(config).length) return false;
 	await writeConfig(home, { ...config, tokens: remaining });
 	return true;
+}
+
+/**
+ * The grants a credential written before grants existed is given, once, by `npm run doctor -- migrate`.
+ *
+ * The console could read the conversation, answer a question and administer the deployment, and every credential that
+ * predates the panel was handed out for exactly that. The migration keeps the deployment working — a home where no
+ * device may administer is a home nobody can fix — and `trace` is deliberately not in it: the raw view is a new power,
+ * granted to a device on purpose rather than inherited from a console that never had one.
+ */
+export const MIGRATED_GRANTS: readonly OperatorGrant[] = ["conversation", "admin", "approve"];
+
+/**
+ * Stamp the grants onto every credential that has none, in one write.
+ *
+ * One-way and idempotent: a record that already carries grants is left exactly as it is, including one an operator
+ * narrowed by hand. A home with no tokens is not a home to fix — the boot mints one, with grants.
+ */
+export async function migrateTokenGrants(
+	home: string,
+): Promise<readonly { readonly id: string; readonly label: string }[]> {
+	const config = await readConfig(home);
+	const records = readTokens(config);
+	const missing = records.filter((record) => !Array.isArray(record.grants));
+	if (missing.length === 0) return [];
+	await writeConfig(home, {
+		...config,
+		tokens: records.map((record) => (Array.isArray(record.grants) ? record : { ...record, grants: MIGRATED_GRANTS })),
+	});
+	return missing.map((record) => ({ id: record.id, label: record.label }));
+}
+
+/** Whether a config still holds a credential the panel cannot use: what the boot says out loud. */
+export async function tokensWithoutGrants(home: string): Promise<readonly TokenRecord[]> {
+	return readTokens(await readConfig(home)).filter((record) => !Array.isArray(record.grants));
 }
 
 /**
@@ -170,7 +244,10 @@ export async function ensureToken(
 	const sessionKey = await ensureSessionKey(home);
 	const existing = await readTokens(await readConfig(home));
 	if (existing.length > 0) return { records: existing, sessionKey };
-	const minted = await mintToken(home, label);
+	// The first credential of a fresh home is the one person's own: it administers the panel, reads the conversation and
+	// answers approvals. The trace is not in it — an operator who wants the machine's working notes grants them to a
+	// device on purpose, which is one click in the panel (or `npm run token -- grants <id> conversation,trace`).
+	const minted = await mintToken(home, label, ["conversation", "admin", "approve"]);
 	return { token: minted.token, records: [minted.record], sessionKey };
 }
 
@@ -411,21 +488,4 @@ function lanAddresses(): readonly string[] {
 		}
 	}
 	return addresses;
-}
-
-/**
- * The cookie a join screen sets: the device it was already paired as, plus the person picked from the roster.
- *
- * The device stays in the cookie on purpose. A name is a claim about *who is sitting at this browser*, and the token
- * is a claim about *which browser* — keeping both means removing a person ends their join, and revoking a laptop ends
- * its session, without either one hiding the other.
- */
-export function joinCookie(
-	request: IncomingMessage,
-	config: MasonConfig,
-	tokenId: string,
-	person: string,
-): string | undefined {
-	if (config.sessionKey === undefined) return undefined;
-	return sessionCookieValue(config.sessionKey, tokenId, requestIsSecure(request), person);
 }
