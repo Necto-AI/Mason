@@ -17,7 +17,8 @@ a note saying what was chosen.
 ## Decision
 
 **Firecracker is the VMM.** It is the snapshot engine, it is what Lambda and Fargate run at scale, and its restore
-latency is the one several independent third parties have measured (boot ≤125 ms; restore 150–200 ms end to end). The requirement
+latency is the one several independent third parties have measured (150–200 ms end to end; Firecracker's own CI claim
+is a ≤125 ms boot). The requirement
 that gave Cloud Hypervisor the edge — a *live* host directory — is real, and it becomes a thing to build rather than a
 reason to change hypervisor.
 
@@ -70,4 +71,5 @@ each; the protocol is the deployment's boundary, the VM is the isolation boundar
 - No code changes here. There is no Firecracker code, no supervisor and no guest image in the tree.
   [#20](https://github.com/DenisSud/mason/issues/20) is the execution-target seam, [#65](https://github.com/DenisSud/mason/issues/65)
   is milestone 0 (a real userland before any VM), and milestones 1–6 have no tracker entry yet apart from
-  [#57](https://github.com/DenisSud/mason/issues/57), which covers the guest image milestone 6 needs.
+  [#57](https://github.com/DenisSud/mason/issues/57), which builds `pi-env` inside the image and is part of what
+  milestone 6 needs.
