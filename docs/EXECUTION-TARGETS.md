@@ -40,7 +40,7 @@ Conversations are durable; the machine a conversation runs on must be too, or a 
 ```ts
 type ExecutionTarget =
   | { kind: "local"; cwd: string }
-  | { kind: "microvm"; vm: string; cwd: string; snapshot?: string };
+  | { kind: "microvm"; vm: string; cwd: string };
 
 const TargetDoc = defineDoc<ExecutionTarget>({
   kind: "app.target", version: 1, scope: "conversation", history: "latest", fork: "current",

@@ -32,7 +32,7 @@ plan proposed:
 | Earlier plan | Now |
 |---|---|
 | a mason-defined envelope: `{v, id, from, to, kind: "delegate", task, budget, replyTo}` | A2A's own message and task shapes carry it; mason does not invent a peer protocol |
-| Chord between masons on one host, HTTPS across hosts | one transport, whichever binding A2A settles on; the host topology is not the protocol |
+| Chord between masons on one host, HTTPS across hosts | one of A2A's published bindings (JSON-RPC, gRPC or HTTP+JSON), chosen by the implementation; the host topology is not the protocol |
 | ACP as the boundary (this note's first version) | ACP merged into A2A in August 2025, so A2A is the standard and nothing is pinned to a protocol being wound down |
 | "shape it to be A2A-compatible later" | the later is now: A2A is the boundary, and mason still invents no peer protocol |
 | sibling as the router that lets bots reach each other | sibling organises and observes the fleet; the message does not pass through it |
