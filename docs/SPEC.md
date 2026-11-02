@@ -3,13 +3,49 @@
 ## 1. Product Goal
 
 mason is a headless, always-on agent backend, and an interface attaches to it (`GLOSSARY.md`,
-`docs/adr/0004-mason-is-a-headless-backend.md`): a durable, proactive personal agent ("Muse"-style) on `pi-durable`,
+`docs/adr/0004-mason-is-a-headless-backend.md`): a durable, proactive bot ("Muse"-style) on `pi-durable`,
 plus the contracts a chat or a console speaks. mason owns the tool and the projection — what the model may call, and
 what may cross the wire — and never the rendering. The operator console in this repository is frozen and only has to
 keep working (§4.3).
+
 1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, an integration's signed trigger, the transcript's controls) so the agent can proactively message the user first.
 2. **Chord Client-Server Transport:** Uses `@earendil-works/chord` (`createHost`, `remote`, `acceptWebSockets`, `webSocketLink`) to replicate what the projection derives — `transcript`, `queued` and `agentStatus` — to connected clients in real time; the durable `ConversationView` itself never crosses the wire (§4.1a).
 3. **A Widget Tool and Its Artifact Contract:** `generateSandboxedUi` is a `pi-durable` extension (`GenerateSandboxedUiExtension`) in `BASE_EXTENSIONS`, so every conversation is offered the tool from its first turn and on every turn after it: there is no toggle, and therefore no tool that appears mid-conversation (§3.5). The server maps the call's arguments to widget content and only that content crosses the wire; framing, streaming and drawing it is a client's job (§5). The manual the model needs — parameter order, design system, sandbox limits — lives in `skills/generative-ui/SKILL.md`, which it reads when it decides to build a widget.
+
+### One deployment is one specialized bot
+
+A mason deployment serves one profession. Its soul, skills, routines and integration grants are chosen for that job —
+not a role label on a general-purpose assistant — and a second profession is a second deployment
+(`GLOSSARY.md`, `docs/adr/0001-mason-defines-one-bot.md`).
+
+**The deployment this repository is built for is the application bot.** It finds, evaluates and tracks internships and
+fellowships, prepares the applications and drafts, incorporates Denis's edits, and stops for his explicit approval
+before it submits anything; the first version is internships and fellowships only (`docs/APPLICATION-PLAN.md`). Jobs,
+scholarships and university applications are later expansions, and there is no planned graduation to autonomous
+submission. A later bot may be a chief of staff; that is a second deployment, not a new mode of this one.
+
+**Work inside one bot is a worker, not a bot.** A worker is a conversation owned by one tool call, given a narrow job
+and a small context, that returns a report: browser work is worker-owned, and a worker has no home, no roster name and
+no peer identity of its own.
+
+### Several bots are separately deployed, and peers speak ACP
+
+A **fleet** is several mason bots, each its own container with its own home. They talk through the Agent Communication
+Protocol — a standard boundary, not a protocol mason invents — and sibling organises and observes the fleet without
+being its message bus (`docs/FLEET-PLAN.md`). ACP is independent of the execution-environment topology: two bots use
+the same peer protocol whether they share a VM or have separate VMs. Mason's code grows no peer registry, no router and
+no cross-agent message store for this; the fleet's transport belongs to the deployments.
+
+**The execution environment is Firecracker, in two ordered stages.** First one bot's tool machine moves to a Firecracker
+VM. Then the target becomes configurable, so a chosen group of bots may share one Firecracker VM; sharing is an option,
+not a requirement, and bots that share a VM share one operating-system trust domain (`docs/ENV-PLAN.md`,
+`docs/adr/0009-firecracker-first-then-a-shared-vm.md`). Firecracker has no virtiofs and no 9p, so live host
+directories require a network or vsock file service, and VM networking and snapshots need host privileges designed
+explicitly.
+
+None of this is implemented: there is no ACP client, no fleet manifest and no VM in the tree, and this specification
+does not add them. It fixes the product direction the plans and issues execute.
+
 
 ---
 
@@ -646,7 +682,7 @@ This streams exact Chord structural diffs to every connected browser tab over
 ### 4.3 The Operator Console (frozen)
 
 **The shell does not narrate itself.** `SessionBar` is a wordmark plus one overflow menu (compact, reset, and the
-run/model facts as text inside it): a personal agent is assumed to work, so there is no status dot, model pill or
+run/model facts as text inside it): a bot is assumed to work, so there is no status dot, model pill or
 connection badge to read. A run's progress is one line under the transcript — `working: bash` — and `Stop` sits in the
 composer where the send action is; a lost connection is announced once — above
 the composer, after a 1.2s grace period, so a reload does not flash a warning (`Composer` → `connection`).
