@@ -163,10 +163,26 @@ ceiling the operator sets.
 _Avoid_: approval message (the request is not ordinary prose), always allow, tool annotation
 
 **delivery**:
-One outbound act that reaches the submission's origin connector and records the same reply in the transcript. The model
-asks mason to reply; it does not choose a vendor's message tool. A turn with no reachable reader says so rather than
-recording a delivery nobody received.
-_Avoid_: message, reply, notification (each names one shape of it)
+One outbound act that reaches the turn's origin connector and records the same reply in the transcript. The model calls
+`reply`; it does not choose a vendor's message tool. A turn with no reachable reader says so rather than recording a
+delivery nobody received.
+_Avoid_: message, notification (each names one shape of it)
+
+**reply**:
+The one Mason-owned tool a turn uses to reach its reader. It targets the turn's origin — the connector that carried the
+words, or the operator console — and commits an `app.reply` entry; a routine with no origin names its target explicitly.
+_Avoid_: send_to_user (the removed console-only tool), message, answer
+
+**delivery id**:
+The durable identity of one reply: `reply:<callId>` of the call that asked for it. A streaming start, its deltas, its
+final and a resend after a reconnect all carry it, which is what lets a connector answer `duplicate` instead of sending
+twice.
+_Avoid_: message id, request id
+
+**outbox**:
+The committed replies a connector has not acknowledged yet, read from the transcript rather than from a second store. A
+reply is owed until an `app.delivery` entry says what became of it, and an `uncertain` one is never retried.
+_Avoid_: queue, retry buffer
 
 **reader**:
 Whoever a turn's words are for. A connector's user face and an operator's projection are different powers: reading a
@@ -197,6 +213,22 @@ _Avoid_: payload (that is one field), event body, message
 The tools one connector lends the bot through MCP.
 _Avoid_: tool list, MCP server (that is the process, not the surface), plugin API
 
+**connector credential**:
+The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. It is
+stored as a hash in `service/config.json`, read on every upgrade, and is not an owner token: it can speak as that
+connector and do nothing else.
+_Avoid_: token, API key, trigger secret (that authenticates an event delivery, not a session)
+
+**content id**:
+The name of one uploaded file, `cnt_<hex>`. Bytes cross the transfer endpoint by this id, never base64 in a frame and
+never a shared path, and an id is served only to the connector that uploaded it.
+_Avoid_: attachment id, file token
+
+**state scope**:
+One of the four things a connector may mirror — `status`, `presence`, `projection`, `tools` — granted per entry. A scope
+yields a shape from the whitelist; nothing yields the conversation.
+_Avoid_: subscription, channel
+
 **operator control plane**:
 The separate administrative contract for credentials, connector entries, roster, and global configuration. It is not
 a privilege a conversational connector receives.
@@ -214,7 +246,8 @@ mason's mapping makes of it. An assertion, not an identity, until that mapping m
 _Avoid_: user (for the actor), author (that is the roster name on a message)
 
 **origin**:
-The connector and external conversation a submission came from, and therefore the destination of its ordinary reply.
+The connector and external conversation a submission (or a fire) came from, and therefore the destination of its
+ordinary reply. It is structured data on the entry, never prose in a prompt.
 _Avoid_: source, channel, session
 
 **device**:
