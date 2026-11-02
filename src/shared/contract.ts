@@ -1,8 +1,11 @@
 /**
- * The one Chord contract shared by the browser client and the server host:
- * live `ConversationView` + agent status state, and the owner's control methods.
+ * The shapes the panel and the server spell the same way: the reader's transcript, the queue, the agent's status, and
+ * the entry kinds the projection is made of.
+ *
+ * There is no wire contract here any more (#103). The console's Chord service is gone with the console: a browser reads
+ * `GET /api/admin/state` (`shared/admin.ts`), and a person speaks through a connector. This file stayed because every
+ * shape below is still shared — the projection writes them, the panel renders them, the connector door mirrors them.
  */
-import { hostNamed, method, remote } from "@earendil-works/chord";
 import { Type } from "typebox";
 
 /**
@@ -198,46 +201,3 @@ export const QueuedItemSchema = Type.Object({
 	withdrawable: Type.Boolean(),
 });
 export type QueuedItem = { id: number; mode: string; text: string; author?: string; withdrawable: boolean };
-
-export const AgentService = remote("personal.agent", {
-	version: 1,
-	input: Type.Object({}),
-	host: hostNamed("server"),
-	variants: {
-		owner: {
-			state: {
-				/** The reader's transcript: their words, what the agent sent, widgets, triggers, coarse notices. */
-				transcript: Type.Array(TranscriptItemSchema),
-				/** The queue behind the running turn, labelled for the reader. */
-				queued: Type.Array(QueuedItemSchema),
-				// `status` is reserved by Chord references, so the agent's own status cell is `agentStatus`.
-				agentStatus: AgentStatusSchema,
-			},
-			methods: {
-				submit: method(
-					Type.Object({
-						content: Type.String(),
-						whenBusy: Type.Optional(
-							Type.Union([Type.Literal("followUp"), Type.Literal("steer"), Type.Literal("reject")]),
-						),
-					}),
-					Type.Object({ submissionId: Type.Number() }),
-				),
-				withdrawSubmission: method(Type.Object({ submissionId: Type.Number() })),
-				abort: method(),
-				reset: method(Type.Optional(Type.Object({ handoff: Type.Optional(Type.String()) }))),
-				compact: method(Type.Optional(Type.Object({ instructions: Type.Optional(Type.String()) }))),
-				fireHook: method(
-					Type.Object({
-						hookId: Type.String(),
-						payload: Type.Optional(Type.String()),
-						/** Idempotency key; omit for a gesture such as pressing the transcript's Retry control. */
-						requestId: Type.Optional(Type.String()),
-					}),
-					Type.Object({ submissionId: Type.Number() }),
-				),
-				toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
-			},
-		},
-	},
-});
