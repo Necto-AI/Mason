@@ -25,7 +25,8 @@
  * placed at the boundary it interrupts, so "newest input" is exactly "the input this turn is answering".
  */
 
-import type { EntryRecord } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord";
+import type { ConversationId, Cursor, EntryRecord, Tx } from "@earendil-works/pi-durable";
 import type { ContentBlock, Origin } from "@mason/protocol";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder } from "../shared/contract.ts";
 import type { Integration } from "./integrations.ts";
@@ -196,4 +197,58 @@ export function reachableTarget(
 /** The target a turn's origin implies, when the origin is one a reply can go back to. */
 export function targetOfOrigin(origin: Origin): ReplyTarget {
 	return { connector: origin.connector, externalConversationId: origin.externalConversationId };
+}
+
+/** How far back a turn's input can be — a round of tool calls is one entry each, and a page always ends. */
+const TURN_INPUT_PAGE = 128;
+const TURN_INPUT_MAX_PAGES = 16;
+
+/** The little of a tool's execution API this read needs: its conversation, and a committed scan of it. */
+export interface TurnOriginReader {
+	readonly conversationId: ConversationId;
+	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
+}
+
+/**
+ * The turn this call belongs to, read from the transcript.
+ *
+ * A tool cannot see the request that made its call, so this reads the newest input entry — the same entry the delivery
+ * gate reads — rather than trusting the model to remember where the turn came from. Shared with the permission gateway,
+ * which routes a question to whoever the turn's own surface can approve it, so the two cannot disagree about where a
+ * turn came from.
+ */
+export async function readTurnOrigin(api: TurnOriginReader, context: Context): Promise<TurnOrigin> {
+	return api.commit((tx) => turnOriginIn(tx, api.conversationId), context);
+}
+
+/**
+ * The same read, against a transaction the caller already has.
+ *
+ * It exists because the two callers commit differently: a tool's `commit` answers with the callback's value, while a
+ * hook's `commit` adopts that value as the task's own state (`permissions.ts` wraps it so it can return nothing). The
+ * scan itself is one function, so neither caller can drift from the other's idea of the newest input.
+ */
+export async function turnOriginIn(tx: Tx, conversationId: ConversationId): Promise<TurnOrigin> {
+	const entry = await turnInputIn(tx, conversationId);
+	return entry === undefined ? { kind: "console" } : turnOriginOfEntry(entry);
+}
+
+/**
+ * The newest input entry itself, for a caller that needs more than where the turn came from.
+ *
+ * The permission gateway reads it for the person the words are attributed to: authority to approve is a roster name, and
+ * the entry is where mason wrote it, while the origin a connector sent may not carry an actor at all.
+ */
+export async function turnInputIn(tx: Tx, conversationId: ConversationId): Promise<EntryRecord | undefined> {
+	let cursor: Cursor | undefined;
+	for (let page = 0; page < TURN_INPUT_MAX_PAGES; page += 1) {
+		const scanned = await tx.scanEntries({ conversationId, order: "descending" }, TURN_INPUT_PAGE, cursor);
+		// Descending, so the first input in the page is the newest one in the transcript.
+		for (const entry of scanned.items) {
+			if (isInputEntry(entry)) return entry;
+		}
+		if (scanned.next === undefined) break;
+		cursor = scanned.next;
+	}
+	return undefined;
 }

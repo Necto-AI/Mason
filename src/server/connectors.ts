@@ -70,6 +70,20 @@ export interface ConnectorGrant {
 	 * connector describes its own operations, and trusting that description is a decision only the operator makes.
 	 */
 	readonly trustMarkers: boolean;
+	/**
+	 * The operator's own rules for this connector's tools, each naming a tool as the server does (`issues.create`) or
+	 * `*` for every tool on the connector. `deny` beats `ask` beats `allow`, so a rule can only tighten what a marker
+	 * says: `required` asks unless a deny rule refuses it, and `not_required` allows only with an allow rule or trusted
+	 * markers.
+	 */
+	readonly policy?: ConnectorPolicy;
+}
+
+/** The three rule lists, all of them optional: an absent list is no rule. */
+export interface ConnectorPolicy {
+	readonly allow?: readonly string[];
+	readonly ask?: readonly string[];
+	readonly deny?: readonly string[];
 }
 
 /** One issued connector credential, as `config.json` holds it. The credential itself exists only in the hand that got it. */
@@ -109,6 +123,7 @@ export function readConnectorGrant(
 	const events = readEvents(where, name, raw.events);
 	const state = readState(where, name, raw.state);
 	const trustMarkers = readBoolean(where, name, raw, "trustMarkers");
+	const policy = readPolicy(where, name, raw.policy);
 	const hasFace = user !== undefined || events !== undefined || hasToolsFace;
 	if (!hasFace) {
 		throw new Error(
@@ -125,6 +140,7 @@ export function readConnectorGrant(
 		...(events === undefined ? {} : { events }),
 		state,
 		trustMarkers,
+		...(policy === undefined ? {} : { policy }),
 	};
 }
 
@@ -278,6 +294,43 @@ function readState(where: string, name: string, value: unknown): StateScope[] {
 		scopes.push(entry as StateScope);
 	}
 	return scopes;
+}
+
+/**
+ * The operator's ask/deny/allow rules. Each is a list of tool names; an empty list is no rule, and a name is kept as the
+ * server spells it. An unknown key inside `policy` is not refused — like every entry in this file, a key mason does not
+ * know survives a rewrite, so a newer build's rule is not deleted by an older one.
+ */
+function readPolicy(where: string, name: string, value: unknown): ConnectorPolicy | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error(refusal(where, name, 'has a "connector.policy" that is not an object'));
+	}
+	const raw = value as Record<string, unknown>;
+	const allow = readRuleList(where, name, raw.allow, "allow");
+	const ask = readRuleList(where, name, raw.ask, "ask");
+	const deny = readRuleList(where, name, raw.deny, "deny");
+	if (allow === undefined && ask === undefined && deny === undefined) return undefined;
+	return {
+		...(allow === undefined ? {} : { allow }),
+		...(ask === undefined ? {} : { ask }),
+		...(deny === undefined ? {} : { deny }),
+	};
+}
+
+function readRuleList(where: string, name: string, value: unknown, key: string): readonly string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		throw new Error(refusal(where, name, `has a "connector.policy.${key}" that is not a list of tool names`));
+	}
+	return value.map((entry, index) => {
+		if (typeof entry !== "string" || entry.trim() === "") {
+			throw new Error(
+				refusal(where, name, `has a "connector.policy.${key}" entry ${index} that is not a tool name`),
+			);
+		}
+		return entry.trim();
+	});
 }
 
 function readBoolean(where: string, name: string, raw: Record<string, unknown>, key: string): boolean {
