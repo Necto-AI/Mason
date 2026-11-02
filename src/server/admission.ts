@@ -9,10 +9,13 @@
  * and it used to land twenty-eight minutes after the work it was cancelling was already done.
  */
 import type { InputEntry, JsonObject } from "@earendil-works/pi-durable";
-import { HOOK_ENTRY_KIND } from "../shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND } from "../shared/contract.ts";
 
-/** Where an input came from. `user` is the same human who owns the conversation; `hook` is an event hook firing. */
-export type Origin = "user" | "hook";
+/**
+ * Where an input came from. `user` is a person typing in the operator console; `external` is a person whose words
+ * arrived through a connector, carrying the origin a reply goes back to; `hook` is an event hook firing.
+ */
+export type Origin = "user" | "external" | "hook";
 
 /** The queue a busy conversation puts an input in. `reject` is the caller's own refusal, never a policy here. */
 export type WhenBusy = "steer" | "followUp" | "reject";
@@ -22,6 +25,8 @@ export function entryKindFor(origin: Origin): string | undefined {
 	switch (origin) {
 		case "user":
 			return undefined;
+		case "external":
+			return CONNECTOR_ENTRY_KIND;
 		case "hook":
 			return HOOK_ENTRY_KIND;
 	}
@@ -46,4 +51,12 @@ export function entryFor(origin: Origin, data?: JsonObject): InputEntry | undefi
 export function whenBusyFor(origin: Origin, requested?: WhenBusy): WhenBusy | undefined {
 	if (origin === "hook") return requested === undefined || requested === "steer" ? "steer" : "followUp";
 	return requested;
+}
+
+/**
+ * Whether the origin is a person: the console, or a connector carrying someone's words. A person's message is admitted
+ * as ordinary conversation; a fire steers, and never becomes one.
+ */
+export function isHumanOrigin(origin: Origin): boolean {
+	return origin === "user" || origin === "external";
 }

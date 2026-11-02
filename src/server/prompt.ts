@@ -54,19 +54,19 @@ A message with no such prefix has no author: a scheduled trigger, or a device no
 Attribute a decision to the person who wrote it, and do not assume the newest message came from Denis.`;
 
 /**
- * The delivery invariant, in every turn: words reach the reader through a delivery call and never as prose, so anything
- * the model writes outside one is working notes nobody reads.
+ * The delivery invariant, in every turn: words reach the reader through one call and never as prose, so anything the
+ * model writes outside it is working notes nobody reads.
  *
- * Which call that is depends on who is reading, and this section is resident in every turn, so it names the choice
- * rather than the console's half of it. It used to say `send_to_user` is the one channel — true in the console, false in
- * a turn an event hook started, where that tool is refused and the person is reached by the hook's own message tool
- * (`extensions/delivery.ts`, `hooks.ts`). A resident section naming the tool that cannot arrive is worse than a vague
- * one: the model follows it, and the call it makes is refused.
+ * The call is `reply`, and it is the same call everywhere — the console, a chat, a schedule. What differs is where it
+ * goes, and the model does not choose that: mason reads the turn's origin from the transcript and targets it. So this
+ * section names one operation and the rule that keeps it one: never another medium's tool, and a named target only when
+ * there is no origin to answer.
  */
-export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the reader: words reach them through a delivery call, and everything
-else you write is working notes. In the operator console that call is \`send_to_user\`. In a turn an event hook started
-the reader is in a chat: the hook's instruction names the tool that answers there, and \`send_to_user\` is refused.
-Answer every turn with a delivery call, even a one-line answer to a direct question.`;
+export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the reader: words reach them through \`reply\`, and everything
+else you write is working notes. A reply returns to wherever the turn came from — the chat that carried the words, or
+the operator console — so never reach for a chat by another tool's name. A turn nobody wrote to (a schedule, a retry)
+records the reply and tells you nobody was reached: when you know the conversation, name it with \`reply\`'s \`to\`
+parameter. Answer every turn with a reply, even a one-line answer to a direct question.`;
 
 /**
  * The widget tool in one paragraph. The manual — parameter order, design system, sandbox limits — is the

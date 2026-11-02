@@ -101,7 +101,7 @@ describe("durable harness + pi-env", () => {
 			fauxAssistantMessage(
 				[
 					fauxText("The note greets durable."),
-					fauxToolCall("send_to_user", { message: "The note greets durable." }, { id: "greets" }),
+					fauxToolCall("reply", { message: "The note greets durable." }, { id: "greets" }),
 				],
 				{ stopReason: "toolUse" },
 			),
@@ -124,10 +124,10 @@ describe("durable harness + pi-env", () => {
 
 			const entries = await readEntries(runtime);
 			const toolResults = entries.filter(ToolResultEntry.is);
-			// The four daemon calls, and the `send_to_user` the answer is delivered through.
+			// The four daemon calls, and the `reply` the answer is delivered through.
 			assert.deepEqual(
 				toolResults.map((entry) => (entry.model?.[0] as { toolName?: string }).toolName),
-				["write", "edit", "read", "bash", "send_to_user"],
+				["write", "edit", "read", "bash", "reply"],
 			);
 			// The `read` result carries what the daemon returned, not what the model asked for.
 			assert.match(textOf(toolResults[2]?.model?.[0]), /hello durable/);
@@ -158,10 +158,10 @@ describe("durable harness + pi-env", () => {
 				{ path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" },
 				"w",
 			),
-			toolCall("send_to_user", { message: "Noted." }, "d"),
+			toolCall("reply", { message: "Noted." }, "d"),
 			fauxAssistantMessage(fauxText("Noted.")),
 			// A second turn, so the prompt is rendered again: the profile written above is now the agent's memory.
-			toolCall("send_to_user", { message: "Second." }, "d2"),
+			toolCall("reply", { message: "Second." }, "d2"),
 			fauxAssistantMessage(fauxText("Second.")),
 		]);
 		const runtime = await openFor(directory, access);
@@ -217,7 +217,7 @@ describe("durable harness + pi-env", () => {
 				{ command: 'echo "secret=${MASON_ENV_LEAK_TEST:-absent}"; echo "path=${PATH:+set}"' },
 				"probe",
 			),
-			toolCall("send_to_user", { message: "Probed the environment." }, "probed"),
+			toolCall("reply", { message: "Probed the environment." }, "probed"),
 			fauxAssistantMessage(fauxText("Nothing else to report.")),
 		]);
 		// A secret in the server's own environment: an exported key, a database URL, a switch of ours. The model can run
@@ -242,11 +242,11 @@ describe("durable harness + pi-env", () => {
 		}
 	});
 
-	it("send_to_user is offered in every conversation, and its call is the message the client renders", async () => {
+	it("reply is offered in every conversation, and its call is the message the client renders", async () => {
 		const directory = await tempDir("pda-deliver-");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
-			toolCall("send_to_user", { message: "Standup moved to nine." }, "m1"),
+			toolCall("reply", { message: "Standup moved to nine." }, "m1"),
 			fauxAssistantMessage(fauxText("Nothing else to report.")),
 		]);
 		const runtime = await openFor(directory, access, { storage: "memory" });
@@ -261,7 +261,7 @@ describe("durable harness + pi-env", () => {
 			// The call ran, so the tool was offered: it is in the base extension list, not behind a toggle.
 			const result = entries
 				.filter(ToolResultEntry.is)
-				.find((entry) => (entry.model?.[0] as { toolName?: string }).toolName === "send_to_user");
+				.find((entry) => (entry.model?.[0] as { toolName?: string }).toolName === "reply");
 			assert.ok(result, "the call reached the tool");
 			assert.equal((result.model?.[0] as { isError?: boolean }).isError, false);
 			assert.match(textOf(result.model?.[0]), /delivered/);
@@ -271,7 +271,7 @@ describe("durable harness + pi-env", () => {
 			const transcript = await readTranscript(runtime);
 			assert.deepEqual(
 				transcript.filter((item) => item.kind !== "user"),
-				[{ kind: "delivered", id: "m1", text: "Standup moved to nine." }],
+				[{ kind: "delivered", id: "reply:m1", text: "Standup moved to nine." }],
 			);
 
 			// The invariant the client relies on is in the prompt, not just in the tool description.
@@ -279,11 +279,11 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			// The section names both readers, because it is resident in every turn: the console^s tool, and the fact that
-			// a hooked turn answers with the tool its instruction names.
-			assert.match(system, /words reach them through a delivery call/);
-			assert.match(system, /In the operator console that call is `send_to_user`/);
-			assert.match(system, /the hook's instruction names the tool that answers there/);
+			// The section names the one operation and both of its targets, because it is resident in every turn: `reply`,
+			// which goes back where the turn came from, and `to` for the turn that has no origin.
+			assert.match(system, /words reach them through `reply`/);
+			assert.match(system, /A reply returns to wherever the turn came from/);
+			assert.match(system, /name it with `reply`'s `to`/);
 		} finally {
 			await runtime.close();
 		}
@@ -292,9 +292,9 @@ describe("durable harness + pi-env", () => {
 	it("an event hook appends an app.hook entry and the agent answers on its own", async () => {
 		const directory = await tempDir("pda-hook-");
 		const { access, faux } = fauxAccess();
-		// The proactive turn delivers through `send_to_user` like any other: a message, then a working note.
+		// The proactive turn delivers through `reply` like any other: a message, then a working note.
 		faux.setResponses([
-			toolCall("send_to_user", { message: "Workspace is clean." }, "h1"),
+			toolCall("reply", { message: "Workspace is clean." }, "h1"),
 			fauxAssistantMessage(fauxText("Nothing else to report.")),
 		]);
 		const runtime = await openFor(directory, access, { storage: "memory" });
@@ -343,9 +343,9 @@ describe("durable harness + pi-env", () => {
 	it("the retry hook carries the failure back to the agent, and nothing schedules it on its own", async () => {
 		const directory = await tempDir("pda-retry-");
 		const { access, faux } = fauxAccess();
-		// The proactive turn delivers through `send_to_user` like any other: a message, then a closing note.
+		// The proactive turn delivers through `reply` like any other: a message, then a closing note.
 		faux.setResponses([
-			toolCall("send_to_user", { message: "Picking the write back up." }, "resumed"),
+			toolCall("reply", { message: "Picking the write back up." }, "resumed"),
 			fauxAssistantMessage(fauxText("Resuming the write.")),
 		]);
 		const runtime = await openFor(directory, access, { storage: "memory" });
@@ -407,7 +407,7 @@ describe("durable harness + pi-env", () => {
 		const { access: restartedAccess, faux: restartedFaux } = fauxAccess();
 		// The resumed turn delivers first and closes with the answer in prose, which is still the last thing committed.
 		restartedFaux.setResponses([
-			toolCall("send_to_user", { message: "The interrupted write is finished." }, "resumed-answer"),
+			toolCall("reply", { message: "The interrupted write is finished." }, "resumed-answer"),
 			fauxAssistantMessage(fauxText("Finished after the restart.")),
 		]);
 		const reopened = await openFor(directory, restartedAccess);
@@ -422,7 +422,7 @@ describe("durable harness + pi-env", () => {
 			// The delivery step commits the call's result before the turn's closing answer.
 			assert.deepEqual(
 				entries.map((entry) => entry.kind),
-				["pi.user", "pi.system", "pi.assistant", "pi.tool-result", "pi.assistant"],
+				["pi.user", "pi.system", "pi.assistant", "app.reply", "pi.tool-result", "pi.assistant"],
 			);
 			assert.equal(textOf(entries.at(-1)?.model?.[0]), "Finished after the restart.");
 		} finally {

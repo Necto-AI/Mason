@@ -36,14 +36,28 @@ export const COMMAND_LIMIT = EVENT_FIRE_LIMIT;
 export const EVENT_FIRE_WINDOW_MS = 60_000;
 
 /**
+ * A connector's budgets, per class and per connector. They are separate because they bound different spending: a
+ * submission is a person's message, a fire is a whole turn, a control is an act on the run, and an attachment is bytes.
+ * A flood in one must not starve another, and `stop` has its own beside the controls (`connector.ts`).
+ */
+export const CONNECTOR_SUBMISSION_LIMIT = 60;
+export const CONNECTOR_FIRE_LIMIT = 6;
+export const CONNECTOR_CONTROL_LIMIT = 6;
+
+/**
  * How many integration names a limiter remembers. The names come from the URL, so the map is bounded rather than
  * trusted: a sender inventing paths must not be able to grow it, and the oldest key is the one to forget first.
  */
 const TRACKED_KEYS_MAX = 512;
 
 export interface FireLimiter {
-	/** Seconds to wait when this fire is refused; `undefined` when it is allowed — and counted. */
-	take(key: string): number | undefined;
+	/**
+	 * Seconds to wait when this key's budget is spent; `undefined` when it is allowed — and counted.
+	 *
+	 * `limit` defaults to the process's fire budget. A caller with its own class (a connector's submissions, its
+	 * attachments) passes the number it advertised, so the budget a sender reads at the handshake is the one it meets.
+	 */
+	take(key: string, limit?: number): number | undefined;
 }
 
 /**
@@ -62,10 +76,11 @@ export function createFireLimiter(
 	const fires = new Map<string, number[]>();
 
 	return {
-		take(key) {
+		take(key, budget) {
 			const at = now();
+			const cap = budget ?? limit;
 			const recent = (fires.get(key) ?? []).filter((time) => at - time < windowMs);
-			if (recent.length >= limit) {
+			if (recent.length >= cap) {
 				const oldest = recent[0] ?? at;
 				fires.set(key, recent);
 				return Math.max(1, Math.ceil((oldest + windowMs - at) / 1000));

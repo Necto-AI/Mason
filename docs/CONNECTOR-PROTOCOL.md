@@ -30,10 +30,13 @@ not keep a second copy of the rules here: two documents that both claim to be th
 
 | | |
 |---|---|
-| Mason's server speaking this protocol | not yet: the socket, the outbox, live MCP and the permission gateway land next |
-| Telegram and Slack as external processes on the SDK | not yet |
-| Removal of the HMAC event door and the legacy console socket | not yet |
+| Mason's server speaking this protocol | `src/server/connector.ts`: the socket, admission, the state mirrors, the reply outbox, attachments and budgets (`docs/SPEC.md` §4.1d) |
+| The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add <name>` mints the credential |
+| What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
+| Telegram and Slack as external processes on the SDK | not yet (`#104`) |
+| The permission gateway and live MCP discovery | not yet (`#102`) |
+| Removal of the HMAC event door and the legacy console socket | not yet (`#104`) |
 
-Until the server speaks it, a connector built on this contract has nothing to connect to. The SDK and the protocol are
-published first because every later slice — the server, the admin panel, the two real connectors — is written against
-them, and because a contract that two independent implementations have not yet read is a contract nobody has tested.
+A connector can connect today, submit words, fire events, subscribe to the state its entry grants, receive replies and
+move files. Until `#104`, the old HMAC door still exists beside this socket and the old Telegram relay still speaks it;
+the two do not share a delivery path, and a fire through the old door has no origin for a reply to go back to.

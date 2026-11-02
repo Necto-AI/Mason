@@ -67,7 +67,16 @@ export {
 	silentLogger,
 } from "./connector.ts";
 export { protocolErrorOf, protocolFailure, type RpcMessage } from "./jsonrpc.ts";
-export { type Link, type LinkFactory, linkPair, webSocketLink } from "./link.ts";
+export {
+	type Link,
+	type LinkFactory,
+	linkOver,
+	linkPair,
+	nodeWebSocketLink,
+	type WebSocketConstructor,
+	type WebSocketLike,
+	webSocketLink,
+} from "./link.ts";
 export {
 	approvalMeta,
 	declareTool,

@@ -24,6 +24,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { writeFileAtomic } from "./atomic.ts";
+import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
 import { COMMAND_NAMES, type CommandName, isCommandName } from "./events.ts";
 import type { HousePaths } from "./house.ts";
 import { clearIntegrationStatus } from "./integration-status.ts";
@@ -43,6 +44,11 @@ export interface IntegrationTools {
 	readonly url: string;
 	/** Opt in to the old behaviour: an unreachable server refuses the boot instead of removing its tools. */
 	readonly required?: boolean;
+	/**
+	 * The credential the connector issued **to mason**, sent as `Authorization: Bearer` on every MCP call. Direction
+	 * matters: this is mason's credential to that service, and it is never the credential mason issued to the connector.
+	 */
+	readonly credential?: string;
 	/** A key mason does not know survives a rewrite, here as everywhere in this file. */
 	readonly [key: string]: unknown;
 }
@@ -62,6 +68,12 @@ export interface Integration {
 	readonly description?: string;
 	readonly tools?: IntegrationTools;
 	readonly trigger?: IntegrationTrigger;
+	/**
+	 * What this service is granted as a connector: which actors map to which people, which kinds fire which hook, which
+	 * state scopes it may mirror, whether its approval markers are trusted. Absent for an integration that only lends
+	 * tools or only posts a signed trigger.
+	 */
+	readonly connector?: ConnectorGrant;
 	/**
 	 * What the trigger's secret may ask for beyond a fire, out of the closed set in `events.ts`. Absent or empty means
 	 * none, so an existing trigger secret gains no vocabulary by being read.
@@ -177,6 +189,7 @@ function validate(where: string, name: string, value: unknown): Integration {
 	const description = readDescription(where, name, raw.description, tools !== undefined);
 	const trigger = readTrigger(where, name, raw.trigger);
 	const commands = readCommands(where, name, raw.commands);
+	const connector = readConnectorGrant(where, name, raw.connector, tools !== undefined);
 	return {
 		...raw,
 		enabled,
@@ -184,6 +197,7 @@ function validate(where: string, name: string, value: unknown): Integration {
 		...(tools === undefined ? {} : { tools }),
 		...(trigger === undefined ? {} : { trigger }),
 		...(commands === undefined ? {} : { commands }),
+		...(connector === undefined ? {} : { connector }),
 	};
 }
 
@@ -214,7 +228,22 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 			),
 		);
 	}
-	return { ...raw, url, ...(required === undefined ? {} : { required }) };
+	const credential = raw.credential;
+	if (credential !== undefined && (typeof credential !== "string" || credential.trim() === "")) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				'has a "tools.credential" that is not a credential: it is the key the connector issued mason',
+			),
+		);
+	}
+	return {
+		...raw,
+		url,
+		...(required === undefined ? {} : { required }),
+		...(credential === undefined ? {} : { credential }),
+	};
 }
 
 /**
