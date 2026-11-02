@@ -765,10 +765,6 @@ describe("the grants", () => {
 			assert.equal((await panel.call("GET", "/api/status", undefined, none)).status, 403);
 			assert.equal((await panel.call("GET", "/api/integrations", undefined, none)).status, 403);
 
-			// The two script routes carry the area their grant covers, and nothing for a device without it.
-			assert.equal((await panel.call("GET", "/api/status", undefined, none)).status, 403);
-			assert.equal((await panel.call("GET", "/api/integrations", undefined, none)).status, 403);
-
 			const conversation = await panel.granted(["conversation"]);
 			const reader = (await panel.call("GET", "/api/admin/state", undefined, conversation)).body as PanelState;
 			assert.ok(reader.conversation !== undefined);
@@ -840,6 +836,17 @@ describe("the configuration the panel writes", () => {
 		const panel = await openPanel();
 		try {
 			await addPerson(housePaths(panel.home), "Ilya");
+			// A name is the one field whose refusal quotes what the operator typed, so a typo has to be a sentence in the
+			// form and not a stack in the log — including a quote, which used to break the classification itself.
+			for (const name of ["Bad_Name", 'x"y']) {
+				const refused = await panel.call("POST", "/api/admin/connectors", {
+					name,
+					description: "tools",
+					tools: { url: "http://127.0.0.1:9/mcp" },
+				});
+				assert.equal(refused.status, 400, `${name}: ${JSON.stringify(refused.body)}`);
+				assert.match(refused.body.error, /is not a usable name/);
+			}
 			const created = await panel.call("POST", "/api/admin/connectors", {
 				name: "github",
 				description: "GitHub issues and pull requests",
