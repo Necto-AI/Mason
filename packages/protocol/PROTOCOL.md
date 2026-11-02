@@ -19,7 +19,7 @@ tools transport; this socket does not replace it and does not carry tool calls.
 | Credential | `Authorization: Bearer <mason-issued connector credential>` on the upgrade request |
 | TLS | required outside a trusted local deployment network |
 | Framing | one JSON-RPC message per WebSocket text frame |
-| Keepalive | `connector/ping` every 20 s; no message for 60 s closes the socket |
+| Keepalive | `connector/ping` (a request, answered with `{at}`) on an idle socket every 20 s; no message for 60 s closes it |
 
 A second socket for the same connector supersedes the first, and the superseded one is closed with a reason. Reconnecting
 is the recovery mechanism for everything: there is no session resumption beyond the sequence numbers below.
@@ -124,6 +124,43 @@ The result is a durable claim, and `submissionId` is the identity mason deduplic
 `stop`, `compact`, `clear`, `status`, and nothing else. A control never reads anything. `stop` has its own budget so a
 connector that spent its fire minute can still stop the turn those fires started. An undeclared op is
 `mason.invalid_request` and spends nothing.
+
+## Tools
+
+Tools do not travel on this socket. The `tools` face is an MCP server over Streamable HTTP, which stays MCP because
+inventing a transport for the one thing that already has a standard is how a protocol loses its reason to exist. Two
+things about it are fixed here, because mason has to act on both.
+
+**Mason connects to it with its own credential.** Direction matters: mason holds a credential the connector issued for
+mason's MCP calls, and the connector holds the credential mason issued for this socket. Neither side ever sees the
+other's operator credential, and a connector never receives a credential that speaks for a person.
+
+**Every tool declares its approval marker.** In the tool's `_meta`, in mason's namespace:
+
+```json
+{"name":"send_message","description":"Send one message to a chat.","inputSchema":{},
+ "_meta":{"dev.mason/approval":"required"}}
+```
+
+| `dev.mason/approval` | Meaning |
+|---|---|
+| `required` | mason asks a person before this call runs, unless the call is denied outright |
+| `not_required` | the call runs without asking **only** when the operator trusts this connector's markers, or has an allow rule for this tool |
+
+Rules that make the marker worth reading:
+
+1. **Missing, or a value mason does not know, means `required`.** A tool that says nothing about its effects is a tool
+   nobody vouched for, and the safe answer to "may this run without asking?" is always no.
+2. **The connector author writes it**, because that service knows what the operation does. Mason does not infer risk from
+   a tool's name.
+3. **MCP's own annotations are not authority.** `readOnlyHint` and `destructiveHint` are claims a server makes about
+   itself; trusting them is a decision only an operator may make, and this marker is the claim they decide about.
+4. **Markers are static per tool.** An operation whose risk depends on its arguments is two tools.
+5. **Live, not frozen.** Mason discovers the current catalog through codemode, and a tool that disappears or is
+   redefined rejects a later call with a rediscovery instruction rather than running against a stale schema.
+
+Nine out of ten tools are `required` in practice: a send, a write, a delete, anything that leaves the process. The one
+that is not is the read you would let a stranger run.
 
 ## Replies
 
@@ -258,6 +295,19 @@ A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence,
 | `mason.not_authenticated` | no | a bad or revoked credential |
 | `mason.unknown_permission` | no | an answer to a request that does not exist |
 | `mason.internal` | depends | mason failed; the sentence says what |
+
+## The conformance suite
+
+A connector is conformant when the published suite passes against it. It ships with `@mason/connector` as
+`@mason/connector/testkit` — a fake mason that enforces this document rather than agreeing with everything — and it runs
+in a connector's own repository, with no path into mason's source:
+
+```ts
+const result = await runConformance({ name: "telegram", faces, handlers });
+```
+
+The fixtures that prove the suite itself are a tools-only connector, an events-only one, and a full user one, because the
+three shapes exercise different halves of what is above.
 
 ## Delivery guarantees, stated honestly
 

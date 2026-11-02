@@ -10,20 +10,19 @@
  * wraps every handler so it can see what the connector was actually asked to do. A fixture that built its own connector
  * would be the thing certifying itself.
  */
-import {
-	type Capability,
-	type DeliveryDeltaParams,
-	type DeliveryFinalParams,
-	type DeliveryStartParams,
-	type ExternalActor,
-	type ExternalConversation,
-	type FacesDeclaration,
-	type InteractionAck,
-	type InteractionRequestParams,
-	METHOD,
-	type StateDeltaParams,
-	type StateScope,
-	type StateSnapshotParams,
+import type {
+	Capability,
+	DeliveryDeltaParams,
+	DeliveryFinalParams,
+	DeliveryStartParams,
+	ExternalActor,
+	ExternalConversation,
+	FacesDeclaration,
+	InteractionAck,
+	InteractionRequestParams,
+	StateDeltaParams,
+	StateScope,
+	StateSnapshotParams,
 } from "@mason/protocol";
 import { AttachmentError } from "../attachments.ts";
 import {
@@ -511,6 +510,40 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
+			name: "delivery/a slow send is not sent twice while it is still in flight",
+			needs: ["user"],
+			async run(context) {
+				const { mason, observed } = context;
+				let sends = 0;
+				context.handler.onDelivery = async (params) => {
+					sends += 1;
+					// One turn of the loop: a real connector talks to a vendor here, which is the window in which a naive
+					// replay would send the same message a second time.
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					return { status: "delivered", external: { id: params.deliveryId } };
+				};
+				const [first, second] = await Promise.all([
+					mason.deliver({
+						deliveryId: "d-slow",
+						origin: originOf(context.fixture),
+						blocks: [{ type: "text", text: "hi" }],
+					}),
+					mason.deliver({
+						deliveryId: "d-slow",
+						origin: originOf(context.fixture),
+						blocks: [{ type: "text", text: "hi" }],
+					}),
+				]);
+				for (const ack of [first, second]) {
+					if (ack === undefined) fail("delivery", "a delivery went unanswered");
+					if (ack.status !== "delivered" && ack.status !== "duplicate")
+						fail("delivery", `an ack was ${ack.status}`);
+				}
+				equal(sends, 1, "sends for one delivery id");
+				equal(observed.deliveries.length, 1, "handler runs for one delivery id");
+			},
+		},
+		{
 			name: "delivery/a reply reaches the origin and is acknowledged once",
 			needs: ["user"],
 			async run({ mason, observed, fixture }) {
@@ -565,18 +598,24 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			needs: ["user"],
 			async run(context) {
 				const { mason } = context;
+				let attemptsToVendor = 0;
 				context.handler.onDelivery = () => {
+					attemptsToVendor += 1;
 					throw new Error("the vendor stopped answering");
 				};
-				const ack = await mason.deliver({
+				// The acknowledgement is lost, which is the only way an uncertain outcome can be asked about twice.
+				mason.loseNextAck();
+				const first = await mason.deliver({
 					deliveryId: "d-4",
 					origin: originOf(context.fixture),
 					blocks: [{ type: "text", text: "maybe" }],
 				});
-				equal(ack?.status, "uncertain", "the acknowledgement");
-				mason.kill("reconnect");
+				equal(first, undefined, "the first acknowledgement");
+				mason.kill("the acknowledgement was lost");
 				await waitFor(() => mason.connected, "the connector reconnected");
-				equal(mason.deliveries[0]?.attempts, 1, "attempts after reconnect");
+				await waitFor(() => mason.deliveries[0]?.ack !== undefined, "the delivery was settled after reconnect");
+				equal(mason.deliveries[0]?.ack?.status, "uncertain", "the resent delivery");
+				equal(attemptsToVendor, 1, "attempts a person's message was sent with");
 			},
 		},
 		{
@@ -709,5 +748,8 @@ export function conformanceCases(): readonly ConformanceCase[] {
 	];
 }
 
-/** The method names a connector must answer, so a fixture can assert it was asked for the ones it claims. */
-export const CONNECTOR_ANSWERED_METHODS = [METHOD.deliveryFinal, METHOD.interactionRequest, METHOD.ping] as const;
+/**
+ * Nothing to export here yet: a tools-face case needs live MCP discovery, which is masonry the server half owns. The
+ * tools-only fixture passes the handshake, grant and control cases, and says so in the suite's skipped list rather than
+ * passing a case that would prove nothing.
+ */

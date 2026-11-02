@@ -175,7 +175,14 @@ export class RpcPeer {
 			return;
 		}
 		if (isNotification(message)) {
-			this.handlers.notification(message.method, message.params);
+			// Nobody is waiting for a notification, so a rejection has nowhere to go but the process. A handler that
+			// throws is a medium that cannot render one thing, not a reason to kill an always-on connector.
+			void Promise.resolve(this.handlers.notification(message.method, message.params)).catch((error: unknown) => {
+				this.handlers.notification("connector/handler_error", {
+					method: message.method,
+					detail: error instanceof Error ? error.message : String(error),
+				});
+			});
 			return;
 		}
 		if (isSuccess(message)) {

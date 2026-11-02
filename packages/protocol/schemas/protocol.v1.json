@@ -10,11 +10,17 @@
 			"additionalProperties": false,
 			"required": ["major"],
 			"properties": {
-				"major": { "type": "integer", "minimum": 1 },
+				"major": {
+					"type": "integer",
+					"minimum": 1
+				},
 				"minors": {
 					"type": "array",
 					"description": "Optional minors the sender implements, highest last. Mason answers with the highest one both sides know, so an addition within a major never fails a handshake.",
-					"items": { "type": "integer", "minimum": 0 }
+					"items": {
+						"type": "integer",
+						"minimum": 0
+					}
 				}
 			}
 		},
@@ -39,8 +45,13 @@
 			"additionalProperties": false,
 			"required": ["externalActorId"],
 			"properties": {
-				"externalActorId": { "type": "string", "minLength": 1 },
-				"displayName": { "type": "string" }
+				"externalActorId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"displayName": {
+					"type": "string"
+				}
 			}
 		},
 		"externalConversation": {
@@ -49,9 +60,17 @@
 			"additionalProperties": false,
 			"required": ["externalConversationId", "kind"],
 			"properties": {
-				"externalConversationId": { "type": "string", "minLength": 1 },
-				"kind": { "type": "string", "enum": ["person", "room"] },
-				"title": { "type": "string" }
+				"externalConversationId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"kind": {
+					"type": "string",
+					"enum": ["person", "room"]
+				},
+				"title": {
+					"type": "string"
+				}
 			}
 		},
 		"origin": {
@@ -60,16 +79,28 @@
 			"additionalProperties": true,
 			"required": ["connector", "externalConversationId"],
 			"properties": {
-				"connector": { "type": "string", "minLength": 1 },
-				"externalConversationId": { "type": "string", "minLength": 1 },
-				"externalMessageId": { "type": "string" },
-				"externalActorId": { "type": "string" }
+				"connector": {
+					"type": "string",
+					"minLength": 1
+				},
+				"externalConversationId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"externalMessageId": {
+					"type": "string"
+				},
+				"externalActorId": {
+					"type": "string"
+				}
 			}
 		},
 		"blocks": {
 			"type": "array",
 			"description": "Message content as typed blocks. A file is a content id that crosses through the transfer endpoints, never a path or a base64 blob.",
-			"items": { "$ref": "#/$defs/block" }
+			"items": {
+				"$ref": "#/$defs/block"
+			}
 		},
 		"block": {
 			"oneOf": [
@@ -78,8 +109,12 @@
 					"additionalProperties": false,
 					"required": ["type", "text"],
 					"properties": {
-						"type": { "const": "text" },
-						"text": { "type": "string" }
+						"type": {
+							"const": "text"
+						},
+						"text": {
+							"type": "string"
+						}
 					}
 				},
 				{
@@ -87,8 +122,12 @@
 					"additionalProperties": false,
 					"required": ["type", "text"],
 					"properties": {
-						"type": { "const": "markdown" },
-						"text": { "type": "string" }
+						"type": {
+							"const": "markdown"
+						},
+						"text": {
+							"type": "string"
+						}
 					}
 				},
 				{
@@ -96,12 +135,26 @@
 					"additionalProperties": false,
 					"required": ["type", "contentId"],
 					"properties": {
-						"type": { "const": "file" },
-						"contentId": { "type": "string", "minLength": 1 },
-						"name": { "type": "string" },
-						"mimeType": { "type": "string" },
-						"size": { "type": "integer", "minimum": 0 },
-						"caption": { "type": "string" }
+						"type": {
+							"const": "file"
+						},
+						"contentId": {
+							"type": "string",
+							"minLength": 1
+						},
+						"name": {
+							"type": "string"
+						},
+						"mimeType": {
+							"type": "string"
+						},
+						"size": {
+							"type": "integer",
+							"minimum": 0
+						},
+						"caption": {
+							"type": "string"
+						}
 					}
 				},
 				{
@@ -109,7 +162,9 @@
 					"additionalProperties": false,
 					"required": ["type", "content"],
 					"properties": {
-						"type": { "const": "widget" },
+						"type": {
+							"const": "widget"
+						},
 						"content": {}
 					}
 				},
@@ -118,8 +173,12 @@
 					"additionalProperties": false,
 					"required": ["type", "text"],
 					"properties": {
-						"type": { "const": "notice" },
-						"text": { "type": "string" }
+						"type": {
+							"const": "notice"
+						},
+						"text": {
+							"type": "string"
+						}
 					}
 				}
 			]
@@ -135,10 +194,19 @@
 			"additionalProperties": true,
 			"required": ["accepted", "id"],
 			"properties": {
-				"accepted": { "type": "boolean" },
-				"id": { "type": "string", "minLength": 1 },
-				"entryId": { "type": "string" },
-				"duplicate": { "type": "boolean" }
+				"accepted": {
+					"type": "boolean"
+				},
+				"id": {
+					"type": "string",
+					"minLength": 1
+				},
+				"entryId": {
+					"type": "string"
+				},
+				"duplicate": {
+					"type": "boolean"
+				}
 			}
 		},
 		"helloRequest": {
@@ -147,14 +215,22 @@
 			"additionalProperties": true,
 			"required": ["protocol", "connector", "faces"],
 			"properties": {
-				"protocol": { "$ref": "#/$defs/version" },
+				"protocol": {
+					"$ref": "#/$defs/version"
+				},
 				"connector": {
 					"type": "object",
 					"additionalProperties": false,
 					"required": ["name", "version"],
 					"properties": {
-						"name": { "type": "string", "minLength": 1 },
-						"version": { "type": "string", "minLength": 1 }
+						"name": {
+							"type": "string",
+							"minLength": 1
+						},
+						"version": {
+							"type": "string",
+							"minLength": 1
+						}
 					}
 				},
 				"faces": {
@@ -166,12 +242,24 @@
 							"type": "object",
 							"additionalProperties": false,
 							"properties": {
-								"actors": { "type": "array", "items": { "$ref": "#/$defs/externalActor" } },
+								"actors": {
+									"type": "array",
+									"items": {
+										"$ref": "#/$defs/externalActor"
+									}
+								},
 								"conversations": {
 									"type": "array",
-									"items": { "$ref": "#/$defs/externalConversation" }
+									"items": {
+										"$ref": "#/$defs/externalConversation"
+									}
 								},
-								"capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }
+								"capabilities": {
+									"type": "array",
+									"items": {
+										"$ref": "#/$defs/capability"
+									}
+								}
 							}
 						},
 						"tools": {
@@ -191,7 +279,10 @@
 								"kinds": {
 									"type": "array",
 									"description": "The structured `kind` strings this connector may fire. The operator maps them to hooks; mason never invents a vendor-specific one.",
-									"items": { "type": "string", "minLength": 1 }
+									"items": {
+										"type": "string",
+										"minLength": 1
+									}
 								}
 							}
 						}
@@ -205,7 +296,9 @@
 			"additionalProperties": false,
 			"required": ["protocol", "connector", "faces", "capabilities", "limits"],
 			"properties": {
-				"protocol": { "$ref": "#/$defs/version" },
+				"protocol": {
+					"$ref": "#/$defs/version"
+				},
 				"connector": {
 					"type": "string",
 					"description": "The connector name mason configured under. It may differ from the name advertised."
@@ -222,21 +315,34 @@
 								"actors": {
 									"type": "array",
 									"description": "The external actors mason maps to a roster name. An actor absent from this list is refused unless the entry permits unattributed participants.",
-									"items": { "$ref": "#/$defs/externalActor" }
+									"items": {
+										"$ref": "#/$defs/externalActor"
+									}
 								},
 								"conversations": {
 									"type": "array",
 									"description": "The rooms and conversations this connector may carry. A submission naming another one is refused.",
-									"items": { "$ref": "#/$defs/externalConversation" }
+									"items": {
+										"$ref": "#/$defs/externalConversation"
+									}
 								},
-								"capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } }
+								"capabilities": {
+									"type": "array",
+									"items": {
+										"$ref": "#/$defs/capability"
+									}
+								}
 							}
 						},
 						"tools": {
 							"type": "object",
 							"additionalProperties": false,
 							"required": ["url"],
-							"properties": { "url": { "type": "string" } }
+							"properties": {
+								"url": {
+									"type": "string"
+								}
+							}
 						},
 						"events": {
 							"type": "object",
@@ -246,7 +352,9 @@
 								"hooks": {
 									"type": "object",
 									"description": "The `kind` an event may declare and the hook it fires. A kind absent from this map is refused.",
-									"additionalProperties": { "type": "string" }
+									"additionalProperties": {
+										"type": "string"
+									}
 								}
 							}
 						}
@@ -260,13 +368,24 @@
 						"additionalProperties": false,
 						"required": ["face", "reason"],
 						"properties": {
-							"face": { "$ref": "#/$defs/face" },
-							"reason": { "type": "string" }
+							"face": {
+								"$ref": "#/$defs/face"
+							},
+							"reason": {
+								"type": "string"
+							}
 						}
 					}
 				},
-				"capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" } },
-				"limits": { "$ref": "#/$defs/limits" }
+				"capabilities": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/capability"
+					}
+				},
+				"limits": {
+					"$ref": "#/$defs/limits"
+				}
 			}
 		},
 		"limits": {
@@ -275,12 +394,30 @@
 			"additionalProperties": false,
 			"required": ["submissionsPerMinute", "firesPerMinute", "controlsPerMinute", "attachmentsPerMinute"],
 			"properties": {
-				"submissionsPerMinute": { "type": "integer", "minimum": 0 },
-				"firesPerMinute": { "type": "integer", "minimum": 0 },
-				"controlsPerMinute": { "type": "integer", "minimum": 0 },
-				"attachmentsPerMinute": { "type": "integer", "minimum": 0 },
-				"attachmentBytes": { "type": "integer", "minimum": 0 },
-				"attachmentTtlMs": { "type": "integer", "minimum": 0 }
+				"submissionsPerMinute": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"firesPerMinute": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"controlsPerMinute": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"attachmentsPerMinute": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"attachmentBytes": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"attachmentTtlMs": {
+					"type": "integer",
+					"minimum": 0
+				}
 			}
 		},
 		"submitParams": {
@@ -289,15 +426,28 @@
 			"additionalProperties": false,
 			"required": ["submissionId", "origin", "content"],
 			"properties": {
-				"submissionId": { "type": "string", "minLength": 1 },
-				"origin": { "$ref": "#/$defs/origin" },
-				"actor": { "$ref": "#/$defs/externalActor" },
-				"content": { "$ref": "#/$defs/blocks" },
-				"mode": { "$ref": "#/$defs/submissionMode" },
+				"submissionId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"origin": {
+					"$ref": "#/$defs/origin"
+				},
+				"actor": {
+					"$ref": "#/$defs/externalActor"
+				},
+				"content": {
+					"$ref": "#/$defs/blocks"
+				},
+				"mode": {
+					"$ref": "#/$defs/submissionMode"
+				},
 				"capabilities": {
 					"type": "array",
 					"description": "What this origin can render. Narrower than the hello declaration when one connector carries two surfaces of different ability.",
-					"items": { "$ref": "#/$defs/capability" }
+					"items": {
+						"$ref": "#/$defs/capability"
+					}
 				},
 				"approver": {
 					"type": "boolean",
@@ -311,10 +461,18 @@
 			"additionalProperties": false,
 			"required": ["fireId", "kind", "payload"],
 			"properties": {
-				"fireId": { "type": "string", "minLength": 1 },
-				"kind": { "type": "string", "minLength": 1 },
+				"fireId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"kind": {
+					"type": "string",
+					"minLength": 1
+				},
 				"payload": {},
-				"origin": { "$ref": "#/$defs/origin" },
+				"origin": {
+					"$ref": "#/$defs/origin"
+				},
 				"summary": {
 					"type": "string",
 					"description": "One operator-readable line for the trace. Not an instruction and not what the model is told to do."
@@ -327,10 +485,20 @@
 			"additionalProperties": false,
 			"required": ["op"],
 			"properties": {
-				"op": { "type": "string", "enum": ["stop", "compact", "clear", "status"] },
-				"requestId": { "type": "string", "minLength": 1 },
-				"instructions": { "type": "string" },
-				"by": { "$ref": "#/$defs/externalActor" }
+				"op": {
+					"type": "string",
+					"enum": ["stop", "compact", "clear", "status"]
+				},
+				"requestId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"instructions": {
+					"type": "string"
+				},
+				"by": {
+					"$ref": "#/$defs/externalActor"
+				}
 			}
 		},
 		"controlResult": {
@@ -338,8 +506,13 @@
 			"additionalProperties": false,
 			"required": ["handled", "op"],
 			"properties": {
-				"handled": { "type": "boolean" },
-				"op": { "type": "string", "enum": ["stop", "compact", "clear", "status"] },
+				"handled": {
+					"type": "boolean"
+				},
+				"op": {
+					"type": "string",
+					"enum": ["stop", "compact", "clear", "status"]
+				},
 				"reply": {
 					"type": "string",
 					"description": "One sentence for the person who asked, or why it was not acted on."
@@ -357,9 +530,17 @@
 			"additionalProperties": false,
 			"required": ["permissionId", "answer"],
 			"properties": {
-				"permissionId": { "type": "string", "minLength": 1 },
-				"answer": { "type": "string", "enum": ["allow", "deny"] },
-				"by": { "$ref": "#/$defs/externalActor" }
+				"permissionId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"answer": {
+					"type": "string",
+					"enum": ["allow", "deny"]
+				},
+				"by": {
+					"$ref": "#/$defs/externalActor"
+				}
 			}
 		},
 		"interactionAnswerResult": {
@@ -371,7 +552,9 @@
 					"type": "boolean",
 					"description": "Whether this answer settled the request. False for a late answer, an unauthenticated actor, or a request that was already settled."
 				},
-				"reason": { "type": "string" }
+				"reason": {
+					"type": "string"
+				}
 			}
 		},
 		"stateSubscribeParams": {
@@ -380,7 +563,12 @@
 			"additionalProperties": false,
 			"required": ["scopes"],
 			"properties": {
-				"scopes": { "type": "array", "items": { "$ref": "#/$defs/stateScope" } },
+				"scopes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/stateScope"
+					}
+				},
 				"since": {
 					"type": "integer",
 					"minimum": 0,
@@ -393,9 +581,19 @@
 			"additionalProperties": false,
 			"required": ["scopes", "seq"],
 			"properties": {
-				"scopes": { "type": "array", "items": { "$ref": "#/$defs/stateScope" } },
-				"seq": { "type": "integer", "minimum": 0 },
-				"resumed": { "type": "boolean" }
+				"scopes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/stateScope"
+					}
+				},
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"resumed": {
+					"type": "boolean"
+				}
 			}
 		},
 		"deliveryStartParams": {
@@ -404,13 +602,22 @@
 			"additionalProperties": false,
 			"required": ["deliveryId", "origin", "seq", "blocks"],
 			"properties": {
-				"deliveryId": { "type": "string", "minLength": 1 },
-				"origin": { "$ref": "#/$defs/origin" },
-				"seq": { "type": "integer", "minimum": 0 },
-				"blocks": { "$ref": "#/$defs/blocks" },
+				"deliveryId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"origin": {
+					"$ref": "#/$defs/origin"
+				},
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"blocks": {
+					"$ref": "#/$defs/blocks"
+				},
 				"target": {
-					"type": "object",
-					"description": "Absent for a reply to the origin. Present for a proactive send and for an explicit target."
+					"$ref": "#/$defs/deliveryTarget"
 				}
 			}
 		},
@@ -420,9 +627,17 @@
 			"additionalProperties": false,
 			"required": ["deliveryId", "seq", "blocks"],
 			"properties": {
-				"deliveryId": { "type": "string", "minLength": 1 },
-				"seq": { "type": "integer", "minimum": 0 },
-				"blocks": { "$ref": "#/$defs/blocks" }
+				"deliveryId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"blocks": {
+					"$ref": "#/$defs/blocks"
+				}
 			}
 		},
 		"deliveryFinalParams": {
@@ -431,13 +646,22 @@
 			"additionalProperties": false,
 			"required": ["deliveryId", "origin", "seq", "blocks"],
 			"properties": {
-				"deliveryId": { "type": "string", "minLength": 1 },
-				"origin": { "$ref": "#/$defs/origin" },
-				"seq": { "type": "integer", "minimum": 0 },
-				"blocks": { "$ref": "#/$defs/blocks" },
+				"deliveryId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"origin": {
+					"$ref": "#/$defs/origin"
+				},
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"blocks": {
+					"$ref": "#/$defs/blocks"
+				},
 				"target": {
-					"type": "object",
-					"description": "Absent for a reply to the origin. Present for a proactive send and for an explicit target."
+					"$ref": "#/$defs/deliveryTarget"
 				}
 			}
 		},
@@ -447,14 +671,33 @@
 			"additionalProperties": false,
 			"required": ["status"],
 			"properties": {
-				"status": { "type": "string", "enum": ["delivered", "duplicate", "uncertain", "rejected"] },
-				"detail": { "type": "string" },
+				"status": {
+					"type": "string",
+					"enum": ["delivered", "duplicate", "uncertain", "rejected"]
+				},
+				"detail": {
+					"type": "string"
+				},
 				"external": {
 					"type": "object",
 					"description": "What the medium answered, for the trace.",
 					"additionalProperties": true
 				}
-			}
+			},
+			"allOf": [
+				{
+					"if": {
+						"properties": {
+							"status": {
+								"enum": ["uncertain", "rejected"]
+							}
+						}
+					},
+					"then": {
+						"required": ["detail"]
+					}
+				}
+			]
 		},
 		"interactionRequestParams": {
 			"type": "object",
@@ -462,25 +705,41 @@
 			"additionalProperties": false,
 			"required": ["permissionId", "tool", "arguments", "reason", "answers", "origin"],
 			"properties": {
-				"permissionId": { "type": "string", "minLength": 1 },
+				"permissionId": {
+					"type": "string",
+					"minLength": 1
+				},
 				"tool": {
 					"type": "object",
 					"additionalProperties": false,
 					"required": ["name"],
 					"properties": {
-						"name": { "type": "string" },
-						"connector": { "type": "string" }
+						"name": {
+							"type": "string"
+						},
+						"connector": {
+							"type": "string"
+						}
 					}
 				},
 				"arguments": {},
-				"reason": { "type": "string" },
+				"reason": {
+					"type": "string"
+				},
 				"answers": {
 					"type": "array",
 					"description": "The answers this request accepts. v1 is `allow` and `deny`; there is no standing answer.",
-					"items": { "type": "string", "enum": ["allow", "deny"] }
+					"items": {
+						"type": "string",
+						"enum": ["allow", "deny"]
+					}
 				},
-				"origin": { "$ref": "#/$defs/origin" },
-				"blocks": { "$ref": "#/$defs/blocks" }
+				"origin": {
+					"$ref": "#/$defs/origin"
+				},
+				"blocks": {
+					"$ref": "#/$defs/blocks"
+				}
 			}
 		},
 		"interactionAck": {
@@ -489,9 +748,15 @@
 			"additionalProperties": false,
 			"required": ["delivered"],
 			"properties": {
-				"delivered": { "type": "boolean" },
-				"surface": { "type": "string" },
-				"detail": { "type": "string" }
+				"delivered": {
+					"type": "boolean"
+				},
+				"surface": {
+					"type": "string"
+				},
+				"detail": {
+					"type": "string"
+				}
 			}
 		},
 		"stateSnapshotParams": {
@@ -500,24 +765,56 @@
 			"additionalProperties": false,
 			"required": ["seq", "scopes"],
 			"properties": {
-				"seq": { "type": "integer", "minimum": 0 },
-				"scopes": { "type": "array", "items": { "$ref": "#/$defs/stateScope" } },
-				"status": { "type": "object", "additionalProperties": true },
-				"presence": { "type": "object", "additionalProperties": true },
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"scopes": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/stateScope"
+					}
+				},
+				"status": {
+					"type": "object",
+					"additionalProperties": true
+				},
+				"presence": {
+					"type": "object",
+					"additionalProperties": true
+				},
 				"projection": {
 					"type": "object",
 					"additionalProperties": false,
 					"required": ["items"],
 					"properties": {
-						"items": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
-						"queued": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+						"items": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"additionalProperties": true
+							}
+						},
+						"queued": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"additionalProperties": true
+							}
+						}
 					}
 				},
 				"tools": {
 					"type": "object",
 					"additionalProperties": false,
+					"required": ["running"],
 					"properties": {
-						"running": { "type": "array", "items": { "type": "string" } }
+						"running": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
 					}
 				}
 			}
@@ -528,11 +825,21 @@
 			"additionalProperties": false,
 			"required": ["seq", "scope", "op"],
 			"properties": {
-				"seq": { "type": "integer", "minimum": 0 },
-				"scope": { "$ref": "#/$defs/stateScope" },
-				"op": { "type": "string", "enum": ["set", "push", "reset"] },
+				"seq": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"scope": {
+					"$ref": "#/$defs/stateScope"
+				},
+				"op": {
+					"type": "string",
+					"enum": ["set", "push", "reset"]
+				},
 				"value": {},
-				"path": { "type": "string" }
+				"path": {
+					"type": "string"
+				}
 			}
 		},
 		"attachmentUploadResult": {
@@ -540,8 +847,14 @@
 			"additionalProperties": false,
 			"required": ["contentId", "size"],
 			"properties": {
-				"contentId": { "type": "string", "minLength": 1 },
-				"size": { "type": "integer", "minimum": 0 },
+				"contentId": {
+					"type": "string",
+					"minLength": 1
+				},
+				"size": {
+					"type": "integer",
+					"minimum": 0
+				},
 				"expiresAt": {
 					"type": "integer",
 					"description": "Epoch milliseconds. An expired content id is a refused download, not a missing one."
@@ -571,10 +884,56 @@
 						"mason.internal"
 					]
 				},
-				"message": { "type": "string" },
-				"retryable": { "type": "boolean" },
-				"retryAfterMs": { "type": "integer", "minimum": 0 },
-				"field": { "type": "string" }
+				"message": {
+					"type": "string"
+				},
+				"retryable": {
+					"type": "boolean"
+				},
+				"retryAfterMs": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"field": {
+					"type": "string"
+				}
+			}
+		},
+		"deliveryTarget": {
+			"type": "object",
+			"description": "A proactive destination: the connector and the conversation it names. Absent means the submission's origin, which is the only default there is.",
+			"additionalProperties": false,
+			"required": ["connector", "externalConversationId"],
+			"properties": {
+				"connector": {
+					"type": "string",
+					"minLength": 1
+				},
+				"externalConversationId": {
+					"type": "string",
+					"minLength": 1
+				}
+			}
+		},
+		"pingParams": {
+			"type": "object",
+			"description": "`connector/ping` params. The connector sends it on an idle socket, every 20 s by the protocol's own number; mason answers with `pingResult` and nothing else.",
+			"additionalProperties": true,
+			"properties": {
+				"at": {
+					"type": "integer"
+				}
+			}
+		},
+		"pingResult": {
+			"type": "object",
+			"description": "The answer to `connector/ping`: mason is there, and this is when it said so.",
+			"additionalProperties": false,
+			"required": ["at"],
+			"properties": {
+				"at": {
+					"type": "integer"
+				}
 			}
 		}
 	}
