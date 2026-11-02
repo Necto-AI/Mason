@@ -59,9 +59,11 @@ boot for every wake-up, and would lose every long-lived process the agent starte
 
 - Cold boot of a Firecracker microVM is ~1s; restore from a snapshot is ~30ms (E2B reports ~150ms end-to-end for a
   sandbox, and ships snapshot restore for exactly this reason).
-- So: create on first use, **pause-snapshot when idle**, restore on the next generation prepare. The snapshot id lives in
-  `TargetDoc`; `env()` restoring on demand is the reconnect point, and it is called once per turn, which is the right
-  frequency.
+- So: the supervisor creates the machine on first use and sleeps it when the bot has had no turn for a while, keeping
+  **one snapshot per machine** and deleting the previous one when it takes the next
+  ([`ENV-PLAN.md`](ENV-PLAN.md), "Spin down and up"). `TargetDoc` records which machine a conversation points at, not a
+  snapshot of its own; `env()` waking the named machine is the reconnect point, and it is called once per turn, which is
+  the right frequency.
 - **The machine is the bot's, not the conversation's.** A target document stays conversation-scoped, because a
   restart must not forget which machine held the work, but the machine it names belongs to the deployment: stage 1 of
   [`ENV-PLAN.md`](ENV-PLAN.md) gives one bot one VM, and every conversation in that bot points at it. One VM per

@@ -1,21 +1,21 @@
-# Apiary as the control plane — managing a fleet of agents
+# Apiary as the control plane — managing a fleet of bots
 
 > Written 2026-10-26. Apiary is the app; mason is the backend (ADR-0004). This is the plan for what apiary has to become
-> to make a *fleet* of mason agents intuitive to set up, organise and run — and what mason has to expose for that to be
+> to make a *fleet* of mason bots intuitive to set up, organise and run — and what mason has to expose for that to be
 > possible. **Revised 2026-11-02:** the peer-to-peer contract below was a custom envelope over Chord, with A2A later;
 > that is superseded. Bots speak ACP, and apiary observes without routing ([`FLEET-PLAN.md`](FLEET-PLAN.md),
 > the amendment to [`adr/0001-mason-defines-one-bot.md`](adr/0001-mason-defines-one-bot.md)). The rest stands.
 
 ## The problem, stated honestly
 
-Today, standing up one agent is: copy `deploy/.env`, mint a token, mint a trigger secret, paste five variables, run a
+Today, standing up one bot is: copy `deploy/.env`, mint a token, mint a trigger secret, paste five variables, run a
 script, and know that `integrations.json` is read once at boot. That is a developer's ritual, not a product. And the
-second agent is worse: there is no notion of an agent as an object, so there is nothing to copy, to compare, or to stop.
+second bot is worse: there is no notion of a bot as an object, so there is nothing to copy, to compare, or to stop.
 
 Apiary's job is to make those sentences false. Concretely, three things a person must be able to do without reading a
 README:
 
-1. **Create** an agent: a name, what it is for, which services it may reach, which person speaks to it, and a link that
+1. **Create** a bot: a name, what it is for, which services it may reach, which person speaks to it, and a link that
    pairs the interface.
 2. **See** it: what it is doing, what it did, what it cost, what is broken.
 3. **Organise** several of them: who delegates to whom, which one is in charge, and what a person is expected to answer.
@@ -51,8 +51,8 @@ The shape of a delegation was right even though its wire was not, and ACP carrie
 - **A budget is part of the request.** The receiver may spend up to it and no more; a delegation without a budget is
   refused, and that is what makes a chief of staff safe to leave running.
 - **Idempotent by request id**, like an event fire: a re-delivery after a restart is the same task, not a second one.
-- **Default: no peers.** A bot accepts a message from a bot a person added, and from nothing else. A person's roster
-  decides which peers exist.
+- **Default: no peers.** A bot accepts a message from a bot in its peer list, and from nothing else; nothing discovers
+  another bot. The list is a file a person wrote (`FLEET-PLAN.md`), not a registry.
 
 ### What is ACP's, and therefore not designed here
 
@@ -67,8 +67,8 @@ what apiary reads. That keeps the control plane a reader — it can draw the boa
 cannot be the reason a message went missing. **apiary is not the message bus**, and a fleet whose bots can only talk
 when apiary is running is not a fleet.
 
-Explicitly not doing: an agent registry in a public directory, federated discovery, or a bot that accepts a delegation
-from a bot no person added.
+Explicitly not doing: a public directory of bots, federated discovery, or a bot that accepts a delegation from a bot no
+person added.
 
 ## The chief of staff
 
@@ -95,10 +95,10 @@ Sequenced so that each one is useful alone, and so no milestone needs a backend 
 
 | # | Milestone | In apiary | Needs from mason | Exit criteria |
 |---|---|---|---|---|
-| 1 | **The window** | A list of agents with state, last activity, cost, and what is broken; open a transcript | manifest, status | A person can answer "is it working" without ssh |
+| 1 | **The window** | A list of bots with state, last activity, cost, and what is broken; open a transcript | manifest, status | A person can answer "is it working" without ssh |
 | 2 | **The editor** | Roster, integrations (add/enable/secret/rotate), hooks on/off, schedules, tokens — every one of them currently a CLI subcommand | the same verbs over Chord, plus writes | Nothing in `deploy/README.md` needs a shell any more |
-| 3 | **The wizard** | New agent from a template: name, purpose, which services, which person, then a pairing link; the deploy is behind a button | a create call the deployment honours (one container per bot, from the manifest in [`FLEET-PLAN.md`](FLEET-PLAN.md)) | Second agent in under five minutes, no file edited by hand |
-| 4 | **The board** | Tasks per agent and across agents, with state and owner | tasks, projection | "Where is X" is answered by looking, not by asking |
+| 3 | **The wizard** | New bot from a template: name, purpose, which services, which person, then a pairing link; the deploy is behind a button | a create call the deployment honours (one container per bot, from the manifest in [`FLEET-PLAN.md`](FLEET-PLAN.md)) | Second bot in under five minutes, no file edited by hand |
+| 4 | **The board** | Tasks per bot and across bots, with state and owner | tasks, projection | "Where is X" is answered by looking, not by asking |
 | 5 | **The fleet** | Add a peer, watch an ACP exchange, see a budget burn | each bot's ACP status; budgets | Two bots complete one delegated task end to end |
 | 6 | **The chief** | Board with one bot on top; its delegations visible; its noise budget adjustable | the same, plus proactivity | A week where the chief runs the board and Denis reads one digest |
 

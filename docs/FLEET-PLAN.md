@@ -39,6 +39,11 @@ chat at each other in a loop. **A budget is part of the request**, because a bot
 without saying how much is not safe to leave running. **Default: no peers.** A bot accepts a message from a bot a person
 added, and from nothing else.
 
+The accepted peers are a list a person wrote. It is operator configuration read at boot like `integrations.json`, not
+a registry: nothing discovers, registers or enumerates bots, and an entry carries an address and what it may ask for,
+never a session. Whether the check runs in mason's own code or in the deployment's ACP bridge is the implementation's
+call; either way it is a file a person edited, and a bot with no entry has no peers.
+
 What is not decided here: which ACP specification version and SDK carries the exchange, how peer identity and
 authorisation map onto it, and how the approval and budget messages ride on it. Those are [`SPEC.md`](SPEC.md) open
 question 1, and the answer belongs to the implementation, not to this note.
@@ -52,8 +57,9 @@ the result; it is not a requirement, and it should not be built before a prototy
 
 Two rules that outlive the choice of format:
 
-- **The manifest describes containers, not bots.** A bot is a home and a soul; a container is where it runs. A future
-  format that cannot say "these two bots share this VM" without merging their containers is the wrong format.
+- **The manifest names containers; a bot is a home and a soul that runs in one.** A future format that cannot say
+  "these two bots share this VM" without merging their containers is the wrong format, because a shared VM is a property
+  of the group rather than a merge of homes.
 - **Nothing is armed by default.** Adding a second bot to a manifest does not give it peers, credentials or a shared VM.
   A shared VM is named on purpose, per group.
 

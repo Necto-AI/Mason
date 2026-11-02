@@ -22,8 +22,8 @@ Stated once here, because they are what the plans are built on. Each names where
    about a policy file. (`always-on-agents/08`, §1)
 2. **Every agent gets its own machine, and the isolation unit is a product decision with a bill attached.** Per user
    shared by agents (Grok Bot) makes collaboration free and compartmentalisation impossible; per agent (OpenBot, dots)
-   buys the opposite. Apiary's whole shape depends on which one mason is — see [`../APIARY-PLAN.md`](../APIARY-PLAN.md),
-   open question 1. (`always-on-agents/08`, §2)
+   buys the opposite. Apiary's whole shape depended on which one mason is; **answered 2026-11-02:** one container per bot,
+   and several bots are a fleet speaking ACP ([`../FLEET-PLAN.md`](../FLEET-PLAN.md)). (`always-on-agents/08`, §2)
 3. **A credential must never enter the context window.** Three closed vendors, three mechanisms, one invariant: the model
    is given a reference or a surrogate, and the real secret is substituted at the network boundary by something that is
    not the model. This is the same conclusion the Yandex notes reach from the other direction, and it is why the sign-in
@@ -46,6 +46,6 @@ Stated once here, because they are what the plans are built on. Each names where
 - **Whether a chat is a good interface for a long task.** Every shipped product has more than a chat; none publishes
   usage data showing which surface carries the work. The pilot in [`../MVP-PLAN.md`](../MVP-PLAN.md) exists to answer
   this for one person.
-- **What a fleet of agents is worth.** Nobody in the set ships agent-to-agent delegation as a product. The design in
-  [`../APIARY-PLAN.md`](../APIARY-PLAN.md) is inference, not evidence, and should be treated as such until two agents
+- **What a fleet of bots is worth.** Nobody in the set ships agent-to-agent delegation as a product. The ACP direction in
+  [`../FLEET-PLAN.md`](../FLEET-PLAN.md) is a product decision, not evidence, and should be treated as such until two bots
   complete a delegated task end to end.
