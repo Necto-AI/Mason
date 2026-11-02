@@ -110,6 +110,10 @@ duplicate ids, unknown actors and unpermitted rooms, fires and unmapped kinds, b
 delivery and its duplicate and its unsure outcome, streaming under one id, approvals answered once, state sequence, and
 attachments with a cap. A case for a face the fixture does not implement is skipped, and the report says which.
 
+There is no tools-face case yet: a meaningful one needs live MCP discovery, which is the server half. The tools-only
+fixture passes the handshake, grant and control cases and reports the rest as skipped, rather than passing a case that
+would prove nothing.
+
 The fake mason enforces the protocol rather than agreeing with everything, because a mock that says yes proves nothing
 about a connector that has to survive a no.
 

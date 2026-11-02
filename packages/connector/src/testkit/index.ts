@@ -6,7 +6,6 @@
  */
 
 export {
-	CONNECTOR_ANSWERED_METHODS,
 	type ConformanceCase,
 	type ConformanceContext,
 	type ConformanceFaces,

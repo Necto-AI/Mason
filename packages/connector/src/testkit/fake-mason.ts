@@ -53,6 +53,9 @@ export interface DeliveryRecord {
 	readonly sentAt: number;
 	ack?: DeliveryAck;
 	attempts: number;
+	/** A call is on the wire right now. Replay must leave it alone: a record still in flight on this connection is not a
+	 * record a reconnect lost. */
+	sending?: boolean;
 	/** The answer was sent and dropped on the way back, which is the only way a lost acknowledgement is knowable. */
 	lostAck?: boolean;
 }
@@ -63,6 +66,7 @@ export interface InteractionRecord {
 	ack?: InteractionAck;
 	answer?: InteractionAnswerResult;
 	answerParams?: InteractionAnswerParams;
+	sending?: boolean;
 }
 
 export interface FakeMasonGrants {
@@ -239,11 +243,11 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 
 	async function replay(): Promise<void> {
 		for (const record of deliveries) {
-			if (record.ack !== undefined) continue;
+			if (record.ack !== undefined || record.sending === true) continue;
 			await sendDelivery(record);
 		}
 		for (const record of interactions) {
-			if (record.ack !== undefined) continue;
+			if (record.ack !== undefined || record.sending === true) continue;
 			await sendInteraction(record);
 		}
 	}
@@ -461,16 +465,17 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	}
 
 	async function sendDelivery(record: DeliveryRecord): Promise<DeliveryAck | undefined> {
-		if (peer === undefined || !peer.open) return undefined;
+		if (peer === undefined || !peer.open || record.sending === true) return undefined;
+		record.sending = true;
 		record.attempts += 1;
 		log.push({ at: now(), direction: "out", method: METHOD.deliveryFinal, params: record.params });
-		if (loseAck) {
-			loseAck = false;
-			record.lostAck = true;
-			peer.sendWithoutWaiting(METHOD.deliveryFinal, record.params);
-			return undefined;
-		}
 		try {
+			if (loseAck) {
+				loseAck = false;
+				record.lostAck = true;
+				peer.sendWithoutWaiting(METHOD.deliveryFinal, record.params);
+				return undefined;
+			}
 			const ack = (await peer.call(METHOD.deliveryFinal, record.params)) as DeliveryAck;
 			record.ack = ack;
 			return ack;
@@ -480,6 +485,8 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 				return record.ack;
 			}
 			return undefined;
+		} finally {
+			record.sending = false;
 		}
 	}
 
@@ -506,7 +513,8 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	}
 
 	async function sendInteraction(record: InteractionRecord): Promise<InteractionAck | undefined> {
-		if (peer === undefined || !peer.open) return undefined;
+		if (peer === undefined || !peer.open || record.sending === true) return undefined;
+		record.sending = true;
 		log.push({ at: now(), direction: "out", method: METHOD.interactionRequest, params: record.params });
 		try {
 			const ack = (await peer.call(METHOD.interactionRequest, record.params)) as InteractionAck;
@@ -518,6 +526,8 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 				return record.ack;
 			}
 			return undefined;
+		} finally {
+			record.sending = false;
 		}
 	}
 

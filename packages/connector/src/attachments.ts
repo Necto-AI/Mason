@@ -46,8 +46,11 @@ export interface AttachmentClientOptions {
 	readonly baseUrl: string;
 	readonly credential: string;
 	readonly fetch?: Fetcher;
-	/** The SDK's own guard, checked before a byte is sent. The server enforces its own cap regardless. */
-	readonly maxBytes?: number;
+	/**
+	 * The SDK's own guard, checked before a byte is sent. Mason enforces its own cap regardless, and the number is only
+	 * known after the handshake, so this is read at the moment of the call.
+	 */
+	readonly maxBytes?: number | (() => number | undefined);
 }
 
 export function createAttachmentClient(options: AttachmentClientOptions): AttachmentClient {
@@ -56,17 +59,16 @@ export function createAttachmentClient(options: AttachmentClientOptions): Attach
 
 	return {
 		async upload(bytes, meta = {}) {
-			if (options.maxBytes !== undefined && bytes.byteLength > options.maxBytes) {
-				throw new AttachmentError(
-					413,
-					`that file is ${bytes.byteLength} bytes and this connector may send ${options.maxBytes}`,
-				);
+			const cap = typeof options.maxBytes === "function" ? options.maxBytes() : options.maxBytes;
+			if (cap !== undefined && bytes.byteLength > cap) {
+				throw new AttachmentError(413, `that file is ${bytes.byteLength} bytes and this connector may send ${cap}`);
 			}
 			const headers: Record<string, string> = {
 				authorization: `Bearer ${options.credential}`,
-				"content-type": "application/octet-stream",
+				// The file's own type, in the header that carries it: a `x-mason-mime` beside it would be a second way to
+				// say one thing, and a mason built from the document would read neither.
+				"content-type": meta.mimeType ?? "application/octet-stream",
 			};
-			if (meta.mimeType !== undefined) headers["x-mason-mime"] = meta.mimeType;
 			if (meta.name !== undefined) headers["x-mason-filename"] = encodeURIComponent(meta.name);
 			const response = await doFetch(`${base}/api/connector/attachments`, {
 				method: "POST",

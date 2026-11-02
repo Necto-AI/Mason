@@ -94,6 +94,8 @@ export interface ConnectorConfig {
 	readonly state?: readonly StateScope[];
 	readonly reconnect?: { readonly initialMs?: number; readonly maxMs?: number; readonly factor?: number };
 	readonly requestTimeoutMs?: number;
+	/** How often the connector pings mason on an idle socket. 0 disables it; the protocol's number is 20 s. */
+	readonly heartbeatMs?: number;
 	/** Base URL for the attachment endpoints when it differs from the socket's origin. */
 	readonly httpBase?: string;
 	/** Substitute the transfer endpoint: the conformance suite serves attachments from memory. */
@@ -201,10 +203,13 @@ export function createConnector(config: ConnectorConfig): Connector {
 	const now = config.now ?? Date.now;
 	const linkFactory = config.link ?? webSocketLink;
 	const handlers = config.handlers ?? {};
+	// The cap is mason's, learnt at the handshake, so the client is built once and asks for it every time.
+	let attachmentCap: number | undefined;
 	const attachments = createAttachmentClient({
 		baseUrl: config.httpBase ?? httpOrigin(config.url),
 		credential: config.credential,
 		...(config.fetch === undefined ? {} : { fetch: config.fetch }),
+		maxBytes: () => attachmentCap,
 	});
 
 	const reconnect = {
@@ -220,8 +225,12 @@ export function createConnector(config: ConnectorConfig): Connector {
 	let lastError: string | undefined;
 	let backoffMs = reconnect.initialMs;
 	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	let flushTimer: ReturnType<typeof setTimeout> | undefined;
+	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 	let scopes: readonly StateScope[] = config.state ?? [];
 	const inflight = new Map<string, Promise<Send<unknown>>>();
+	const delivering = new Map<string, Promise<DeliveryAck>>();
+	const asking = new Map<string, Promise<InteractionAck>>();
 
 	const connector: Connector = {
 		start,
@@ -257,7 +266,11 @@ export function createConnector(config: ConnectorConfig): Connector {
 	async function stop(): Promise<void> {
 		stopping = true;
 		if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+		if (flushTimer !== undefined) clearTimeout(flushTimer);
+		if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
 		reconnectTimer = undefined;
+		flushTimer = undefined;
+		heartbeatTimer = undefined;
 		peer?.close("the connector is shutting down");
 		peer = undefined;
 		await config.store.close();
@@ -300,6 +313,8 @@ export function createConnector(config: ConnectorConfig): Connector {
 		};
 		backoffMs = reconnect.initialMs;
 		lastError = undefined;
+		attachmentCap = answer.limits.attachmentBytes;
+		startHeartbeat();
 
 		if (scopes.length > 0) {
 			try {
@@ -321,6 +336,8 @@ export function createConnector(config: ConnectorConfig): Connector {
 	function onClosed(reason: string): void {
 		const wasOpen = peer !== undefined;
 		peer = undefined;
+		if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
+		heartbeatTimer = undefined;
 		if (!wasOpen) return;
 		lastError = reason;
 		try {
@@ -393,13 +410,32 @@ export function createConnector(config: ConnectorConfig): Connector {
 	/**
 	 * Answer one delivery exactly once.
 	 *
-	 * The ledger is read and written around the handler, which is what makes a resend a `duplicate` rather than a second
-	 * send. A handler that throws answers `uncertain`: the message may or may not have left, and only a person can decide
-	 * what to do about that.
+	 * Both guards are needed and they catch different things. The in-memory map catches two frames for one id that
+	 * overlap on a live socket — mason's own request timing out while the handler is still sending is the ordinary way
+	 * that happens. The ledger catches the same frame arriving again after a reconnect or a restart, which is the case
+	 * the whole at-least-once arrangement is built around.
+	 *
+	 * Every answer is remembered, including `uncertain` and `rejected`: a send that *may* have left must not be
+	 * attempted a second time when its answer was lost, because that is precisely the duplicate the ledger exists to
+	 * prevent.
 	 */
 	async function settleDelivery(params: DeliveryFinalParams): Promise<DeliveryAck> {
+		const running = delivering.get(params.deliveryId);
+		if (running !== undefined) return running;
+		const settled = settleOnce(params).finally(() => delivering.delete(params.deliveryId));
+		delivering.set(params.deliveryId, settled);
+		return settled;
+	}
+
+	async function settleOnce(params: DeliveryFinalParams): Promise<DeliveryAck> {
 		const seen = await config.store.read<DeliveryAck>(NAMESPACE.delivered, params.deliveryId);
-		if (seen !== undefined) return { status: "duplicate", detail: `already settled as ${seen.status}` };
+		if (seen !== undefined) {
+			// A resent `delivered` is a duplicate; a resent `uncertain` is still uncertain, and saying so again is what
+			// keeps mason from recording a delivery it never got.
+			return seen.status === "delivered" || seen.status === "duplicate"
+				? { status: "duplicate", detail: `already settled as ${seen.status}` }
+				: seen;
+		}
 		if (handlers.onDelivery === undefined) {
 			return { status: "rejected", detail: "this connector implements no delivery face" };
 		}
@@ -407,25 +443,68 @@ export function createConnector(config: ConnectorConfig): Connector {
 		try {
 			ack = await handlers.onDelivery(params);
 		} catch (error) {
-			return { status: "uncertain", detail: `the send failed after it may have left: ${describe(error)}` };
+			ack = { status: "uncertain", detail: `the send failed after it may have left: ${describe(error)}` };
 		}
-		if (ack.status === "uncertain" || ack.status === "rejected") return ack;
 		await config.store.write(NAMESPACE.delivered, params.deliveryId, ack);
 		await config.store.prune(NAMESPACE.delivered, LEDGER_KEEP);
 		return ack;
 	}
 
 	async function putInteraction(params: InteractionRequestParams): Promise<InteractionAck> {
-		if (handlers.onInteraction === undefined) {
-			return { delivered: false, detail: "this connector implements no approval surface" };
-		}
 		const settled = await config.store.read<{ answer: string }>(NAMESPACE.settled, params.permissionId);
 		if (settled !== undefined) return { delivered: false, detail: "this request was already settled" };
+		const running = asking.get(params.permissionId);
+		if (running !== undefined) return running;
+		const asked = ask(params).finally(() => asking.delete(params.permissionId));
+		asking.set(params.permissionId, asked);
+		return asked;
+	}
+
+	async function ask(params: InteractionRequestParams): Promise<InteractionAck> {
+		if (handlers.onInteraction === undefined) return { delivered: false, detail: "there is nowhere to ask" };
 		try {
 			return await handlers.onInteraction(params);
 		} catch (error) {
 			return { delivered: false, detail: describe(error) };
 		}
+	}
+
+	/**
+	 * Ping on an idle socket, and use the tick to retry what is journaled. A connector that only resent on reconnect
+	 * would leave a call refused for budget waiting for an unrelated network event that may never come.
+	 */
+	function startHeartbeat(): void {
+		if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
+		heartbeatTimer = undefined;
+		const every = config.heartbeatMs ?? 20_000;
+		if (every <= 0) return;
+		const timer = setInterval(() => {
+			void beat();
+		}, every);
+		timer.unref?.();
+		heartbeatTimer = timer;
+	}
+
+	async function beat(): Promise<void> {
+		if (peer === undefined || !peer.open) return;
+		try {
+			await peer.call(METHOD.ping, { at: now() }, { timeoutMs: 5_000 });
+		} catch (error) {
+			logger.debug?.("the heartbeat was not answered", { error: describe(error) });
+		}
+		await flushOutbox();
+	}
+
+	/** Retry what was refused for budget after exactly the wait mason asked for, once. */
+	function scheduleFlush(inMs: number): void {
+		if (flushTimer !== undefined || stopping) return;
+		const wait = Math.min(Math.max(inMs, 10), 60_000);
+		const timer = setTimeout(() => {
+			flushTimer = undefined;
+			void flushOutbox();
+		}, wait);
+		timer.unref?.();
+		flushTimer = timer;
 	}
 
 	async function noteSeq(frame: StateSnapshotParams | StateDeltaParams): Promise<void> {
@@ -435,10 +514,13 @@ export function createConnector(config: ConnectorConfig): Connector {
 	}
 
 	async function subscribe(next: readonly StateScope[], since?: number): Promise<StateSubscribeResult> {
-		scopes = next;
 		if (peer === undefined) throw new Error("there is no socket to subscribe on");
 		const params = since === undefined ? { scopes: next } : { scopes: next, since };
-		return (await peer.call(METHOD.stateSubscribe, params)) as StateSubscribeResult;
+		const result = (await peer.call(METHOD.stateSubscribe, params)) as StateSubscribeResult;
+		// Only now: a refused scope must not become the set every later reconnect asks for, which would leave the
+		// connector mirroring nothing at all and saying nothing about it.
+		scopes = next;
+		return result;
 	}
 
 	function submit(
@@ -530,7 +612,10 @@ export function createConnector(config: ConnectorConfig): Connector {
 			return { status: "ok", value };
 		} catch (error) {
 			if (error instanceof PeerError) {
-				if (error.retryable) return { status: "pending" };
+				if (error.retryable) {
+					scheduleFlush(error.retryAfterMs ?? reconnect.initialMs);
+					return { status: "pending" };
+				}
 				await config.store.delete(NAMESPACE.outbox, key);
 				return { status: "refused", error: error.data ?? { code: ERROR_CODE.internal, message: error.message } };
 			}
@@ -548,15 +633,25 @@ export function createConnector(config: ConnectorConfig): Connector {
 		await config.store.write(NAMESPACE.outbox, key, { seq, method, key, params } satisfies OutboxEntry);
 	}
 
-	/** Replay what was journaled and never claimed, in the order it happened. */
+	/**
+	 * Replay what was journaled and never claimed, in the order it happened.
+	 *
+	 * A call still waiting stops its own class and no other: a submission held for budget must not reorder the person's
+	 * messages against each other, and must not keep a `stop` behind it.
+	 */
 	async function flushOutbox(): Promise<void> {
 		if (peer === undefined || !peer.open) return;
 		const pending = await config.store.entries<OutboxEntry>(NAMESPACE.outbox);
 		const ordered = [...pending].sort((left, right) => left.value.seq - right.value.seq);
+		const stalled = new Set<string>();
 		for (const entry of ordered) {
 			const { method, key, params } = entry.value;
+			if (stalled.has(method)) continue;
 			const outcome = await deliver(method, key, params as Record<string, unknown>);
-			if (outcome.status === "pending") return;
+			if (outcome.status === "pending") {
+				stalled.add(method);
+				continue;
+			}
 			if (outcome.status === "refused") {
 				logger.warn("a journaled call was refused for good", { method, detail: outcome.error.message });
 				continue;
