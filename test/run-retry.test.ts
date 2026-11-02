@@ -63,7 +63,7 @@ test("the supervisor stops when there is nothing to do", () => {
 		kind: "idle",
 		reason: "handled",
 	});
-	// budget spent: the manual Retry control is what is left
+	// budget spent: the manual retry hook is what is left
 	assert.deepEqual(planRunRetry({ ...base, busy: false, errorId: "9", errorMessage: "x", attempts: 3 }), {
 		kind: "idle",
 		reason: "budget",

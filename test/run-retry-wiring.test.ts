@@ -139,7 +139,7 @@ describe("a failed run with no browser connected", () => {
 			assert.equal(await fires(server.runtime, RETRY_HOOK_ID), 1, "the supervisor fired its own retry hook");
 			// The budget is one: a second failure is not a second retry.
 			await new Promise((resolve) => setTimeout(resolve, 400));
-			assert.equal(await fires(server.runtime, RETRY_HOOK_ID), 1, "one attempt, then the Retry control");
+			assert.equal(await fires(server.runtime, RETRY_HOOK_ID), 1, "one attempt, then the manual retry hook");
 		} finally {
 			await server?.close();
 			if (previousDelays === undefined) delete process.env.PDA_RUN_RETRY_DELAYS_MS;

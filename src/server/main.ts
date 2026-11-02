@@ -21,6 +21,7 @@ import {
 	createTokenStore,
 	ensureToken,
 	grantsOf,
+	hasGrant,
 	pairingFromRequest,
 	pairingUrls,
 	type TokenRecord,
@@ -73,7 +74,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly port?: number;
 	readonly hostname?: string;
-	/** Directory holding the built client (`index.html`, `main.js`, `main.css`). */
+	/** Directory holding the built panel (`index.html`, `admin.js`, `admin.css`). */
 	readonly webDir?: string;
 	/**
 	 * The attachment store's bounds. Defaults are the protocol's (25 MiB, a day); a test that has to cross the cap or wait
@@ -125,7 +126,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const reportRun = createCacheReporter((line) => console.log(line));
 	console.log(
 		retryOptions.maxAttempts === 0
-			? "[run-retry] off: a failed run is left to the Retry control"
+			? "[run-retry] off: a failed run is left to the retry hook"
 			: `[run-retry] a failed run is re-armed after ${supervisor.delaysMs.map((ms) => `${Math.round(ms / 1000)}s`).join(", ")}`,
 	);
 	// A run the last process left unfinished is counted from the moment this process attached, so its first line
@@ -458,32 +459,32 @@ async function handleRequest(
 	}
 
 	// The operator's control plane: the state the granted areas of the panel read, the configuration it writes, and the
-	// two approval routes the old console used. `admin.ts` owns the grant checks; this file only routes to it.
-	if (url.pathname.startsWith("/api/admin/") || url.pathname === "/api/admin") {
+	// two approval routes. `admin.ts` owns the grant checks; this file only routes to it, and a path it does not know is
+	// a `404` rather than a request nobody ever answers.
+	if (
+		url.pathname.startsWith("/api/admin/") ||
+		url.pathname === "/api/admin" ||
+		url.pathname === "/api/permissions" ||
+		url.pathname.startsWith("/api/permissions/")
+	) {
 		if (device === undefined) return json(response, 401, { error: "unauthorized" });
-		await handleOperatorRequest(request, response, url, {
+		const handled = await handleOperatorRequest(request, response, url, {
 			runtime,
 			house,
 			store,
 			device,
 			...(person === undefined ? {} : { person: person.name }),
 		});
+		if (!handled) notFound(response);
 		return;
 	}
 
-	if (url.pathname === "/api/permissions" || url.pathname.startsWith("/api/permissions/")) {
-		if (device === undefined) return json(response, 401, { error: "unauthorized" });
-		await handleOperatorRequest(request, response, url, {
-			runtime,
-			house,
-			store,
-			device,
-			...(person === undefined ? {} : { person: person.name }),
-		});
-		return;
-	}
-
+	// Status and health are areas of the panel's state (§4.2), served here for a script that asks one question: the
+	// same grant covers them, so a device with no grants cannot read what its state would not carry.
 	if (url.pathname === "/api/status") {
+		if (device === undefined || !hasGrant(grantsOf(device), "conversation")) {
+			return json(response, 403, { error: 'this device has no "conversation" grant' });
+		}
 		const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
 		const status = deriveAgentStatus(view, {
 			hooks: runtime.hooks.list(),
@@ -493,9 +494,12 @@ async function handleRequest(
 		return json(response, 200, status);
 	}
 
-	// What this boot's integration list is, and whether its servers answered. Behind the same gate as the rest of `/api`,
-	// and the only place health appears: a prompt section that carried it would differ between two turns of one build.
+	// What this boot's integration list is, and whether its servers answered. Administrative, like the panel's own
+	// health table: it names services and why they are unreachable.
 	if (url.pathname === "/api/integrations") {
+		if (device === undefined || !hasGrant(grantsOf(device), "admin")) {
+			return json(response, 403, { error: 'this device has no "admin" grant' });
+		}
 		return json(response, 200, { integrations: integrationSummaries(currentIntegrations()) });
 	}
 

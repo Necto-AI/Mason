@@ -183,9 +183,6 @@ export interface Trace {
 	readonly kinds: readonly { readonly kind: string; readonly count: number }[];
 }
 
-/** The control the operator still needs from the old console. There is no way to speak from here. */
-export type PanelControl = "stop" | "compact" | "clear";
-
 /**
  * What one `/api/admin/state` answer holds. A granted area is a key; an area this device may not see is absent, and the
  * client renders what it was given rather than asking again for what it was refused.
@@ -227,12 +224,4 @@ export interface ConnectorPatch {
 	readonly tools?: { readonly url: string; readonly required?: boolean; readonly credential?: string } | null;
 	readonly connector?: ConnectorGrantInput | null;
 	readonly commands?: readonly string[];
-}
-
-/** The answer to a mint: the one time the secret is in a response. */
-export interface MintedSecret {
-	readonly id?: string;
-	readonly credential?: string;
-	readonly token?: string;
-	readonly secret?: string;
 }

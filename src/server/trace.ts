@@ -4,7 +4,7 @@
  * `projection.ts` is the reader's wire and a whitelist: a person sees their words, the replies, the widgets and a
  * coarse failure, and nothing of the machine. This file is the other half of that decision — the entries as the durable
  * conversation holds them, forwarded only to a device the operator granted `trace` (`auth.ts`), and never through a
- * connector (`docs/SPEC.md` §4.5).
+ * connector (`docs/SPEC.md` §4.2).
  *
  * Everything the model did is here because everything it did is an entry: the messages the model was sent and wrote
  * (`model`), the tool calls and their results (in those same messages), a hook's payload (`app.hook`), the permission

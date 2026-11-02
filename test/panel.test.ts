@@ -761,6 +761,14 @@ describe("the grants", () => {
 			assert.deepEqual(Object.keys(bareState).sort(), ["now", "session"], "no grant, no area");
 			assert.equal(grantsOf({ grants: undefined }).length, 0);
 
+			// The two script routes carry the area their grant covers, and nothing for a device without it.
+			assert.equal((await panel.call("GET", "/api/status", undefined, none)).status, 403);
+			assert.equal((await panel.call("GET", "/api/integrations", undefined, none)).status, 403);
+
+			// The two script routes carry the area their grant covers, and nothing for a device without it.
+			assert.equal((await panel.call("GET", "/api/status", undefined, none)).status, 403);
+			assert.equal((await panel.call("GET", "/api/integrations", undefined, none)).status, 403);
+
 			const conversation = await panel.granted(["conversation"]);
 			const reader = (await panel.call("GET", "/api/admin/state", undefined, conversation)).body as PanelState;
 			assert.ok(reader.conversation !== undefined);
@@ -772,12 +780,16 @@ describe("the grants", () => {
 				(await panel.call("POST", "/api/admin/control", { action: "compact" }, conversation)).status,
 				200,
 			);
-			assert.equal((await panel.call("POST", "/api/admin/control", { action: "clear" }, conversation)).status, 403);
+			// There is no third control: `clear` is not an action, so a conversation device gets the sentence and an
+			// administrator has no way to lose the context from here at all.
+			assert.equal((await panel.call("POST", "/api/admin/control", { action: "clear" }, conversation)).status, 400);
 			assert.equal(
 				(await panel.call("PUT", "/api/admin/connectors/github", { enabled: false }, conversation)).status,
 				403,
 			);
 			assert.equal((await panel.call("GET", "/api/permissions", undefined, conversation)).status, 403);
+			assert.equal((await panel.call("GET", "/api/status", undefined, conversation)).status, 200);
+			assert.equal((await panel.call("GET", "/api/integrations", undefined, conversation)).status, 403);
 
 			const approver = await panel.granted(["approve"]);
 			const questions = await panel.call("GET", "/api/permissions", undefined, approver);
