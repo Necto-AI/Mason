@@ -12,13 +12,12 @@ transcript out, a control plane, an identity, a version. It defines one bot; it 
 _Avoid_: the bot, the app, the platform, the assistant
 
 **interface**:
-Anything that attaches to mason to reach a person: a chat integration, the operator console, a future client. An
-interface speaks the backend contract; it never grows a private one.
+A role a connector plays when it reaches a person: a chat, a rich client, or another user-facing surface. It is not a
+separate kind of thing beside a connector.
 _Avoid_: frontend, UI (for the abstract thing), channel
 
 **client**:
-A consumer of the wire that holds a pairing token: it is sent a transcript and may speak as a person. One kind of
-interface, and the only one that keeps a session.
+A consumer of a connector's user face: it may submit a person's words and receive what the face's grant lets it render.
 _Avoid_: frontend, UI, channel, app
 
 **operator console**:
@@ -138,61 +137,70 @@ The model's tool calls and their results, between two generations of the same tu
 _Avoid_: tool step, iteration
 
 **submission**:
-The reader's input as the server receives it: the text, the mode it was sent with, and whether it still waits in the
-queue.
-_Avoid_: message (that is what is read afterwards), prompt, request
+A person's input as mason receives it: its content, origin, attribution, the mode it was sent with, and whether it
+still waits in the queue. A human message is a submission, not a hook fire, even when both arrive through one
+connector.
+_Avoid_: message (that is what is read afterwards), prompt, request, hook
 
 **hook**:
-Something outside the conversation that can wake the bot: an integration event, a schedule slot, a gesture.
-_Avoid_: trigger, event source, listener
+Something outside the conversation that can wake the bot without being a person's conversational input: a service
+event, a schedule slot, or a gesture.
+_Avoid_: trigger, event source, listener, tool result
 
 **fire**:
-One call into a hook, from an integration event, a schedule slot, or a gesture. A redelivery under the same identity
-is still one fire.
-_Avoid_: event, invocation, delivery
+One call into a hook, from a service event, a schedule slot, or a gesture. A redelivery under the same identity is
+still one fire. Unlike a tool result, a fire is unsolicited input that can start or steer a turn.
+_Avoid_: event, invocation, delivery, submission
 
 **routine**:
 A hook that fires on a schedule.
 _Avoid_: cron job, schedule, timer
 
+**permission request**:
+A correlated interaction asking an authorized person whether one paused tool call may execute. Its `allow` and `deny`
+answers apply once; neither creates a standing rule. A connector declares whether its tools require one, within the
+ceiling the operator sets.
+_Avoid_: approval message (the request is not ordinary prose), always allow, tool annotation
+
 **delivery**:
-An outbound act committed before it is sent and sent once. It goes to the integration the turn came from, through the
-message tool that integration's hook instruction names, or to the transcript when no chat is on the other end: the
-operator door, or a hook that names no chat tool at all (a schedule, a retry), where the call lands and says nobody read
-it. `send_to_user` is the console's delivery, and a turn that has a chat refuses it (`reader`).
+One outbound act that reaches the submission's origin connector and records the same reply in the transcript. The model
+asks mason to reply; it does not choose a vendor's message tool. A turn with no reachable reader says so rather than
+recording a delivery nobody received.
 _Avoid_: message, reply, notification (each names one shape of it)
 
 **reader**:
-Whoever a turn's words are for: the call that reaches them is what decides. The console's reader holds an operator token
-and reads the projection — the frozen console today, apiary next. A turn an event hook started answers a person in a
-chat instead, who reads only what that hook's own message tool sends, and `send_to_user` is refused there because a
-call the chat cannot see is a message recorded as sent that nobody received. A hook whose instruction names no chat
-tool has no reader at all until somebody opens the console. A reader is not an integration and never wakes the agent on
-a vendor's behalf.
+Whoever a turn's words are for. A connector's user face and an operator's projection are different powers: reading a
+transcript does not grant administration, and carrying a person's words does not grant transcript access.
 _Avoid_: client, user, frontend
 
-## Integrations
+## Connectors
 
-**integration**:
-Another system mason is connected to, and the only kind of thing that talks to it from outside. It has two halves, either
-of which may be absent: tools it lends the bot, and a trigger that wakes the bot with its events. An integration that
-carries a person's words is also the place a reply goes — there is no separate interface type
-(`docs/adr/0005-there-is-no-interface-type.md`).
-_Avoid_: connector, plugin, client, app, interface (that is a role an integration plays, not a kind of thing)
+**connector**:
+An external participant that talks to mason through any combination of three faces: user, tools, and events. A
+connector is not a Mason module, and one kind of connector does not exist per face.
+_Avoid_: integration (the former name), plugin, client, app, interface (that is a role, not a kind of thing)
 
-**trigger**:
-The half of an integration that wakes the bot: one authenticated event becomes one fire.
-_Avoid_: webhook, connector, source, listener
+**user face**:
+The connector face that carries a person's submissions, the agent's replies, and the state its grant lets it render.
+_Avoid_: ACP (the name of a specific editor-facing protocol), channel, interface
+
+**events face**:
+The connector face that delivers service events to mason: one authenticated event becomes one fire. It does not carry
+ordinary human conversation; that is the user face.
+_Avoid_: webhook, trigger, source, listener, tool result
 
 **envelope**:
-The signed v1 body an integration posts to the trigger door: version, id, kind and a payload written for a person to
-read. Unknown fields are ignored, so v1 only grows additively; an incompatible change becomes v2, and v1 is read
-forever.
+The versioned body that carries one event: its stable id, kind, and untrusted payload.
 _Avoid_: payload (that is one field), event body, message
 
 **tool surface**:
-The tools one integration lends the bot, named before the conversation starts and fixed for its life.
+The tools one connector lends the bot through MCP.
 _Avoid_: tool list, MCP server (that is the process, not the surface), plugin API
+
+**operator control plane**:
+The separate administrative contract for credentials, connector entries, roster, and global configuration. It is not
+a privilege a conversational connector receives.
+_Avoid_: admin channel, connector management face
 
 ## The room
 
@@ -201,9 +209,13 @@ A human with a name on the roster.
 _Avoid_: user, member, teammate
 
 **actor**:
-Who caused a fire, an approval or a refusal: what the sender asserted, and what the record kept. An assertion, not an
-identity, until a mapping makes it one.
+Who caused a submission, a fire, an approval or a refusal: the external id a connector asserted, and the roster person
+mason's mapping makes of it. An assertion, not an identity, until that mapping makes it one.
 _Avoid_: user (for the actor), author (that is the roster name on a message)
+
+**origin**:
+The connector and external conversation a submission came from, and therefore the destination of its ordinary reply.
+_Avoid_: source, channel, session
 
 **device**:
 One pairing: the token, the label beside it, and what a revoke kills. A person and a device are different things.
@@ -238,5 +250,11 @@ the conversation.
 _Avoid_: conversation, history, chat log
 
 **projection**:
-The whitelist that turns a conversation into a transcript. Anything it does not name does not cross the wire.
+The whitelist that turns a conversation into a transcript. Anything it does not name does not cross the connector wire.
 _Avoid_: serializer, mapper, view
+
+**trace**:
+The operator-only record of the stored agent session: model messages, tool calls with their arguments and results,
+hook payloads, prompt changes, and delivery and control events. It is not the projected transcript and is never a
+connector's state.
+_Avoid_: transcript, conversation (when the raw record is meant), debug log
