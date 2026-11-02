@@ -30,8 +30,9 @@ now also a scope. The soul, the skills, the routines and the integration grants 
 running today is the application bot — internships and fellowships, approval before submission (`docs/APPLICATION-PLAN.md`).
 It is not a general assistant with a role label, and a second profession is a second deployment rather than a mode.
 
-**Peer communication is no longer sibling's alone.** The rule above still holds: mason grows no peer registry, no router
-and no cross-agent message store. What changed is who carries a message between two bots. It is not sibling and not a
+**Peer communication is no longer sibling's alone.** The rule above still holds: mason grows no peer discovery, no
+registry, no router and no cross-agent message store. A list of accepted peers is operator configuration read like
+`integrations.json`; it is not a registry. What changed is who carries a message between two bots. It is not sibling and not a
 custom envelope: separately deployed mason bots talk through the Agent Communication Protocol, a standard boundary
 that the deployments carry (`docs/FLEET-PLAN.md`). sibling organises and observes the fleet, shows what a delegation did,
 and is still not the bus. ACP is independent of the execution-environment topology — two bots use it whether they share

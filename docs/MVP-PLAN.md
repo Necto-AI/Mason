@@ -110,7 +110,7 @@ Written down before the results, so a good week cannot talk us into a bad produc
 - **A bug file, not a wish list.** Every failure goes into `docs/research/application-log.md` with the message, the
   answer and one line of what should have happened. This is the input to the next milestone, and it is the only
   artefact the pilot is required to produce.
-- **The instance is the deployment.** No local run and no second bot: the pilot runs on the pclan host, because a bug
+- **The instance is the deployment.** No local run and no second bot: the pilot runs on the deployed stack, because a bug
   that only exists in the deployment is the bug worth finding.
 
 ## What the pilot is expected to teach, in priority order

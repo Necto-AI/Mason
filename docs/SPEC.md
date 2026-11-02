@@ -33,8 +33,9 @@ no peer identity of its own.
 A **fleet** is several mason bots, each its own container with its own home. They talk through the Agent Communication
 Protocol — a standard boundary, not a protocol mason invents — and sibling organises and observes the fleet without
 being its message bus (`docs/FLEET-PLAN.md`). ACP is independent of the execution-environment topology: two bots use
-the same peer protocol whether they share a VM or have separate VMs. Mason's code grows no peer registry, no router and
-no cross-agent message store for this; the fleet's transport belongs to the deployments.
+the same peer protocol whether they share a VM or have separate VMs. Mason's code grows no peer discovery, no router
+and no cross-agent message store for this; the fleet's transport belongs to the deployments, and the peers a bot will
+answer are a list a person wrote (`docs/FLEET-PLAN.md`).
 
 **The execution environment is Firecracker, in two ordered stages.** First one bot's tool machine moves to a Firecracker
 VM. Then the target becomes configurable, so a chosen group of bots may share one Firecracker VM; sharing is an option,
