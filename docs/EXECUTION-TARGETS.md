@@ -62,13 +62,22 @@ boot for every wake-up, and would lose every long-lived process the agent starte
 - So: create on first use, **pause-snapshot when idle**, restore on the next generation prepare. The snapshot id lives in
   `TargetDoc`; `env()` restoring on demand is the reconnect point, and it is called once per turn, which is the right
   frequency.
-- Isolation unit = durable conversation: one VM per conversation, created from a template image.
+- **The machine is the bot's, not the conversation's.** A target document stays conversation-scoped, because a
+  restart must not forget which machine held the work, but the machine it names belongs to the deployment: stage 1 of
+  [`ENV-PLAN.md`](ENV-PLAN.md) gives one bot one VM, and every conversation in that bot points at it. One VM per
+  conversation was the shape this note assumed when a VM was hypothetical; it would multiply machines a bot cannot pay
+  for, and it is not the isolation unit the product decided on
+  ([`adr/0009-firecracker-first-then-a-shared-vm.md`](adr/0009-firecracker-first-then-a-shared-vm.md)).
+- **Stage 2 makes the target configurable.** The same document gains the choice of VM membership: a bot's own VM, or a
+  named group of bots sharing one. Sharing is an option, not a default, and the bots in one VM share one operating-system
+  trust domain even though their homes and conversations stay distinct. ACP is unaffected either way
+  ([`FLEET-PLAN.md`](FLEET-PLAN.md)).
 
 **Decided (Denis, 2026-10-20): a fork reuses the conversation's machine. No snapshot is taken for a fork and no copy of
 the disk is made.** A forked conversation points at the same VM and the same workspace, so a branch that edits a file
-edits it for both. That is the deliberate trade: one machine per conversation is the isolation unit, and a fork is a
-second view of the same work rather than a sandbox. `TargetDoc`'s `fork: "current"` already means exactly this — the
-child inherits the target as it stands.
+edits it for both. That is the deliberate trade: the machine is shared, and a fork is a second view of the same work
+rather than a sandbox. `TargetDoc`'s `fork: "current"` already means exactly this — the child inherits the target as it
+stands.
 
 There is no fork mechanism in mason today (no UI, no method), so this constrains a future one rather than describing an
 existing behaviour. If a fork later needs its own machine, that is a new decision with a new doc rule, not a migration.
@@ -84,8 +93,9 @@ This falls out of the current code and is worth making explicit, because it remo
   model never touches it.
 - `agent/profile.md`, `agent/log/` and `agent/skills/` are **agent** files: the server renders the sections from them
   through the execution environment (`src/server/resident.ts`), which is the same read the model's `read` tool does, and
-  the model may edit the profile and its skills with `write`. They are already on the volume the tool machine mounts,
-  so they need no second route into the guest.
+  the model may edit the profile and its skills with `write`. They are on the volume the tool machine mounts today;
+  when the tool machine becomes a VM that volume becomes the guest's block device and the supervisor owns its
+  persistence, so there is still no second route into the guest.
 - Therefore nothing about memory needs a copy inside a VM: only tool-visible files live there, and they already do.
 - The **skills index** is the one place where this shows: it hands the model absolute paths to `SKILL.md` files, and the
   model reads them with its own `read` tool — inside the guest. Today those paths are home paths
