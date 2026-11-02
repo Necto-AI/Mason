@@ -2,7 +2,7 @@
 
 ## Overview
 
-mason is a headless, always-on agent backend — a proactive personal agent built on `@earendil-works/pi-durable`, `@earendil-works/pi-env` and `@earendil-works/chord`, with an event-hook system — and interfaces attach to it: Telegram is the first interface, and the operator console in this repository is the second, frozen.
+mason is a headless, always-on agent backend — one deployment is one specialized bot, built on `@earendil-works/pi-durable`, `@earendil-works/pi-env` and `@earendil-works/chord`, with an event-hook system — and interfaces attach to it: Telegram is the first interface, and the operator console in this repository is the second, frozen.
 
 Full architecture, contracts, and milestone specifications live in [`docs/SPEC.md`](docs/SPEC.md). Read `docs/SPEC.md` before writing code.
 

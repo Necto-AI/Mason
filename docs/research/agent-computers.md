@@ -1,5 +1,10 @@
 # Research: giving mason's tool machine a real computer (Firecracker microVMs and alternatives)
 
+> **Decision, 2026-11-02:** Firecracker is the chosen VMM, in two stages — one bot's VM first, a configurable shared VM
+> second — and this run's recommendation (Cloud Hypervisor) is superseded as a plan without being superseded as evidence.
+> The findings below stand as written; [`../adr/0009-firecracker-first-then-a-shared-vm.md`](../adr/0009-firecracker-first-then-a-shared-vm.md)
+> is where the choice and its costs are recorded, and [`../ENV-PLAN.md`](../ENV-PLAN.md) is the plan built on it.
+
 Researched 2026-10-26. Versions cited as found that day: Firecracker **v1.17.0** (released 2026-09-10), nixpkgs firecracker **1.16.1**, Kata Containers **4.3.1**, Cloud Hypervisor **v54.0**, gVisor (rolling), microsandbox **0.7.11**, libkrun 2.0 (pre-release) / stable branch.
 
 Evidence labels used throughout: **[documented]** = stated by the project's own docs/source; **[measured]** = a third party published numbers with a method; **[vendor claim]** = the vendor's marketing or blog; **[inference]** = my reasoning from the above, not stated by any source.

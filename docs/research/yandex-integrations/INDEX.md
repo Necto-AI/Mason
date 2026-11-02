@@ -1,5 +1,9 @@
 # Yandex as an agent's second pair of hands — research run, 2026-10-26
 
+> **Ordered later, 2026-11-02.** Gmail and Google Calendar come first for the application bot
+> ([`../../APPLICATION-PLAN.md`](../../APPLICATION-PLAN.md)); this run stays as written and is the design for when Yandex
+> is built ([`../../adr/0008-three-yandex-integrations-one-container.md`](../../adr/0008-three-yandex-integrations-one-container.md)).
+
 Goal: decide whether mason should reach Denis's Yandex services, and if so what each one actually costs to integrate.
 Three surfaces, three protocols, and three different answers: Disk is one OAuth token and a dozen endpoints, Calendar
 is CalDAV with a password that never expires, Mail is IMAP/SMTP with an error taxonomy nobody has written down.
@@ -28,7 +32,7 @@ need `mason-egress` and nothing else.
    owner's own mailbox — which is this case.
 2. **Disk: prove the device flow before building on it.** Whether an *API access* app may use `POST /device/code` is the
    one unverified fact in the set. One curl script settles it, and it decides whether the sign-in mechanism in the
-   [auth plan](../BACKEND-PLAN.md) can be a code a person types in a chat, or has to be a redirect page.
+   [auth plan](../../BACKEND-PLAN.md) can be a code a person types in a chat, or has to be a redirect page.
 3. **Write or read-only first, for Calendar and Mail alike.** Both notes land on the same answer independently: read,
    list, summarise and draft; nothing that mails a third party, deletes an event or rewrites a series, until the agent
    has been running for a while and has earned it.
@@ -55,7 +59,7 @@ can mean four different things at Yandex and only one of them is fixable by the 
 ## What these notes do not cover
 
 - **The link-based sign-in mechanism itself.** It is a mason-side design, not a Yandex one: one grant page, a single-use
-  link in a DM, a credential the integration owns. It is specified in [`../BACKEND-PLAN.md`](../BACKEND-PLAN.md) once the
+  link in a DM, a credential the integration owns. It is specified in [`../../BACKEND-PLAN.md`](../../BACKEND-PLAN.md) once the
   Mail and Disk decisions above are made.
 - **A new integration for Mail's REST API.** It is 360-only and cannot send, so it would be a second way to read a mailbox
   the IMAP client already reads.

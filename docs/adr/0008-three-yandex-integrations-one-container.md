@@ -4,6 +4,10 @@
 
 **Date:** 2026-10-27
 
+**Ordered later, 2026-11-02:** Gmail and Google Calendar come first for the application bot
+([`../APPLICATION-PLAN.md`](../APPLICATION-PLAN.md)); this decision stays the design for when Yandex is built, and
+[#78](https://github.com/DenisSud/mason/issues/78) stays open as that work. Nothing in it is superseded in content.
+
 **Revisited if:** a Yandex surface stops being one vendor's service — Calendar moving off Yandex's CalDAV would end
 the shared credential store and split the image; if the agent needs to react to mail within minutes rather than at a
 routine's hour, which is the trigger face this declines; or if the operator would rather have one switch over all
