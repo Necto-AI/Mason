@@ -5,14 +5,19 @@ the same way when each connector writes them itself: the socket, the handshake, 
 attachments, and the approval marker. It does not own vendor behaviour, and it makes no policy decision.
 
 ```ts
-import { createConnector } from "@mason/connector";
+import { createConnector, nodeWebSocketLink } from "@mason/connector";
 import { openSqliteStore } from "@mason/connector/store/sqlite";
+import WebSocket from "ws";
 
 const connector = createConnector({
 	name: "telegram",
 	version: "0.2.0",
 	url: "wss://mason.local/api/connector",
 	credential: process.env.MASON_CONNECTOR_CREDENTIAL ?? "",
+	// The credential travels as `Authorization: Bearer` on the upgrade request. A browser's `WebSocket` cannot set a
+	// header and Node's built-in one cannot either, so a Node connector passes `ws`: `webSocketLink` is only for a
+	// runtime whose constructor accepts upgrade options.
+	link: nodeWebSocketLink(WebSocket),
 	store: await openSqliteStore({ path: "/var/lib/mason-telegram/state.db" }),
 	faces: {
 		user: {
