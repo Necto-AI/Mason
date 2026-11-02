@@ -20,7 +20,7 @@ import { housePaths } from "../src/server/house.ts";
 import { integrationStatus } from "../src/server/integration-status.ts";
 import { startServer } from "../src/server/main.ts";
 import { connectIntegrations, createMcpToolName, type McpTransportFactory } from "../src/server/mcp.ts";
-import { MESSAGE_TOOL } from "../src/shared/contract.ts";
+import { REPLY_TOOL } from "../src/shared/contract.ts";
 import {
 	boot,
 	declared,
@@ -280,7 +280,7 @@ describe("the boot", () => {
 				fauxAssistantMessage([fauxToolCall("tool_search", { query: "search issues by text" }, { id: "load" })], {
 					stopReason: "toolUse",
 				}),
-				fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message: "Search is ready." }, { id: "sent" })], {
+				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Search is ready." }, { id: "sent" })], {
 					stopReason: "toolUse",
 				}),
 				fauxAssistantMessage(fauxText("Nothing else to report.")),
@@ -311,7 +311,7 @@ describe("the boot", () => {
 				fauxAssistantMessage([fauxToolCall(SEARCH_TOOL_NAME, { query: "bug" }, { id: "search" })], {
 					stopReason: "toolUse",
 				}),
-				fauxAssistantMessage([fauxToolCall(MESSAGE_TOOL, { message: "Found some." }, { id: "sent" })], {
+				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Found some." }, { id: "sent" })], {
 					stopReason: "toolUse",
 				}),
 				fauxAssistantMessage(fauxText("Nothing else to report.")),
