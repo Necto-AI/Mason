@@ -30,7 +30,7 @@ Mason's job is to be a backend with a machine-readable boundary. Five surfaces, 
 | **Status** | `GET /api/status` — last N structured events: turns, firings, integration connects, budget hits, errors | [`BACKEND-PLAN.md`](BACKEND-PLAN.md) §7. "What is broken" is the first question anyone asks a fleet view |
 | **Manage** | Chord methods that already exist (`fireHook`, `toggleHook`, `reset`, `compact`, `submit`) plus roster, integrations, schedules, tokens | Apiary is the console that replaced the frozen one; it needs the same verbs and more |
 | **Tasks** | the `task` object from BACKEND-PLAN §6, with a projection | A board is only worth drawing if the things on it are real records |
-| **Fleet** | each bot's A2A status: who it may talk to, what it was asked, what answered, what it spent | A fleet view is only worth drawing if delegations are visible, and apiary is where a person sees them |
+| **Fleet** | each bot's A2A status: who it may talk to, what it was asked, what answered, what it spent — read from mason, or from the deployment's A2A bridge through the same surface | A fleet view is only worth drawing if delegations are visible, and apiary is where a person sees them |
 
 All of it sits behind `src/server/auth.ts`. An apiary instance is a client with a token, not a privileged backdoor: if a
 surface is not reachable by a token-holding client, it is not reachable by apiary either.

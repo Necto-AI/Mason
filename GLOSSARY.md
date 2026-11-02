@@ -63,7 +63,8 @@ _Avoid_: team (that is the arrangement apiary shows), group, cluster
 Agent2Agent Protocol, the Linux Foundation standard for agent-to-agent communication: the peer-communication boundary
 between separately deployed bots. The Agent Communication Protocol (ACP) merged into it in August 2025, so A2A is the
 only peer standard mason speaks; it is carried by the deployments and independent of whether they share a VM, and
-mason's own code grows no peer registry or router for it (`docs/FLEET-PLAN.md`).
+mason's own code grows no peer registry or router for it; the bots it accepts are a list a person edits, not a
+registry (`docs/FLEET-PLAN.md`).
 _Avoid_: ACP (merged into A2A in 2025), calling it mason's protocol, or confusing it with the editor-facing Agent Client
 Protocol
 
