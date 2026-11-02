@@ -53,6 +53,55 @@ MCP server; there is no server to run. browserless is SSPL-or-paid. neko is a We
 - **Whether one self-hosted Steel really serves one session at a time.** Likely, per a single `activeSession` field in
   the controller, not proven.
 
+## Detection, and reusing the operator's own session
+
+Asked after the first pass: a browser that gets challenged on every other site is not a browser the agent can use, and
+the obvious fix is to reuse a real session rather than start a clean one.
+
+**What actually gets a browser refused, in order of weight:**
+
+1. **The IP.** A datacenter address is scored before a single byte of JavaScript runs. No fingerprint patch answers this;
+   the egress has to be residential-grade, which is also an argument for running the browser on the operator's own
+   network rather than a VPS.
+2. **The TLS and HTTP/2 fingerprint.** A real Chromium has Chromium's own; a fetch library has its own and gets flagged.
+   This is another reason the browser is a browser and not a scraper.
+3. **The profile's standing.** Cookies, history, a resolved consent banner, a warmed cache. A brand-new profile on a
+   logged-out site is the shape of a bot even when nothing is automated.
+4. **CDP tells.** Real but narrower than folklore: `navigator.webdriver`, `--enable-automation` in the flag list, and
+   `Runtime.enable` being called when no devtools window is open. [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)
+   is a patched Playwright that removes exactly these: it never calls `Runtime.enable`, injects scripts through routes
+   instead, drops `--enable-automation` and adds `--disable-blink-features=AutomationControlled`. Its own README claims
+   passes on CreepJS, Sannysoft, Cloudflare, Kasada, Akamai, DataDome and Fingerprint.com; those are self-reported and
+   Chromium-only, and it disables `console` to do it. [Camoufox](https://github.com/daijro/camoufox) is the Firefox-shaped
+   alternative for the same job.
+
+**Reusing the operator's own browser session is harder than it looks, and one reason is new.** From Chrome 136,
+`--remote-debugging-port` and `--remote-debugging-pipe` are **ignored when the profile is the default one**; the switch
+must come with `--user-data-dir` pointing somewhere else, which by design uses a different encryption key
+([Chrome developers blog, 2025-03-17](https://developer.chrome.com/blog/remote-debugging-port)). So "attach to my normal
+Chrome" is not a supported move any more. Copying the profile directory to another machine usually fails for the same
+reason from the other side: cookies are encrypted with a key held by the OS keyring, so a copy does not decrypt at its
+new home.
+
+What does work, in increasing order of moving parts:
+
+1. **A dedicated profile inside the service, signed into once by a person through the live view.** Cookies then belong to
+   the service, the profile persists, and nobody's real profile is exposed. This is the recommendation.
+2. **The Playwright extension bridge** (`--extension`, driving a running Chrome through the extension's `chrome.debugger`
+   permission) attaches to the operator's real session without the debugging port. It needs their machine awake and
+   reachable, and it is a bigger blast radius: that browser is signed into everything they are.
+3. **Copy the profile once, with the keyring key.** Possible on Linux when both ends use the same key store, brittle
+   everywhere else, and it rots within weeks.
+
+The security point that should decide it: a browser holding the operator's session is the operator, everywhere, with no
+door to check at. A per-purpose profile (research, shopping) signed into a handful of sites has a boundary; the personal
+profile does not. That is also why the vault broker is fill-only: reuse should be scoped by which logins exist in the
+profile, not by how good the agent's judgement is that day.
+
+Steel supports the levers this needs per session, read from its schema: `proxyUrl`, `userAgent`, `timezone`,
+`dimensions`, `skipFingerprintInjection`, `persist`, `userDataDir`, `extensions`
+([sessions.schema.ts](https://github.com/steel-dev/steel-browser/blob/main/api/src/modules/sessions/sessions.schema.ts)).
+
 The next step is a container on a machine that has one, a session created through the API, a real login filled from the
 vault broker, and a person typing into the same session while the agent watches. Everything above is a reading of
 sources until that happens.
