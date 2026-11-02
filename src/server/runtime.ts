@@ -446,11 +446,21 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 function assertTriggersHaveHooks(integrations: Record<string, Integration>, hooks: HooksManager, path: string): void {
 	for (const [name, integration] of Object.entries(integrations)) {
 		if (!integration.enabled) continue;
-		const hook = integration.trigger?.hook;
-		if (hook === undefined || hooks.has(hook)) continue;
-		throw new Error(
-			`${path}: integration "${name}" has a trigger that fires "${hook}", which is not a hook. A delivery there ` +
-				"would fire nothing, so the server does not start with one.",
-		);
+		const named = [
+			...(integration.trigger === undefined ? [] : [{ where: "a trigger", hook: integration.trigger.hook }]),
+			// A connector's `kind`→hook map is the same promise as a trigger's, made by the same file, so it is refused the
+			// same way: a kind that maps to a hook nobody defined is a fire that silently does nothing.
+			...Object.entries(integration.connector?.events?.hooks ?? {}).map(([kind, hook]) => ({
+				where: `the kind "${kind}"`,
+				hook,
+			})),
+		];
+		for (const entry of named) {
+			if (hooks.has(entry.hook)) continue;
+			throw new Error(
+				`${path}: integration "${name}" has ${entry.where} that fires "${entry.hook}", which is not a hook. A ` +
+					"delivery there would fire nothing, so the server does not start with one.",
+			);
+		}
 	}
 }

@@ -169,7 +169,7 @@ function collect(
 		else if (item.kind === "notice") notices.push(item.text);
 		else if (item.kind === "widget") widgets.push({ content: item.content });
 	}
-	// Every call the model made, in order, including the real tools a stub did not replace: `send_to_user`, `remember`
+	// Every call the model made, in order, including the real tools a stub did not replace: `reply`, `remember`
 	// and the widget tool are the same delivery path the reader sees, so an eval must count what the harness committed.
 	const calls = toolCallsOf(view);
 	const widgetCall = calls.find((call) => call.name === "generateSandboxedUi");

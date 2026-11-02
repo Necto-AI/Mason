@@ -39,7 +39,7 @@ import {
 } from "@earendil-works/pi-mcp";
 import { type TUnsafe, Type } from "typebox";
 import { integrationStatus } from "./integration-status.ts";
-import type { Integration } from "./integrations.ts";
+import type { Integration, IntegrationTools } from "./integrations.ts";
 
 /** Provider tool names are limited to 64 characters of `[A-Za-z0-9_-]`; the name is also the identifier a script calls. */
 const MAX_TOOL_NAME_LENGTH = 64;
@@ -113,8 +113,11 @@ const MCP_RESULT_SCHEMA = Type.Unsafe<JsonValue>({
 const CLIENT_NAME = "mason";
 const CLIENT_VERSION = "0.1.0";
 
-/** How the boot reaches one integration's endpoint. */
-export type McpTransportFactory = (url: string) => McpTransport;
+/**
+ * How the boot reaches one integration's endpoint. The credential is the one the connector issued to mason
+ * (`tools.credential`), passed beside the url so a test's in-memory transport can ignore it and the HTTP one can send it.
+ */
+export type McpTransportFactory = (url: string, credential?: string) => McpTransport;
 
 export interface ConnectIntegrationsOptions {
 	readonly integrations: Record<string, Integration>;
@@ -311,7 +314,7 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
 		wanted.map(async ({ name, tools }) => {
 			const required = tools.required === true;
 			try {
-				const { client, listed } = await connect(name, tools.url, openTransport);
+				const { client, listed } = await connect(name, tools, openTransport);
 				return { name, required, client, listed };
 			} catch (error) {
 				return { name, required, error: errorMessage(error) };
@@ -367,7 +370,7 @@ export async function connectIntegrations(options: ConnectIntegrationsOptions): 
  */
 async function connect(
 	name: string,
-	url: string,
+	tools: IntegrationTools,
 	openTransport: McpTransportFactory,
 ): Promise<{ readonly client: McpClient; readonly listed: readonly McpTool[] }> {
 	let failure: unknown;
@@ -378,7 +381,7 @@ async function connect(
 			requestTimeoutMs: REQUEST_TIMEOUT_MS,
 		});
 		try {
-			await client.connect(openTransport(url));
+			await client.connect(openTransport(tools.url, tools.credential));
 			return { client, listed: await client.listTools() };
 		} catch (error) {
 			failure = error;
@@ -386,15 +389,22 @@ async function connect(
 			if (attempt < CONNECT_ATTEMPTS) await delay(RETRY_DELAY_MS);
 		}
 	}
-	throw new Error(`MCP integration "${name}" at ${url}: ${errorMessage(failure)}`);
+	throw new Error(`MCP integration "${name}" at ${tools.url}: ${errorMessage(failure)}`);
 }
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function httpTransport(url: string): McpTransport {
-	return new StreamableHttpTransport({ url });
+/**
+ * One transport over Streamable HTTP, carrying mason's own credential when the entry has one. A connector that wants a
+ * credential on this direction issues it; mason presents it and never the other way round.
+ */
+function httpTransport(url: string, credential?: string): McpTransport {
+	return new StreamableHttpTransport({
+		url,
+		...(credential === undefined ? {} : { headers: { authorization: `Bearer ${credential}` } }),
+	});
 }
 
 function errorMessage(error: unknown): string {

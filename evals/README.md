@@ -12,7 +12,7 @@ statement about the prompt and the harness, which is what these files exist to p
 ## What is real and what is stubbed
 
 Real: the production prompt registry (`src/server/prompt.ts`), the harness (`openAgentRuntime`), the extension set a
-scenario runs with (prompt, `remember`, `send_to_user`, the widget tool), the projection that decides what a reader
+scenario runs with (prompt, `remember`, `reply`, the widget tool), the projection that decides what a reader
 sees (`src/server/projection.ts`), and the model. Every turn is a real model call, plus the calls its tool steps need.
 
 Stubbed: `bash`, `read`, `write` and `edit` keep their production names, descriptions and parameters, and answer from
@@ -106,8 +106,8 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
     { "hook": { "name": "Morning brief", "description": "Check today's calendar.", "payload": "" } }
   ],
   "expect": {
-    "calls": { "send_to_user": { "min": 1, "max": 1 }, "read": { "min": 1 } },
-    "before": [{ "tool": "read", "then": "send_to_user" }],
+    "calls": { "reply": { "min": 1, "max": 1 }, "read": { "min": 1 } },
+    "before": [{ "tool": "read", "then": "reply" }],
     "text": ["3"],
     "maxInputTokens": 10000
   }
@@ -129,9 +129,9 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
 - `expect.text` and `expect.absentText` are substrings the delivered transcript must and must not contain,
   case-insensitive. `expect.log` is regexes today's log file must match.
 - `expect.widget` requires a widget to reach the reader, built with `css` before `html` in the call's arguments.
-- `expect.maxTools` bounds work calls: everything except `send_to_user`, which is the delivery channel rather than
+- `expect.maxTools` bounds work calls: everything except `reply`, which is the delivery channel rather than
   effort. `expect.maxInputTokens` bounds the run's summed input tokens. `expect.reminders` bounds how often the delivery
-  gate had to rescue a turn, which is how a model that stops answering in `send_to_user` shows up even though the
+  gate had to rescue a turn, which is how a model that stops answering in `reply` shows up even though the
   reader is now guaranteed an answer.
 
 Two checks are not optional and need no `expect` entry: every turn must deliver at least one message
@@ -152,13 +152,13 @@ passed 15.
 | remember | **0/3** | a recalled preference is delivered on the next turn |
 | widget | 3/3 | a widget reaches the reader, `css` before `html` |
 
-`remember` first failed on `turn.2.delivered`: the turn that answers the recall question ended without `send_to_user`,
+`remember` first failed on `turn.2.delivered`: the turn that answers the recall question ended without `reply`,
 so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
 four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
 silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
 to the log and read back through the same path.
 
-The gate changes what green means. `calls.send_to_user` still measures the model's own discipline; `reminders` measures
+The gate changes what green means. `calls.reply` still measures the model's own discipline; `reminders` measures
 how often it needed help, and that is the number to watch — a model that stops delivering still turns the suite green,
 because the reader is guaranteed an answer either way.
 

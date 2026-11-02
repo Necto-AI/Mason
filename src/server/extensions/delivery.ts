@@ -1,30 +1,26 @@
 /**
- * `send_to_user`: the one channel through which the agent's words reach the reader — in the console.
+ * `reply`: the one channel through which a turn's words reach a reader.
  *
- * The tool performs no side effect and is not terminal. Delivery is defined as the call being committed to the
- * transcript: the chat renders the message out of the `pi.assistant` / `pi.tool-result` entries, so `execute()` only
- * has to return. The turn carries on afterwards, which lets the model send a progress note and then the result in
- * the same turn.
+ * Routing is mason's, not the model's. A turn knows its origin from the transcript — the `app.connector` or `app.hook`
+ * entry that started it — and the tool addresses the reply there. There is no vendor tool to name and no prompt that
+ * names one: a chat, a console and a schedule are the same call, and only the destination differs.
  *
- * There are two readers, and this tool is one of them. In the console, `send_to_user` *is* the reader: nothing else the
- * model writes is rendered, so a call is the message. A turn an event hook started is the other case — the person is in
- * a chat, the hook's instruction answers there with the integration's own tool, and `send_to_user` writes into a console
- * that person is not looking at. The projection renders such a call, so nothing about it is a lie in the transcript, and
- * that is exactly what made it dangerous: the model was told "delivered", wrote itself a note that it had answered, and
- * the person in the chat heard nothing at all. A prompt cannot fix that — the tool's description wins — so `execute()`
- * refuses it in a hooked turn, naming the tool that does reach the reader, and the gate below counts that tool as the
- * delivery instead. Which tool that is comes from the hook's own instruction (`hooks.ts`), one source for both.
+ * Three outcomes, and the result says which:
  *
- * Delivery is a top-level act, because the projection renders a message only out of a call the model made itself. A
- * call made from inside another tool — `tools.send_to_user()` in a code-mode script — is a nested call whose result
- * goes back to the script instead of into the transcript. Nothing about it reaches the reader, yet the script would be
- * told "delivered" and go on as if the reader had the message: the turn ends with the projection's "The agent finished
- * without sending you a message." notice, which is the truth discovered too late. So `execute()` refuses one, with the
- * instruction that puts the message where the reader is.
+ * - **delivered** — the console is the reader; the entry the call commits *is* the delivery.
+ * - **queued** — a connector is the reader; the entry is the durable outbox, and the socket sends it, resends it after a
+ *   reconnect, and records the acknowledgement. Saying "delivered" here would be a promise this process cannot keep.
+ * - **nobody reached** — a hooked turn with no origin that named no target. The work is recorded and the model is told
+ *   that no person has it, which is the truth; a message nobody received is the worst outcome the arrangement exists to
+ *   avoid.
  *
- * `replay` is set explicitly, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would
- * deliver the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error
- * result, which the client shows as a bubble that may not have reached the reader.
+ * `replay` is explicit, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would commit
+ * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
+ * the client shows as a bubble that may not have reached the reader.
+ *
+ * A **nested** call — `tools.reply()` inside a code-mode script — is refused: its result goes back to the script instead
+ * of into the transcript, so nothing reaches the reader while the script is told it did. The entry is the delivery, and
+ * a script cannot write one that a reader sees; the refusal says what to do instead.
  */
 import type { Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
@@ -33,7 +29,6 @@ import {
 	type Cursor,
 	defineExtension,
 	defineTool,
-	type EntryRecord,
 	GenerationTask,
 	hook,
 	type ToolExecutionApi,
@@ -41,19 +36,40 @@ import {
 import { Type } from "typebox";
 import {
 	DELIVERY_REMINDER,
-	hookDeliveryReminder,
 	isDeliveryReminder,
-	MESSAGE_TOOL,
+	REPLY_ENTRY_KIND,
+	REPLY_TOOL,
 	WIDGET_TOOL,
 } from "../../shared/contract.ts";
-import { deliveryToolForTurn, isHookTurn } from "../hooks.ts";
-import { isNestedCall, nestedRefusal, refusal } from "./nested.ts";
+import { currentIntegrations } from "../integrations.ts";
+import {
+	isInputEntry,
+	type ReplyRecord,
+	type ReplyTarget,
+	reachableTarget,
+	type TurnOrigin,
+	targetOfOrigin,
+	turnOriginOfEntry,
+} from "../replies.ts";
+import { nestedRefusal } from "./nested.ts";
 
-const SendToUserParams = Type.Object({
+const ReplyParams = Type.Object({
 	message: Type.String({
 		minLength: 1,
-		description: "What the user reads, written in full — this text is the message, not a note about it",
+		description: "What the reader sees, written in full — this text is the message, not a note about it",
 	}),
+	to: Type.Optional(
+		Type.Object(
+			{
+				connector: Type.String({ description: "the connector to send to, as the operator names it" }),
+				conversation: Type.String({ description: "the external conversation id on that connector" }),
+			},
+			{
+				description:
+					"Where to send when this turn has no origin — a scheduled routine naming the chat it reports to. Omit it to answer whoever started the turn.",
+			},
+		),
+	),
 });
 
 /**
@@ -61,93 +77,46 @@ const SendToUserParams = Type.Object({
  * an error result into a rejection (`vendor/pi/packages/durable/src/codemode/codemode.ts:280-291`), so the text has to
  * say the call rejects — a script that read it as advice would carry on believing the reader had been written to.
  */
-const DELIVERY_NESTED_REFUSAL =
-	"send_to_user cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and send it with send_to_user directly.";
+const REPLY_NESTED_REFUSAL =
+	"reply cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call reply from the turn.";
 
-/**
- * What the model is told instead of a delivery nobody would see, in a turn an event hook started: the same shape as the
- * nested refusal — the call rejects, here is who was never reached, here is the call that reaches them — with `tool` as
- * the one the hook's own instruction names.
- *
- * It has to say "rejects" for the same reason the nested one does: code mode turns an error result into a rejection, and
- * a script that read it as advice would carry on believing the chat had the answer.
- */
-function hookRefusal(tool: string, nested: boolean): string {
-	const fromScript = nested
-		? ` A message sent from inside a script reaches nobody in either case: return the text from the script and call ${tool} from the turn.`
-		: "";
-	return `send_to_user cannot reach the reader in this turn: the call rejects, and a message sent this way never arrives. This turn came from an event hook, and the person it answers sees only what \`${tool}\` sends: call ${tool} directly, with the chat the payload names, and put the answer in that call.${fromScript}`;
+/** What the model is told when nothing that carries words started this turn and it named no target. */
+const NOBODY_REACHED =
+	"recorded, but nobody was reached: this turn came from an event hook with no conversation behind it and no target was named, so the message is in the transcript and no person was sent it. To reach someone, call reply again with {to:{connector, conversation}} naming a configured user-face connector and one of its permitted conversations.";
+
+/** Where a reply goes, and whether the recording of it is also a delivery. */
+interface ChosenTarget {
+	readonly target?: ReplyTarget;
+	/** A hooked turn with no origin: the words are recorded, and no medium carries them. */
+	readonly nobodyReached?: true;
 }
-
-/**
- * What the model is told when a hook turn has no chat on the other end — a schedule, a repository event, a retry.
- *
- * `send_to_user` is a real delivery here: the console is the only reader such a turn has, and the call is committed.
- * Saying just "delivered" would be true and misleading in the same breath — nobody is in a chat, so the answer waits in
- * the transcript until somebody opens it. The sentence names that, and it names the fix a person can act on.
- */
-const CONSOLE_ONLY_DELIVERY =
-	"delivered to the operator console. This turn came from an event hook whose instruction names no chat tool, so no message reached a person: the answer is in the transcript, and it is read when somebody opens the console.";
-
-export const sendToUserTool = defineTool({
-	name: MESSAGE_TOOL,
-	description:
-		"Send the user a message in the operator console. Only messages sent this way are seen there; everything else you write in a turn is working notes. In a turn an event hook started, the person is in a chat reached by that chat's own tool, and this call is refused; a hook whose instruction names no chat tool — a schedule, a repository event — has no other reader, so the call lands here and the result says so. Call this directly, never from inside a script: a message sent by a nested call never reaches the reader. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
-	parameters: SendToUserParams,
-	replay: "unsafe",
-	// The commit is the delivery: nothing to do, so nothing to undo, retry or wait for. A nested call has nothing to
-	// commit at all, which is why it is answered with the instruction rather than with "delivered".
-	execute: async ({ message }, api, context) => {
-		// Which reader this turn has, read from the transcript rather than from anything the model was asked to do.
-		const input = await turnInput(api, context);
-		const reader = deliveryToolForTurn(input);
-		if (reader !== undefined) return refusal(hookRefusal(reader, isNestedCall(api)));
-		const nested = nestedRefusal(api, DELIVERY_NESTED_REFUSAL);
-		if (nested !== undefined) return nested;
-		// A console turn and a hooked turn with no chat both land in the transcript; only the second is worth saying out
-		// loud, because "delivered" there reads as "a person has this" and nobody does.
-		const text = isHookTurn(input) ? CONSOLE_ONLY_DELIVERY : "delivered";
-		return { output: [{ type: "text", text }], details: { length: message.length } };
-	},
-});
 
 /** How far back a turn's input can be — a round of tool calls is one entry each, and a page always ends. */
 const TURN_INPUT_PAGE = 128;
 const TURN_INPUT_MAX_PAGES = 16;
 
 /**
- * The input that started this turn, as the model was given it: the newest user message in the transcript, unless that is
- * the gate's own reminder, which starts nothing.
+ * The turn this call belongs to, read from the transcript.
  *
- * A tool cannot see the request that made its call, so this reads the transcript instead — the same texts the gate reads
- * in `beforeRequest`, which is what keeps the two from disagreeing about who the reader is. It is a read-only commit: no
- * entry is written, and `Session.commit()` discards a batch with no writes.
+ * A tool cannot see the request that made its call, so this reads the newest input entry — the same entry the delivery
+ * gate reads — rather than trusting the model to remember where the turn came from. Scanning pages because a long turn
+ * can outgrow one page of entries; sixteen pages of 128 is far past any turn this agent writes.
  */
-async function turnInput(api: ToolExecutionApi, context: Context): Promise<string | undefined> {
+async function readTurnOrigin(api: ToolExecutionApi, context: Context): Promise<TurnOrigin> {
 	const conversationId: ConversationId = api.conversationId;
 	return api.commit(async (tx) => {
 		let cursor: Cursor | undefined;
 		for (let page = 0; page < TURN_INPUT_MAX_PAGES; page += 1) {
 			const scanned = await tx.scanEntries({ conversationId, order: "descending" }, TURN_INPUT_PAGE, cursor);
+			// Descending, so the first input in the page is the newest one in the transcript.
 			for (const entry of scanned.items) {
-				const spoken = inputTextOf(entry);
-				if (spoken === undefined || isDeliveryReminder(spoken)) continue;
-				return spoken;
+				if (isInputEntry(entry)) return turnOriginOfEntry(entry);
 			}
-			if (scanned.next === undefined) return undefined;
+			if (scanned.next === undefined) break;
 			cursor = scanned.next;
 		}
-		return undefined;
+		return { kind: "console" };
 	}, context);
-}
-
-/** What an entry contributes as input, or `undefined` when it is not a user message: a resumed turn has older ones. */
-function inputTextOf(entry: EntryRecord): string | undefined {
-	for (const message of entry.model ?? []) {
-		if (message.role !== "user") continue;
-		return textOf(message);
-	}
-	return undefined;
 }
 
 /** The text of a message: a plain string, or its text blocks joined. Reasoning and calls are not text. */
@@ -163,91 +132,160 @@ function textOf(message: Message): string {
 		.join("");
 }
 
-/**
- * What the turn did so far, read from the only thing a hook can see: the model's own context.
- *
- * A generation is one request and the round it starts, so a turn that makes several rounds is several generations and
- * no memo survives between them. The message list does survive, so the turn is read from it: everything after the last
- * real input is this turn, and a call in it is something the reader has already seen — the reader being whoever the
- * turn's input says they are. A turn an event hook started has a chat on the other end, reached by that hook's own tool
- * (`tool`), and `send_to_user` writes to the console instead: there, only that tool is a delivery.
- */
-function turnProgress(messages: readonly Message[]): { delivered: boolean; reminded: boolean; tool?: string } {
-	// Walk back to the input that started the turn; the reminder is not one, or the turn would look like it restarted
-	// the moment it was nudged.
-	let start = -1;
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		const message = messages[index] as Message;
-		if (message.role === "user" && !isDeliveryReminder(textOf(message))) {
-			start = index;
-			break;
-		}
-	}
-	// The hook this turn answers, if it answers one: the one source of truth for which tool delivers here.
-	const tool = deliveryToolForTurn(start === -1 ? undefined : textOf(messages[start] as Message));
-	// No input in context at all — a resumed or compacted turn: read what is there, and err towards having delivered.
-	// `send_to_user` reads the same fallback off the same transcript (`turnInput`), so a turn whose input was compacted
-	// away is read as the console's by both of them, together, rather than by one of them.
-	const delivering = new Set(tool === undefined ? [MESSAGE_TOOL, WIDGET_TOOL] : [tool]);
+export const replyTool = defineTool({
+	name: REPLY_TOOL,
+	description:
+		"Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A reply goes back where the turn came from — the connector that carried the words, or the operator console — so never try to reach a chat by another tool's name. When the turn came from an event hook with no conversation behind it, name the target with {to:{connector, conversation}}, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
+	parameters: ReplyParams,
+	replay: "unsafe",
+	execute: async ({ message, to }, api, context) => {
+		const nested = nestedRefusal(api, REPLY_NESTED_REFUSAL);
+		if (nested !== undefined) return nested;
+		const origin = await readTurnOrigin(api, context);
+		const chosen = chooseTarget(origin, to);
+		if ("reason" in chosen) return { output: [{ type: "text", text: chosen.reason }] };
+		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text: message }];
+		const record: ReplyRecord = {
+			deliveryId: `reply:${api.callId}`,
+			blocks,
+			...(chosen.target === undefined ? {} : { target: chosen.target }),
+			...(origin.kind !== "console" && origin.origin !== undefined ? { origin: origin.origin } : {}),
+		};
+		// The commit is the delivery, and the commit is what makes it durable: a console reply is read out of this entry,
+		// and a connector reply is sent from it by the outbox, which records the acknowledgement as its own entry.
+		await api.commit(
+			(tx) =>
+				tx.appendEntry(api.conversationId, {
+					kind: REPLY_ENTRY_KIND,
+					// Plain JSON, field by field: a protocol interface has no index signature, and an entry's `data` is JSON.
+					data: {
+						deliveryId: record.deliveryId,
+						blocks,
+						...(record.target === undefined
+							? {}
+							: {
+									target: {
+										connector: record.target.connector,
+										externalConversationId: record.target.externalConversationId,
+									},
+								}),
+						...(record.origin === undefined
+							? {}
+							: {
+									origin: {
+										connector: record.origin.connector,
+										externalConversationId: record.origin.externalConversationId,
+										...(record.origin.externalMessageId === undefined
+											? {}
+											: { externalMessageId: record.origin.externalMessageId }),
+										...(record.origin.externalActorId === undefined
+											? {}
+											: { externalActorId: record.origin.externalActorId }),
+									},
+								}),
+					},
+				}),
+			context,
+		);
+		const outcome = chosen.nobodyReached === true ? NOBODY_REACHED : outcomeText(record);
+		return { output: [{ type: "text", text: outcome }], details: { length: message.length } };
+	},
+});
 
-	let delivered = false;
-	let reminded = false;
-	for (let index = start + 1; index < messages.length; index += 1) {
-		const message = messages[index] as Message;
-		if (message.role === "user") {
-			if (isDeliveryReminder(textOf(message))) reminded = true;
-			continue;
-		}
+/** What the model is told the call did, in one sentence it can act on. */
+function outcomeText(record: ReplyRecord): string {
+	if (record.target === undefined) {
+		return record.origin === undefined
+			? "delivered to the operator console"
+			: "delivered to the operator console: this turn's origin is a connector, but the reply was addressed here";
+	}
+	return `queued for delivery to ${record.target.connector} "${record.target.externalConversationId}"`;
+}
+
+/**
+ * Where the reply goes, or why it cannot go anywhere.
+ *
+ * The origin decides unless the model named a target: a routine has no origin, and an explicit target that the operator
+ * did not grant is refused rather than silently redirected to a room the connector may not speak in.
+ */
+function chooseTarget(
+	origin: TurnOrigin,
+	to: { readonly connector: string; readonly conversation: string } | undefined,
+): ChosenTarget | { readonly reason: string } {
+	if (to !== undefined) {
+		const target: ReplyTarget = { connector: to.connector, externalConversationId: to.conversation };
+		const reachable = reachableTarget(currentIntegrations(), target);
+		if (!reachable.ok) return { reason: `cannot deliver: ${reachable.reason}` };
+		return { target };
+	}
+	// A person's words through a connector and a fire that named its conversation are the same destination: both carry an
+	// origin, and the reply goes back to it.
+	const carried = origin.kind === "console" ? undefined : origin.origin;
+	if (carried !== undefined) {
+		const target = targetOfOrigin(carried);
+		const reachable = reachableTarget(currentIntegrations(), target);
+		// A connector that was switched off mid-turn is not a destination; the reply is still the turn's answer, so the call
+		// fails with a sentence the model can act on rather than silently landing somewhere nobody reads.
+		return reachable.ok ? { target } : { reason: `cannot deliver: ${reachable.reason}` };
+	}
+	if (origin.kind === "console") return {};
+	return { nobodyReached: true };
+}
+
+const DELIVERED = "delivery.delivered";
+const REMINDED = "delivery.reminded";
+
+/**
+ * The reader never gets silence for an answer.
+ *
+ * `reply` is a tool, so calling it is the model's choice, and the prompt that asks for it is advice. This gate is what
+ * makes it happen: when a turn is about to end with nothing delivered, the run continues with one reminder, and the
+ * model gets one more chance to say what it meant to say. Once per turn, because the reminder is itself a `pi.user`
+ * entry and the next generation can see it; a second silent answer is left to the projection, which shows a notice
+ * rather than nothing.
+ *
+ * "Delivered" is the same call `reply` makes: one operation, so the gate and the tool cannot disagree about what
+ * reaching the reader means. A widget is a second thing a reader sees, and counts.
+ */
+function turnDelivered(messages: readonly Message[]): boolean {
+	const delivering = new Set([REPLY_TOOL, WIDGET_TOOL]);
+	for (const message of messages) {
 		if (message.role !== "assistant") continue;
 		const content = (message as { content?: unknown }).content;
 		if (!Array.isArray(content)) continue;
 		for (const part of content) {
 			const call = part as { type?: unknown; name?: unknown };
-			if (call.type === "toolCall" && typeof call.name === "string" && delivering.has(call.name)) delivered = true;
+			if (call.type === "toolCall" && typeof call.name === "string" && delivering.has(call.name)) return true;
 		}
 	}
-	return { delivered, reminded, ...(tool === undefined ? {} : { tool }) };
+	return false;
 }
 
-const DELIVERED = "delivery.delivered";
-const REMINDED = "delivery.reminded";
-/** The hook's own tool, when this turn answers one: what the reminder names instead of `send_to_user`. */
-const TOOL = "delivery.tool";
+/** Whether this turn has already been reminded: the nudge is the newest user message, and nothing delivered followed. */
+function remindedAlready(messages: readonly Message[]): boolean {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index] as Message;
+		if (message.role !== "user") continue;
+		return isDeliveryReminder(textOf(message));
+	}
+	return false;
+}
 
-/**
- * The reader never gets silence for an answer.
- *
- * `send_to_user` is a tool, so calling it is the model's choice, and the prompt that asks for it is advice. This gate is
- * what makes it happen: when a turn is about to end with nothing delivered, the run continues with one reminder,
- * and the model gets one more chance to say what it meant to say. Once per turn, because the reminder is itself a
- * `pi.user` entry and the next generation can see it; a second silent answer is left to the projection, which shows a
- * notice rather than nothing.
- *
- * What counts as delivered is the turn's reader, not a name written here: in the console it is `send_to_user`, and in a
- * turn an event hook started it is the tool that hook's instruction names. The reminder says the same thing, so a nudge
- * is never an instruction to call the tool that cannot arrive.
- *
- * Every delivery this walk can see is one the reader can see, because a nested one is refused: the gate and the
- * projection read the same top-level call.
- */
 export const deliveryGate = hook(GenerationTask, {
 	beforeRequest: async ({ messages }, api, context) => {
-		const progress = turnProgress(messages);
-		if (progress.delivered) await api.memo(DELIVERED, true, context);
-		if (progress.reminded) await api.memo(REMINDED, true, context);
-		if (progress.tool !== undefined) await api.memo(TOOL, progress.tool, context);
+		if (turnDelivered(messages)) await api.memo(DELIVERED, true, context);
+		if (remindedAlready(messages)) await api.memo(REMINDED, true, context);
 		return undefined;
 	},
 	onYield: async (_answer, api, context) => {
 		if ((await api.memo(DELIVERED, context)) === true) return undefined;
 		if ((await api.memo(REMINDED, context)) === true) return undefined;
-		const tool = await api.memo(TOOL, context);
-		return { continue: typeof tool === "string" ? hookDeliveryReminder(tool) : DELIVERY_REMINDER };
+		return { continue: DELIVERY_REMINDER };
 	},
 });
 
 export const Delivery = defineExtension({
 	name: "delivery",
-	tools: [sendToUserTool],
+	tools: [replyTool],
 	hooks: [deliveryGate],
 });

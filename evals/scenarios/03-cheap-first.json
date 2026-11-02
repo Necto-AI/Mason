@@ -11,7 +11,7 @@
 	],
 	"expect": {
 		"calls": {
-			"send_to_user": {
+			"reply": {
 				"min": 1,
 				"max": 1
 			}
