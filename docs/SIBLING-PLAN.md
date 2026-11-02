@@ -38,9 +38,9 @@ surface is not reachable by a token-holding client, it is not reachable by sibli
 ## Peers: A2A, and sibling does not route
 
 The question that decides everything else is **who addresses whom**. Two bots talking is not two chat sessions: one of
-them is asking for work and the other has to accept it, be paid for it, and answer once. The answer is the Agent
-Communication Protocol, carried by the deployments ([`FLEET-PLAN.md`](FLEET-PLAN.md)), not a protocol mason invents and
-not a message sibling relays.
+them is asking for work and the other has to accept it, be paid for it, and answer once. The answer is the
+Agent2Agent Protocol (A2A), carried by the deployments ([`FLEET-PLAN.md`](FLEET-PLAN.md)), not a protocol mason invents
+and not a message sibling relays.
 
 ### What stays from the earlier design
 
