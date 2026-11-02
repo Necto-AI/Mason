@@ -22,7 +22,11 @@ import type { Integration } from "../src/server/integrations.ts";
 import {
 	approverFor,
 	decide,
+	type HookCommitter,
+	type MarkerReading,
 	mayAnswer,
+	PERMISSION_ANSWER_ENTRY_KIND,
+	PermissionBook,
 	type PermissionInputs,
 	type PermissionRequest,
 	surfaceFor,
@@ -36,6 +40,7 @@ import {
 	MCP,
 	SEARCH_SCRIPT,
 	SEARCH_TOOL,
+	SILENT_TOOL,
 	scriptThenSpeak,
 	TWO_CALLS,
 	temporaryDirectory,
@@ -57,43 +62,58 @@ const ALLOWS_CREATE: Integration = {
 	connector: { state: [], trustMarkers: false, policy: { allow: ["issues.create"] } },
 };
 
-/** The decision inputs, with a catalog that knows one tool and says what the caller told it to say. */
+/**
+ * The decision inputs, with the catalog's answer fixed by the test: `marker` is what the service said about the tool,
+ * `"absent"` is a tool it no longer offers (or a service that is not answering), and absence of the option is the
+ * `required` default.
+ */
 function inputs(
 	options: {
 		readonly toolName?: string;
 		readonly args?: Record<string, unknown>;
-		readonly marker?: "required" | "not_required" | null;
+		readonly marker?: "required" | "not_required" | "absent" | "unresolved";
 		readonly integration?: Integration;
 		readonly origin?: PermissionInputs["origin"];
 	} = {},
 ): PermissionInputs {
-	const marker = options.marker === undefined ? "required" : options.marker;
+	const marker = options.marker ?? "required";
+	const reading: MarkerReading | undefined =
+		marker === "unresolved"
+			? undefined
+			: marker === "absent"
+				? { present: false, why: "the catalog cannot see github/issues.create right now" }
+				: { present: true, marker };
 	return {
 		toolName: options.toolName ?? MCP.call,
 		args: options.args ?? { integration: "github", tool: "issues.create", arguments: {} },
 		origin: options.origin ?? { kind: "console" },
 		integrations: { github: options.integration ?? GITHUB },
-		catalog: {
-			approvalOf: (_integration, tool) => (marker === null || tool !== "issues.create" ? undefined : marker),
-		},
+		...(reading === undefined ? {} : { reading }),
 	};
 }
 
 describe("the decision", () => {
-	it("asks for a marker that is missing or unknown, because a server that said nothing said nothing about safety", () => {
-		assert.equal(
-			decide(inputs({ marker: null })).kind,
-			"allow",
-			"a tool the catalog no longer has is the call's problem",
-		);
-		assert.equal(decide(inputs({ integration: UNTRUSTED, marker: "required" })).kind, "ask");
+	it("refuses a call nobody can see: a tool that is gone, a service that is not answering, or no answer at all", () => {
+		// The catalog's answer is resolved before the decision, so "absent" is a fact about now rather than about a cache.
+		// Both refusals, because a `required` marker that a reconnect could hide is a call that runs unasked.
+		for (const marker of ["absent", "unresolved"] as const) {
+			const refused = decide(inputs({ marker }));
+			assert.equal(refused.kind, "deny", marker);
+			assert.match(refused.kind === "deny" ? refused.reason : "", /cannot see|no catalog answer/);
+		}
 	});
 
 	it("asks for a required tool whatever the operator allowed, and never lets a marker loosen a rule", () => {
-		assert.equal(decide(inputs({ integration: GITHUB, marker: "required" })).kind, "ask");
-		const trusted: Integration = { ...GITHUB, connector: { state: [], trustMarkers: true } };
-		const allowed = decide(inputs({ integration: trusted, marker: "required" }));
-		assert.equal(allowed.kind, "ask", "`required` always asks: an allow rule cannot waive it");
+		assert.equal(decide(inputs({ marker: "required" })).kind, "ask");
+		const allowed: Integration = {
+			...GITHUB,
+			connector: { state: [], trustMarkers: false, policy: { allow: ["issues.create"] } },
+		};
+		assert.equal(
+			decide(inputs({ integration: allowed, marker: "required" })).kind,
+			"ask",
+			"the rule cannot waive it",
+		);
 	});
 
 	it("allows a not_required tool only with trusted markers or a rule that names it", () => {
@@ -118,6 +138,17 @@ describe("the decision", () => {
 			connector: { state: [], trustMarkers: true, policy: { deny: ["*"] } },
 		};
 		assert.equal(decide(inputs({ integration: everything, marker: "required" })).kind, "deny", "`*` is every tool");
+	});
+
+	it("allows a reply to a fire's own carried conversation, which is a turn's origin too", () => {
+		// A fire may carry the origin a reply would go to. Keeping that voice where it was is the same decision as keeping
+		// a person's words where they were, and asking would be a question with no surface to answer it on.
+		const fired = inputs({
+			toolName: "reply",
+			args: { text: "done", to: { connector: "telegram", conversation: "-1001234" } },
+			origin: { kind: "hook", origin: { connector: "telegram", externalConversationId: "-1001234" } },
+		});
+		assert.equal(decide(fired).kind, "allow");
 	});
 
 	it("allows a reply to the turn's own origin and asks for one addressed elsewhere", () => {
@@ -184,6 +215,15 @@ describe("who may answer", () => {
 		assert.equal(none.ok, false);
 	});
 
+	it("refuses a question that came through another connector, even for the same person", () => {
+		// Two connectors whose approver is the same roster name are two seats, not one: the glossary says "a request that
+		// came through it", and the id alone must not carry authority across connectors.
+		const elsewhere = mayAnswer(request, { ...grant, connector: "slack" }, { externalActorId: "8811" });
+		assert.equal(elsewhere.ok, false);
+		assert.match(elsewhere.ok ? "" : elsewhere.reason, /came through/);
+		assert.equal(mayAnswer(request, { ...grant, connector: "telegram" }, { externalActorId: "8811" }).ok, true);
+	});
+
 	it("routes a question to the person who asked, and leaves it pending when that person is not the approver", () => {
 		const integrations = {
 			telegram: {
@@ -221,6 +261,10 @@ describe("who may answer", () => {
 	});
 });
 
+/** A script whose only call reaches a tool that declared nothing about its effect. */
+const CLOSE_SCRIPT = `const r = await tools.mcp_call({ integration: "github", tool: "issues.close", arguments: { title: "Pager" } });
+return r.content[0].text;`;
+
 /** Wait until `ready` holds, so a question a turn asks is not raced by the assertion that looks for it. */
 async function until(ready: () => Promise<boolean>): Promise<boolean> {
 	const deadline = Date.now() + 15_000;
@@ -248,6 +292,50 @@ async function lastScript(runtime: Awaited<ReturnType<typeof boot>>): Promise<st
 	}
 	return "";
 }
+
+describe("the book", () => {
+	it("drops the waiter it registered when the answer is already in the log", async () => {
+		// The recovery path this gateway advertises: the answer was written, the process died before the intent, and the
+		// next hook reads the answer on its first pass. The waiter registered before that read has nothing to wait for, and
+		// an abandoned waiter rejects when the invocation ends — an unhandled rejection, which takes the process down.
+		const book = new PermissionBook();
+		const request: PermissionRequest = {
+			permissionId: "perm_1",
+			tool: { name: "mcp_call", connector: "github", tool: "issues.create" },
+			arguments: { title: "Pager" },
+			reason: "the service declares that its effect needs approval",
+			answers: ["allow", "deny"],
+			askedAt: 1,
+		};
+		const entry = {
+			kind: PERMISSION_ANSWER_ENTRY_KIND,
+			data: { permissionId: "perm_1", answer: "allow", by: "Denis", at: 2 },
+		};
+		const api: HookCommitter = {
+			conversationId: 1 as unknown as HookCommitter["conversationId"],
+			commit: async (change) => {
+				await change({
+					scanEntries: async () => ({ items: [entry] }),
+				} as never);
+			},
+		};
+		const controller = new AbortController();
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const answer = await book.ask(api, request, { abortSignal: controller.signal } as never);
+			assert.deepEqual(answer, { permissionId: "perm_1", answer: "allow", by: "Denis", at: 2 });
+			controller.abort(new Error("Task 1 invocation has ended"));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			assert.deepEqual(unhandled, [], "the abandoned waiter is gone, not failing in the background");
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
+});
 
 describe("the gateway at runtime", () => {
 	it("asks before a required tool runs, and runs it once when the answer is allow", async () => {
@@ -339,6 +427,37 @@ describe("the gateway at runtime", () => {
 			assert.deepEqual(
 				server.calls.map((call) => call.name),
 				["issues.search"],
+			);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("asks for a tool that declared nothing, even on a connector whose markers are trusted", async () => {
+		// The default is the one that matters: trusting a connector's markers trusts the ones it declared, and a tool that
+		// said nothing has not said it is safe.
+		const server = await fakeServer([SILENT_TOOL], () => ({ content: [{ type: "text", text: "closed" }] }));
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, {
+			integrations: { github: GITHUB },
+			transport: () => server.transport,
+			steps: scriptThenSpeak(CLOSE_SCRIPT),
+		});
+		try {
+			const submission = await startTurn(runtime, "Close it.");
+			assert.ok(await until(async () => (await runtime.permissions.pending()).length === 1));
+			const [request] = await runtime.permissions.pending();
+			assert.match(
+				request?.reason ?? "",
+				/needs approval/,
+				"the tool declared no safety, so it declares no shortcut",
+			);
+			assert.equal(server.calls.length, 0, "nothing ran before the answer");
+			await runtime.permissions.answer(request!.permissionId, "allow", "Denis");
+			await submission.wait(BACKGROUND_CONTEXT);
+			assert.deepEqual(
+				server.calls.map((call) => call.name),
+				["issues.close"],
 			);
 		} finally {
 			await runtime.close();
@@ -445,7 +564,8 @@ describe("a restart while a call waits", () => {
 		});
 		const code = await new Promise<number | null>((resolve) => child.on("exit", resolve));
 		assert.equal(code, 9, `the child must die where it said it would: ${err.slice(-800)}`);
-		const reached = JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as {
+		// The hand-off is a file, not stdout: the boot logs there too, and a log line must not be able to corrupt it.
+		const reached = JSON.parse(await readFile(join(directory, "child.json"), "utf8")) as {
 			submissionId?: string;
 			permissionId?: string;
 		};

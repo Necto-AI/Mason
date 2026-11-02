@@ -35,7 +35,10 @@ intent is committed — which is what makes a pending approval survive a restart
 has not recorded an intent and recovery re-enters the phase. `reply` to the turn's own origin is allowed and anything
 else asks; an MCP call is decided by the tool's `dev.mason/approval` marker inside the operator's ceiling (`deny` beats
 `ask` beats `allow`, and `required` always asks); everything mason ships is allowed, because gating `bash` is a separate
-policy question.
+policy question. The marker is resolved before the decision, from the same live read the call itself will use — which
+reconnects and re-lists a server that dropped — and a tool nobody can see at that moment is refused. A decision made
+against a remembered listing would be a decision a reconnect inside the call could refresh away, and the deployment this
+matters for is the ordinary one: mason and the integration restart together, and the integration is not up yet.
 
 **A question is durable and a person answers it.** An `ask` commits an `app.permission` entry and waits; the answer is an
 `app.permission-answer` entry, allowed once, with no "always allow". A question is routed to the surface that started the

@@ -133,6 +133,9 @@ const CLIENT_VERSION = "0.1.0";
  */
 export type McpTransportFactory = (url: string, credential?: string) => McpTransport;
 
+/** The three tools the catalog installs, by the names a script calls: the whole of what MCP puts in a registry. */
+export const MCP_TOOL = { search: "mcp_search", describe: "mcp_describe", call: "mcp_call" } as const;
+
 /** One tool a server offers right now, with the two facts a caller needs to act on it. */
 export interface DiscoveredTool {
 	readonly integration: string;
@@ -184,13 +187,14 @@ export interface McpCatalog {
 	readonly tools: readonly ToolRegistration[];
 	/** Tools whose name or description matches every word of `query`, best first. A server that dropped is retried once. */
 	search(query: string, options?: SearchOptions): Promise<DiscoveredTool[]>;
-	/** One tool as it stands, or `undefined` when the server no longer offers it. */
-	describe(integration: string, tool: string): Promise<DiscoveredTool | undefined>;
 	/**
-	 * The approval marker of one tool, and whether the catalog still has it. `undefined` means the tool is gone: the
-	 * gateway lets the call through so its own rediscovery result is the one the caller reads.
+	 * One tool as it stands, or `undefined` when the server no longer offers it or cannot be reached.
+	 *
+	 * This is what the permission gateway reads before it decides, and it *asks*: a server that dropped is reconnected
+	 * and re-listed first. A marker read from the last successful listing would be a marker a call could refresh out
+	 * from under its own decision.
 	 */
-	approvalOf(integration: string, tool: string): ApprovalMarker | undefined;
+	describe(integration: string, tool: string): Promise<DiscoveredTool | undefined>;
 	call(integration: string, tool: string, args: JsonObject, expectedVersion?: string): Promise<McpCallOutcome>;
 	/** Connects every server that dropped, for the routes and the boot's health line. */
 	refresh(): Promise<void>;
@@ -326,7 +330,6 @@ export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<Mc
 		tools: (extension.tools ?? []) as readonly ToolRegistration[],
 		search,
 		describe,
-		approvalOf: (integration, tool) => servers.get(integration)?.find(tool)?.approval,
 		call,
 		async refresh() {
 			await Promise.all([...servers.values()].map((server) => server.ensure()));
@@ -346,7 +349,6 @@ function emptyCatalog(): McpCatalog {
 		tools: [],
 		search: async () => [],
 		describe: async () => undefined,
-		approvalOf: () => undefined,
 		call: async (integration, _tool) => ({
 			ok: false,
 			code: "unknown_tool",
@@ -360,8 +362,11 @@ function emptyCatalog(): McpCatalog {
 /**
  * What a caller reads when the tool it named is gone or changed: what happened, and the one step that fixes it. Both
  * halves matter — a script that only read "not found" would give up on a tool that is still there under a new shape.
+ *
+ * Exported because the permission gateway refuses the same call for the same reason one layer earlier: a tool it cannot
+ * see is a call it will not let run, and the caller has to be told the same thing either way.
  */
-function rediscovery(integration: string, tool: string, what: string): string {
+export function rediscovery(integration: string, tool: string, what: string): string {
 	return `mcp: ${integration}/${tool} ${what}. Look again — mcp_describe {integration:"${integration}", tool:"${tool}"}, or mcp_search to find what the server offers now — and retry with the version it answers.`;
 }
 
@@ -598,7 +603,7 @@ function versionOf(tool: McpTool): string {
  */
 function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call">): ToolRegistration[] {
 	const search = defineTool({
-		name: "mcp_search",
+		name: MCP_TOOL.search,
 		description:
 			"Find a tool a connected service offers. Answers JSON: [{integration, tool, description, approval, version}], best match first. Use it before mcp_describe when you do not know what a service can do; the integration names are in the prompt, and a service that restarted is reconnected by this call.",
 		parameters: Type.Object({
@@ -628,7 +633,7 @@ function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call">)
 		},
 	});
 	const describe = defineTool({
-		name: "mcp_describe",
+		name: MCP_TOOL.describe,
 		description:
 			"Read one tool a service offers, as it stands now: its description, its approval marker, the JSON Schema of its arguments, and the version a call must name. Answers an error when the service no longer offers it, which means the catalog changed and mcp_search will show what is there.",
 		parameters: Type.Object({
@@ -654,7 +659,7 @@ function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call">)
 		},
 	});
 	const call = defineTool({
-		name: "mcp_call",
+		name: MCP_TOOL.call,
 		description:
 			"Call one tool of a connected service. Name the integration, the tool, its arguments, and the version mcp_describe answered: a tool that was removed or redefined since then is refused with the rediscovery step instead of being run as something else. The result is the server's own content, untruncated for a script.",
 		parameters: Type.Object({

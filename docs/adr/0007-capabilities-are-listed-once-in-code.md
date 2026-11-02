@@ -130,7 +130,7 @@ the networks and the memory are in the compose file it names; the model is `cost
 the environment another container needs to reach it is that container's own (`deploy/compose.telegram.yaml:48-52`). A
 capability that needed mason's own environment would be a capability configured by an exported variable, which is what
 mason already refuses — configuration belongs in a file, and the tool daemon is started with an allowlist precisely so a
-tool cannot read the server's environment (`AGENTS.md`, rule 7).
+tool cannot read the server's environment (`AGENTS.md`, rule 8).
 
 `websearch`, when it is added, is one more entry and its code: no reader changes, no `deploy.sh` change, no bot file
 change beyond the bot that names it.

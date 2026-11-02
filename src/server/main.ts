@@ -625,7 +625,14 @@ async function handleRequest(
 	}
 	if (url.pathname.startsWith("/api/permissions/")) {
 		if ((request.method ?? "GET") !== "POST") return json(response, 405, { error: "method not allowed" });
-		const permissionId = decodeURIComponent(url.pathname.slice("/api/permissions/".length));
+		// A malformed escape is a junk id, not a broken server: `decodeURIComponent` throws on `%zz`, and that throw would
+		// reach the handler's catch as a 500 with a stack in the log.
+		let permissionId: string;
+		try {
+			permissionId = decodeURIComponent(url.pathname.slice("/api/permissions/".length));
+		} catch {
+			return json(response, 404, { error: "no such request" });
+		}
 		if (permissionId === "") return json(response, 404, { error: "no such request" });
 		const text = await readBodyCapped(request);
 		if (text === undefined) {
@@ -640,7 +647,8 @@ async function handleRequest(
 		const found = await runtime.permissions.find(permissionId);
 		if (found.request === undefined) return json(response, 404, { error: "no such request" });
 		// The owner answers as themselves: this route is behind the owner's credential, so there is no name to check and
-		// nobody else's answer to honour.
+		// nobody else's answer to honour. A device that joined with a roster name is recorded under it; one that has not
+		// joined answers as `owner`, the route itself being the identity.
 		const settled = await runtime.permissions.answer(permissionId, asked, person?.name ?? "owner");
 		return json(response, settled.settled ? 200 : 409, settled);
 	}

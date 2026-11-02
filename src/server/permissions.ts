@@ -14,10 +14,12 @@
  *
  * - `reply` to the turn's own origin is allowed. Naming another conversation asks, because sending words elsewhere is
  *   the one delivery decision a person other than the model should make.
- * - `mcp_call` is decided by the tool's own `dev.mason/approval` marker, read from the live catalog, inside the
- *   operator's ceiling: a `deny` rule refuses, an `ask` rule asks, `required` asks, and `not_required` is allowed only
- *   when the operator trusted that connector's markers or an `allow` rule names the tool. A tool the catalog no longer
- *   has is let through so its own rediscovery result is the one the caller reads.
+ * - `mcp_call` is decided by the tool's own `dev.mason/approval` marker, inside the operator's ceiling: a `deny` rule
+ *   refuses, an `ask` rule asks, `required` asks, and `not_required` is allowed only when the operator trusted that
+ *   connector's markers or an `allow` rule names the tool. Nothing about the marker is cached: the catalog is asked
+ *   afresh, reconnecting a server that dropped first, and a tool nobody can see right now is refused rather than run.
+ *   That last rule is the one that makes the gate a gate — a call must never run because mason could not see what the
+ *   service says about it, and `mcp_call` reconnects before it executes, so a cache miss is not a "gone".
  * - Everything else mason ships is allowed: the tools are the bot's own body, and gating `bash` is a policy question
  *   (#97, #103), not a marker one.
  *
@@ -47,9 +49,9 @@ import {
 	ToolTask,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import type { Origin } from "@mason/protocol";
+import type { ApprovalMarker, Origin } from "@mason/protocol";
 import type { Integration } from "./integrations.ts";
-import type { McpCatalog } from "./mcp.ts";
+import { MCP_TOOL, type McpCatalog, rediscovery } from "./mcp.ts";
 import { type TurnOrigin, turnInputIn, turnOriginOfEntry } from "./replies.ts";
 
 /** One committed question: the record the door sends and the transcript keeps. */
@@ -101,13 +103,26 @@ export type PermissionDecision =
 	| { readonly kind: "deny"; readonly reason: string; readonly tool: PermissionTool }
 	| { readonly kind: "ask"; readonly reason: string; readonly tool: PermissionTool };
 
-/** What the gate is asked, apart from the call itself: the policy in force and the catalog as it stands now. */
+/** What the catalog answered about one tool, asked before the call was decided. */
+export type MarkerReading =
+	| { readonly present: true; readonly marker: ApprovalMarker }
+	| { readonly present: false; readonly why: string };
+
+/** What the gate is asked, apart from the call itself: the policy in force and what the catalog said about the tool. */
 export interface PermissionInputs {
 	readonly toolName: string;
 	readonly args: Record<string, unknown>;
 	readonly origin: TurnOrigin;
 	readonly integrations: Record<string, Integration>;
-	readonly catalog: Pick<McpCatalog, "approvalOf">;
+	/**
+	 * What the catalog answered about the tool this call would reach, or `undefined` when the call reaches no catalog
+	 * tool.
+	 *
+	 * It is resolved by the caller *before* the decision, from a fresh answer, and that is the whole point: a marker read
+	 * out of the last successful listing is a marker a reconnect inside the call itself can refresh away, and a call must
+	 * never run because mason could not see what the service says about it.
+	 */
+	readonly reading?: MarkerReading;
 }
 
 /** The operator's rules for one connector's tools. A missing list is no rule; a rule always names a tool as the server does. */
@@ -137,15 +152,21 @@ function decideMcpCall(inputs: PermissionInputs): PermissionDecision {
 		return { kind: "allow" };
 	}
 	const name = `${integration}/${tool}`;
-	const listed = inputs.catalog.approvalOf(integration, tool);
-	if (listed === undefined) {
-		// The catalog no longer has it: the call's own result says so, with the rediscovery step, and asking a person about a
-		// tool that is gone would be a question with no right answer.
-		return { kind: "allow" };
-	}
 	const rule = inputs.integrations[integration]?.connector;
 	const policy = rule?.policy;
-	const subject = { name: "mcp_call", connector: integration, tool };
+	const subject = { name: MCP_TOOL.call, connector: integration, tool };
+	const reading = inputs.reading;
+	if (reading === undefined || !reading.present) {
+		// Nothing a caller can see, so nothing to weigh: a server that is not answering, or no longer offers the tool, is a
+		// call that does not run. Failing closed here is what keeps a `required` marker from being invisible for exactly the
+		// moment a reconnect would have hidden it.
+		return {
+			kind: "deny",
+			reason: reading?.why ?? `the gateway has no catalog answer for ${name}: nothing may run until one exists`,
+			tool: subject,
+		};
+	}
+	const listed = reading.marker;
 	if (matches(policy?.deny, tool)) {
 		return { kind: "deny", reason: `the operator denies ${name}`, tool: subject };
 	}
@@ -169,12 +190,15 @@ function decideReply(inputs: PermissionInputs): PermissionDecision {
 	const target = to as { connector?: unknown; conversation?: unknown };
 	if (typeof target.connector !== "string" || typeof target.conversation !== "string") return { kind: "allow" };
 	// A reply that named a destination is a proactive send. Answering the turn's own origin is not: that is the reply the
-	// model is told to make.
-	if (inputs.origin.kind === "connector") {
-		const carried = inputs.origin.origin;
-		if (carried.connector === target.connector && carried.externalConversationId === target.conversation) {
-			return { kind: "allow" };
-		}
+	// model is told to make — and a fire carries an origin too, so "own" is the carried conversation whatever started
+	// the turn, not only the words a connector brought.
+	const carried = inputs.origin.kind === "console" ? undefined : inputs.origin.origin;
+	if (
+		carried !== undefined &&
+		carried.connector === target.connector &&
+		carried.externalConversationId === target.conversation
+	) {
+		return { kind: "allow" };
 	}
 	return {
 		kind: "ask",
@@ -218,11 +242,21 @@ export function surfaceFor(
 /** Whether an actor a connector names may answer this request. The owner's own route never asks this. */
 export function mayAnswer(
 	request: PermissionRequest,
-	grant: { readonly approver?: string; readonly actors: Readonly<Record<string, string>> },
+	grant: {
+		readonly approver?: string;
+		readonly actors: Readonly<Record<string, string>>;
+		/** The integration this grant belongs to: a question that came through another connector is not this one's. */
+		readonly connector?: string;
+	},
 	by: { readonly externalActorId?: string },
 ): { readonly ok: true; readonly by: string } | { readonly ok: false; readonly reason: string } {
 	if (grant.approver === undefined) {
 		return { ok: false, reason: "this connector has no approver configured, so nobody on it may answer" };
+	}
+	if (grant.connector !== undefined && request.origin !== undefined && request.origin.connector !== grant.connector) {
+		// The glossary's promise, kept: an approver settles the questions that came through their own connector. Two
+		// connectors configured with the same person are two seats, and a seat is not a claim on the other's traffic.
+		return { ok: false, reason: `this request came through ${request.origin.connector}, not through this connector` };
 	}
 	if (request.approver !== undefined && request.approver !== grant.approver) {
 		return { ok: false, reason: `this request is for ${request.approver}, not for ${grant.approver}` };
@@ -355,7 +389,14 @@ export class PermissionBook {
 		try {
 			const folded = await this.#fold(read);
 			const answered = folded.answers.get(request.permissionId);
-			if (answered !== undefined) return answered;
+			if (answered !== undefined) {
+				// The answer was written before this hook ran, which is exactly what a restart after the answer and before
+				// the intent looks like. The waiter registered above is abandoned here, so it is dropped and its abort
+				// listener removed: an abandoned promise that rejects when the invocation ends is an unhandled rejection,
+				// and an unhandled rejection takes the process down.
+				waiting.cancel();
+				return answered;
+			}
 			if (!folded.requests.has(request.permissionId)) {
 				await api.commit(
 					async (tx) =>
@@ -416,11 +457,10 @@ export class PermissionBook {
 				const request = requestOf(entry);
 				if (request !== undefined) requests.set(request.permissionId, request);
 				const answer = answerOf(entry);
-				// The first answer is the one that counts; a second entry would be a bug, and reading it as another answer
-				// would make the bug visible as a changed outcome.
-				if (answer !== undefined && !answers.has(answer.permissionId)) {
-					answers.set(answer.permissionId, answer);
-				}
+				// The first answer is the one that counts, and "first" is a time rather than a page: the transcript is read
+				// newest-first here and oldest-first on the connector's side, and two folds that disagreed about a double
+				// answer would show one outcome and act on another.
+				if (answer !== undefined) keepEarliest(answers, answer);
 			}
 			if (scanned.next === undefined) break;
 			cursor = scanned.next;
@@ -552,6 +592,12 @@ function apiReader(api: HookCommitter, context: Context): Reader {
 }
 
 /** The transcript as a page reader, from a conversation handle: the routes and the connector's answer path. */
+/** Hold the earliest answer for an id: the first one to be written is the one that settled the request. */
+export function keepEarliest(answers: Map<string, PermissionAnswer>, answer: PermissionAnswer): void {
+	const held = answers.get(answer.permissionId);
+	if (held === undefined || answer.at < held.at) answers.set(answer.permissionId, answer);
+}
+
 function conversationReader(conversation: Conversation): Reader {
 	return (limit, cursor) => conversation.entries({}, limit, cursor, BACKGROUND_CONTEXT);
 }
@@ -619,9 +665,10 @@ function originOf(value: unknown): Origin | undefined {
 /* ---------------------------------------------------------------------------------------------------------------- */
 
 export interface PermissionsOptions {
-	/** The boot's configuration, read per call: a rule an operator edits is in force at the next turn, not the next boot. */
+	/** The boot's configuration. A rule an operator edits is in force at the next boot, like every other entry in it. */
 	readonly integrations: () => Record<string, Integration>;
-	readonly catalog: Pick<McpCatalog, "approvalOf">;
+	/** The live catalog, asked afresh for every `mcp_call`: `describe` reconnects and re-lists before it answers. */
+	readonly catalog: Pick<McpCatalog, "describe">;
 	readonly now?: () => number;
 	readonly log?: (line: string) => void;
 }
@@ -646,12 +693,16 @@ export function createPermissions(options: PermissionsOptions): Permissions {
 			// The task runtime the hook is handed, narrowed to the half the gate writes with.
 			const runtime = committer(api);
 			const { origin, askedBy } = await hookTurn(runtime, context);
+			const args = (call.arguments ?? {}) as Record<string, unknown>;
+			// The catalog is asked before the decision, and it asks the service: `describe` reconnects a server that dropped
+			// and re-lists it, so the marker is what the service says now rather than what it said at boot.
+			const reading = call.name === MCP_TOOL.call ? await readingOf(options.catalog, args) : undefined;
 			const decision = decide({
 				toolName: call.name,
-				args: (call.arguments ?? {}) as Record<string, unknown>,
+				args,
 				origin,
 				integrations: options.integrations(),
-				catalog: options.catalog,
+				...(reading === undefined ? {} : { reading }),
 			});
 			if (decision.kind === "allow") return undefined;
 			if (decision.kind === "deny") {
@@ -692,6 +743,32 @@ export function createPermissions(options: PermissionsOptions): Permissions {
 		book,
 		attach: (conversation) => book.attach(conversation),
 	};
+}
+
+/**
+ * What the catalog says about the tool one `mcp_call` would reach, asked now.
+ *
+ * `describe` is the live read: it reconnects a server that dropped and re-lists it before answering, so this is the same
+ * view of the service the call itself will have. `undefined` from it means the service is not answering or no longer
+ * offers the tool, and both are a refusal: a call whose effect nobody can see is not one to run.
+ */
+async function readingOf(catalog: Pick<McpCatalog, "describe">, args: Record<string, unknown>): Promise<MarkerReading> {
+	const integration = typeof args.integration === "string" ? args.integration : undefined;
+	const tool = typeof args.tool === "string" ? args.tool : undefined;
+	if (integration === undefined || tool === undefined) {
+		// No reading, and no reading needed: validation refuses this shape before anything runs.
+		return { present: false, why: "mcp_call needs an integration and a tool named as the service spells them" };
+	}
+	const found = await catalog.describe(integration, tool);
+	if (found === undefined) {
+		// Gone and unreachable are one answer here: both mean the effect cannot be seen, so neither runs. The sentence is the
+		// catalog's own, so a caller blocked here and a caller refused by `mcp_call` read the same way out.
+		return {
+			present: false,
+			why: rediscovery(integration, tool, "is not offered any more, or the service is not answering"),
+		};
+	}
+	return { present: true, marker: found.approval };
 }
 
 /** The memo that gives one call attempt one permission id, across every rerun of that attempt. */

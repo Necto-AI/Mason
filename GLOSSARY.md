@@ -248,7 +248,9 @@ _Avoid_: approval prompt, confirmation dialog, ask
 
 **permission answer**:
 The one answer that settles a request — `allow`, `deny`, or `cancelled` when `stop` ended the wait. It is an
-`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow".
+`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow". It records the roster
+name of the person who gave it; `owner` is the name an answer from `/api/permissions` carries when the device has not
+joined as anyone, because there the owner's credential is the identity.
 _Avoid_: grant, consent, vote
 
 **approver**:
