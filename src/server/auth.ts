@@ -47,6 +47,11 @@ export interface TokenRecord {
 /** `~/.mason/service/config.json`. Unknown keys are preserved: this file grows with the agent. */
 export interface MasonConfig {
 	readonly tokens?: readonly TokenRecord[];
+	/**
+	 * The credentials mason issued to connectors (`connectors.ts`). Beside the tokens because they are the same kind of
+	 * thing: a hash, a label and a moment, and never the credential itself.
+	 */
+	readonly connectors?: readonly unknown[];
 	/** HMAC key that signs browser session cookies. Generated alongside the first token, and never shown. */
 	readonly sessionKey?: string;
 	readonly [key: string]: unknown;
@@ -109,7 +114,7 @@ function isSessionKey(value: unknown): value is string {
  * Write the config atomically and privately. A crash mid-write leaves the previous tokens in place, and the file and its
  * directory are `0600`/`0700` (`atomic.ts`): this is the one file whose leak is a working credential.
  */
-async function writeConfig(home: string, config: MasonConfig): Promise<void> {
+export async function writeConfig(home: string, config: MasonConfig): Promise<void> {
 	await writeFileAtomic(configPath(home), config);
 }
 

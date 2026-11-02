@@ -3,7 +3,7 @@
  *
  * This module is the wire boundary, and the only place that decides what crosses it. Everything the model does —
  * reasoning, tool calls, tool arguments, tool output, usage, the raw entries — stays here, on the server. What leaves
- * is the conversation as a person reads it: their own words, the messages the agent chose to send (`send_to_user`),
+ * is the conversation as a person reads it: their own words, the messages the agent chose to send (`reply`),
  * the widgets it built for them, the trigger that woke it, and a coarse notice when a run failed.
  *
  * The rule is a whitelist, not a filter: a transcript item exists only because something here names it. A new entry
@@ -12,8 +12,18 @@
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { HOOK_ENTRY_KIND, isDeliveryReminder, MESSAGE_TOOL, splitAuthor, WIDGET_TOOL } from "../shared/contract.ts";
+import {
+	CONNECTOR_ENTRY_KIND,
+	DELIVERY_ENTRY_KIND,
+	HOOK_ENTRY_KIND,
+	isDeliveryReminder,
+	REPLY_ENTRY_KIND,
+	REPLY_TOOL,
+	splitAuthor,
+	WIDGET_TOOL,
+} from "../shared/contract.ts";
 import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
+import { replyRecordOf, textOfBlocks } from "./replies.ts";
 
 /**
  * Whether a message says nothing: empty, whitespace only, or invisible characters alone.
@@ -54,7 +64,7 @@ interface CallBlock {
 	arguments?: unknown;
 }
 
-/** The `send_to_user` and widget calls of one assistant message, in the order the model made them. */
+/** The widget calls of one assistant message, in the order the model made them. */
 function callsOf(message: unknown): CallBlock[] {
 	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
 }
@@ -64,17 +74,41 @@ function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean 
 	return outcomes.get(callId) === true;
 }
 
+/** What became of one delivery, as the entry records it. */
+interface DeliveryRecord {
+	readonly deliveryId: string;
+	readonly status: "delivered" | "duplicate" | "uncertain" | "rejected";
+	readonly detail?: string;
+}
+
+function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
+	if (entry.kind !== DELIVERY_ENTRY_KIND) return undefined;
+	if (typeof entry.data !== "object" || entry.data === null) return undefined;
+	const data = entry.data as Record<string, unknown>;
+	if (typeof data.deliveryId !== "string") return undefined;
+	const status = data.status;
+	if (status !== "delivered" && status !== "duplicate" && status !== "uncertain" && status !== "rejected") {
+		return undefined;
+	}
+	return {
+		deliveryId: data.deliveryId,
+		status,
+		...(typeof data.detail === "string" ? { detail: data.detail } : {}),
+	};
+}
+
 /**
- * The reader's transcript: every entry the person is meant to see, in order, and nothing else.
+ * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
- * `pi.assistant` contributes only the calls this file names — its prose, its reasoning and every other call are
- * working notes. A `send_to_user` call is the message; a widget call is the artifact. Tool results are read for
- * failure alone, never forwarded. A hook trigger contributes nothing: a proactive turn is the message it sent, and
- * the schedule that woke it is not part of the conversation.
+ * A person's words are an input entry — `pi.user` from the console, `app.connector` through a connector, neither when an
+ * event hook fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
+ * message that carried the call contributes nothing, so a message appears once whether it was streamed, sent or read in
+ * the console. A widget is the artifact, read off the call that built it. Tool results are read for failure alone,
+ * never forwarded.
  *
- * The round in flight contributes the same two shapes, streaming: a message appears as the model writes it, a widget
- * as its markup arrives, exactly as they will stand once committed. A half-written message is the one thing the reader
- * is meant to watch.
+ * The round in flight contributes the same two shapes, streaming: a reply appears as the model writes it and a widget as
+ * its markup arrives, exactly as they will stand once committed. A streaming reply whose entry has already landed is
+ * skipped — the entry is the truth, and two copies of one message is the duplicate the outbox exists to prevent.
  *
  * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
  * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
@@ -83,11 +117,21 @@ function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean 
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
 	const outcomes = new Map<string, boolean>();
+	const replies = new Set<string>();
+	const deliveries = new Map<string, DeliveryRecord>();
 	for (const entry of entries) {
-		if (entry.kind !== "pi.tool-result") continue;
-		const message = messageOf(entry) as { toolCallId?: unknown; isError?: unknown } | undefined;
-		if (typeof message?.toolCallId !== "string") continue;
-		outcomes.set(message.toolCallId, message.isError === true);
+		if (entry.kind === "pi.tool-result") {
+			const message = messageOf(entry) as { toolCallId?: unknown; isError?: unknown } | undefined;
+			if (typeof message?.toolCallId === "string") outcomes.set(message.toolCallId, message.isError === true);
+			continue;
+		}
+		if (entry.kind === REPLY_ENTRY_KIND) {
+			const record = replyRecordOf(entry);
+			if (record !== undefined) replies.add(record.deliveryId);
+			continue;
+		}
+		const delivery = deliveryRecordOf(entry);
+		if (delivery !== undefined) deliveries.set(delivery.deliveryId, delivery);
 	}
 
 	const items: TranscriptItem[] = [];
@@ -95,17 +139,39 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	// person would otherwise have to interpret.
 	let spoke = true;
 	for (const entry of entries) {
-		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND) {
+		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND || entry.kind === CONNECTOR_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
 			// The delivery gate's reminder is a user entry the model reads, not one the reader sent — in either shape,
 			// the console's and the one a hooked turn gets.
-			const reminder = entry.kind === "pi.user" && isDeliveryReminder(spoken);
+			const reminder = entry.kind !== CONNECTOR_ENTRY_KIND && isDeliveryReminder(spoken);
 			if (!reminder) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
 			// is not part of the conversation.
-			if (entry.kind === "pi.user" && spoken !== "" && !reminder) {
+			if (entry.kind !== HOOK_ENTRY_KIND && spoken !== "" && !reminder) {
 				const { text, author } = splitAuthor(spoken);
 				items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
+			}
+			continue;
+		}
+		if (entry.kind === REPLY_ENTRY_KIND) {
+			const record = replyRecordOf(entry);
+			if (record === undefined) continue;
+			const text = textOfBlocks(record.blocks);
+			if (isBlank(text)) continue;
+			spoke = true;
+			items.push({ kind: "delivered", id: record.deliveryId, text });
+			const delivery = deliveries.get(record.deliveryId);
+			// A delivery that may not have arrived is the reader's business: the message is on screen, and whether a
+			// person received it is not something the transcript may leave implied.
+			if (delivery !== undefined && (delivery.status === "uncertain" || delivery.status === "rejected")) {
+				items.push({
+					kind: "notice",
+					id: `delivery:${record.deliveryId}`,
+					text:
+						delivery.status === "uncertain"
+							? "This message may not have reached the chat: the connector could not tell whether it was sent."
+							: "This message did not reach the chat: the connector refused it.",
+				});
 			}
 			continue;
 		}
@@ -125,20 +191,6 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 				const args = (
 					typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}
 				) as Record<string, unknown>;
-				if (call.name === MESSAGE_TOOL) {
-					const text = typeof args.message === "string" ? args.message : "";
-					// A blank message is not a message: the renderer would pad it into an empty bubble.
-					if (isBlank(text)) continue;
-					spoke = true;
-					const failed = outcomeFailed(outcomes, call.id);
-					items.push({
-						kind: "delivered",
-						id: call.id,
-						text,
-						...(failed ? { failed: true } : {}),
-					});
-					continue;
-				}
 				if (call.name === WIDGET_TOOL && !outcomeFailed(outcomes, call.id)) {
 					spoke = true;
 					items.push({
@@ -150,7 +202,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 				}
 			}
 			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
-			// not speech either: only the calls this file forwards above count as having said something.
+			// not speech either: only the entries and calls this file forwards above count as having said something.
 			if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
 				// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
 				// person wondering whether the agent is working or gone.
@@ -163,12 +215,21 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 			}
 		}
 	}
-	items.push(...streamingItems(view, outcomes));
+	items.push(...streamingItems(view, outcomes, replies));
 	return items;
 }
 
-/** The calls of the in-flight round, projected the same way, marked streaming. */
-function streamingItems(view: ConversationView | undefined, outcomes: Map<string, boolean>): TranscriptItem[] {
+/**
+ * The calls of the in-flight round, projected the same way, marked streaming.
+ *
+ * A reply streams under the id its entry will carry — `reply:<callId>` — so the bubble a reader is watching becomes the
+ * message without a second row appearing. A widget streams as its markup arrives.
+ */
+function streamingItems(
+	view: ConversationView | undefined,
+	outcomes: Map<string, boolean>,
+	replies: Set<string>,
+): TranscriptItem[] {
 	const live = view?.docs["pi.live"] as LiveState | undefined;
 	const inFlight = live?.generation?.message;
 	if (inFlight === undefined) return [];
@@ -181,10 +242,14 @@ function streamingItems(view: ConversationView | undefined, outcomes: Map<string
 			string,
 			unknown
 		>;
-		if (call.name === MESSAGE_TOOL) {
+		if (call.name === REPLY_TOOL) {
 			const text = typeof args.message === "string" ? args.message : "";
 			if (isBlank(text)) continue;
-			items.push({ kind: "delivered", id: call.id, text, streaming: true });
+			const deliveryId = `reply:${call.id}`;
+			// The entry has landed, so the committed row is the message; a streaming copy beside it would be the same
+			// words twice.
+			if (replies.has(deliveryId)) continue;
+			items.push({ kind: "delivered", id: deliveryId, text, streaming: true });
 			continue;
 		}
 		if (call.name === WIDGET_TOOL) {
