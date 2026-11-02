@@ -109,6 +109,10 @@ export interface FakeMason {
 	readonly deliveries: readonly DeliveryRecord[];
 	readonly interactions: readonly InteractionRecord[];
 	readonly attachments: ReadonlyMap<string, Uint8Array>;
+	/** How many uploads actually reached the endpoint. A refusal made locally must leave this at zero. */
+	readonly attachmentPosts: () => number;
+	/** How many keepalives this mason answered. A refused ping is not an answered one. */
+	readonly pings: () => number;
 	readonly connections: number;
 	readonly session: HelloResult | undefined;
 	readonly connected: boolean;
@@ -154,6 +158,8 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	const deliveries: DeliveryRecord[] = [];
 	const interactions: InteractionRecord[] = [];
 	const attachments = new Map<string, Uint8Array>();
+	let uploads = 0;
+	let answeredPings = 0;
 	const seen = new Set<string>();
 	const budgets = new Map<string, number>();
 	const spent = new Set<string>();
@@ -178,6 +184,8 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		deliveries,
 		interactions,
 		attachments,
+		attachmentPosts: () => uploads,
+		pings: () => answeredPings,
 		get connections() {
 			return connections;
 		},
@@ -274,6 +282,9 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 				return answer(params as InteractionAnswerParams);
 			case METHOD.stateSubscribe:
 				return subscribe(params as { scopes: string[]; since?: number });
+			case METHOD.ping:
+				answeredPings += 1;
+				return { at: now() };
 			default:
 				throw refusal(ERROR_CODE.invalidRequest, `${method} is not a method mason answers`);
 		}
@@ -566,6 +577,7 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 					{ status: 429, headers: { "content-type": "application/json" } },
 				);
 			}
+			uploads += 1;
 			const body = new Uint8Array(init.body as ArrayBuffer);
 			const cap = limits.attachmentBytes ?? DEFAULT_LIMITS.attachmentBytes ?? 0;
 			if (body.byteLength > cap) {

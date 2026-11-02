@@ -186,14 +186,20 @@ The answer to `delivery.final` is a `deliveryAck`:
 |---|---|---|
 | `delivered` | the medium accepted it | records the delivery as done |
 | `duplicate` | this `deliveryId` was already delivered | records the delivery as done, once |
-| `uncertain` | the vendor may or may not have accepted it | records an uncertain outcome and **does not retry** |
-| `rejected` | it was refused and was not sent | records the refusal with `detail` |
+| `uncertain` | the vendor may or may not have accepted it; `detail` says what could not be known | records an uncertain outcome and **does not retry** |
+| `rejected` | it was refused and was not sent; `detail` says why | records the refusal |
 
 `uncertain` is the honest report of a lost acknowledgement. A connector that retries a send it is unsure about produces a
 duplicate message; a connector that reports `uncertain` produces one message and one visible question.
 
 An unacknowledged `delivery.final` is resent after reconnect, in `seq` order, with the same `deliveryId`. The connector
-must deduplicate on `deliveryId` and answer `duplicate`.
+answers it from its own record, and never by sending again:
+
+- a delivery it already sent is `duplicate`;
+- a delivery whose outcome it could not know is **`uncertain` again**, not `duplicate`.
+
+That second line matters. Answering `duplicate` for a send that may never have left lets mason record a delivery nobody
+received, and a person who was never told anything is the worst outcome the whole arrangement exists to avoid.
 
 ## Interactions
 
