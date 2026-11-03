@@ -213,9 +213,10 @@ The connector face that delivers service events to mason: one authenticated even
 ordinary human conversation; that is the user face.
 _Avoid_: webhook, trigger, source, listener, tool result
 
-**envelope**:
-The versioned body that carries one event: its stable id, kind, and untrusted payload.
-_Avoid_: payload (that is one field), event body, message
+**payload**:
+The data a fire carries. It reaches the model fenced as untrusted data and never becomes an instruction; the summary is
+the one line a person reads about it, and neither is a rendered sentence the sender composed.
+_Avoid_: envelope (the signed body that carried a payload, removed in #104), event body, message
 
 **tool surface**:
 The tools one connector lends the bot through MCP.
@@ -225,7 +226,7 @@ _Avoid_: tool list, MCP server (that is the process, not the surface), plugin AP
 The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. It is
 stored as a hash in `service/config.json`, read on every upgrade, and is not an owner token: it can speak as that
 connector and do nothing else.
-_Avoid_: token, API key, trigger secret (that authenticates an event delivery, not a session)
+_Avoid_: token, API key, session (that is a person's, and a connector speaks for no person)
 
 **content id**:
 The name of one uploaded file, `cnt_<hex>`. Bytes cross the transfer endpoint by this id, never base64 in a frame and

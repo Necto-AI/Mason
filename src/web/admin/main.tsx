@@ -151,12 +151,6 @@ function actions(then: () => Promise<void>) {
 		async revokeCredential(id) {
 			return call("DELETE", `/api/admin/credentials/${encodeURIComponent(id)}`);
 		},
-		async mintTrigger(name, hook) {
-			return call<{ secret: string }>("POST", `/api/admin/connectors/${encodeURIComponent(name)}/trigger`, { hook });
-		},
-		async removeTrigger(name) {
-			return call("DELETE", `/api/admin/connectors/${encodeURIComponent(name)}/trigger`);
-		},
 	};
 	return {
 		connector,

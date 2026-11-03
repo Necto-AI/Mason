@@ -1,10 +1,12 @@
 /**
  * Integrations: the services mason reaches, in one file in the server's half.
  *
- * An integration is a service with up to two network faces (ADR-0003): an MCP endpoint that lends the bot tools, and one
- * authenticated POST that wakes it with events. Everything that differs between integrations is configuration read at
- * boot — no TypeScript module, no extension, no client code per system — so this file and the reader below it are the
- * whole of mason's per-integration surface.
+ * An integration is a service mason reaches (ADR-0003): an MCP endpoint that lends the bot tools, and optionally a
+ * connector grant for the external process that carries people's words and reports events over `/api/connector`
+ * (`connectors.ts`, §4.1d). There is no second door: the signed POST that used to wake a hook is gone (#104), and a
+ * service that wants to wake mason does it over the socket it was granted. Everything that differs between integrations
+ * is configuration read at boot — no TypeScript module, no extension, no client code per system — so this file and the
+ * reader below it are the whole of mason's per-integration surface.
  *
  * The file is service-owned (`service/integrations.json`), never a path inside `agent/`: a tool that could rewrite its
  * own capability is not a capability a person chose. It is written through `npm run integration`, and read exactly once
@@ -23,14 +25,11 @@
  * between two turns of one build.
  */
 import { readFile } from "node:fs/promises";
+import { CONTROL_OPS, type ControlOp } from "@mason/protocol";
 import { writeFileAtomic } from "./atomic.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
-import { COMMAND_NAMES, type CommandName, isCommandName } from "./events.ts";
 import type { HousePaths } from "./house.ts";
 import { clearIntegrationStatus } from "./integration-status.ts";
-
-/** A trigger secret shorter than this is a guess away from being no door: 32 bytes hex, or the like. */
-const TRIGGER_SECRET_MIN = 32;
 
 /**
  * An integration's name: what a tool name is built from (`mcp__<name>__<tool>`), so lowercase letters, digits and
@@ -53,13 +52,6 @@ export interface IntegrationTools {
 	readonly [key: string]: unknown;
 }
 
-/** The trigger half: one signed door, firing one hook. The secret is never printed by anything. */
-export interface IntegrationTrigger {
-	readonly hook: string;
-	readonly secret: string;
-	readonly [key: string]: unknown;
-}
-
 /** One integration, as the file holds it. A face that is present is a face that is on: there is no per-face switch. */
 export interface Integration {
 	/** The only switch. Read at boot, never mid-conversation. */
@@ -67,18 +59,12 @@ export interface Integration {
 	/** Required whenever the tools face is present: it is the only thing the model is told about the integration. */
 	readonly description?: string;
 	readonly tools?: IntegrationTools;
-	readonly trigger?: IntegrationTrigger;
 	/**
 	 * What this service is granted as a connector: which actors map to which people, which kinds fire which hook, which
-	 * state scopes it may mirror, whether its approval markers are trusted. Absent for an integration that only lends
-	 * tools or only posts a signed trigger.
+	 * state scopes it may mirror, which controls it may spend, whether its approval markers are trusted. Absent for an
+	 * integration that only lends tools.
 	 */
 	readonly connector?: ConnectorGrant;
-	/**
-	 * What the trigger's secret may ask for beyond a fire, out of the closed set in `events.ts`. Absent or empty means
-	 * none, so an existing trigger secret gains no vocabulary by being read.
-	 */
-	readonly commands?: readonly CommandName[];
 	readonly [key: string]: unknown;
 }
 
@@ -106,12 +92,24 @@ export async function readIntegrations(paths: HousePaths): Promise<Integrations>
 async function load(
 	path: string,
 ): Promise<{ file: Record<string, unknown>; integrations: Record<string, Integration> }> {
+	const raw = await loadRaw(path);
+	if (raw === undefined) return { file: {}, integrations: {} };
+	const integrations: Record<string, Integration> = {};
+	for (const [name, entry] of Object.entries(raw.declared)) integrations[name] = validate(path, name, entry);
+	return { file: raw.file, integrations };
+}
+
+/** The file as it is, checked for shape and not for entries: the one reader a migration may use, because a migration's
+ * whole job is a file that the boot would refuse. */
+async function loadRaw(
+	path: string,
+): Promise<{ file: Record<string, unknown>; declared: Record<string, unknown> } | undefined> {
 	const text = await readFile(path, "utf8").catch((error: unknown) => {
 		if (isMissingFile(error)) return undefined;
 		throw new Error(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	});
 	// No file is no integration: nothing was configured, and a fresh install starts here.
-	if (text === undefined) return { file: {}, integrations: {} };
+	if (text === undefined) return undefined;
 	return parseFile(path, text);
 }
 
@@ -119,10 +117,7 @@ function isMissingFile(error: unknown): boolean {
 	return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
 }
 
-function parseFile(
-	path: string,
-	text: string,
-): { file: Record<string, unknown>; integrations: Record<string, Integration> } {
+function parseFile(path: string, text: string): { file: Record<string, unknown>; declared: Record<string, unknown> } {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
@@ -140,7 +135,7 @@ function parseFile(
 	if (declared === undefined) {
 		// `{}` is a file nobody has filled in yet. Other keys without `integrations` among them are a typo that would
 		// otherwise read as "no integrations": the silent loss this module exists to refuse.
-		if (Object.keys(file).length === 0) return { file, integrations: {} };
+		if (Object.keys(file).length === 0) return { file, declared: {} };
 		throw new Error(
 			`${path} has no "integrations" key, only ${Object.keys(file).join(", ")}: nothing would be read from it.`,
 		);
@@ -148,9 +143,7 @@ function parseFile(
 	if (typeof declared !== "object" || declared === null || Array.isArray(declared)) {
 		throw new Error(`${path}: "integrations" is not an object mapping names to entries.`);
 	}
-	const integrations: Record<string, Integration> = {};
-	for (const [name, entry] of Object.entries(declared)) integrations[name] = validate(path, name, entry);
-	return { file, integrations };
+	return { file, declared: declared as Record<string, unknown> };
 }
 
 /**
@@ -187,16 +180,37 @@ function validate(where: string, name: string, value: unknown): Integration {
 	}
 	const tools = readTools(where, name, raw.tools);
 	const description = readDescription(where, name, raw.description, tools !== undefined);
-	const trigger = readTrigger(where, name, raw.trigger);
-	const commands = readCommands(where, name, raw.commands);
+	// The trigger face and its command list are the old door (#104). An entry that still carries one is refused rather
+	// than read past: a secret nothing checks is a sender that looks configured and is not, and the fix is one command.
+	if (raw.trigger !== undefined) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				'has a "trigger": the signed event door is gone, and a service wakes mason over the connector socket ' +
+					"now. Run `npm run doctor -- migrate` to remove it, then grant the connector a `connector` block and " +
+					"issue it a credential with `npm run connector -- add " +
+					name +
+					"`",
+			),
+		);
+	}
+	if (raw.commands !== undefined) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				'has a "commands" list: what a connector may ask for is its grant now (`connector.commands`), not the ' +
+					"old trigger block's. Run `npm run doctor -- migrate` to remove the old key",
+			),
+		);
+	}
 	const connector = readConnectorGrant(where, name, raw.connector, tools !== undefined);
 	return {
 		...raw,
 		enabled,
 		...(description === undefined ? {} : { description }),
 		...(tools === undefined ? {} : { tools }),
-		...(trigger === undefined ? {} : { trigger }),
-		...(commands === undefined ? {} : { commands }),
 		...(connector === undefined ? {} : { connector }),
 	};
 }
@@ -272,67 +286,6 @@ function readDescription(where: string, name: string, value: unknown, required: 
 	return value.trim();
 }
 
-/**
- * The trigger half. Validated here rather than at the door because `integrations.json` is one file for two faces: a
- * trigger that cannot work makes the file bad, so it fails the boot that reads it. #43 owns the door — the route, the
- * signature check and the rate limit — not the file, and a door that validated its own config could never be walked up
- * to with a bad file without the server having started on it.
- */
-function readTrigger(where: string, name: string, value: unknown): IntegrationTrigger | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "trigger" that is not an object'));
-	}
-	const raw = value as Record<string, unknown>;
-	const hook = raw.hook;
-	if (typeof hook !== "string" || hook.trim() === "") {
-		throw new Error(
-			refusal(where, name, 'has a "trigger" with no "hook": a delivery\'s one verb is firing a named hook'),
-		);
-	}
-	const secret = raw.secret;
-	if (typeof secret !== "string" || secret.length < TRIGGER_SECRET_MIN) {
-		throw new Error(
-			refusal(
-				where,
-				name,
-				`has a trigger secret shorter than ${TRIGGER_SECRET_MIN} characters: an HMAC key that can be guessed is not a door`,
-			),
-		);
-	}
-	return { ...raw, hook, secret };
-}
-
-/**
- * The commands a trigger may issue, checked against the closed set `events.ts` owns. A name this build does not have
- * refuses the boot rather than sitting in the file doing nothing: a command an operator believes they gave a chat and
- * that never ran is the quiet loss this module is shaped against, and the refusal names the whole set so the fix is one
- * line away.
- */
-function readCommands(where: string, name: string, value: unknown): readonly CommandName[] | undefined {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value)) {
-		throw new Error(
-			refusal(where, name, 'has a "commands" that is not a list: the command names this trigger may issue'),
-		);
-	}
-	const commands: CommandName[] = [];
-	for (const entry of value) {
-		if (typeof entry !== "string" || !isCommandName(entry)) {
-			throw new Error(
-				refusal(
-					where,
-					name,
-					`declares the command ${typeof entry === "string" ? `"${entry}"` : JSON.stringify(entry)}, which mason does ` +
-						`not have: the whole set is ${COMMAND_NAMES.join(", ")}`,
-				),
-			);
-		}
-		commands.push(entry);
-	}
-	return commands;
-}
-
 function isHttpUrl(url: string): boolean {
 	try {
 		const { protocol } = new URL(url);
@@ -358,6 +311,70 @@ export async function writeIntegration(
 	return entry;
 }
 
+/**
+ * The one-way migration of a file written before the cutover: the trigger face and its command list are removed, and
+ * nothing else is touched. It is a row rewrite, not a semantic move — the secret checked a door that no longer exists
+ * — so an entry keeps its tools, its switch and its connector grant, and gains nothing.
+ *
+ * Returns the names it changed, which is what `npm run doctor -- migrate` prints. Idempotent: a file with no trigger in
+ * it is left exactly as it is, byte for byte, because a command that rewrites a person's file on every run is one they
+ * stop running.
+ */
+export async function migrateIntegrationTriggers(paths: HousePaths): Promise<TriggerMigration[]> {
+	const raw = await loadRaw(paths.integrations);
+	if (raw === undefined) return [];
+	const migrated: Record<string, unknown> = {};
+	const outcome: TriggerMigration[] = [];
+	for (const [name, value] of Object.entries(raw.declared)) {
+		const entry = value as Record<string, unknown>;
+		if (entry.trigger === undefined && entry.commands === undefined) {
+			migrated[name] = entry;
+			continue;
+		}
+		const { trigger: _trigger, commands, ...rest } = entry;
+		// The control vocabulary the old trigger secret owned was *this entry's* — the socket spent exactly this list
+		// (`connector.ts` read `integration.commands`), so removing it without saying so is the quiet loss this module
+		// refuses. It moves onto the grant when there is a grant to move it onto, and is reported when there is not: a
+		// permission is a person's decision, and doctor does not invent one.
+		const words = Array.isArray(commands)
+			? commands.filter(
+					(word): word is ControlOp =>
+						typeof word === "string" && (CONTROL_OPS as readonly string[]).includes(word),
+				)
+			: [];
+		const grant = rest.connector;
+		if (words.length === 0) {
+			migrated[name] = rest;
+			outcome.push({ name, moved: [], stranded: [] });
+			continue;
+		}
+		if (
+			typeof grant === "object" &&
+			grant !== null &&
+			!Array.isArray(grant) &&
+			(grant as { commands?: unknown }).commands === undefined
+		) {
+			migrated[name] = { ...rest, connector: { ...(grant as Record<string, unknown>), commands: words } };
+			outcome.push({ name, moved: words, stranded: [] });
+			continue;
+		}
+		migrated[name] = rest;
+		outcome.push({ name, moved: [], stranded: words });
+	}
+	if (outcome.length === 0) return [];
+	await writeFileAtomic(paths.integrations, { ...raw.file, integrations: ordered(migrated) });
+	return outcome;
+}
+
+/** What the migration did with one entry: the controls it carried onto the grant, and the ones nothing could hold. */
+export interface TriggerMigration {
+	readonly name: string;
+	/** Controls now under `connector.commands`. */
+	readonly moved: readonly ControlOp[];
+	/** Controls the entry declared with no `connector` block to receive them: the operator re-grants them. */
+	readonly stranded: readonly ControlOp[];
+}
+
 /** Removes one entry. `false` when there is none: a typo must not read as a successful removal. */
 export async function removeIntegration(paths: HousePaths, name: string): Promise<boolean> {
 	const { file, integrations } = await load(paths.integrations);
@@ -380,38 +397,9 @@ export async function setIntegrationEnabled(
 }
 
 /** Names in a stable order: the file is read by a person in a diff as often as by the server. */
-function ordered(integrations: Record<string, Integration>): Record<string, Integration> {
+function ordered<T>(integrations: Record<string, T>): Record<string, T> {
 	const names = Object.keys(integrations).sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 	return Object.fromEntries(names.map((name) => [name, integrations[name]]));
-}
-
-/**
- * The trigger a door may use: the one an enabled integration with a trigger face has.
- *
- * This is the whole of "usable trigger", in one place, so the route does not decide it: a disabled integration's door
- * and one that never had a trigger face are both `404`, and neither is a shape the request path has an opinion about.
- * Read from the boot's snapshot (`currentIntegrations()`), never from the file: whether a trigger exists is config, and
- * config is settled at boot.
- */
-export function triggerFor(integrations: Record<string, Integration>, name: string): IntegrationTrigger | undefined {
-	return live(integrations, name)?.trigger;
-}
-
-/**
- * What a trigger may issue besides a fire: the commands its entry declares, and none at all when there is no door to ask
- * through. A declaration without a trigger face is not an error, because it grants nothing until there is a secret to
- * spend it with — and the moment there is one, this is the list it is held to.
- */
-export function commandsFor(integrations: Record<string, Integration>, name: string): readonly string[] {
-	const integration = live(integrations, name);
-	if (integration === undefined || integration.trigger === undefined) return [];
-	return integration.commands ?? [];
-}
-
-/** One entry that is switched on, which is what both faces of the door are read from. */
-function live(integrations: Record<string, Integration>, name: string): Integration | undefined {
-	const integration = integrations[name];
-	return integration === undefined || !integration.enabled ? undefined : integration;
 }
 
 /**

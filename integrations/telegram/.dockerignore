@@ -1,4 +1,0 @@
-# The build context for this image is this directory, so what is installed here is what the image is.
-node_modules
-test
-*.log

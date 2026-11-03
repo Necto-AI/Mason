@@ -7,11 +7,10 @@
  * and a run that a provider killed stayed dead until somebody wrote again (a bot's two messages sat unanswered for 3
  * and 12 hours on 2026-10-30, with no `[run-retry]` line in the log at all).
  *
- * The whole path is exercised: a signed event opens a run, the faux provider fails it, and the supervisor's own fire is
- * what the transcript has to show — no client is ever created here.
+ * The whole path is exercised: a hook fire opens a run, the faux provider fails it, and the supervisor's own fire is what
+ * the transcript has to show — no client is ever created here, and no socket carries the fire.
  */
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,10 +29,9 @@ after(async () => {
 	for (const directory of directories) await rm(directory, { recursive: true, force: true });
 });
 
-const secret = "4c".repeat(32);
-const integrations = {
-	integrations: { telegram: { enabled: true, trigger: { hook: "team-chat", secret } } },
-};
+// An empty list is the honest one: this test fires a hook the build defines, and the retry is the subject, not a
+// connector's grant.
+const integrations = { integrations: {} };
 
 async function temporaryHome(): Promise<HousePaths> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-retry-wiring-"));
@@ -51,10 +49,6 @@ function failingModel(): ResolvedModel {
 	const models = createModels();
 	models.setProvider(faux.provider);
 	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };
-}
-
-function signature(body: string): string {
-	return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
 interface Entries {
@@ -120,13 +114,8 @@ describe("a failed run with no browser connected", () => {
 				modelAccess: failingModel(),
 				onReport: () => {},
 			});
-			const body = JSON.stringify({ v: 1, id: "chat-1", kind: "chat.message", payload: "Таня: ?" });
-			const delivered = await fetch(`http://127.0.0.1:${server.port}/api/events/telegram`, {
-				method: "POST",
-				headers: { "content-type": "application/json", "x-mason-signature": signature(body) },
-				body,
-			});
-			assert.equal(delivered.status, 202, "the event opens a run, and the run is the failure under test");
+			const opened = await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?" });
+			assert.ok(opened.id !== undefined, "the fire opens a run, and the run is the failure under test");
 
 			// The run failed, and no client was ever created: a supervisor fed from a connection would observe nothing.
 			await waitFor(server.runtime, (all) => all.some((entry) => entry.stopReason === "error"));

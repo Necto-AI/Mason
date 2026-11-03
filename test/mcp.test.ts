@@ -392,7 +392,7 @@ describe("the boot", () => {
 	it("counts an integration without a tools face as nothing to connect, and a disabled one as not its business", async () => {
 		const catalog = await openMcpCatalog({
 			integrations: {
-				activity: { enabled: true, trigger: { hook: "github-activity", secret: "s".repeat(32) } },
+				activity: { enabled: true },
 				docs: { enabled: false, description: "Docs", tools: { url: "http://mason-docs:8080/mcp" } },
 			},
 			openTransport: downTransport,
@@ -495,7 +495,6 @@ describe("the integrations route", () => {
 					name: "github",
 					enabled: true,
 					hasTools: true,
-					hasTrigger: false,
 					connected: true,
 					tools: 2,
 					error: null,

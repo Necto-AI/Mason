@@ -68,7 +68,6 @@ import {
 import { ATTACHMENT_LIMIT, type AttachmentStore } from "./attachments.ts";
 import { commandTarget, runCommand } from "./commands.ts";
 import { authenticateConnector, type ConnectorGrant, connectorGrantFor, grantedActors } from "./connectors.ts";
-import { COMMAND_NAMES } from "./events.ts";
 import { currentHouse } from "./house.ts";
 import { currentIntegrations, type Integration } from "./integrations.ts";
 import {
@@ -95,6 +94,9 @@ import { deriveRunStatus, isBusy, queuedSubmissions, runningToolNames } from "./
 
 /** The path a connector opens. Beside the Chord socket rather than inside it: one door, one contract. */
 export const CONNECTOR_PATH = "/api/connector";
+
+/** What `compact` may be told, in characters: a line of instruction, not a document. */
+export const COMMAND_INSTRUCTION_MAX = 200;
 
 /** An inbound frame larger than this is not a submission or an event; it is somebody trying to fill memory. */
 const FRAME_MAX_BYTES = 256 * 1024;
@@ -751,6 +753,9 @@ export class ConnectorSession {
 			faces: faces as HelloResult["faces"],
 			...(inactive.length === 0 ? {} : { inactive }),
 			capabilities: faces.user === undefined ? [] : faces.user.capabilities,
+			// The control vocabulary is part of what the handshake answers with: a connector that was not granted `stop` learns
+			// it here rather than by spending a refused call, and the list is the same one `mason/control` holds the call to.
+			commands: [...(grant.commands ?? [])],
 			limits,
 		};
 	}
@@ -1025,23 +1030,34 @@ export class ConnectorSession {
 				`${String(op)} is not a control mason knows: the whole set is ${CONTROL_OPS.join(", ")}`,
 			);
 		}
-		const declared = this.#integration.commands ?? [];
+		const declared = this.#grant.commands ?? [];
 		if (!declared.includes(op)) {
 			throw refused(ERROR_CODE.invalidRequest, `this entry declares no "${op}" command`);
 		}
 		// `stop` has a budget of its own beside the controls, so a connector that spent its minute on compactions can still
 		// stop the turn those compactions were about.
 		this.#spend(op === "stop" ? "stop" : "control", CONNECTOR_CONTROL_LIMIT);
+		// `compact` takes instructions and the other three take none: the same shape the event door held a command to, kept
+		// here because the socket is now the only way a word arrives. A command that ran with an argument it silently dropped
+		// would do something other than what the person asked for.
+		const instructions = typeof params.instructions === "string" ? params.instructions : undefined;
+		if (op !== "compact" && instructions !== undefined && instructions.trim() !== "") {
+			throw refused(
+				ERROR_CODE.invalidRequest,
+				`"${op}" takes no argument: a command is one word, and only "compact" reads what follows it`,
+			);
+		}
+		if (instructions !== undefined && instructions.length > COMMAND_INSTRUCTION_MAX) {
+			throw refused(
+				ERROR_CODE.invalidRequest,
+				`"compact" takes at most ${COMMAND_INSTRUCTION_MAX} characters of instructions; this one is ${instructions.length}`,
+			);
+		}
 		const requestId =
 			typeof params.requestId === "string" && params.requestId !== ""
 				? connectorRequestId(this.name, "control", params.requestId)
 				: `command:${this.name}:gesture:${randomUUID()}`;
-		const reply = await runCommand(
-			await commandTarget(this.#runtime),
-			requestId,
-			op as ControlOp,
-			typeof params.instructions === "string" ? params.instructions : undefined,
-		);
+		const reply = await runCommand(await commandTarget(this.#runtime), requestId, op as ControlOp, instructions);
 		this.#log(`[connector] ${this.name}: ${op}${reply === undefined ? " (already ran)" : ""}`);
 		return {
 			handled: true,
@@ -1053,7 +1069,7 @@ export class ConnectorSession {
 							runStatus: deriveRunStatus(this.#view()),
 							busy: isBusy(this.#view()),
 							queued: queuedSubmissions(this.#view()),
-							commands: COMMAND_NAMES,
+							commands: [...CONTROL_OPS],
 						},
 					}
 				: {}),
