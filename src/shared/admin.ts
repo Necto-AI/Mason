@@ -10,7 +10,7 @@
  * - **inspection is granted, not assumed.** `PanelState` carries a key only when the device's grant covers it, so the
  *   trace is *absent* from a state built for a device without `trace`, not hidden by the client. A field that is
  *   sometimes missing is a field a client cannot pretend to have.
- * - **a secret is written, never read.** A token, a connector credential and a trigger secret come back exactly once,
+ * - **a secret is written, never read.** A token and a connector credential come back exactly once,
  *   from the mint that made them. The state names what exists by id and label; nothing it holds is replayable.
  */
 import type { AgentStatus, HookSummary, QueuedItem, TranscriptItem } from "./contract.ts";
@@ -95,6 +95,8 @@ export interface PanelConnectorGrant {
 	/** The operator's `kind` → hook map for the events face. */
 	readonly events?: { readonly hooks: Readonly<Record<string, string>> };
 	readonly state: readonly string[];
+	/** The controls this connector may spend on `mason/control`, out of the protocol's closed set. */
+	readonly commands?: readonly string[];
 	readonly trustMarkers: boolean;
 	readonly policy?: PanelPolicy;
 }
@@ -115,6 +117,8 @@ export interface ConnectorGrantInput {
 	} | null;
 	readonly events?: { readonly hooks?: Readonly<Record<string, string>> } | null;
 	readonly state?: readonly string[];
+	/** `[]` takes the vocabulary away again; the names are the protocol's closed set. */
+	readonly commands?: readonly string[];
 	readonly trustMarkers?: boolean;
 	/** `null` removes every rule; a list sent as `[]` is a rule that matches nothing. */
 	readonly policy?: PanelPolicy | null;
@@ -126,9 +130,7 @@ export interface PanelConnector {
 	readonly enabled: boolean;
 	readonly description: string | null;
 	readonly tools: { readonly url: string; readonly required: boolean; readonly hasCredential: boolean } | null;
-	readonly trigger: { readonly hook: string } | null;
 	readonly connector: PanelConnectorGrant | null;
-	readonly commands: readonly string[];
 }
 
 /** What the boot's connections came to, for one integration. */
@@ -136,7 +138,6 @@ export interface PanelHealth {
 	readonly name: string;
 	readonly enabled: boolean;
 	readonly hasTools: boolean;
-	readonly hasTrigger: boolean;
 	readonly connected: boolean;
 	readonly tools: number;
 	readonly error: string | null;
@@ -223,5 +224,4 @@ export interface ConnectorPatch {
 	readonly description?: string;
 	readonly tools?: { readonly url: string; readonly required?: boolean; readonly credential?: string } | null;
 	readonly connector?: ConnectorGrantInput | null;
-	readonly commands?: readonly string[];
 }

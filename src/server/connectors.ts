@@ -4,8 +4,8 @@
  * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
  * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
  * `connector` block is what the operator grants it: which external actors map to which roster names, which external
- * conversations may be spoken in, which event kinds fire which hook, which state scopes it may mirror, and whether it
- * may spend the entry's `commands` on `mason/control`.
+ * conversations may be spoken in, which event kinds fire which hook, which state scopes it may mirror, which controls it
+ * may spend on `mason/control`, and whether its approval markers may waive approval.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
  * the intersection with this file: an actor that is not mapped is refused, a conversation that is not listed is refused,
@@ -30,6 +30,8 @@ import type { IncomingMessage } from "node:http";
 import {
 	CAPABILITIES,
 	type Capability,
+	CONTROL_OPS,
+	type ControlOp,
 	type ExternalActor,
 	type ExternalConversation,
 	STATE_SCOPES,
@@ -65,6 +67,12 @@ export interface ConnectorGrant {
 	readonly events?: ConnectorEventGrant;
 	/** The state scopes this connector may subscribe to. A scope absent from here is refused, not narrowed. */
 	readonly state: readonly StateScope[];
+	/**
+	 * The controls this connector's socket may spend on `mason/control`, out of the protocol's closed vocabulary. Absent
+	 * or empty is no vocabulary at all: a chat that was never granted `stop` is a chat that cannot interrupt a turn, and
+	 * saying so at the handshake's first refusal is better than a word that silently never runs.
+	 */
+	readonly commands?: readonly ControlOp[];
 	/**
 	 * Whether this connector's `dev.mason/approval` markers may waive approval. Off unless the operator says so: a
 	 * connector describes its own operations, and trusting that description is a decision only the operator makes.
@@ -122,6 +130,7 @@ export function readConnectorGrant(
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
 	const state = readState(where, name, raw.state);
+	const commands = readCommands(where, name, raw.commands);
 	const trustMarkers = readBoolean(where, name, raw, "trustMarkers");
 	const policy = readPolicy(where, name, raw.policy);
 	const hasFace = user !== undefined || events !== undefined || hasToolsFace;
@@ -139,9 +148,39 @@ export function readConnectorGrant(
 		...(user === undefined ? {} : { user }),
 		...(events === undefined ? {} : { events }),
 		state,
+		...(commands === undefined ? {} : { commands }),
 		trustMarkers,
 		...(policy === undefined ? {} : { policy }),
 	};
+}
+
+/**
+ * The controls this grant may spend. The names are the protocol's own closed set, so a typo is refused here with the
+ * whole set in the message: a command an operator believes they granted and that silently never runs is the quiet loss
+ * this file is shaped against.
+ */
+function readCommands(where: string, name: string, value: unknown): ControlOp[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) {
+		throw new Error(
+			refusal(where, name, 'has a "connector.commands" that is not a list: the controls this socket may spend'),
+		);
+	}
+	const commands: ControlOp[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string" || !(CONTROL_OPS as readonly string[]).includes(entry)) {
+			throw new Error(
+				refusal(
+					where,
+					name,
+					`grants the control ${typeof entry === "string" ? `"${entry}"` : JSON.stringify(entry)}, which mason ` +
+						`does not have: the whole set is ${CONTROL_OPS.join(", ")}`,
+				),
+			);
+		}
+		commands.push(entry as ControlOp);
+	}
+	return commands;
 }
 
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {

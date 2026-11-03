@@ -3,13 +3,13 @@
  *
  * The conversation is a stub here, which is the point: the dispatch is a function over five ports (`CommandTarget`), so
  * a test can read what `/stop` did without a provider, a turn or a clock. The real conversation is exercised at the door
- * (`test/events.test.ts`), and the sentence `/status` answers with is derived in `status.ts` — pinned at the end of this
- * file against synthetic views, because a status line is arithmetic over what the client already shows.
+ * (`test/connector.test.ts`), and the sentence `/status` answers with is derived in `status.ts` — pinned at the end of
+ * this file against synthetic views, because a status line is arithmetic over what the client already shows.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import type { CommandName } from "../src/server/events.ts";
+import type { ControlOp } from "@mason/protocol";
 import type { IntegrationSummary } from "../src/server/integration-status.ts";
 import { type CommandTarget, runCommand } from "../src/server/main.ts";
 import { statusLine } from "../src/server/status.ts";
@@ -28,11 +28,11 @@ function stub(options: { readonly claimed?: boolean; readonly status?: string; r
 	readonly target: CommandTarget;
 	readonly ran: Ran;
 	readonly steps: string[];
-	readonly claims: { requestId: string; command: CommandName; argument: string | undefined }[];
+	readonly claims: { requestId: string; command: ControlOp; argument: string | undefined }[];
 } {
 	const ran: Ran = { abort: 0, clear: 0, compact: [], status: 0 };
 	const steps: string[] = [];
-	const claims: { requestId: string; command: CommandName; argument: string | undefined }[] = [];
+	const claims: { requestId: string; command: ControlOp; argument: string | undefined }[] = [];
 	const claimed = options.claimed ?? true;
 	const target: CommandTarget = {
 		abort: async () => {
@@ -176,7 +176,6 @@ describe("the status line a chat reads", () => {
 			name,
 			enabled: health.enabled ?? true,
 			hasTools: true,
-			hasTrigger: false,
 			connected: health.connected ?? false,
 			tools: health.connected === true ? 2 : 0,
 			error: health.error ?? null,

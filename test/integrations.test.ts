@@ -3,8 +3,8 @@
  *
  * What matters here is the shape of a failure. An empty integration list quietly removes tools, so a file mason cannot
  * read or cannot validate refuses the boot, naming the path — never an empty set. A rewrite keeps every key mason does
- * not understand, because the file grows and a hand-written note is not mason's to drop. A trigger secret is never
- * printed, not even truncated.
+ * not understand, because the file grows and a hand-written note is not mason's to drop. The signed event door's
+ * `trigger` is gone (#104), so a file that still names one is refused and the migration that removes it is tested here.
  *
  * The two files are tested apart from each other: the list on disk through `readIntegrations` and the command, and the
  * route through a started server — a reachable server is a fake MCP server on an in-memory transport, never a port.
@@ -19,12 +19,11 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
-	commandsFor,
 	type Integration,
+	migrateIntegrationTriggers,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
-	triggerFor,
 	writeIntegration,
 } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
@@ -188,48 +187,91 @@ describe("the integration list on disk", () => {
 		assert.match(await refusal(paths), /needs "enabled": true or "enabled": false/);
 	});
 
-	it("refuses a trigger with no hook or a secret that can be guessed", async () => {
+	it("refuses a file that still names the signed event door, and points at the migration", async () => {
 		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({ integrations: { github: { ...github, trigger: { hook: "  ", secret: "s".repeat(32) } } } }),
-		);
-		assert.match(await refusal(paths), /"trigger" with no "hook"/);
-
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(31) } } },
-			}),
-		);
-		assert.match(await refusal(paths), /shorter than 32 characters/);
-
+		// The door is gone (#104). Reading past a secret nothing checks would leave a sender that looks configured and
+		// receives nothing, so the boot refuses and says which command removes it.
 		await writeRaw(
 			paths,
 			JSON.stringify({
 				integrations: { github: { ...github, trigger: { hook: "github-activity", secret: "s".repeat(32) } } },
 			}),
 		);
-		assert.equal((await readIntegrations(paths)).integrations.github?.trigger?.hook, "github-activity");
+		const trigger = await refusal(paths);
+		assert.ok(trigger.includes(paths.integrations), `the refusal names the file: ${trigger}`);
+		assert.match(trigger, /"trigger"/);
+		assert.match(trigger, /npm run doctor -- migrate/);
+		assert.match(trigger, /npm run connector -- add github/);
+
+		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: ["stop"] } } }));
+		const commands = await refusal(paths);
+		assert.match(commands, /"commands"/);
+		assert.match(commands, /connector\.commands/);
+		assert.match(commands, /npm run doctor -- migrate/);
 	});
 
-	it("refuses a command mason does not have, naming the whole set", async () => {
+	it("migrates both old keys away, once, and carries a granted vocabulary onto the grant", async () => {
 		const paths = await temporaryHome();
-		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: ["stop", "restart"] } } }));
-		const message = await refusal(paths);
-		assert.ok(message.includes(paths.integrations), `the refusal names the file: ${message}`);
-		assert.match(message, /"restart"/);
-		assert.match(message, /stop, compact, clear, status/);
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					github: {
+						...github,
+						note: "a key mason has never heard of",
+						trigger: { hook: "github-activity", secret: "s".repeat(32) },
+						commands: ["stop"],
+					},
+					docs: { enabled: false, description: "The docs", tools: { url: "http://mason-docs:8080/mcp" } },
+				},
+			}),
+		);
 
-		// Empty is the one honest list: a trigger with no commands is an existing secret that gained nothing.
-		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: [] } } }));
-		assert.deepEqual((await readIntegrations(paths)).integrations.github?.commands, []);
+		assert.deepEqual(await migrateIntegrationTriggers(paths), [{ name: "github", moved: [], stranded: ["stop"] }]);
+		const migrated = (await readIntegrations(paths)).integrations;
+		assert.equal(migrated.github?.trigger, undefined);
+		assert.equal(migrated.github?.commands, undefined);
+		assert.equal((migrated.github as Record<string, unknown>).note, "a key mason has never heard of");
+		assert.deepEqual(migrated.github?.tools, github.tools, "the tools face survives the migration");
+		assert.deepEqual(migrated.docs?.tools, { url: "http://mason-docs:8080/mcp" });
+
+		// Idempotent: a second run finds nothing to do and does not rewrite the file.
+		const before = await readFile(paths.integrations, "utf8");
+		assert.deepEqual(await migrateIntegrationTriggers(paths), []);
+		assert.equal(await readFile(paths.integrations, "utf8"), before);
+	});
+
+	it("moves the old command list onto the grant rather than dropping a permission a person granted", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					telegram: {
+						enabled: true,
+						trigger: { hook: "team-chat", secret: "s".repeat(32) },
+						commands: ["stop", "status"],
+						connector: { events: { hooks: {} }, state: ["status"], trustMarkers: false },
+					},
+					// No connector block: there is nothing to hold the words, and doctor says so rather than inventing one.
+					bare: { enabled: true, commands: ["compact"] },
+				},
+			}),
+		);
+
+		assert.deepEqual(await migrateIntegrationTriggers(paths), [
+			{ name: "telegram", moved: ["stop", "status"], stranded: [] },
+			{ name: "bare", moved: [], stranded: ["compact"] },
+		]);
+		const migrated = (await readIntegrations(paths)).integrations;
+		assert.deepEqual(migrated.telegram?.connector?.commands, ["stop", "status"]);
+		assert.deepEqual(migrated.telegram?.connector?.state, ["status"], "the rest of the grant is untouched");
 	});
 
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {
 		const paths = await temporaryHome();
 		await writeIntegration(paths, "github", github);
-		assert.equal((await stat(paths.integrations)).mode & 0o777, 0o600, "the file holds a trigger secret");
+		assert.equal((await stat(paths.integrations)).mode & 0o777, 0o600, "the file holds connector credentials");
 		assert.equal((await stat(paths.serviceDir)).mode & 0o777, 0o700);
 		assert.deepEqual(
 			(await readdir(paths.serviceDir)).filter((name) => name.endsWith(".tmp")),
@@ -290,7 +332,7 @@ describe("the integration command", () => {
 		assert.equal((await readIntegrations(paths)).integrations.github?.enabled, true);
 
 		const listed = await integration(paths.home, "list");
-		assert.match(listed.stdout, /github\s+enabled\s+http:\/\/mason-github:8082\/mcp\s+no trigger/);
+		assert.match(listed.stdout, /github\s+enabled\s+http:\/\/mason-github:8082\/mcp\s+no connector/);
 
 		await integration(paths.home, "disable", "github");
 		assert.match((await integration(paths.home, "list")).stdout, /github\s+disabled/);
@@ -303,9 +345,8 @@ describe("the integration command", () => {
 		await assert.rejects(() => integration(paths.home, "enable", "github"), /no integration github/);
 	});
 
-	it("refuses a second add unless it is a replace, and a replace keeps the switch and the trigger", async () => {
+	it("refuses a second add unless it is a replace, and a replace keeps the switch and the grant", async () => {
 		const paths = await temporaryHome();
-		const secret = "0123456789abcdef0123456789abcdef";
 		await writeRaw(
 			paths,
 			JSON.stringify({
@@ -314,7 +355,7 @@ describe("the integration command", () => {
 						enabled: false,
 						description: "The old endpoint",
 						tools: { url: "http://mason-github:8082/mcp", required: true },
-						trigger: { hook: "github-activity", secret },
+						connector: { state: [], trustMarkers: true },
 					},
 				},
 			}),
@@ -339,102 +380,29 @@ describe("the integration command", () => {
 		const stored = (await readIntegrations(paths)).integrations.github;
 		assert.equal(stored?.description, "New");
 		assert.deepEqual(stored?.tools, { url: "http://new:8082/mcp", required: true });
-		assert.equal(stored?.trigger?.secret, secret);
+		assert.equal(stored?.connector?.trustMarkers, true);
 	});
 
-	it("lists a trigger by the hook it fires, and never by its secret", async () => {
+	it("lists a connector by the faces it grants, and names no credential", async () => {
 		const paths = await temporaryHome();
-		const secret = "0123456789abcdef0123456789abcdef";
 		await writeRaw(
 			paths,
-			JSON.stringify({ integrations: { github: { ...github, trigger: { hook: "github-activity", secret } } } }),
+			JSON.stringify({
+				integrations: {
+					github: {
+						...github,
+						connector: {
+							user: { actors: { "8811": "Denis" }, conversations: [] },
+							state: ["status"],
+							trustMarkers: false,
+						},
+					},
+				},
+			}),
 		);
 		const listed = await integration(paths.home, "list");
-		assert.match(listed.stdout, /trigger github-activity/);
-		assert.ok(!listed.stdout.includes(secret), "a secret in a printed line is a secret in a log");
-		assert.ok(!listed.stdout.includes(secret.slice(0, 8)), "not even a prefix of one");
-	});
-
-	it("mints a trigger secret once, stores it 0600, and keeps the rest of the entry", async () => {
-		const paths = await temporaryHome();
-		await writeIntegration(paths, "telegram", {
-			enabled: true,
-			description: "The team's Telegram group",
-			tools: { url: "http://mason-telegram:8082/mcp" },
-		});
-
-		const minted = await integration(paths.home, "secret", "telegram", "--hook", "workspace-check");
-		const secret = /^ {2}([0-9a-f]{64})$/m.exec(minted.stdout)?.[1];
-		assert.ok(secret, `the secret is printed once, on a line of its own: ${minted.stdout}`);
-		assert.equal(minted.stdout.split(secret).length - 1, 1, "one delivery of one secret, never a second mention");
-		const stored = (await readIntegrations(paths)).integrations.telegram;
-		assert.equal(stored?.trigger?.hook, "workspace-check");
-		assert.equal(stored?.trigger?.secret, secret);
-		assert.deepEqual(stored?.tools, { url: "http://mason-telegram:8082/mcp" }, "the rest of the entry is kept");
-		assert.equal((await stat(paths.integrations)).mode & 0o777, 0o600);
-
-		// A rotation replaces the key and keeps the hook, so the door's identity does not move with its secret.
-		const rotated = await integration(paths.home, "secret", "telegram");
-		const rotatedSecret = /^ {2}([0-9a-f]{64})$/m.exec(rotated.stdout)?.[1];
-		assert.ok(rotatedSecret);
-		assert.notEqual(rotatedSecret, secret);
-		assert.equal((await readIntegrations(paths)).integrations.telegram?.trigger?.hook, "workspace-check");
-
-		// A --hook beside an existing trigger is refused rather than silently ignored, and a first secret needs one.
-		await assert.rejects(
-			() => integration(paths.home, "secret", "telegram", "--hook", "morning-brief"),
-			/already has a trigger/,
-		);
-		await writeIntegration(paths, "docs", {
-			enabled: true,
-			description: "The docs",
-			tools: { url: "http://mason-docs:8080/mcp" },
-		});
-		await assert.rejects(() => integration(paths.home, "secret", "docs"), /--hook/);
-
-		// The list and the refusal name the hook and never the secret.
-		const listed = (await integration(paths.home, "list")).stdout;
-		assert.match(listed, /trigger workspace-check/);
-		assert.ok(!listed.includes(rotatedSecret), "a secret in a printed line is a secret in a log");
-	});
-
-	it("declares the commands its trigger may issue, and refuses one mason does not have", async () => {
-		const paths = await temporaryHome();
-		await writeIntegration(paths, "telegram", {
-			enabled: true,
-			description: "The team's Telegram group",
-			tools: { url: "http://mason-telegram:8082/mcp" },
-			trigger: { hook: "team-chat", secret: "0123456789abcdef0123456789abcdef" },
-		});
-
-		// An absent list is no vocabulary at all: an existing trigger secret gains nothing by being read.
-		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, undefined);
-
-		await integration(paths.home, "commands", "telegram", "stop, compact ,clear");
-		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, ["stop", "compact", "clear"]);
-		assert.match((await integration(paths.home, "list")).stdout, /trigger team-chat, commands stop,compact,clear/);
-
-		// A name this build does not have is refused rather than stored, and the refusal names the whole set.
-		await assert.rejects(
-			() => integration(paths.home, "commands", "telegram", "stop,stopp"),
-			(error: Error) => {
-				assert.match(error.message, /"stopp"/);
-				assert.match(error.message, /stop, compact, clear, status/);
-				assert.ok(error.message.includes(paths.integrations), "the refusal names the file to fix");
-				return true;
-			},
-		);
-		assert.deepEqual(
-			(await readIntegrations(paths)).integrations.telegram?.commands,
-			["stop", "compact", "clear"],
-			"a refused write leaves the file as it was",
-		);
-
-		// An empty list is how the vocabulary is taken away again, and it reads as none either way.
-		await integration(paths.home, "commands", "telegram", "");
-		assert.deepEqual((await readIntegrations(paths)).integrations.telegram?.commands, []);
-		assert.doesNotMatch((await integration(paths.home, "list")).stdout, /commands/);
-		await assert.rejects(() => integration(paths.home, "commands", "nobody", "stop"), /no integration nobody/);
+		assert.match(listed.stdout, /connector \(user, tools\)/);
+		assert.doesNotMatch(listed.stdout, /secret|credential/i);
 	});
 
 	it("prints the home and the file it edits when it is asked how to be used", async () => {
@@ -492,54 +460,40 @@ function downAll(): never {
 	throw new Error("no container in a test");
 }
 
-describe("the trigger a door may use", () => {
-	it("is a trigger face on an enabled integration, and nothing else", () => {
-		const integrations: Record<string, Integration> = {
-			on: { enabled: true, trigger: { hook: "workspace-check", secret: "0f".repeat(32) } },
-			off: { enabled: false, trigger: { hook: "workspace-check", secret: "1e".repeat(32) } },
-			"tools-only": { ...github },
-		};
-		assert.equal(triggerFor(integrations, "on")?.hook, "workspace-check");
-		assert.equal(triggerFor(integrations, "off"), undefined, "a disabled integration's door is nowhere");
-		assert.equal(triggerFor(integrations, "tools-only"), undefined, "tools are not a door");
-		assert.equal(triggerFor(integrations, "nobody"), undefined);
-	});
-});
-
-describe("the vocabulary a trigger may issue", () => {
-	it("is the declared commands of an enabled entry with a trigger, and nothing else", () => {
-		// This is the privilege gate itself: what one integration's secret may ask mason to do. Everything else — a
-		// declaration with no trigger to spend it with, a switched-off entry, an absent list — is nothing at all, so a
-		// later `secret` minting a trigger is what first makes an old declaration live.
-		const integrations: Record<string, Integration> = {
-			telegram: {
-				enabled: true,
-				trigger: { hook: "workspace-check", secret: "0f".repeat(32) },
-				commands: ["stop", "status"],
-			},
-			silent: { enabled: true, trigger: { hook: "workspace-check", secret: "1e".repeat(32) } },
-			off: { enabled: false, trigger: { hook: "workspace-check", secret: "2a".repeat(32) }, commands: ["stop"] },
-			"no-trigger": { enabled: true, commands: ["stop"] },
-			"off-and-no-trigger": { enabled: false, commands: ["stop"] },
-		};
-		assert.deepEqual(commandsFor(integrations, "telegram"), ["stop", "status"]);
-		assert.deepEqual(commandsFor(integrations, "silent"), [], "an absent list is no vocabulary at all");
-		assert.deepEqual(
-			commandsFor(integrations, "off"),
-			[],
-			"a switched-off entry's door is nowhere, so its words are too",
-		);
-		assert.deepEqual(
-			commandsFor(integrations, "no-trigger"),
-			[],
-			"a declaration with no secret to spend it with grants nothing",
-		);
-		assert.deepEqual(commandsFor(integrations, "off-and-no-trigger"), []);
-		assert.deepEqual(commandsFor(integrations, "nobody"), []);
-	});
-});
-
 describe("the integrations route", () => {
+	it("answers nothing at the signed event door, because there is no door any more", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(paths, JSON.stringify({ integrations: {} }));
+		const server = await serve(paths, downAll);
+		const base = server.url.slice(0, -"/api/integrations".length);
+		try {
+			// The path used to be the one door outside the owner's gate, authenticated by a sender's HMAC. It is not a
+			// door now, so it is not outside the gate either: no token is refused like any other `/api` path, and a token
+			// reaches the same `404` a path nobody serves gets.
+			for (const path of ["/api/events/telegram", "/api/events/", "/api/events/telegram/more"]) {
+				const anonymous = await fetch(`${base}${path}`, {
+					method: "POST",
+					headers: { "content-type": "application/json", "x-mason-signature": `sha256=${"0".repeat(64)}` },
+					body: JSON.stringify({ v: 1, id: "1", kind: "chat.message", payload: "hello" }),
+				});
+				assert.equal(anonymous.status, 401, `${path} is not a door`);
+
+				const owned = await fetch(`${base}${path}`, {
+					method: "POST",
+					headers: {
+						authorization: `Bearer ${server.token}`,
+						"content-type": "application/json",
+						"x-mason-signature": `sha256=${"0".repeat(64)}`,
+					},
+					body: JSON.stringify({ v: 1, id: "1", kind: "chat.message", payload: "hello" }),
+				});
+				assert.equal(owned.status, 404, `${path} has no route behind the gate either`);
+			}
+		} finally {
+			await server.close();
+		}
+	});
+
 	it("answers this boot's list, sorted, and refuses a request without a token", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
@@ -570,7 +524,6 @@ describe("the integrations route", () => {
 				name: "github",
 				enabled: true,
 				hasTools: true,
-				hasTrigger: false,
 				connected: false,
 				tools: 0,
 				error: 'MCP integration "github" at http://mason-github:8082/mcp: no container in a test',
@@ -581,7 +534,6 @@ describe("the integrations route", () => {
 				name: "docs",
 				enabled: false,
 				hasTools: true,
-				hasTrigger: false,
 				connected: false,
 				tools: 0,
 				error: null,
@@ -602,7 +554,6 @@ describe("the integrations route", () => {
 						enabled: true,
 						description: "The internal documentation server",
 						tools: { url: "http://mason-docs:8080/mcp" },
-						trigger: { hook: "workspace-check", secret: "s".repeat(32) },
 					},
 				},
 			}),
@@ -616,7 +567,6 @@ describe("the integrations route", () => {
 					name: "docs",
 					enabled: true,
 					hasTools: true,
-					hasTrigger: true,
 					connected: false,
 					tools: 0,
 					error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no container in a test',
@@ -625,7 +575,6 @@ describe("the integrations route", () => {
 					name: "github",
 					enabled: true,
 					hasTools: true,
-					hasTrigger: false,
 					connected: true,
 					tools: 2,
 					error: null,

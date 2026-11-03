@@ -24,6 +24,11 @@
 				}
 			}
 		},
+		"controlOp": {
+			"type": "string",
+			"description": "One of the four words `mason/control` takes. The set is closed: a fifth name is major 2.",
+			"enum": ["stop", "compact", "clear", "status"]
+		},
 		"capability": {
 			"type": "string",
 			"description": "A content or delivery capability, negotiated independently of any privilege grant. An origin is only ever sent what it claims.",
@@ -381,6 +386,13 @@
 					"type": "array",
 					"items": {
 						"$ref": "#/$defs/capability"
+					}
+				},
+				"commands": {
+					"type": "array",
+					"description": "The controls this connector may spend on `mason/control`, as the operator granted them. Absent is none: a word outside this list is refused, and this is how a connector knows what it may send without spending a call to find out.",
+					"items": {
+						"$ref": "#/$defs/controlOp"
 					}
 				},
 				"limits": {

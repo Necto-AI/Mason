@@ -8,7 +8,7 @@ plus the contracts a connector speaks and the panel an operator administers from
 projection — what the model may call, and what may cross the wire — and never the rendering. The operator panel in this
 repository is a control plane, not a chat (§4.3).
 
-1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, an integration's signed trigger, the transcript's controls) so the agent can proactively message the user first.
+1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, a connector's fire, the transcript's controls) so the agent can proactively message the user first.
 2. **The projection, and one operator panel:** `src/server/projection.ts` derives `transcript`, `queued` and `agentStatus` from the durable view, and a device granted `conversation` reads them at `GET /api/admin/state`; the durable `ConversationView` itself crosses only to a device granted `trace`, and only as that device's own area of the answer (§4.1a, §4.2). There is no conversational socket: a person speaks through a connector, and administration is a grant of its own.
 3. **A Widget Tool and Its Artifact Contract:** `generateSandboxedUi` is a `pi-durable` extension (`GenerateSandboxedUiExtension`) in `BASE_EXTENSIONS`, so every conversation is offered the tool from its first turn and on every turn after it: there is no toggle, and therefore no tool that appears mid-conversation (§3.5). The server maps the call's arguments to widget content and only that content crosses the wire; framing, streaming and drawing it is a client's job (§5). The manual the model needs — parameter order, design system, sandbox limits — lives in `skills/generative-ui/SKILL.md`, which it reads when it decides to build a widget.
 
@@ -81,7 +81,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   ├── attachments.ts             # Content ids and bytes: the connector's authenticated upload/download store
 │   │   ├── admin.ts                   # The panel's routes: a state per grant, the writes, and the approval answers
 │   │   ├── auth.ts                    # Who may talk to the server: token file, grants, bearer/query, Origin gate
-│   │   ├── commands.ts                # The four controls, the claim that makes a delivery id an identity, and the door's target
+│   │   ├── commands.ts                # The four controls, the claim that makes a control id an identity, and the target
 │   │   ├── connector.ts               # The connector socket: handshake, admission, state mirrors, the reply outbox
 │   │   ├── connectors.ts              # A connector's grants and the credential it opens its socket with
 │   │   ├── house.ts                   # The agent's home: agent/ and service/ paths, soul/profile reads, log, git
@@ -92,7 +92,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   │   ├── memory.ts              # The `remember` tool: one dated fact in agent/log/
 │   │   │   ├── delivery.ts            # The reply tool and the gate: one operation, targeted at the turn's origin
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
-│   │   ├── hooks.ts                   # Proactive event hooks (timers, a trigger's fire, proactive submit)
+│   │   ├── hooks.ts                   # Proactive event hooks (timers, a connector's fire, proactive submit)
 │   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
 │   │   ├── trace.ts                   # The other half of it: the raw entries, for a device granted `trace`
 │   │   ├── replies.ts                 # What a turn's reply is: its origin, its target, and the entry that carries both
@@ -213,7 +213,7 @@ what the runtime installs.
 
 ### 3.3 `src/server/hooks.ts` — Proactive Event Hooks Engine
 
-Allows the agent to message the user first when events occur (timers, an integration's trigger, the retry supervisor):
+Allows the agent to message the user first when events occur (timers, a connector's fire, the retry supervisor):
 
 ```ts
 export interface EventHookConfig {
@@ -262,27 +262,20 @@ export interface EventHookConfig {
 - **Built-in hooks:**
   - `morning-brief` (manual or scheduled check-in)
   - `workspace-check` (inspects workspace git status / tasks and reports anything needing attention)
-  - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though an integration's trigger may name it, and a hook nothing calls costs nothing.
+  - `github-activity` (an issue or pull request event, the shape a relay compacts GitHub's into): enabled, and inert — no shipped configuration fires it, though a connector's `kind` map may name it, and a hook nothing calls costs nothing.
   - `team-chat` (a message in the team chat, as a connector's submission or fire renders one): enabled, no interval — a chat message is not a schedule. It names the sender, the chat and the message a reply answers, and asks the agent to decide whether to answer with `reply` — which returns to the chat the message came from — or stay quiet, because every answer is a message a person reads.
-- **`integration.trigger`: the generic event door** (`src/server/events.ts`, `src/server/main.ts`). An integration's trigger is not a second way to speak as the owner: it cannot read the transcript, claim a name or call a method. It has one verb — deliver an event — and that verb becomes one fire of the hook its config names, which is a prompt with the payload fenced as untrusted data (above), or one of the commands its config declares. `POST /api/events/<integration>` is the path; `<integration>` is a configured name, and the secret that verifies the body is that integration's own. The route is outside the token gate because the HMAC is the door.
-  - **Envelope v1.** `{ "v": 1, "id": "issue-1421-opened", "kind": "issue.opened", "payload": "Ilya opened issue #1421 …" }`. `v` must be the integer `1`: a version mason does not know is a bug in the sender, refused `400` rather than guessed at. `id` is the envelope id and the fire's identity — non-empty, at most 200 characters, and one line: a control character in it is refused, because the accept log prints it as-is and a newline would forge the rest of the line — unique within that integration — and it becomes ``explicitRequestId(hook.id, `${name}:${id}`)``, the integration's name inside the key because a sender only promises uniqueness inside its own stream: two integrations on one hook that both call a delivery `1` are two events, and each fires. A duplicate from the same integration is the same fire however much later it arrives: the durable log never forgets a request id, so no table of seen ids exists, and a redelivery after a restart is still one event. `kind` is a short token labelling what happened — letters, digits and `.` `_` `:` `-`, the first character a letter or a digit, at most 64 — never free text: it becomes one line of the accept log and the prompt's label, so a newline or a space in it is refused, and `issue.opened`, `push` or `chat.message` are the shapes it names. It is a label rather than a dispatch key for every kind except one: `command` says the payload names something mason should do (§3.3, the command kind below), and no other kind makes mason decide anything. `payload` is **a string** (at most 2 000 characters) written by the sender for a person to read; mason never parses structure, and an over-long payload is refused rather than truncated, because a truncated event is a lie about what happened. Unknown keys are ignored (a sender may add fields before mason knows them), and a body that is not a JSON object is a `400` naming the field.
-  - **The command kind.** An integration's entry may declare `"commands": ["stop", "compact", "clear", "status"]`, out of a closed set (`COMMAND_NAMES`, `src/server/events.ts`): empty or absent means none, so an existing trigger secret gains no vocabulary by being read, and a name mason does not have refuses the boot, naming the file and the whole set. The declaration is what the secret may spend, and `npm run integration -- commands <name> <a,b,c>` is how it is written. A signed body with `kind: "command"` carries the command in `payload`: the name, and at most one argument after the first run of whitespace (`compact keep the pricing thread`). Three rules hold at the door, all in `src/server/events.ts` so that `main.ts` only dispatches:
-    - **A word the integration does not declare is not an error.** The route answers `200 { "handled": false }`, and the relay treats the message as the ordinary text it was: `/start`, `/foo` and a mistaken `/stopp` are messages, never failures.
-    - **A declared command is held to its shape.** `stop`, `clear` and `status` take no argument (`400`, one line saying so); `compact` takes at most 200 characters of instructions (`400` past it). The refusal names the rule it broke, because a command that ran with an argument the door dropped would do something other than what the person asked for.
-    - **`id` keeps its meaning.** A command is claimed in the durable log under ``command:<integration>:<id>``, in one commit with the display-only entry that records what was asked, so a redelivery, a minute later or after a restart, answers and changes nothing. Where the claim sits is per command, and the difference is the trade: `clear` and `compact` claim **before** they act, because a crash between the two loses one command rather than repeating it and a repeated `/clear` is the worse of those two, while `stop` aborts **first** and claims second, because `abort` is idempotent and a claim taken first would turn a failed abort into a permanent `stopped` that no redelivery could retry. The abort is never gated on its claim. `status` is not claimed, because it changes nothing. A delivery that finds the claim answers `{"handled": true, "reply": ""}` — no reply at all, because nothing ran and the first delivery already answered.
-    The answer to a handled command is `200 { "handled": true, "reply": "<one line>" }`, and the reply is what the relay posts into the chat: `stopped`, `compacted`, `cleared`, or the status sentence (`idle: nothing queued; telegram connected; nothing unreachable since boot`). `/clear` answers `clearing after this turn` instead of `cleared` when a run is in progress or anything is queued, because a reset is not display-only: it lands *behind* the running turn, and a person told `cleared` would watch the answer they cleared arrive. The reply is prose because a person reads it, and it is one line because that is what a chat message is.
-  - **Signature, limits, identity.** `X-Mason-Signature: sha256=<hex hmac-sha256(secret, raw body)>`, compared in constant time over the bytes that arrived, before JSON parsing; missing or wrong is `401` with no detail, no hint which half failed. The secret is 32 bytes hex, stored `0600` through the same atomic write as the rest of the file, and minted by `npm run integration -- secret <name> [--hook <hook-id>]`, which prints it exactly once. Limits are per integration: a 256 KiB body cap (`413`) and **two** budgets of 6 a minute (`429` with `retry-after`) — fires under `integration:<name>` and commands under `command:<name>`, keyed apart so that one chatty sender cannot spend another's, and so that a spent fire budget can never be the reason a `/stop` is refused. Only a delivery mason acts on is charged: an undeclared word (`handled: false`) and a malformed command (`400`) spend neither budget. Boot refuses an **enabled** integration whose trigger names a hook this build does not define, naming the integration and the hook: a door that fires nothing is a silent black hole, and it is a config error, not a missing optional container. A disabled integration is not checked — its door is `404`, and a name is no reason to keep an integration the operator switched off from ever being switched on again. The switch is read at boot, so enabling it is the restart that runs the same check.
-  - **A delivery by hand.** The door's one prerequisite is an HMAC over the exact bytes that are sent, and there is no wrapper script for it: any sender that can run `openssl` is a sender. The secret is the one `npm run integration -- secret <name>` printed once; the name in the path is the integration's.
+- **A connector's events face: `mason/fire`** (`src/server/connector.ts`, §4.1d). This is the only way a service wakes the agent, and it is a fire on the socket the connector was granted — not a second door. A fire carries `fireId`, `kind`, `payload` and an optional `summary` and `origin`; the operator's `kind` → hook map picks the hook, and the payload reaches the model fenced as untrusted data (above). A fire that names an origin gives its turn a reader to reply to; one that does not has none, and `reply` says nobody was reached rather than claiming a delivery. There is no signed POST any more: #104 removed `POST /api/events/<integration>`, the HMAC trigger path, and the envelope it carried, and this build accepts nothing at that path (§4.1d, "what is not here").
 
-    ```sh
-    SECRET=…                     # the integration's trigger secret, printed once
-    BODY='{"v":1,"id":"issue-1421-opened","kind":"issue.opened","payload":"Ilya opened issue #1421"}'
-    SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')
-    curl -sS -X POST http://127.0.0.1:8787/api/events/github \
-      -H 'content-type: application/json' -H "x-mason-signature: sha256=$SIG" --data-binary "$BODY"
-    ```
+  What the old door did, and where each part lives now:
 
-    `id` is what makes a redelivery the same event: `--data-binary` sends those bytes unaltered, so signing them is signing what arrives.
+  | Then | Now |
+  |---|---|
+  | one hook per integration, named in its trigger | an operator-editable `kind` → hook map on the connector's grant |
+  | HMAC over the body, `X-Mason-Signature` | a connector credential on the WebSocket upgrade, read per connection |
+  | `id` deduplicated in the durable log | `fireId`, claimed durably before the acknowledgement, deduplicated forever |
+  | `commands` listed on the integration entry | `connector.commands`, the closed set `mason/control` |
+  | `payload` one rendered string | `payload` JSON data plus `summary`, fenced the same way |
+  | budgets: 6 fires and 6 commands a minute | the connector socket's classes, per connector (§4.1d) |
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -316,14 +309,14 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # Credentials that may talk to the server: one hashed token per device (§4.1b)
     ├── roster.json         # Who is in the room: the names a person may speak as, mapped by whichever interface they use, read per request (§4.1b)
-    ├── integrations.json   # The services mason reaches: each entry's MCP endpoint and trigger, read once at boot
+    ├── integrations.json   # The services mason reaches: each entry's MCP endpoint, connector grant and commands, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
     └── data/               # agent.sqlite, hooks.json and seeded-skills.json (§4.1c)
 ```
 
 **The boundary is a mount until writable roots lands.** In the deployment `service/` does not exist in the tool
-machine's filesystem, so `bash` cannot reach the token hashes, the trigger secrets, the database, the SSH key or the
+machine's filesystem, so `bash` cannot reach the token hashes, the connector credentials, the database, the SSH key or the
 provider credential — the split holds for every tool, not only the ones that honour a policy. In the dev stack there
 are no containers: both halves are sibling directories on one filesystem and a tool can see `service/`, so the
 writable-roots policy is what makes the split meaningful for a developer. `service/` is unversioned. `agent/.git` is the memory repo, created when the home is first
@@ -335,7 +328,7 @@ The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `r
 `agent.sqlite` are `0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither
 is a thing to leave readable by every other account on the machine.
 
-`integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a trigger that wakes
+`integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a connector that wakes
 it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
 there and a list that changed under a running turn would re-price the prefix and change what the model can do between
 two messages of one conversation.
@@ -471,14 +464,10 @@ of `handleRequest` that `/api/*` passes through, the roster refusal that gate ap
 `/api/admin/*` route which then checks the device's grants (`src/server/admin.ts`). A browser holds no socket at all:
 an upgrade on any path but `/api/connector` is closed.
 
-Three paths are deliberately outside that gate, and each is narrower than a token. `/api/health` is a
-liveness probe that answers one word and needs no credential at all, and `POST /api/events/<integration>` (§3.3) is
-authenticated by that integration's trigger secret. The door it opens can do exactly two things, and only the two its
-entry declares: fire the one hook its trigger names, and issue one of the commands in its `commands` list. That secret is
-not a token, because it cannot read, claim, or call, so the door it opens is a door into `hooks.fire` and into
-`abort`/`compact`/`reset`/status, and nothing else.
+Two paths are deliberately outside that gate, and each is narrower than a token. `/api/health` is a liveness probe that
+answers one word and needs no credential at all.
 
-The third is the connector's own door: `/api/connector` (the socket, §4.1d) and `/api/connector/attachments[/<contentId>]`
+The other is the connector's own door: `/api/connector` (the socket, §4.1d) and `/api/connector/attachments[/<contentId>]`
 (the byte transfer). It is authenticated as **the connector**, by a credential mason issued for one entry
 (`src/server/connectors.ts`, `npm run connector`): `Authorization: Bearer masonc_…` on the upgrade request, read from
 `service/config.json` on every connection, so a revoke lands on the next one. `Origin` is checked the same way it is for
@@ -618,7 +607,8 @@ for one connector supersedes the first, and the first is closed with a reason.
 
 **The handshake is a ceiling.** `mason/hello` answers with what the operator granted, narrowed by what the connector
 advertised: the actor mapping, the permitted conversations, the capabilities that are in both lists, the `kind` → hook
-map, and the limits. A face the entry does not grant is named in `inactive` with a reason rather than dropped, and a
+map, the control vocabulary the grant holds (`commands`, so a connector learns what it may send rather than spending a
+refused call to find out), and the limits. A face the entry does not grant is named in `inactive` with a reason rather than dropped, and a
 major version this build does not speak is `mason.protocol_mismatch` and closes the socket. Nothing else is accepted
 before the answer.
 
@@ -663,10 +653,18 @@ connector that spent its minute on compactions can still stop the turn they were
 settles it: see §4.1e for what is asked, who may answer, and what happens to the call that is waiting. Neither is a
 second way to speak — an answer is not a submission, and a question is not a reply.
 
-**What is not here yet.** The removal of the HMAC event door and the old Telegram relay is #104. Until then the old
-door still fires hooks with no origin, so a turn it starts records its reply and reaches nobody — the honest state of a
-half-migrated deployment, and the reason the connector's own path is the one to build on. The panel and the one-way
-migration are in (§4.2, §4.3).
+**The cutover is done, and there is nothing behind it.** #104 removed the HMAC event door (`POST /api/events/<name>` and
+its verifier), the trigger face in `integrations.json`, the vendor-aware delivery path and the boot-frozen MCP
+registration. A build with none of them accepts nothing at those paths and has no configuration that re-enables them: a
+request to `/api/events/<name>` is an ordinary `/api` path now, so it is `401` without the owner's token and `404` with
+one, and an entry that still names a `trigger` refuses the boot with the migration command in the sentence. `npm run
+doctor -- migrate` removes the old keys, once, and `src/server/integrations.ts` is the only reader that knows they
+existed.
+
+The two connectors that replaced the in-repository Telegram relay live in their own repositories — `mason-telegram` (text,
+files, replies, approvals, and a tools face) and `mason-slack` (text, replies and approvals, honestly without files,
+widgets or streaming) — and neither imports anything from this one. Their diff here is configuration: an entry with a
+`connector` block and a credential, and not one line of vendor source (§4.3).
 
 ### 4.1e The tool catalog and the permission gateway
 
@@ -740,7 +738,7 @@ view, and it carries only the areas this device's grants cover:
 | `conversation` | `conversation` | `status` (run status, busy, the **names** of running tools, model, hooks, cwd), `transcript`, `queued` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
 | `trace` | `trace` | the durable entries, verbatim: model messages, tool calls and results, hook payloads, questions and answers, deliveries, commands, compaction and context edits | nothing is filtered — this *is* the raw view |
 | `approve` | `permissions` | the pending questions: tool, arguments, reason, answers, approver, origin, askedAt | anything else the trace holds |
-| `admin` | `config` | connectors and their grants, health, roster, tokens, connector credentials, hooks, the command and scope vocabularies, `restartRequired` | any secret: a token, a connector credential and a trigger secret are written once and never read back |
+| `admin` | `config` | connectors and their grants, health, roster, tokens, connector credentials, hooks, the command and scope vocabularies, `restartRequired` | any secret: a token and a connector credential are written once and never read back |
 
 `session` is always there — the device's id, label, the roster name it speaks for, and its grants — because a device
 with no grants still has to learn that it has none. An area the grant does not cover is **absent**: a browser that
@@ -775,7 +773,7 @@ Conversation (the projected transcript across every connector, plus the queue be
 entries, filterable by kind, with model messages, tool arguments and results, payloads and context changes), Approvals
 (the pending questions, answered allow-once or deny), Connectors (faces, description, tools endpoint and credential,
 the grant: actors → roster names, external rooms, event kinds → hooks, state scopes, marker trust, policy rules, the
-approver, and the commands the trigger may issue; plus its credentials, its trigger and an audit of file-versus-boot),
+approver, and the commands the grant may spend; plus its credentials and an audit of file-versus-boot),
 Roster (the names mason attributes to), Access (devices with their grants, and every connector credential), and Hooks
 (the switches and the fire button — a routine is a hook with an interval).
 
@@ -788,7 +786,7 @@ different powers (§4.1e): answering a question is not writing a rule.
 
 **What is live and what is a restart.** Tokens, roster names, connector credentials and hook switches are read per
 request (or are process state), so the panel's change lands on the next call — including on the device that made it.
-`integrations.json` is the boot's: a connector, its grant, its trigger and the tools catalog are read once, so saving
+`integrations.json` is the boot's: a connector, its grant and the tools catalog are read once, so saving
 there answers `restartRequired`, the Overview says so above everything, and the panel never pretends a saved entry is a
 running one.
 
@@ -956,7 +954,7 @@ on message quality against `evals/rubric.md`. Scenario shape, flags, trace field
    file every time; a `PATCH /api/admin/tokens/<id>` that removes `trace` is in force for that device's very next call,
    which `test/panel.test.ts` pins. Nothing here is cached at boot except `integrations.json`, and the panel says
    `restartRequired` when that one has moved.
-3. **A secret is a write-only field.** A token, a connector credential and a trigger secret are minted by a response and
+3. **A secret is a write-only field.** A token and a connector credential are minted by a response and
    stored as hashes; the panel can list what exists and replace it, and no read can print it again. The `config` area of
    the state names them by id and `hasCredential`, and nothing else.
 4. **A sandbox holds stable dependencies.** The widget bridge is rebuilt on every render; handing that object

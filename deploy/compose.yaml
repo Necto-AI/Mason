@@ -58,7 +58,7 @@ services:
       # skills, worker definitions and workspace, and the repository its memory is committed to. One path on two
       # machines is what makes a tool's cwd, a `read` and a `git commit` mean the same thing on both.
       #
-      # `service/` is deliberately absent: no soul, no roster, no token hashes, no trigger secret, no database, no SSH
+      # `service/` is deliberately absent: no soul, no roster, no token hashes, no connector credential, no database, no SSH
       # key, no provider credential. That absence is the boundary — a mount, not a mode bit that `chmod` can undo.
       - mason-agent:/home/mason/.mason/agent
       # The Telegram integration's inbox, at the path `mason-telegram` writes it to: one volume mounted in two
@@ -198,8 +198,9 @@ services:
         target: /run/integrations.json
         read_only: true
     healthcheck:
-      # /api/health needs no credential: a monitor that needs a token is a monitor nobody runs. The only other way past
-      # the token gate is POST /api/events/<integration>, and the sender's HMAC is its credential.
+      # /api/health needs no credential: a monitor that needs a token is a monitor nobody runs. The only other ways past
+      # the token gate are the connector's own — /api/connector and its attachment endpoint — and those are the connector's
+      # credential, not a person's.
       test:
         - CMD-SHELL
         - node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
@@ -292,8 +293,8 @@ volumes:
   # Mounted into both containers at /home/mason/.mason/agent. Back this up.
   mason-agent:
     name: ${MASON_STACK:-mason}-agent
-  # The service: soul.md, roster.json, config.json (the token hashes), integrations.json (the services and their trigger
-  # secrets), data/agent.sqlite, ssh/ (the env key) and pi/ (the copied provider credential). Mounted only into the mason
+  # The service: soul.md, roster.json, config.json (the token hashes and the connector credentials), integrations.json (the
+  # services and their grants), data/agent.sqlite, ssh/ (the env key) and pi/ (the copied provider credential). Mounted only into the mason
   # container. Back this up too, encrypted: it holds the provider key.
   mason-service:
     name: ${MASON_STACK:-mason}-service

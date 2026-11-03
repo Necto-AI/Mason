@@ -541,6 +541,32 @@ describe("control", () => {
 		}
 	});
 
+	it("answers the handshake with the control vocabulary it was granted, and holds a word to its shape", async () => {
+		const served = await serveConnector();
+		try {
+			const connected = await connectConnector(served);
+			try {
+				// The list is the grant: a connector that was not given `stop` learns it here rather than by spending a
+				// refused call, and the four names are the protocol's closed set.
+				assert.deepEqual(connected.connector.status().session?.commands, ["stop", "compact", "clear", "status"]);
+
+				// The shape the old event door held a command to survives the cutover, because the socket is the only door
+				// now: a word that takes no argument refuses one, and `compact` reads a line rather than a document.
+				const withArgument = await connected.connector.control({ op: "stop", instructions: "now please" });
+				assert.equal(withArgument.handled, false);
+				assert.match(withArgument.reply ?? "", /"stop" takes no argument/);
+
+				const tooLong = await connected.connector.control({ op: "compact", instructions: "x".repeat(201) });
+				assert.equal(tooLong.handled, false);
+				assert.match(tooLong.reply ?? "", /at most 200 characters/);
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
 	it("keeps stop independent of the fire budget, so a flood cannot starve it", async () => {
 		const served = await serveConnector();
 		try {

@@ -5,8 +5,10 @@ it describes ([`protocol.v1.json`](../packages/protocol/schemas/protocol.v1.json
 on purpose: a connector author installs it, reads it, and needs nothing from this repository.
 
 This file used to hold a proposed contract — events over an HMAC door, tools over MCP, replies through a vendor tool named
-on the entry, no submissions and no approvals. That proposal is superseded. Do not write a connector against it, and do
-not keep a second copy of the rules here: two documents that both claim to be the contract is how they start disagreeing.
+on the entry, no submissions and no approvals. That proposal is superseded, and so is the HMAC door itself: it was removed
+in #104, along with the trigger face, the vendor-aware delivery path and the boot-frozen MCP registration. Do not write a
+connector against either, and do not keep a second copy of the rules here: two documents that both claim to be the
+contract is how they start disagreeing.
 
 ## Where the decision lives
 
@@ -34,12 +36,13 @@ not keep a second copy of the rules here: two documents that both claim to be th
 | Mason's server speaking this protocol | `src/server/connector.ts`: the socket, admission, the state mirrors, the reply outbox, attachments and budgets (`docs/SPEC.md` §4.1d) |
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add <name>` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
-| Telegram and Slack as external processes on the SDK | not yet (`#104`) |
+| Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` (`#104`) — text, files, replies, approvals, a tools face |
+| A minimal Slack as an external process on the SDK | `github.com/DenisSud/mason-slack` (`#104`) — text, replies, approvals; no files, widgets or streaming |
 | The permission gateway and the live tool catalog | `src/server/permissions.ts`, `src/server/mcp.ts`; `docs/SPEC.md` §4.1e |
 | The panel and the one-way migration | in (`#103`, ADR-0011) |
-| Removal of the HMAC event door and the legacy Telegram relay | not yet (`#104`) |
+| Removal of the HMAC event door and the in-repository Telegram relay | in (`#104`) — `POST /api/events/<name>`, the trigger face, the vendor delivery path |
 
-A connector can connect today, submit words, fire events, subscribe to the state its entry grants, receive replies, move
-files and answer permission requests. Until `#104`, the old HMAC door still exists beside this socket and the old
-Telegram relay still speaks it; the two do not share a delivery path, and a fire through the old door has no origin for a
-reply to go back to.
+A connector can connect, submit words, fire events, subscribe to the state its entry grants, receive replies, move files
+and answer permission requests. There is one way in: this socket. The signed event door is gone, an entry that still names
+a `trigger` refuses the boot and `npm run doctor -- migrate` removes the key, and nothing in this build speaks the old
+envelope.

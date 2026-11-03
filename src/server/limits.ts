@@ -14,26 +14,8 @@ import type { IncomingMessage } from "node:http";
 /** A small write's body — a name to claim, a session to open. 32 KiB is already generous for that. */
 export const JSON_BODY_MAX_BYTES = 32 * 1024;
 
-/**
- * A generic event delivery: how many bytes a trigger may send. An envelope carries a paragraph, and the cap bounds what
- * a sender can buffer; a delivery over it is dropped with `413` before the signature is read, never truncated.
- */
-export const EVENT_BODY_MAX_BYTES = 256 * 1024;
-
-/** Fires one integration may start per window, counted per integration name. */
-export const EVENT_FIRE_LIMIT = 6;
-
-/**
- * Commands one integration may ask for per window — a budget of its own, keyed `command:<integration>` where a fire is
- * `integration:<integration>`, so a sender that spent its minute on messages can still stop the turn they started.
- *
- * The same number as `EVENT_FIRE_LIMIT` on purpose, defined once: they bound the same kind of spend, and a second literal
- * is a number that drifts. Charged only for a command mason will act on.
- */
-export const COMMAND_LIMIT = EVENT_FIRE_LIMIT;
-
-/** The window fires are counted in. */
-export const EVENT_FIRE_WINDOW_MS = 60_000;
+/** The window every fire budget is counted in. */
+export const FIRE_WINDOW_MS = 60_000;
 
 /**
  * A connector's budgets, per class and per connector. They are separate because they bound different spending: a
@@ -70,8 +52,8 @@ export interface FireLimiter {
 export function createFireLimiter(
 	options: { limit?: number; windowMs?: number; now?: () => number } = {},
 ): FireLimiter {
-	const limit = options.limit ?? EVENT_FIRE_LIMIT;
-	const windowMs = options.windowMs ?? EVENT_FIRE_WINDOW_MS;
+	const limit = options.limit ?? CONNECTOR_FIRE_LIMIT;
+	const windowMs = options.windowMs ?? FIRE_WINDOW_MS;
 	const now = options.now ?? Date.now;
 	const fires = new Map<string, number[]>();
 

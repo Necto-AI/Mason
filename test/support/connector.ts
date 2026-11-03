@@ -60,8 +60,9 @@ export function integrationsFile(
 				enabled: true,
 				description: "the team chat",
 				tools: { url: "http://127.0.0.1:9/mcp", credential: "connector-issued-for-mason" },
-				commands: ["stop", "compact", "clear", "status"],
 				connector: {
+					// The controls this socket may spend: the protocol's whole closed set, granted by the operator.
+					commands: ["stop", "compact", "clear", "status"],
 					user: {
 						actors: { "8811": "Denis" },
 						conversations: [

@@ -18,10 +18,9 @@
  * request and "restart to apply" where the boot froze it: `integrations.json` is the boot's, and the state says so
  * with `restartRequired` rather than pretending a saved change is a running one.
  */
-import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { CAPABILITIES, STATE_SCOPES } from "@mason/protocol";
+import { CAPABILITIES, CONTROL_OPS, STATE_SCOPES } from "@mason/protocol";
 import type {
 	ConnectorGrantInput,
 	ConnectorPatch,
@@ -41,7 +40,6 @@ import {
 	mintConnectorCredential,
 	revokeConnectorCredential,
 } from "./connectors.ts";
-import { COMMAND_NAMES, isCommandName } from "./events.ts";
 import type { HousePaths } from "./house.ts";
 import { integrationSummaries } from "./integration-status.ts";
 import {
@@ -161,17 +159,6 @@ async function handleAdmin(
 		if (action === "credential" && method === "POST") {
 			json(response, 200, await mintCredential(request, deps, name));
 			return;
-		}
-		if (action === "trigger") {
-			if (method === "POST") {
-				json(response, 200, await mintTrigger(request, deps, name));
-				return;
-			}
-			if (method === "DELETE") {
-				json(response, 200, await removeTrigger(deps, name));
-				return;
-			}
-			throw new PanelError(405, "POST or DELETE a trigger");
 		}
 		if (method === "PUT" || method === "PATCH") {
 			json(response, 200, await patchConnector(request, deps, name));
@@ -321,7 +308,7 @@ async function panelConfig(deps: OperatorDeps): Promise<NonNullable<PanelState["
 			createdAt: record.createdAt,
 		})),
 		hooks: deps.runtime.hooks.list(),
-		commands: [...COMMAND_NAMES],
+		commands: [...CONTROL_OPS],
 		capabilities: [...CAPABILITIES],
 		stateScopes: [...STATE_SCOPES],
 		restartRequired: JSON.stringify(file) !== JSON.stringify(booted),
@@ -338,7 +325,7 @@ function tokenWire(record: TokenRecord): PanelToken {
 	};
 }
 
-/** One entry as the panel edits it. The trigger's secret and the tools credential are named as present, never sent. */
+/** One entry as the panel edits it. The tools credential is named as present, never sent. */
 function connectorWire(name: string, entry: Integration): PanelConnector {
 	const grant = entry.connector;
 	return {
@@ -353,9 +340,7 @@ function connectorWire(name: string, entry: Integration): PanelConnector {
 						required: entry.tools.required === true,
 						hasCredential: entry.tools.credential !== undefined,
 					},
-		trigger: entry.trigger === undefined ? null : { hook: entry.trigger.hook },
 		connector: grant === undefined ? null : grantWire(grant),
-		commands: entry.commands ?? [],
 	};
 }
 
@@ -374,6 +359,7 @@ function grantWire(grant: ConnectorGrant): NonNullable<PanelConnector["connector
 				}),
 		...(grant.events === undefined ? {} : { events: { hooks: grant.events.hooks } }),
 		state: grant.state,
+		...(grant.commands === undefined ? {} : { commands: grant.commands }),
 		trustMarkers: grant.trustMarkers,
 		...(grant.policy === undefined ? {} : { policy: grant.policy }),
 	};
@@ -434,17 +420,6 @@ function entryFromPatch(name: string, existing: Integration | undefined, patch: 
 		if (patch.connector === null) delete next.connector;
 		else next.connector = grantFromInput(patch.connector, existing?.connector);
 	}
-	if (patch.commands !== undefined) {
-		for (const word of patch.commands) {
-			if (!isCommandName(word)) {
-				throw new PanelError(
-					400,
-					`"${word}" is not a command mason has: the whole set is ${COMMAND_NAMES.join(", ")}`,
-				);
-			}
-		}
-		next.commands = [...patch.commands];
-	}
 	return next as unknown as Integration;
 }
 
@@ -478,6 +453,7 @@ function grantFromInput(input: ConnectorGrantInput, existing: ConnectorGrant | u
 		}
 	}
 	if (input.state !== undefined) next.state = input.state;
+	if (input.commands !== undefined) next.commands = input.commands;
 	if (input.trustMarkers !== undefined) next.trustMarkers = input.trustMarkers;
 	if (input.policy !== undefined) {
 		if (input.policy === null) {
@@ -512,42 +488,6 @@ async function mintCredential(request: IncomingMessage, deps: OperatorDeps, name
 		replace: body.replace === true,
 	});
 	return { id: record.id, credential };
-}
-
-/**
- * A trigger face is minted, never typed: the secret is 32 bytes mason makes, and adding a trigger and rotating one are
- * the same act. The hook it fires must be one this build has, because a trigger to a hook nobody defines is a door
- * that answers nothing.
- */
-async function mintTrigger(request: IncomingMessage, deps: OperatorDeps, name: string): Promise<unknown> {
-	const body = await bodyOf(request);
-	const hook = body.hook;
-	if (typeof hook !== "string" || hook.trim() === "") throw new PanelError(400, 'the body is {"hook":"<hook id>"}');
-	if (!deps.runtime.hooks.has(hook)) {
-		const known = deps.runtime.hooks.list().map((entry) => entry.id);
-		throw new PanelError(400, `"${hook}" is not a hook this build has: ${known.join(", ") || "none are defined"}`);
-	}
-	const existing = (await readIntegrations(deps.house)).integrations[name];
-	if (existing === undefined) throw new PanelError(404, `no connector "${name}"`);
-	const secret = mintSecret();
-	await writeIntegration(deps.house, name, {
-		...existing,
-		trigger: { ...(existing.trigger ?? {}), hook, secret },
-	});
-	return { hook, secret, restartRequired: true };
-}
-
-function mintSecret(): string {
-	return randomBytes(32).toString("hex");
-}
-
-async function removeTrigger(deps: OperatorDeps, name: string): Promise<unknown> {
-	const existing = (await readIntegrations(deps.house)).integrations[name];
-	if (existing === undefined) throw new PanelError(404, `no connector "${name}"`);
-	if (existing.trigger === undefined) throw new PanelError(400, `"${name}" has no trigger`);
-	const { trigger: _removed, ...rest } = existing;
-	await writeIntegration(deps.house, name, rest as Integration);
-	return { removed: name, restartRequired: true };
 }
 
 /** Mint a device. The token is in this response and nowhere else — the file holds a hash. */

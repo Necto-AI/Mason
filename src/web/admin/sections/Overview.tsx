@@ -18,7 +18,7 @@ export function Overview({ state }: { readonly state: PanelState }) {
 				<Card title="Restart to apply" className="warn-card">
 					<p>
 						<code>integrations.json</code> differs from what this process booted with. Connectors, their grants,
-						their triggers and the tool catalog are the boot's, so the change lands on the next start. Tokens,
+						their commands and the tool catalog are the boot's, so the change lands on the next start. Tokens,
 						roster names and connector credentials are read per request and are already live.
 					</p>
 				</Card>
@@ -102,7 +102,6 @@ export function Overview({ state }: { readonly state: PanelState }) {
 											<div className="chips">
 												{health.enabled ? <Badge tone="ok">on</Badge> : <Badge tone="muted">off</Badge>}
 												{health.hasTools ? <Badge tone="muted">tools</Badge> : null}
-												{health.hasTrigger ? <Badge tone="muted">trigger</Badge> : null}
 											</div>
 										</td>
 										<td>
