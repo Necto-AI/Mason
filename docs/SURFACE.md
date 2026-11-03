@@ -16,11 +16,14 @@ listed below, with the other doors that answer without the owner's token.
 
 `exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the
 `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the
-literal opens (`if (pathname.startsWith("/api/")) { authenticate() }` guards everything below it) or, failing that,
-the nearest one above it. When the block is a dispatcher, the row names the handler it hands the route to and
-`delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a
-`requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the
-guard is the same.
+literal opens, or in a block above it that this path enters — the `/api/` gate is one `if` that closes, and every
+route under it is served after the block ended — or, failing that, in the handler it delegates to. When the block
+is a dispatcher, the row names the handler it hands the route to and `delegated to` says which; `filtered per area`
+means that handler refuses the grant for the areas it owns and hands the device's grants to a function that filters
+the payload instead (the panel's `state` and `control` answer a device holding `conversation`, which
+`test/panel.test.ts` pins). A literal with no guard stops the generator, which is the point: a route added without
+a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the
+guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it.
 
 | Route | Match | Guard | Route at | Guarded at |
 |---|---|---|---|---|
@@ -32,15 +35,14 @@ guard is the same.
 | `/api/permissions/` | prefix | `authenticate` | `src/server/main.ts:338` | `src/server/main.ts:293` |
 | `/api/status` | exact | `conversation` | `src/server/main.ts:354` | `src/server/main.ts:355` |
 | `/api/integrations` | exact | `admin` | `src/server/main.ts:369` | `src/server/main.ts:370` |
-| `/api/health` | exact | public — the liveness probe: it answers one word and holds nothing | `src/server/main.ts:377` | not gated |
+| `/api/health` | exact | public — the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token | `src/server/main.ts:377` | not gated |
 | `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:554` | not gated |
 | `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:554` | not gated |
 | `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:554` | not gated |
 | `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:554` | not gated |
 | `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:98` | `src/server/admin.ts:550` |
 | `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:98` | `src/server/admin.ts:550` |
-| `/api/admin/` | prefix | `admin` (delegated to `handleAdmin`) | `src/server/admin.ts:102` | `src/server/admin.ts:153` |
-| `/api/permissions` | exact | `approve` | `src/server/admin.ts:552` | `src/server/admin.ts:550` |
+| `/api/admin/` | prefix | `admin`, filtered per area (delegated to `handleAdmin`) | `src/server/admin.ts:102` | `src/server/admin.ts:153` |
 
 ## Doors that answer without the owner's token
 
@@ -50,7 +52,7 @@ which is why the connector's two paths are here although they are constant-built
 
 | Route | Why it is public |
 |---|---|
-| `/api/health` | the liveness probe: it answers one word and holds nothing |
+| `/api/health` | the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token |
 | `/api/connector` | the connector's socket, authenticated as the connector by its own credential (`main.ts`, `CONNECTOR_PATH`) |
 | `/api/connector/attachments` | the connector's attachment bytes, the same credential on every request (`main.ts`, `CONNECTOR_PATH`) |
 | `/` | the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so |

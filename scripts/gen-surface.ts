@@ -42,7 +42,10 @@ export const SURFACE_SOURCES: readonly string[] = ["src/server/main.ts", "src/se
  * answer to "which paths answer without a token", and a reader should get that in one place.
  */
 export const PUBLIC_ROUTES: readonly { readonly route: string; readonly why: string }[] = [
-	{ route: "/api/health", why: "the liveness probe: it answers one word and holds nothing" },
+	{
+		route: "/api/health",
+		why: "the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token",
+	},
 	{
 		route: "/api/connector",
 		why: "the connector's socket, authenticated as the connector by its own credential (`main.ts`, `CONNECTOR_PATH`)",
@@ -235,6 +238,49 @@ export function routeLiterals(text: string): Literal[] {
 	return found.sort((left, right) => left.index - right.index);
 }
 
+/**
+ * The source with comments blanked and string literals kept.
+ *
+ * `maskSource` blanks both, which is what block ranges need, but a guard's argument *is* a string (`requireGrant(grants,
+ * "admin")`), so the guard scan needs the other half: comments gone, so a line of prose that names a guard is not a
+ * guard, and strings kept, so the grant it names survives.
+ */
+export function maskComments(text: string): string {
+	const out = [...text];
+	const blank = (from: number, to: number): void => {
+		for (let at = from; at < to && at < out.length; at++) {
+			if (out[at] !== "\n") out[at] = " ";
+		}
+	};
+	let at = 0;
+	while (at < text.length) {
+		const char = text[at];
+		if (char === "/" && text[at + 1] === "/") {
+			const end = text.indexOf("\n", at);
+			const stop = end === -1 ? text.length : end;
+			blank(at, stop);
+			at = stop;
+			continue;
+		}
+		if (char === "/" && text[at + 1] === "*") {
+			const end = text.indexOf("*/", at + 2);
+			const stop = end === -1 ? text.length : end + 2;
+			blank(at, stop);
+			at = stop;
+			continue;
+		}
+		// Skip a string whole, so a `//` inside one (`"https://…"`) is not read as the start of a comment.
+		if (char === '"' || char === "'" || char === "`") {
+			let cursor = at + 1;
+			while (cursor < text.length && text[cursor] !== char) cursor += text[cursor] === "\\" ? 2 : 1;
+			at = cursor + 1;
+			continue;
+		}
+		at++;
+	}
+	return out.join("");
+}
+
 const GUARD_PATTERNS: readonly { readonly pattern: RegExp; readonly kind: Guard["kind"] }[] = [
 	{ pattern: /requireGrant\(\s*grants?\s*,\s*"(\w+)"/g, kind: "grant" },
 	{ pattern: /hasGrant\(\s*grantsOf\(\s*\w+\s*\)\s*,\s*"(\w+)"/g, kind: "grant" },
@@ -242,9 +288,14 @@ const GUARD_PATTERNS: readonly { readonly pattern: RegExp; readonly kind: Guard[
 	{ pattern: /\bauthenticate\(/g, kind: "authenticated" },
 ];
 
-/** Every guard call inside `range`, with the line it is on. */
-function guardsIn(text: string, range: Range): Guard[] {
-	const slice = text.slice(range.start, range.end);
+/**
+ * Every guard call inside `range`, with the line it is on.
+ *
+ * `comments` is `maskComments(text)`: same length, same indices, comments blanked. A guard that exists only in a comment
+ * — a deleted `requireGrant` whose sentence stayed behind — is not a guard, and this is the shape a real diff takes.
+ */
+function guardsIn(text: string, comments: string, range: Range): Guard[] {
+	const slice = comments.slice(range.start, range.end);
 	const lineOf = (index: number): number => text.slice(0, range.start + index).split("\n").length;
 	const guards: Guard[] = [];
 	for (const { pattern, kind } of GUARD_PATTERNS) {
@@ -272,6 +323,93 @@ function declaredFunctions(masked: string): Map<string, number> {
 }
 
 /**
+ * The guards written directly in `region`: a call nested inside a conditional is not one of them.
+ *
+ * A `requireGrant` inside `if (connector !== undefined)` gates that branch, not the block it sits in, so attributing it
+ * to a route in the sibling branch below would report a door nothing gates as gated. Only the calls whose innermost
+ * block is `region` itself are the block's own gate.
+ */
+function directGuards(text: string, comments: string, ranges: readonly Range[], region: Range): Guard[] {
+	return guardsIn(text, comments, region).filter((guard) => {
+		const holder = innermost(ranges, guard.index);
+		return holder !== undefined && holder.start === region.start;
+	});
+}
+
+/**
+ * Whether a handler hands `grants` to a function that is not one of the guard helpers.
+ *
+ * The panel's `handleAdmin` refuses `admin` for the areas it owns and passes the device's grants to `panelState`, which
+ * filters the payload instead of refusing it: a row that named `admin` for the whole `/api/admin/` prefix would be false
+ * for the two routes every screen calls (`test/panel.test.ts` pins the `conversation`-only device getting `200`). The
+ * row says "filtered per area" instead, and this is the text that decides it.
+ */
+function handsGrantsOn(masked: string, body: Range): boolean {
+	const helpers = new Set(["requireGrant", "hasGrant", "grantsOf", "requireMethod"]);
+	const called = /(\w+)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g;
+	const slice = masked.slice(body.start, body.end);
+	for (let hit = called.exec(slice); hit !== null; hit = called.exec(slice)) {
+		const name = hit[1] ?? "";
+		if (helpers.has(name)) continue;
+		if (/\bgrants\b/.test(hit[2] ?? "")) return true;
+	}
+	return false;
+}
+
+/**
+ * The path test a block is entered under, when its `if` condition is nothing but path tests.
+ *
+ * `if (url.pathname.startsWith("/api/")) { authenticate() }` guards everything under `/api/` although the call is not an
+ * ancestor of those routes: the block ends, and execution continues past it only when the condition held. So the guard
+ * inside it applies to a route exactly when the condition admits that route — and `if (connector !== undefined) { … }`,
+ * whose condition says nothing about the path, admits none, which is what keeps one branch's guard off its sibling.
+ *
+ * Returns `undefined` for a condition this cannot read (a flag, a `||`, a call), and the caller treats that as "admits
+ * nothing": an unreadable condition must fail the route loudly rather than vouch for it.
+ */
+function admission(comments: string, block: Range): ((route: string) => boolean) | undefined {
+	let at = block.start - 1;
+	while (at >= 0 && /\s/.test(comments[at] ?? "")) at--;
+	if (comments[at] !== ")") return undefined;
+	let depth = 0;
+	let open = -1;
+	for (let cursor = at; cursor >= 0; cursor--) {
+		if (comments[cursor] === ")") depth++;
+		else if (comments[cursor] === "(") {
+			depth--;
+			if (depth === 0) {
+				open = cursor;
+				break;
+			}
+		}
+	}
+	if (open < 0) return undefined;
+	const keyword = /(\bif)\s*$/.exec(comments.slice(Math.max(0, open - 12), open));
+	if (keyword === null) return undefined;
+	const condition = comments.slice(open + 1, at);
+	const clauses = condition.split("&&").map((clause) => clause.trim());
+	const tests: ((route: string) => boolean)[] = [];
+	for (const clause of clauses) {
+		const prefix = /^!?(?:url\.)?pathname\.startsWith\(\s*"([^"]*)"\s*\)$/.exec(clause);
+		const equal = /^!?(?:url\.)?pathname\s*(===|!==)\s*"([^"]*)"$/.exec(clause);
+		if (prefix !== null) {
+			const path = prefix[1] ?? "";
+			const negated = clause.startsWith("!");
+			tests.push((route) => route.startsWith(path) !== negated);
+			continue;
+		}
+		if (equal !== null) {
+			const same = equal[1] === "===";
+			const path = equal[2] ?? "";
+			tests.push((route) => (route === path) === same);
+			continue;
+		}
+		return undefined;
+	}
+	return (route) => tests.every((test) => test(route));
+}
+
+/**
  * The guard that applies to one literal: the nearest guard that precedes it inside its block, else the nearest that
  * precedes it in an enclosing block, else the guard the handler it delegates to opens with. `undefined` when nothing
  * gates it.
@@ -283,26 +421,39 @@ function declaredFunctions(masked: string): Map<string, number> {
 function guardFor(
 	text: string,
 	masked: string,
+	comments: string,
 	ranges: readonly Range[],
 	functions: Map<string, number>,
 	literal: Literal,
-): { readonly guards: readonly Guard[]; readonly delegate?: string } | undefined {
+): { readonly guards: readonly Guard[]; readonly delegate?: string; readonly filtered?: boolean } | undefined {
 	// The block the literal opens is the most specific gate there is: `if (pathname.startsWith("/api/")) { authenticate() }`
 	// guards every route below it, and the call sits after the literal rather than before it.
-	const opened = guardsIn(
-		text,
-		statementBlock(masked, ranges, literal.index) ?? { start: literal.index, end: literal.index },
-	);
-	if (opened.length > 0) return { guards: nearest(opened) };
-	const regions: Range[] = [];
+	const own = statementBlock(masked, ranges, literal.index);
+	if (own !== undefined) {
+		const guards = directGuards(text, comments, ranges, own);
+		if (guards.length > 0) return { guards: nearest(guards) };
+	}
 	let enclosing = innermost(ranges, literal.index);
+	let outermost = enclosing;
 	while (enclosing !== undefined) {
-		regions.push(enclosing);
+		const guards = nearest(
+			directGuards(text, comments, ranges, enclosing).filter((guard) => guard.index < literal.index),
+		);
+		if (guards.length > 0) return { guards };
+		outermost = enclosing;
 		enclosing = innermost(ranges, enclosing.start);
 	}
-	for (const region of regions) {
-		const guards = nearest(guardsIn(text, region).filter((guard) => guard.index < literal.index));
-		if (guards.length > 0) return { guards };
+	// A block that ended before the literal can still gate it, when its condition is a path test this route passes: the
+	// gate over `/api/` is one `if`, and every route under it is served after that block closed.
+	if (outermost !== undefined) {
+		const admitting = ranges
+			.filter((range) => range.start > outermost.start && range.end < literal.index)
+			.filter((range) => admission(comments, range)?.(literal.route) === true)
+			.sort((left, right) => right.start - left.start);
+		for (const range of admitting) {
+			const guards = nearest(directGuards(text, comments, ranges, range));
+			if (guards.length > 0) return { guards };
+		}
 	}
 	// Nothing gates the literal directly: it may be a dispatcher handing the route to a handler in this file, which is
 	// how the panel keeps one grant check per area rather than one per URL.
@@ -318,8 +469,11 @@ function guardFor(
 		if (declared === undefined) continue;
 		const body = statementBlock(masked, ranges, declared);
 		if (body === undefined) continue;
-		const guards = nearest(guardsIn(text, body));
-		if (guards.length > 0) return { guards, delegate: name };
+		// Every grant the handler enforces, not the first one it reaches: `handleAdmin` checks `admin` for the area it
+		// owns and filters the two routes every panel screen calls by `conversation`, so a single grant in the row would be
+		// a claim about the whole prefix that the handler does not make.
+		const guards = nearest(guardsIn(text, comments, body));
+		if (guards.length > 0) return { guards, delegate: name, filtered: handsGrantsOn(masked, body) };
 	}
 	return undefined;
 }
@@ -340,7 +494,7 @@ function nearest(guards: readonly Guard[]): Guard[] {
 	return keep;
 }
 
-function renderGuard(guards: readonly Guard[], delegate: string | undefined): string {
+function renderGuard(guards: readonly Guard[], delegate: string | undefined, filtered = false): string {
 	const parts: string[] = [];
 	for (const guard of guards) {
 		if (guard.kind === "grant") parts.push(`\`${guard.name}\``);
@@ -348,7 +502,9 @@ function renderGuard(guards: readonly Guard[], delegate: string | undefined): st
 		else parts.push("`authenticate`");
 	}
 	const joined = parts.join(" + ");
-	return delegate === undefined ? joined : `${joined} (delegated to \`${delegate}\`)`;
+	if (delegate === undefined) return joined;
+	const how = filtered ? `${joined}, filtered per area` : joined;
+	return `${how} (delegated to \`${delegate}\`)`;
 }
 
 /**
@@ -365,12 +521,15 @@ export function routeRows(
 	const unguarded: UnguardedRoute[] = [];
 	// One row per (path, match, guard): the same shell is matched in three places and the same probe twice, and a table
 	// that repeats them reads as three doors where there is one. The first occurrence keeps its line.
+	const key = (row: RouteRow): string =>
+		`${row.route}|${row.match}|${row.guard.replace(/ \(delegated to [^)]*\)$/, "")}`;
 	const push = (row: RouteRow): void => {
-		if (rows.some((kept) => kept.route === row.route && kept.match === row.match && kept.guard === row.guard)) return;
+		if (rows.some((kept) => key(kept) === key(row))) return;
 		rows.push(row);
 	};
 	for (const source of sources) {
 		const masked = maskSource(source.text);
+		const comments = maskComments(source.text);
 		const ranges = braceRanges(masked);
 		const functions = declaredFunctions(masked);
 		for (const literal of routeLiterals(source.text)) {
@@ -386,7 +545,7 @@ export function routeRows(
 				});
 				continue;
 			}
-			const found = guardFor(source.text, masked, ranges, functions, literal);
+			const found = guardFor(source.text, masked, comments, ranges, functions, literal);
 			if (found === undefined) {
 				unguarded.push({ route: literal.route, match: literal.match, at: where });
 				continue;
@@ -394,7 +553,7 @@ export function routeRows(
 			push({
 				route: literal.route,
 				match: literal.match,
-				guard: renderGuard(found.guards, found.delegate),
+				guard: renderGuard(found.guards, found.delegate, found.filtered),
 				routeAt: where,
 				guardAt: `${source.file}:${found.guards[0]?.line ?? literal.line}`,
 			});
@@ -539,7 +698,7 @@ export function renderSurface(sources: readonly Source[] = readSources()): strin
 	parts.push("");
 	parts.push(
 		wrap(
-			'`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the literal opens (`if (pathname.startsWith("/api/")) { authenticate() }` guards everything below it) or, failing that, the nearest one above it. When the block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the guard is the same.',
+			"`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the literal opens, or in a block above it that this path enters — the `/api/` gate is one `if` that closes, and every route under it is served after the block ended — or, failing that, in the handler it delegates to. When the block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which; `filtered per area` means that handler refuses the grant for the areas it owns and hands the device's grants to a function that filters the payload instead (the panel's `state` and `control` answer a device holding `conversation`, which `test/panel.test.ts` pins). A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it.",
 		),
 	);
 	parts.push("");

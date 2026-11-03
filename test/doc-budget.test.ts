@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -23,7 +23,10 @@ after(async () => {
 async function workspace(files: Record<string, string>): Promise<string> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-doc-budget-"));
 	directories.add(directory);
-	for (const [name, text] of Object.entries(files)) await writeFile(join(directory, name), text, "utf8");
+	for (const [name, text] of Object.entries(files)) {
+		await mkdir(join(directory, name, ".."), { recursive: true });
+		await writeFile(join(directory, name), text, "utf8");
+	}
 	return directory;
 }
 
@@ -31,7 +34,7 @@ const words = (count: number): string => new Array(count).fill("word").join(" ")
 
 test("a document inside its ceiling passes, and is reported with its headroom", async () => {
 	const base = await workspace({ "a.md": words(90), "b.md": words(50) });
-	const report = audit({ ceilings: { "a.md": 100, "b.md": 50 } }, base);
+	const report = audit({ generated: [], ceilings: { "a.md": 100, "b.md": 50 } }, base);
 	assert.deepEqual(report.over, []);
 	assert.deepEqual(report.missing, []);
 	assert.deepEqual(report.rows, [
@@ -42,14 +45,14 @@ test("a document inside its ceiling passes, and is reported with its headroom", 
 
 test("a document over its ceiling fails, and the failure names the file and both numbers", async () => {
 	const base = await workspace({ "long.md": words(120) });
-	const report = audit({ ceilings: { "long.md": 100 } }, base);
+	const report = audit({ generated: [], ceilings: { "long.md": 100 } }, base);
 	assert.deepEqual(report.over, ["long.md (120 words > 100)"]);
 	assert.equal(report.rows[0]?.headroom, -20);
 });
 
 test("a manifest entry whose file is gone fails, and does not hide the files that are there", async () => {
 	const base = await workspace({ "kept.md": words(10) });
-	const report = audit({ ceilings: { "kept.md": 20, "moved.md": 300 } }, base);
+	const report = audit({ generated: [], ceilings: { "kept.md": 20, "moved.md": 300 } }, base);
 	assert.deepEqual(report.over, []);
 	assert.deepEqual(report.missing, ["moved.md (listed with a ceiling of 300)"]);
 	assert.deepEqual(
@@ -87,4 +90,33 @@ test("the committed manifest is valid, covers the documents, and every file is i
 	}
 	// The generated catalog is not budgeted: it is as long as the code it describes.
 	assert.equal(manifest.ceilings["docs/SURFACE.md"], undefined);
+});
+
+test("a document in a governed tier with no ceiling fails, so a new file cannot pass by not being listed", async () => {
+	// The manifest is the list of ceilings, so an audit that reads only the manifest cannot see a file that is missing
+	// from it: `docs/NEW.md` would be unbudgeted forever. The walk is what closes that.
+	const base = await workspace({ "AGENTS.md": words(10), "docs/SPEC.md": words(10), "docs/NEW.md": words(5000) });
+	const report = audit({ generated: [], ceilings: { "AGENTS.md": 20, "docs/SPEC.md": 20 } }, base);
+	assert.deepEqual(report.unlisted, ["docs/NEW.md (no ceiling; add one at its current size)"]);
+	assert.deepEqual(report.over, []);
+});
+
+test("a generated document is exempt by name, and may not also carry a ceiling", async () => {
+	const base = await workspace({ "docs/SURFACE.md": words(9000) });
+	const report = audit({ generated: ["docs/SURFACE.md"], ceilings: {} }, base);
+	assert.deepEqual(report.unlisted, []);
+	assert.deepEqual(report.rows, []);
+	assert.throws(
+		() => readManifest(JSON.stringify({ generated: ["docs/SURFACE.md"], ceilings: { "docs/SURFACE.md": 9000 } })),
+		/is generated and has a ceiling/,
+	);
+});
+
+test("a subdirectory is exempt on purpose: adr, agents and research are not the tiers the manifest covers", async () => {
+	const base = await workspace({
+		"docs/adr/0001-a.md": words(2000),
+		"docs/research/x/INDEX.md": words(2000),
+	});
+	const report = audit({ generated: [], ceilings: {} }, base);
+	assert.deepEqual(report.unlisted, []);
 });

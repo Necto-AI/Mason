@@ -1,4 +1,5 @@
 {
+	"generated": ["docs/SURFACE.md"],
 	"ceilings": {
 		"AGENTS.md": 2750,
 		"GLOSSARY.md": 2550,
