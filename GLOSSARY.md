@@ -1,8 +1,8 @@
 # mason
 
 mason is a headless, always-on agent backend: a durable agent engine plus a small set of contracts that interfaces
-attach to. Telegram is the first interface, the operator console in this repository is the second and is frozen, and
-this glossary is the vocabulary for the backend and for what attaches to it.
+attach to. Telegram is the first interface; the web app in this repository is the operator panel, a control plane and
+not an interface, and this glossary is the vocabulary for the backend and for what attaches to it.
 
 ## The backend
 
@@ -20,10 +20,18 @@ _Avoid_: frontend, UI (for the abstract thing), channel
 A consumer of a connector's user face: it may submit a person's words and receive what the face's grant lets it render.
 _Avoid_: frontend, UI, channel, app
 
-**operator console**:
-The web client in this repository, frozen: transcript inspection, debugging, and a fallback when the chat is
-unreachable. Maintenance fixes only, no features.
-_Avoid_: dashboard, admin UI, frontend
+**operator panel**:
+The web application mason serves at `/` and `/admin`: the projected conversation, the raw trace, the pending
+approvals, and the deployment's configuration, each behind its own operator grant. A control plane, not a
+conversational client — there is no composer, and a person speaks through a connector.
+_Avoid_: console, dashboard, admin UI, chat, frontend
+
+**grant**:
+One power a device's credential carries: `conversation` (the projected transcript), `trace` (the raw entries), `admin`
+(the configuration) or `approve` (the pending questions). None implies another, a new device gets `conversation`, and the
+trace is granted on purpose. A connector has grants too — the ceiling in its entry — but those are about a service, not
+a person's device.
+_Avoid_: permission (that is one tool call), scope (that is connector state), role
 
 **sibling**:
 The separate project that is mason's rich client and the control plane for a fleet: it reads the wire contract, shows
@@ -170,7 +178,7 @@ _Avoid_: message, notification (each names one shape of it)
 
 **reply**:
 The one Mason-owned tool a turn uses to reach its reader. It targets the turn's origin — the connector that carried the
-words, or the operator console — and commits an `app.reply` entry; a routine with no origin names its target explicitly.
+words — and commits an `app.reply` entry; a routine with no origin names its target explicitly.
 _Avoid_: send_to_user (the removed console-only tool), message, answer
 
 **delivery id**:
@@ -317,6 +325,6 @@ _Avoid_: serializer, mapper, view
 
 **trace**:
 The operator-only record of the stored agent session: model messages, tool calls with their arguments and results,
-hook payloads, prompt changes, and delivery and control events. It is not the projected transcript and is never a
-connector's state.
+hook payloads, prompt changes, and delivery and control events. It is not the projected transcript, it is never a
+connector's state, and a device reads it only with the `trace` grant.
 _Avoid_: transcript, conversation (when the raw record is meant), debug log

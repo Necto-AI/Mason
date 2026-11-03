@@ -16,7 +16,8 @@ not keep a second copy of the rules here: two documents that both claim to be th
 - [`adr/0003-integrations-are-services.md`](adr/0003-integrations-are-services.md) — superseded where it says an
   integration has exactly two faces; a connector now has up to three, and `events` is one of them.
 - Issue #99 on this repository — the cutover that replaces the integration layer, of which the protocol and the SDK are
-  the first slice.
+  the first slice. The operator panel is the last: [`adr/0011-the-panel-is-a-control-plane.md`](adr/0011-the-panel-is-a-control-plane.md)
+  replaced the console with a control plane that cannot speak.
 
 ## What exists today
 
@@ -35,7 +36,8 @@ not keep a second copy of the rules here: two documents that both claim to be th
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | Telegram and Slack as external processes on the SDK | not yet (`#104`) |
 | The permission gateway and the live tool catalog | `src/server/permissions.ts`, `src/server/mcp.ts`; `docs/SPEC.md` §4.1e |
-| Removal of the HMAC event door and the legacy console socket | not yet (`#104`) |
+| The panel and the one-way migration | in (`#103`, ADR-0011) |
+| Removal of the HMAC event door and the legacy Telegram relay | not yet (`#104`) |
 
 A connector can connect today, submit words, fire events, subscribe to the state its entry grants, receive replies, move
 files and answer permission requests. Until `#104`, the old HMAC door still exists beside this socket and the old

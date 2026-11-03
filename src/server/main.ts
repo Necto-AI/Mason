@@ -1,32 +1,27 @@
 /**
- * HTTP + WebSocket server: a Chord host serving `AgentService` to browsers, the event door an
- * integration's trigger posts to, and the built web client.
+ * HTTP + WebSocket server: the operator panel and its API, the connector door, the event door an integration's trigger
+ * posts to, and the built web client.
+ *
+ * There is no conversational socket any more (#103): a person speaks to mason through a connector, and the panel is a
+ * control plane that reads the projected conversation and administers the deployment. What used to be a Chord service
+ * with a state per browser is now `/api/admin/state` (`admin.ts`), and the browser's grant decides which keys it holds.
  */
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acceptWebSockets, type Ctx, createHost, type Host } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import type { ConversationId, ConversationView, SubmissionId } from "@earendil-works/pi-durable";
-import { Type } from "typebox";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import { WebSocketServer } from "ws";
-import {
-	AgentService,
-	type AgentStatus,
-	AgentStatusSchema,
-	QueuedItemSchema,
-	TranscriptItemSchema,
-	withAuthor,
-} from "../shared/contract.ts";
-import { whenBusyFor } from "./admission.ts";
+import { handleOperatorRequest } from "./admin.ts";
 import { ATTACHMENT_LIMIT, AttachmentStore } from "./attachments.ts";
 import {
 	authenticate,
 	createTokenStore,
 	ensureToken,
-	joinCookie,
+	grantsOf,
+	hasGrant,
 	pairingFromRequest,
 	pairingUrls,
 	type TokenRecord,
@@ -55,13 +50,9 @@ import {
 	EVENT_BODY_MAX_BYTES,
 	EVENT_FIRE_LIMIT,
 	type FireLimiter,
-	JSON_BODY_MAX_BYTES,
-	parseJsonObject,
-	readBodyCapped,
 	readRawBodyCapped,
 } from "./limits.ts";
-import { projectQueued, projectTranscript } from "./projection.ts";
-import { claimedPerson, findPerson, peopleOnWire, readRoster } from "./roster.ts";
+import { claimedPerson, readRoster } from "./roster.ts";
 import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
 import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
 import { createCacheReporter, deriveAgentStatus } from "./status.ts";
@@ -69,16 +60,6 @@ import { createCacheReporter, deriveAgentStatus } from "./status.ts";
 export { type CommandTarget, commandTarget, runCommand } from "./commands.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
-
-/**
- * Two principals: the server's own code, and a connected browser — carrying the person that browser says it is, taken
- * from the cookie at handshake.
- *
- * The person rides here rather than in the method arguments because the server, not the caller, has to be the one who
- * writes the author into the transcript. It is part of the principal's key (see `principalKey`), because the object's
- * key is the only place caller identity survives a call: a method's `ctx` acts as the host.
- */
-type Principal = { kind: "owner"; person?: string } | { kind: "server" };
 
 const CONTENT_TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -93,7 +74,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly port?: number;
 	readonly hostname?: string;
-	/** Directory holding the built client (`index.html`, `main.js`, `main.css`). */
+	/** Directory holding the built panel (`index.html`, `admin.js`, `admin.css`). */
 	readonly webDir?: string;
 	/**
 	 * The attachment store's bounds. Defaults are the protocol's (25 MiB, a day); a test that has to cross the cap or wait
@@ -106,8 +87,6 @@ export interface StartServerOptions extends OpenAgentRuntimeOptions {
 export interface RunningServer {
 	readonly port: number;
 	readonly runtime: AgentRuntime;
-	/** `AgentService` reached over the server's own host, for tests and scripts. */
-	readonly host: Host<Principal>;
 	/**
 	 * The token this process minted for a home that had none, so a test (or the log line) can pair without reading a
 	 * hash. Absent on a restart: the plaintext is shown once and never stored.
@@ -147,7 +126,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const reportRun = createCacheReporter((line) => console.log(line));
 	console.log(
 		retryOptions.maxAttempts === 0
-			? "[run-retry] off: a failed run is left to the Retry control"
+			? "[run-retry] off: a failed run is left to the retry hook"
 			: `[run-retry] a failed run is re-armed after ${supervisor.delaysMs.map((ms) => `${Math.round(ms / 1000)}s`).join(", ")}`,
 	);
 	// A run the last process left unfinished is counted from the moment this process attached, so its first line
@@ -158,112 +137,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	runWatch.start(async (view) => {
 		reportRun(view);
 		supervisor.observe(view);
-	});
-
-	const host = createHost<Principal>({
-		name: "server",
-		self: { kind: "server" },
-		// The factory is handed the principal of the connection that created the object, but every method runs in a
-		// context acting as the *host* principal (`CtxImpl.child`), so one *shared* object could not tell later callers
-		// apart: caller identity exists only in the object's key. Keying on the person is therefore what makes the author
-		// readable in `submit` at all. Every unnamed browser still shares one object — the conversation is shared, and so
-		// is what mirrors it — and a named person mirrors it once for themselves.
-		principalKey: (principal) => (principal.kind === "owner" ? `owner:${principal.person ?? ""}` : principal.kind),
-		onError: (error) => console.error("[chord]", error),
-	});
-
-	host.serve(AgentService, (_input, principal, self) => {
-		// The person this object was created for: fixed at handshake, and the only identity a method can see.
-		const author = principal.kind === "owner" ? principal.person : undefined;
-
-		const statusFor = (view: ConversationView | undefined): AgentStatus =>
-			deriveAgentStatus(view, {
-				hooks: runtime.hooks.list(),
-				model: runtime.model,
-				cwd: runtime.workspaceDir,
-			});
-
-		// `viewState()` is the durable conversation's own watch of the view; this object mirrors it into its
-		// own cell so every connected browser gets snapshots and structural diffs.
-		const viewResource = self.resource("viewState", {
-			version: 1,
-			open: async ({ signal }) => runtime.viewState(withAbortSignal(signal, BACKGROUND_CONTEXT)),
-			close: (view) => view.dispose(),
-		});
-		// The raw view never leaves the server: the cells below are the projection in `projection.ts`, which forwards the
-		// reader's transcript and the queue and nothing else — no entries, no reasoning, no tool calls, no usage.
-		const transcript = self.state("transcript", Type.Array(TranscriptItemSchema), {
-			init: () => projectTranscript(viewResource.value.value),
-		});
-		const queued = self.state("queued", Type.Array(QueuedItemSchema), {
-			init: () => projectQueued(viewResource.value.value),
-		});
-		const agentStatus = self.state("agentStatus", AgentStatusSchema, {
-			init: () => statusFor(viewResource.value.value),
-		});
-
-		self.on("viewSync", viewResource, (next, ctx) => {
-			transcript.replace(ctx, projectTranscript(next));
-			queued.replace(ctx, projectQueued(next));
-			agentStatus.replace(ctx, statusFor(next));
-		});
-
-		const refreshStatus = (ctx: Ctx): void => {
-			agentStatus.replace(ctx, statusFor(viewResource.value.value));
-		};
-
-		return {
-			variant: "owner",
-			transcript,
-			queued,
-			agentStatus,
-			submit: async ({ content, whenBusy }) => {
-				// The reader is driving now: a scheduled retry would talk over them.
-				supervisor.acted();
-				const conversation = await runtime.conversation();
-				const placement = whenBusyFor("user", whenBusy);
-				// The author is written here, not sent by the client: the name on a message is the server's claim, and it is
-				// the same string the model reads and the reader sees as a chip.
-				const submission = await conversation.submit(
-					{
-						type: "input",
-						content: withAuthor(content, author),
-						...(placement === undefined ? {} : { whenBusy: placement }),
-					},
-					BACKGROUND_CONTEXT,
-				);
-				return { submissionId: submission.id };
-			},
-			withdrawSubmission: async ({ submissionId }) => {
-				// Chord carries JSON: a submission ID crosses as a number and comes back as one.
-				const submission = await runtime.harness.submission(submissionId as SubmissionId, BACKGROUND_CONTEXT);
-				await submission?.abort(BACKGROUND_CONTEXT);
-			},
-			abort: async () => {
-				await (await runtime.conversation()).abort(BACKGROUND_CONTEXT);
-			},
-			reset: async (args) => {
-				await (await runtime.conversation()).reset(args?.handoff, BACKGROUND_CONTEXT);
-			},
-			compact: async (args) => {
-				await (await runtime.conversation()).compact(args?.instructions, BACKGROUND_CONTEXT);
-			},
-			fireHook: async ({ hookId, payload, requestId }, ctx) => {
-				if (hookId !== RETRY_HOOK_ID) supervisor.acted();
-				// Pressing a control in the transcript is a gesture: no id means one fire per press. A caller that does
-				// have an event identity passes it, and is deduplicated exactly like a named delivery.
-				const submission = await runtime.hooks.fire(hookId, {
-					...(payload === undefined ? {} : { payload }),
-					...(requestId === undefined ? {} : { requestId: explicitRequestId(hookId, requestId) }),
-				});
-				refreshStatus(ctx);
-				return { submissionId: submission.id };
-			},
-			toggleHook: async ({ hookId, enabled }, ctx) => {
-				runtime.hooks.setEnabled(hookId, enabled);
-				refreshStatus(ctx);
-			},
-		};
 	});
 
 	// One owner, a few credentials, and a session key for the browser's cookie. The store is the config file, read per
@@ -299,36 +172,22 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			response.end("internal error");
 		});
 	});
-	// Two socket servers behind one listener, routed by path: the browser's Chord link, and a connector's JSON-RPC door.
-	// `noServer` so neither owns the HTTP server's upgrade event, which is where the path is read.
-	const sockets = new WebSocketServer({ noServer: true });
+	// One socket server behind the listener: a connector's JSON-RPC door. There is no browser socket any more — the
+	// panel polls `/api/admin/state`, and nothing else in a browser speaks to mason. `noServer` because the path in the
+	// upgrade request decides whether there is a door at all, and a path that is not the connector's opens none.
 	const connectorSockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 	server.on("upgrade", (request, socket, head) => {
 		const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-		const target = pathname === CONNECTOR_PATH ? connectorSockets : sockets;
-		target.handleUpgrade(request, socket, head, (client) => target.emit("connection", client, request));
+		if (pathname !== CONNECTOR_PATH) {
+			socket.destroy();
+			return;
+		}
+		connectorSockets.handleUpgrade(request, socket, head, (client) =>
+			connectorSockets.emit("connection", client, request),
+		);
 	});
 	connectorSockets.on("connection", (socket, request) => {
 		void connectors.attach(socket, request);
-	});
-	// A socket is the reader: no credential, no owner. Chord closes the link itself when the principal is `undefined`.
-	acceptWebSockets(sockets, host, {
-		principal: async (request): Promise<Principal | undefined> => {
-			const auth = await authenticate(request, store);
-			if (!auth.ok) {
-				console.warn(`[auth] refused a socket (${auth.reason}) from ${request.headers.origin ?? "a program"}`);
-				return undefined;
-			}
-			// A removed person keeps their cookie but loses the socket: the roster is re-read here, so a removal lands on
-			// the next connection rather than on the next restart. A session that outlives its roster entry would let a
-			// removed person keep speaking under their old name.
-			const person = await claimedPerson(house, auth.person);
-			if (auth.person !== undefined && person === undefined) {
-				console.warn(`[auth] refused a socket for ${auth.person}: not on the roster`);
-				return undefined;
-			}
-			return person === undefined ? { kind: "owner" } : { kind: "owner", person: person.name };
-		},
 	});
 
 	const port = options.port ?? Number(process.env.PORT ?? 8787);
@@ -362,7 +221,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		);
 	} else {
 		const known = (await store.records()).length;
-		console.log(`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live)`);
+		// A credential written before grants existed opens the door and sees nothing: the boot says why, once, next to
+		// the command that fixes it. The fix is not done here — a server that rewrote the operator's files on start would
+		// be a server that edits his home.
+		const ungranted = (await store.records()).filter((record) => !Array.isArray(record.grants));
+		if (ungranted.length > 0) {
+			console.warn(
+				`[auth] ${ungranted.length} credential(s) predate grants and can see nothing of the panel: ` +
+					"run `npm run doctor -- migrate` once (the tokens keep what the console could do, and never trace)",
+			);
+		}
+		console.log(
+			`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live). ` +
+				"The panel is /admin; the server log names the tokens and their grants.",
+		);
 	}
 	// A roster nobody filled in is the team feature nobody can use: the shell sends a paired browser to a picker with no
 	// names on it, and this line is what tells the deployer why, and what to type.
@@ -378,7 +250,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	return {
 		port: boundPort,
 		runtime,
-		host,
 		pairingToken,
 		connectors,
 		async close() {
@@ -387,17 +258,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			// The door first: it stops the state watch and closes every connector socket, and a delivery that arrives during
 			// shutdown should not start an outbox flush against a runtime that is about to close.
 			await connectors.close();
-			// `WebSocketServer.close()` only calls back once every client has gone, and a browser holds its socket
+			// `WebSocketServer.close()` only calls back once every client has gone, and a connector holds its socket
 			// open: terminate the clients first, or shutdown waits forever.
-			for (const client of sockets.clients) client.terminate();
 			for (const client of connectorSockets.clients) client.terminate();
-			await new Promise<void>((closed) => sockets.close(() => closed()));
 			await new Promise<void>((closed) => connectorSockets.close(() => closed()));
 			await new Promise<void>((closed) => {
 				server.close(() => closed());
 				server.closeAllConnections();
 			});
-			await host.close();
 			await runtime.close();
 		},
 	};
@@ -576,84 +444,47 @@ async function handleRequest(
 		}
 	}
 
-	// Who this browser is, for the shell to tell "not paired" from "paired but quiet". Behind the gate above.
-	// The roster rides along only for a browser that has not claimed a name: it is the list the picker shows, and a
-	// browser that already speaks for someone has no use for it.
+	// Who this device is, and what it may do in the panel. Behind the gate above, and the only route the panel calls
+	// before it knows what to draw: `grants` is the answer, and every area of the state it polls is absent unless one of
+	// them covers it (`admin.ts`).
 	if (url.pathname === "/api/session") {
-		const roster = claimed === undefined ? peopleOnWire(await readRoster(house)) : undefined;
 		return json(response, 200, {
 			device: { id: device?.id, label: device?.label },
 			...(person === undefined ? {} : { person: { name: person.name } }),
-			...(roster === undefined ? {} : { roster }),
+			grants: device === undefined ? [] : grantsOf(device),
+			// The join screen is gone with the console, but a cookie signed before today still names a person, and a
+			// device that has none is told so rather than shown an empty name.
+			joined: person !== undefined,
 		});
 	}
 
-	// The join screen's only write: claim a name off the roster. A claim, not an authentication — anyone holding a token
-	// can pick any name on the list — so the route is the roster that makes it meaningful, and removing a person is
-	// what ends it.
-	if (url.pathname === "/api/join") {
-		if ((request.method ?? "GET") === "GET") {
-			return json(response, 200, {
-				people: peopleOnWire(await readRoster(house)),
-				...(person === undefined ? {} : { person: { name: person.name } }),
-			});
-		}
-		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
-		const text = await readBodyCapped(request);
-		if (text === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ error: "payload too large", maxBytes: JSON_BODY_MAX_BYTES }));
-			return;
-		}
-		const body = parseJsonObject(text);
-		const wanted = typeof body.name === "string" ? body.name : "";
-		const chosen = findPerson(await readRoster(house), wanted);
-		if (chosen === undefined || device === undefined) return json(response, 404, { error: "not on the roster" });
-		const cookie = joinCookie(request, await store.config(), device.id, chosen.name);
-		if (cookie === undefined) return json(response, 500, { error: "this home has no session key" });
-		response.setHeader("set-cookie", cookie);
-		return json(response, 200, { person: { name: chosen.name } });
+	// The operator's control plane: the state the granted areas of the panel read, the configuration it writes, and the
+	// two approval routes. `admin.ts` owns the grant checks; this file only routes to it, and a path it does not know is
+	// a `404` rather than a request nobody ever answers.
+	if (
+		url.pathname.startsWith("/api/admin/") ||
+		url.pathname === "/api/admin" ||
+		url.pathname === "/api/permissions" ||
+		url.pathname.startsWith("/api/permissions/")
+	) {
+		if (device === undefined) return json(response, 401, { error: "unauthorized" });
+		const handled = await handleOperatorRequest(request, response, url, {
+			runtime,
+			house,
+			store,
+			device,
+			...(person === undefined ? {} : { person: person.name }),
+		});
+		if (!handled) notFound(response);
+		return;
 	}
 
-	// The owner's own door to the permission gateway. `GET` lists what is waiting — the request, why it was asked and
-	// who could answer it — and `POST /api/permissions/<id>` answers one. It is the admin panel's route (#103) rather
-	// than a chat: approval authority is a grant, and answering a question is not a conversation.
-	if (url.pathname === "/api/permissions") {
-		if (request.method !== undefined && request.method !== "GET")
-			return json(response, 405, { error: "method not allowed" });
-		return json(response, 200, { permissions: await openPermissions(runtime) });
-	}
-	if (url.pathname.startsWith("/api/permissions/")) {
-		if ((request.method ?? "GET") !== "POST") return json(response, 405, { error: "method not allowed" });
-		// A malformed escape is a junk id, not a broken server: `decodeURIComponent` throws on `%zz`, and that throw would
-		// reach the handler's catch as a 500 with a stack in the log.
-		let permissionId: string;
-		try {
-			permissionId = decodeURIComponent(url.pathname.slice("/api/permissions/".length));
-		} catch {
-			return json(response, 404, { error: "no such request" });
-		}
-		if (permissionId === "") return json(response, 404, { error: "no such request" });
-		const text = await readBodyCapped(request);
-		if (text === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ error: "payload too large", maxBytes: JSON_BODY_MAX_BYTES }));
-			return;
-		}
-		const asked = parseJsonObject(text).answer;
-		if (asked !== "allow" && asked !== "deny") {
-			return json(response, 400, { error: 'the body is {"answer":"allow"} or {"answer":"deny"}' });
-		}
-		const found = await runtime.permissions.find(permissionId);
-		if (found.request === undefined) return json(response, 404, { error: "no such request" });
-		// The owner answers as themselves: this route is behind the owner's credential, so there is no name to check and
-		// nobody else's answer to honour. A device that joined with a roster name is recorded under it; one that has not
-		// joined answers as `owner`, the route itself being the identity.
-		const settled = await runtime.permissions.answer(permissionId, asked, person?.name ?? "owner");
-		return json(response, settled.settled ? 200 : 409, settled);
-	}
-
+	// Status and health are areas of the panel's state (§4.2), served here for a script that asks one question: the
+	// same grant covers them, so a device with no grants cannot read what its state would not carry.
 	if (url.pathname === "/api/status") {
+		if (device === undefined || !hasGrant(grantsOf(device), "conversation")) {
+			return json(response, 403, { error: 'this device has no "conversation" grant' });
+		}
 		const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
 		const status = deriveAgentStatus(view, {
 			hooks: runtime.hooks.list(),
@@ -663,9 +494,12 @@ async function handleRequest(
 		return json(response, 200, status);
 	}
 
-	// What this boot's integration list is, and whether its servers answered. Behind the same gate as the rest of `/api`,
-	// and the only place health appears: a prompt section that carried it would differ between two turns of one build.
+	// What this boot's integration list is, and whether its servers answered. Administrative, like the panel's own
+	// health table: it names services and why they are unreachable.
 	if (url.pathname === "/api/integrations") {
+		if (device === undefined || !hasGrant(grantsOf(device), "admin")) {
+			return json(response, 403, { error: 'this device has no "admin" grant' });
+		}
 		return json(response, 200, { integrations: integrationSummaries(currentIntegrations()) });
 	}
 
@@ -824,9 +658,10 @@ function applySecurityHeaders(response: ServerResponse, host: string | undefined
  *
  * `'unsafe-inline'` is the cost of running a widget's own script at all; what remains enforced is what an injected
  * script would otherwise be free to do — frame this origin, retarget every relative URL through `<base>`, post a form
- * to another host, or open a socket anywhere but here and the CDN the widget imports from.
+ * to another host, or reach anything but this origin and the CDN the widget imports from. There is no browser socket
+ * to allow: the panel polls `/api/admin/state` on this origin, and `connect-src 'self'` is the whole of it.
  */
-function contentSecurityPolicy(host: string | undefined): string {
+function contentSecurityPolicy(_host: string | undefined): string {
 	const cdn = "https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com";
 	return [
 		"default-src 'self'",
@@ -834,7 +669,7 @@ function contentSecurityPolicy(host: string | undefined): string {
 		"style-src 'self' 'unsafe-inline'",
 		"img-src 'self' data: blob: https://basemap.nationalmap.gov https://upload.wikimedia.org https://thumb.wikimedia.org",
 		"font-src 'self' data:",
-		`connect-src 'self'${socketOrigins(host)} ${cdn}`,
+		`connect-src 'self' ${cdn}`,
 		"media-src 'self' data: blob:",
 		"frame-src 'self'",
 		"object-src 'none'",
@@ -842,17 +677,6 @@ function contentSecurityPolicy(host: string | undefined): string {
 		"form-action 'self'",
 		"frame-ancestors 'none'",
 	].join("; ");
-}
-
-/**
- * The socket's own origin, for browsers that do not read `'self'` as covering `ws://`.
- *
- * The host comes from a request header, so it is checked rather than trusted: a value with a `;` in it would otherwise
- * end our directive and start one of the sender's choosing.
- */
-function socketOrigins(host: string | undefined): string {
-	if (host === undefined || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) return "";
-	return ` ws://${host} wss://${host}`;
 }
 
 /**
@@ -870,9 +694,9 @@ function eventDoorPath(pathname: string): { readonly name: string } | "malformed
 	return name === "" || name.includes("/") ? "malformed" : { name };
 }
 
-/** The pages a pairing link may land on: the shell, and the shell's file name. */
+/** The pages a pairing link may land on: the panel, and the panel's two spellings. */
 function isShellPath(pathname: string): boolean {
-	return pathname === "/" || pathname === "/index.html" || pathname === "/join";
+	return pathname === "/" || pathname === "/index.html" || pathname === "/admin" || pathname === "/admin/";
 }
 
 /** The page a pairing link redirects to: the same URL with the token spent and dropped. */
@@ -884,9 +708,9 @@ function withoutToken(url: URL): string {
 }
 
 async function serveStatic(response: ServerResponse, webDir: string, pathname: string): Promise<void> {
-	// `/join` is a door into the same shell, not a second page: the bundle decides what to draw from the session it
-	// finds, and a pairing link may land on this path as easily as on the root.
-	if (pathname === "/join") pathname = "/";
+	// `/admin` is a door into the same shell, not a second page: the bundle draws the panel from the session it finds,
+	// and a pairing link may land on this path as easily as on the root.
+	if (pathname === "/" || pathname === "/admin" || pathname === "/admin/") pathname = "/";
 	const relativePath = normalize(pathname === "/" ? "index.html" : pathname.replace(/^\/+/, ""));
 	if (relativePath.startsWith("..")) return notFound(response);
 	const path = resolve(webDir, relativePath);
@@ -898,7 +722,12 @@ async function serveStatic(response: ServerResponse, webDir: string, pathname: s
 		return notFound(response);
 	}
 	const body = await readFile(path);
-	response.writeHead(200, { "content-type": CONTENT_TYPES[extname(path)] ?? "application/octet-stream" });
+	// Never cached: an upgraded mason serves a new bundle under the same name, and an operator's browser running the
+	// previous one is a panel that lies about the deployment it is looking at.
+	response.writeHead(200, {
+		"content-type": CONTENT_TYPES[extname(path)] ?? "application/octet-stream",
+		"cache-control": "no-store",
+	});
 	response.end(body);
 }
 
@@ -919,26 +748,6 @@ function retryOptionsFromEnv(): { delaysMs?: number[]; maxAttempts?: number } {
 		// failed run failed.
 		...(Number.isFinite(attempts) && attempts >= 0 ? { maxAttempts: attempts } : {}),
 	};
-}
-
-/**
- * The pending questions, as `/api/permissions` answers them: what a person needs to decide, and nothing of the trace.
- *
- * `approver` is who could answer it through their own connector; a request without one is one only this route can settle,
- * which is the state an offline approver leaves behind.
- */
-async function openPermissions(runtime: AgentRuntime): Promise<unknown[]> {
-	const pending = await runtime.permissions.pending();
-	return pending.map((request) => ({
-		permissionId: request.permissionId,
-		tool: request.tool,
-		arguments: request.arguments ?? null,
-		reason: request.reason,
-		answers: request.answers,
-		approver: request.approver ?? null,
-		origin: request.origin ?? null,
-		askedAt: request.askedAt === 0 ? null : new Date(request.askedAt).toISOString(),
-	}));
 }
 
 function json(response: ServerResponse, statusCode: number, body: unknown): void {

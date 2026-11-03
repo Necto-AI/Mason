@@ -9,19 +9,19 @@
  * This supervisor watches the committed view, and when a run ends in a model error it fires the built-in
  * `retry-failed-run` hook on a slower schedule (seconds → minutes) — as a hook event, not a message the user never
  * wrote. Each attempt is visible in the transcript, the budget is small and it resets on success or on anything the
- * user submits, and the client's Retry control stays as the manual way out.
+ * user submits, and the `retry-failed-run` hook (fired from the panel's Hooks page) stays the manual way out.
  */
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { isBusy } from "./status.ts";
 
-/** The hook the supervisor fires (`builtinHooks()` in `hooks.ts`); the client's Retry control fires the same one. */
+/** The hook the supervisor fires (`builtinHooks()` in `hooks.ts`); the panel's Hooks page fires the same one. */
 export const RETRY_HOOK_ID = "retry-failed-run";
 
 /** Delays between automatic re-fires, per attempt. Longer than a provider blip, shorter than a lost afternoon. */
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [15_000, 60_000, 300_000, 900_000];
 
 export interface RunRetryOptions {
-	/** Automatic re-fires allowed before the supervisor gives up and leaves the manual Retry control to it. */
+	/** Automatic re-fires allowed before the supervisor gives up and leaves the manual retry hook to it. */
 	readonly maxAttempts?: number;
 	/** Delay before each attempt, in order; the last value repeats. */
 	readonly delaysMs?: readonly number[];

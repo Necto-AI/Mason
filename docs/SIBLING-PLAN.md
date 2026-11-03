@@ -28,7 +28,7 @@ Mason's job is to be a backend with a machine-readable boundary. Five surfaces, 
 |---|---|---|
 | **Manifest** | `GET /api/manifest` — name, version, identity, roster, integrations with their capabilities, hooks with their state, schedules | The UI must be derived from the backend, not hardcoded. A console that guesses is a console that lies |
 | **Status** | `GET /api/status` — last N structured events: turns, firings, integration connects, budget hits, errors | [`BACKEND-PLAN.md`](BACKEND-PLAN.md) §7. "What is broken" is the first question anyone asks a fleet view |
-| **Manage** | Chord methods that already exist (`fireHook`, `toggleHook`, `reset`, `compact`, `submit`) plus roster, integrations, schedules, tokens | Sibling is the console that replaced the frozen one; it needs the same verbs and more |
+| **Manage** | The operator panel's routes (`GET /api/admin/state`, the writes under `/api/admin/`, the approval answers) plus roster, integrations and tokens | The panel replaced the console (#103) and its API is the one control surface; sibling needs those verbs and more, and a grant of its own |
 | **Tasks** | the `task` object from BACKEND-PLAN §6, with a projection | A board is only worth drawing if the things on it are real records |
 | **Fleet** | each bot's A2A status: who it may talk to, what it was asked, what answered, what it spent — read from mason, or from the deployment's A2A bridge through the same surface | A fleet view is only worth drawing if delegations are visible, and sibling is where a person sees them |
 
