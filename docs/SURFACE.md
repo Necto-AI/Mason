@@ -29,19 +29,19 @@ and both are true.
 
 | Route | Match | Guard | Route at | Guarded at |
 |---|---|---|---|---|
-| `/api/` | prefix | `authenticate` | `src/server/main.ts:293` | `src/server/main.ts:294` |
-| `/api/session` | exact | `authenticate` | `src/server/main.ts:321` | `src/server/main.ts:294` |
-| `/api/admin/` | prefix | `authenticate` | `src/server/main.ts:336` | `src/server/main.ts:294` |
-| `/api/admin` | exact | `authenticate` | `src/server/main.ts:337` | `src/server/main.ts:294` |
-| `/api/permissions` | exact | `authenticate` | `src/server/main.ts:338` | `src/server/main.ts:294` |
-| `/api/permissions/` | prefix | `authenticate` | `src/server/main.ts:339` | `src/server/main.ts:294` |
-| `/api/status` | exact | `conversation` | `src/server/main.ts:355` | `src/server/main.ts:356` |
-| `/api/integrations` | exact | `admin` | `src/server/main.ts:370` | `src/server/main.ts:371` |
-| `/api/health` | exact | public — the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token | `src/server/main.ts:378` | not gated |
-| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:555` | not gated |
-| `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:555` | not gated |
-| `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:555` | not gated |
-| `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:555` | not gated |
+| `/api/` | prefix | `authenticate` | `src/server/main.ts:296` | `src/server/main.ts:297` |
+| `/api/session` | exact | `authenticate` | `src/server/main.ts:324` | `src/server/main.ts:297` |
+| `/api/admin/` | prefix | `authenticate` | `src/server/main.ts:339` | `src/server/main.ts:297` |
+| `/api/admin` | exact | `authenticate` | `src/server/main.ts:340` | `src/server/main.ts:297` |
+| `/api/permissions` | exact | `authenticate` | `src/server/main.ts:341` | `src/server/main.ts:297` |
+| `/api/permissions/` | prefix | `authenticate` | `src/server/main.ts:342` | `src/server/main.ts:297` |
+| `/api/status` | exact | `conversation` | `src/server/main.ts:358` | `src/server/main.ts:359` |
+| `/api/integrations` | exact | `admin` | `src/server/main.ts:373` | `src/server/main.ts:374` |
+| `/api/health` | exact | public — the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token | `src/server/main.ts:381` | not gated |
+| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:558` | not gated |
+| `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:558` | not gated |
+| `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:558` | not gated |
+| `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:558` | not gated |
 | `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:100` | `src/server/admin.ts:558` |
 | `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:100` | `src/server/admin.ts:558` |
 | `/api/admin/` | prefix | `admin`, filtered per area (delegated to `handleAdmin`) | `src/server/admin.ts:104` | `src/server/admin.ts:155` |
