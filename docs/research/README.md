@@ -1,7 +1,7 @@
 # Research, and what it changed
 
-Six runs, in the order they happened. Each is a directory with an index of its own; this page exists so that nobody
-starts a seventh one without knowing what the first six already answered.
+Seven runs, in the order they happened. Each is a directory with an index of its own; this page exists so that nobody
+starts an eighth one without knowing what the first seven already answered.
 
 | Run | Question it was asked | Files | Sources | What it actually decided |
 |---|---|---|---|---|
@@ -12,6 +12,7 @@ starts a seventh one without knowing what the first six already answered.
 | [`browser-service/`](browser-service/INDEX.md) (2026-11-01) | What should the browser be? A service the agent drives over CDP and a person can take over, with Bitwarden filling logins | 2 | 25 | The browser is a service, not a library: Steel is the only self-hostable session API under a usable licence, Kernel is a better box with no session API, Browserbase ships nothing to run, browserless is SSPL. A handoff is a lease nobody sells; a credential is filled, never read |
 | [`yandex-integrations/`](yandex-integrations/INDEX.md) (2026-10-26) | Can mason reach Denis's Yandex Disk, Calendar and Mail, and what does each cost? | 3 | 107 | Three protocols, no webhooks: Disk is one OAuth token, Calendar is CalDAV with a password that never expires, Mail is IMAP/SMTP with an error taxonomy nobody wrote down. All three are the `mason-telegram` shape. **Later work since 2026-11-02**: Gmail and Google Calendar come first for the application bot; this run stays the design for when Yandex is built |
 | [`local-model-harness/`](local-model-harness/INDEX.md) (2026-11-03) | What changes in a harness and its system prompt when the model is a 27B-class local model (Qwen 3.8 27B) rather than a frontier model, and what is measured rather than repeated? | 5 | 30+ | The harness layer: at 27B the same model spans 5 to 16 points across harnesses on the same benchmark; every local harness converges on a small static prompt, a small core tool set, deferred skills, a code-owned loop and an executable completion gate; tool and skill cardinality is the most reproducible failure axis; and Qwen 3.8 27B's thinking-preservation, XML tool dialect and hybrid-attention cache are the three properties a generic harness trips over |
+| [`dsh-and-cordis/`](dsh-and-cordis/INDEX.md) (2026-11-03) | How are DeepSeek Harness and its superagent built — the Cordis plugin model, the composition, the domain design, the prompts — and what should mason take? | 6 | 2 repos read at source + the design article + the Cordis paper | The contribution layer: the win is documentation machinery, not architecture — one home per fact, word budgets checked by a script, generated catalogs, cookbook procedures, real-composition tests. Cordis itself is a runtime mason should not adopt; its rules (named capability, declared dependency, one owner, reversible registration, loud misconfiguration) survive without it. Composition as data at the edge and behaviour as code behind it is what let a 15k-line application mount as three YAML rows. **Not yet decided**: the three proposals in `05` §4 |
 
 ## The five findings that survived all four runs
 
@@ -46,6 +47,15 @@ The five above come from the first four runs. The sixth, [`local-model-harness/`
 that belongs beside them: **a harness is worth about one model generation, and the model itself is worth more.** It is
 the run to read before tuning any prompt, local or frontier, because it is the one that puts a number on what that
 tuning can buy.
+
+## A seventh finding, from the dsh run
+
+The sixth came from the local-model run. The seventh, [`dsh-and-cordis/`](dsh-and-cordis/INDEX.md), belongs beside the
+others: **extensibility is a documentation problem before it is an architecture problem.** DeepSeek Harness can mount a
+whole application as three YAML rows because every capability has a name, every fact has one home, and the catalogs are
+generated from source; take the catalogs and the tier table away and the same code is a 143k-line repository nobody can
+join. mason is small enough that its composition needs no framework at all — but it has neither the map nor the generated
+catalog, which is why adding to it costs a reading session.
 
 ## What the research did not settle
 
