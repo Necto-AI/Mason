@@ -1,6 +1,7 @@
 # 11. The panel is a control plane, and the console is gone
 
-Date: 2026-11-02
+**Status:** Accepted
+**Date:** 2026-11-02
 
 ## Context
 
