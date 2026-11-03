@@ -819,7 +819,8 @@ here, and the bridge answers that instead of dropping the click.
 Three layers, because a provider outage has three different timescales.
 
 1. **Inside a run, pi-ai retries the model call.** One attempt plus a bounded number of retries with exponential
-   backoff. A transcript of `terminated` then `Connection error.` *is* that budget being spent.
+   backoff. A transcript reading `terminated` followed by several `Connection error.` entries *is* that budget being
+   spent: the provider was unreachable for longer than a few seconds.
 2. **After a run, the server re-arms it.** A failed run is otherwise a dead end: pi-durable settles the input as
    `unanswered` (`reason: "model_error"`) and waits for new work, so nothing resumes it. `src/server/run-retry.ts`
    holds the whole policy, split so it is testable without a clock:
@@ -831,10 +832,10 @@ Three layers, because a provider outage has three different timescales.
    - `RunRetrySupervisor` — owns the attempt counter and the timer. It observes the committed view on every sync and
      fires the built-in `retry-failed-run` hook, so a retry is a **hook event** — visible in the transcript as
      `triggered Retry a failed run` — and never a message the user did not write. It hands the fire the origin of the
-     turn it resumes, so a resumed answer still has its chat.
+     turn it resumes.
 
-   The schedule is deliberately slower than the in-run retries: **15s, 60s, 5min, 15min** (four attempts, ~20
-   minutes), overridable with `PDA_RUN_RETRY_DELAYS_MS` and `PDA_RUN_RETRY_ATTEMPTS`. The budget resets the moment an
+   The schedule is deliberately slower than the in-run retries: **15s, 60s, 5min, 15min** (four attempts, ~20 minutes
+   in total), overridable with `PDA_RUN_RETRY_DELAYS_MS` and `PDA_RUN_RETRY_ATTEMPTS`. The budget resets the moment an
    answer succeeds, and a pending re-fire is dropped as soon as the reader submits anything — their input leads.
 3. **On demand, the operator retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
    schedules it; the prompt tells the agent to resume where it stopped, not start over, with the failure text as the
@@ -843,8 +844,7 @@ Three layers, because a provider outage has three different timescales.
 
 What durability does and does not promise, in one line: the conversation, the run, the subscriptions and the hook
 state survive a **process** restart — kill the server mid-tool and it resumes the run in place — while a provider
-outage that outlasts every retry budget leaves a failed turn, which the supervisor and the retry hook now pick up
-again.
+outage that outlasts every retry budget leaves a failed turn.
 
 ## 5. Milestone 3 Specification: the Widget Tool and Its Artifact Contract
 

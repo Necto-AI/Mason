@@ -42,9 +42,9 @@ and both are true.
 | `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:558` | not gated |
 | `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:558` | not gated |
 | `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:558` | not gated |
-| `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:100` | `src/server/admin.ts:558` |
-| `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:100` | `src/server/admin.ts:558` |
-| `/api/admin/` | prefix | `admin`, filtered per area (delegated to `handleAdmin`) | `src/server/admin.ts:104` | `src/server/admin.ts:155` |
+| `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:99` | `src/server/admin.ts:555` |
+| `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:99` | `src/server/admin.ts:555` |
+| `/api/admin/` | prefix | `admin`, filtered per area (delegated to `handleAdmin`) | `src/server/admin.ts:103` | `src/server/admin.ts:154` |
 
 ## Doors that answer without the owner's token
 

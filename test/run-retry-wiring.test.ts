@@ -182,9 +182,9 @@ async function serve(paths: HousePaths, modelAccess: ResolvedModel): Promise<Run
  * The retry schedule a test runs under, restored afterwards. One attempt, arriving while the test is still looking: the
  * delay is the thing under test, not the patience.
  */
-async function withSchedule(run: () => Promise<void>): Promise<void> {
+async function withSchedule(run: () => Promise<void>, delayMs = "40"): Promise<void> {
 	const previous = { delays: process.env.PDA_RUN_RETRY_DELAYS_MS, attempts: process.env.PDA_RUN_RETRY_ATTEMPTS };
-	process.env.PDA_RUN_RETRY_DELAYS_MS = "40";
+	process.env.PDA_RUN_RETRY_DELAYS_MS = delayMs;
 	process.env.PDA_RUN_RETRY_ATTEMPTS = "1";
 	try {
 		await run();
@@ -194,6 +194,18 @@ async function withSchedule(run: () => Promise<void>): Promise<void> {
 		if (previous.attempts === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
 		else process.env.PDA_RUN_RETRY_ATTEMPTS = previous.attempts;
 	}
+}
+
+/** Waits for a captured log line: the supervisor's own report is the only evidence a re-fire was armed. */
+async function waitForLog(lines: readonly string[], match: string, deadlineMs = 5_000): Promise<void> {
+	const deadline = Date.now() + deadlineMs;
+	while (!lines.some((line) => line.includes(match)) && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	assert.ok(
+		lines.some((line) => line.includes(match)),
+		`the supervisor never said "${match}": ${JSON.stringify(lines)}`,
+	);
 }
 
 describe("a failed run with no browser connected", () => {
@@ -250,5 +262,40 @@ describe("a retry of a turn somebody was waiting on", () => {
 				await server.close();
 			}
 		});
+	});
+});
+
+describe("a shutdown with a re-fire still pending", () => {
+	it("drops it rather than firing into a runtime that is gone", async () => {
+		// Long enough to close inside the window, short enough to wait out.
+		await withSchedule(async () => {
+			const server = await serve(await temporaryHome(), failingModel());
+			const armed: string[] = [];
+			const reported: string[] = [];
+			const warn = console.warn;
+			const error = console.error;
+			console.warn = (line: unknown) => {
+				armed.push(String(line));
+			};
+			console.error = (line: unknown) => {
+				reported.push(String(line));
+			};
+			try {
+				await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?" });
+				// The supervisor says it armed the re-fire; from here the timer is the only thing that can act.
+				await waitForLog(armed, "[run-retry] run failed");
+				await server.close();
+				// The delay matures after the process stopped: a supervisor nobody closed fires here, into a closed runtime.
+				await new Promise((resolve) => setTimeout(resolve, 700));
+			} finally {
+				console.warn = warn;
+				console.error = error;
+			}
+			assert.deepEqual(
+				reported.filter((line) => line.includes("could not fire the retry hook")),
+				[],
+				"a shutdown is the last thing that drops a pending re-fire",
+			);
+		}, "300");
 	});
 });

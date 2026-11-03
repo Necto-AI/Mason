@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { planRunRetry, RunRetrySupervisor, readRunOutcome } from "../src/server/run-retry.ts";
+import { planRunRetry, RunRetrySupervisor, readRunOutcome, retryOrigin } from "../src/server/run-retry.ts";
 
 /** A view with nothing but the entries a test cares about. `live` decides whether the run is still going. */
 function viewOf(
@@ -197,7 +197,7 @@ test("a retry inherits the origin of the turn it resumes", async () => {
 		(error, origin) => {
 			fired.push({ error, origin });
 		},
-		{ maxAttempts: 3, delaysMs: [1_000] },
+		{ maxAttempts: 8, delaysMs: [1_000] },
 		{
 			set: (fn) => {
 				scheduled.push(fn);
@@ -207,38 +207,74 @@ test("a retry inherits the origin of the turn it resumes", async () => {
 		},
 	);
 
+	/** Observes one view, lets its delay mature, and answers what the fire was told. */
+	const firedFor = async (view: ConversationView): Promise<unknown> => {
+		supervisor.observe(view);
+		scheduled.at(-1)?.();
+		await Promise.resolve();
+		return fired.at(-1)?.origin;
+	};
+
 	// A person wrote in the chat and the run that answered them died: the retry resumes that turn, so it answers there.
-	supervisor.observe(
-		viewOf([
-			{ id: 1, kind: "app.connector", data: { origin: TELEGRAM } },
-			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
-		]),
+	assert.deepEqual(
+		await firedFor(
+			viewOf([
+				{ id: 1, kind: "app.connector", data: { origin: TELEGRAM } },
+				{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+			]),
+		),
+		TELEGRAM,
 	);
-	scheduled[0]?.();
-	await Promise.resolve();
-	assert.deepEqual(fired, [{ error: "terminated", origin: TELEGRAM }]);
+
+	// A fire that landed after the failure is not the turn being resumed. One arrives in that window all the time — a
+	// workspace check, another connector's event, a press on the panel — and inheriting its destination would answer a
+	// chat that never asked, or blank the resume back to "nobody was reached".
+	assert.deepEqual(
+		await firedFor(
+			viewOf([
+				{ id: 3, kind: "app.connector", data: { origin: TELEGRAM } },
+				{ id: 4, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+				{ id: 5, kind: "app.hook", data: { hookId: "workspace-check" } },
+			]),
+		),
+		TELEGRAM,
+		"the failed turn's chat, not a later fire that named none",
+	);
+	assert.deepEqual(
+		await firedFor(
+			viewOf([
+				{ id: 6, kind: "app.connector", data: { origin: TELEGRAM } },
+				{ id: 7, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+				{ id: 8, kind: "app.hook", data: { origin: { connector: "telegram", externalConversationId: "8811" } } },
+			]),
+		),
+		TELEGRAM,
+		"and not another chat the later fire named",
+	);
 
 	// A fire that named its conversation inherits it too: the person behind the fire is the one waiting.
-	supervisor.observe(
-		viewOf([
-			{ id: 3, kind: "app.hook", data: { hookId: "team-chat", origin: TELEGRAM } },
-			{ id: 4, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
-		]),
+	assert.deepEqual(
+		await firedFor(
+			viewOf([
+				{ id: 9, kind: "app.hook", data: { hookId: "team-chat", origin: TELEGRAM } },
+				{ id: 10, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+			]),
+		),
+		TELEGRAM,
 	);
-	scheduled[1]?.();
-	await Promise.resolve();
-	assert.deepEqual(fired[1], { error: "Connection error.", origin: TELEGRAM });
 
 	// A console turn has no chat behind it, so the retry inherits nothing and reaches nobody — the same as before.
-	supervisor.observe(
-		viewOf([
-			{ id: 5, kind: "pi.user" },
-			{ id: 6, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
-		]),
+	assert.equal(
+		await firedFor(
+			viewOf([
+				{ id: 11, kind: "pi.user" },
+				{ id: 12, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+			]),
+		),
+		undefined,
 	);
-	scheduled[2]?.();
-	await Promise.resolve();
-	assert.equal(fired[2]?.origin, undefined);
+	// And a transcript with no failure has no turn to resume at all.
+	assert.equal(retryOrigin(viewOf([{ id: 13, kind: "app.connector", data: { origin: TELEGRAM } }])), undefined);
 
 	supervisor.close();
 });
