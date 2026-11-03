@@ -1,9 +1,7 @@
 # Where a fact lives
 
-One home per fact. A document that says the same thing as another is two documents that will disagree, and the reader
-has no way to tell which one is current. This page is the map of which tier a sentence belongs to, and the budgets that
-keep each one honest. It is not a style guide for prose: the standards below are the ones the repository already follows,
-written down so that an agent adding a paragraph knows which document has room for it.
+One home per fact: a sentence repeated in two documents is two documents that will disagree, and the reader cannot tell
+which is current. This page is the map of which tier a sentence belongs to, and the budgets that keep each one honest.
 
 | Tier | What belongs there | What does not |
 |---|---|---|
@@ -47,5 +45,6 @@ count is whitespace-separated words with code fences included.
   tiers cannot hold them; a raised ceiling with no sentence beside it is the failure this file exists to prevent.
 - **A generated file is not budgeted.** `docs/SURFACE.md` is as long as the code it describes, and a budget on it would
   be a budget on the number of routes.
+- **A research note is not budgeted.** `docs/research/` is evidence; its length belongs to its question, not here.
 - A document renamed or deleted takes its entry with it: the check names a manifest entry whose file is gone, so a
   rename that forgot the manifest is a failure rather than a document that quietly stopped being measured.

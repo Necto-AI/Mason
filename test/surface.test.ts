@@ -174,3 +174,67 @@ test("no door is claimed as public that no comparison in a server answers", () =
 	// doors absent from the literals on purpose. A third one is an allowlist entry that no longer matches anything.
 	assert.deepEqual(orphans, ["/api/connector", "/api/connector/attachments"]);
 });
+
+test("a route matched above the gate is not guarded by the gate below it", () => {
+	// The shape the check exists for: a route answered before the `authenticate` call, in the same function. Pairing it
+	// with the guard the code reaches later would report the one route that never passes the door as authenticated.
+	const sources = fixture(`
+async function handle(request, response, url, store) {
+	if (url.pathname === "/api/oops") {
+		response.writeHead(200);
+		return;
+	}
+	let device;
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
+		const auth = await authenticate(request, store);
+		if (!auth.ok) {
+			response.writeHead(401);
+			return;
+		}
+	}
+}
+`);
+	const { rows, unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/api/oops", match: "exact", at: "fixture.ts:3" }]);
+	assert.deepEqual(
+		rows.map((row) => row.route),
+		["/api/"],
+		"the gate itself is guarded; the route above it is not",
+	);
+	assert.throws(() => renderSurface(sources), /a route with no guard: \/api\/oops/);
+});
+
+test("a route guarded by the block it opens is guarded", () => {
+	const sources = fixture(`
+async function handle(request, response, url, store) {
+	if (url.pathname.startsWith("/api/")) {
+		const auth = await authenticate(request, store);
+		if (!auth.ok) return;
+	}
+	if (url.pathname === "/api/session") {
+		return json(response, 200, {});
+	}
+}
+`);
+	const { rows, unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, []);
+	assert.deepEqual(
+		rows.map((row) => [row.route, row.guard]),
+		[
+			["/api/", "`authenticate`"],
+			["/api/session", "`authenticate`"],
+		],
+	);
+});
+
+test("a `!==` comparison excludes a path and is not a route", () => {
+	const sources = fixture(`
+function gate(pathname) {
+	return pathname.startsWith("/api/") && pathname !== "/api/health";
+}
+`);
+	assert.deepEqual(
+		routeLiterals(sources[0]?.text ?? "").map((literal) => literal.route),
+		["/api/"],
+	);
+});
