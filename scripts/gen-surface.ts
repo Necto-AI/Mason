@@ -1,0 +1,612 @@
+/**
+ * `npm run gen:surface` — renders `docs/SURFACE.md` from the code it describes, and `--check` says whether the committed
+ * copy still matches.
+ *
+ * The document this writes is a catalog nobody has to maintain by hand: the routes `src/server/` answers, the extensions
+ * a boot installs, and the numbers in `src/server/limits.ts`. A hand-kept list of routes is a list that is right until
+ * the next route, and an agent reading it has no way to tell the difference — so the list is derived, and CI runs the
+ * check beside the typecheck.
+ *
+ * The part that matters is Table A. Every route literal in the two servers is paired with the `requireGrant` that guards
+ * it, by position in the file: for a route checked inside an `if (url.pathname === …) { … }`, that block; failing that
+ * the function around it; failing that the handler the block delegates to (`handlePermissions`, `handleAdmin`). A route
+ * literal with none of those and no entry in `PUBLIC_ROUTES` is a route nothing gates, which is what a new route looks
+ * like when someone forgets the guard: the generator refuses to write the file and names the route, so the diff says so
+ * before a reviewer has to.
+ *
+ * Out of scope here, and next: the connector's method vocabulary (`packages/protocol`) and the projection's row kinds
+ * (`src/server/projection.ts` + `src/shared/contract.ts`). Both belong in this file's output for the same reason.
+ */
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as limits from "../src/server/limits.ts";
+import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
+
+const root = fileURLToPath(new URL("../", import.meta.url));
+
+/** The one document this script writes, relative to the repository root. */
+export const SURFACE_PATH = "docs/SURFACE.md";
+
+/** The files whose route literals Table A lists, in the order the door is reached: HTTP first, then the panel's API. */
+export const SURFACE_SOURCES: readonly string[] = ["src/server/main.ts", "src/server/admin.ts"];
+
+/**
+ * The doors deliberately outside the owner's gate.
+ *
+ * Table A labels a route `public` only from this list, and the reason is written here rather than in the table, so the
+ * claim a route makes about itself is in the script a reviewer reads the diff of. Two entries name a constant rather
+ * than a literal (`CONNECTOR_PATH`, `main.ts`) and so never appear as a row; they are here because the list is also the
+ * answer to "which paths answer without a token", and a reader should get that in one place.
+ */
+export const PUBLIC_ROUTES: readonly { readonly route: string; readonly why: string }[] = [
+	{ route: "/api/health", why: "the liveness probe: it answers one word and holds nothing" },
+	{
+		route: "/api/connector",
+		why: "the connector's socket, authenticated as the connector by its own credential (`main.ts`, `CONNECTOR_PATH`)",
+	},
+	{
+		route: "/api/connector/attachments",
+		why: "the connector's attachment bytes, the same credential on every request (`main.ts`, `CONNECTOR_PATH`)",
+	},
+	{
+		route: "/",
+		why: "the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so",
+	},
+	{ route: "/index.html", why: "the same shell, by its file name" },
+	{ route: "/admin", why: "the same shell: `/admin` is a door into one page, not a second one" },
+	{ route: "/admin/", why: "the same shell, with the trailing slash" },
+];
+
+export interface Source {
+	/** A path relative to the repository root, as a reviewer would type it. */
+	readonly file: string;
+	readonly text: string;
+}
+
+/** One route literal and the guard that applies to it. */
+export interface RouteRow {
+	readonly route: string;
+	readonly match: "exact" | "prefix";
+	/** `` `admin` ``, `` `admin` + `authenticate` ``, `authenticate`, or `public — <why>`. */
+	readonly guard: string;
+	/** `<file>:<line>` of the literal. */
+	readonly routeAt: string;
+	/** `<file>:<line>` of the guard, or `not gated` for a public route. */
+	readonly guardAt: string;
+}
+
+/** A route literal the pairing could not guard. Its presence is what makes the generator exit non-zero. */
+export interface UnguardedRoute {
+	readonly route: string;
+	readonly match: "exact" | "prefix";
+	readonly at: string;
+}
+
+interface Literal {
+	readonly route: string;
+	readonly match: "exact" | "prefix";
+	readonly index: number;
+	readonly line: number;
+}
+
+interface Guard {
+	readonly kind: "grant" | "authenticated" | "connector";
+	readonly name?: string;
+	readonly index: number;
+	readonly line: number;
+}
+
+interface Range {
+	readonly start: number;
+	readonly end: number;
+}
+
+/**
+ * The source with comments and string bodies blanked out, one character for one character.
+ *
+ * Line numbers survive, so a position found here is a position in the file; what is gone is the punctuation inside a
+ * comment or a string, which is the punctuation that would otherwise balance a brace that is not there.
+ */
+export function maskSource(text: string): string {
+	const out = [...text];
+	const blank = (from: number, to: number): void => {
+		for (let at = from; at < to && at < out.length; at++) {
+			if (out[at] !== "\n") out[at] = " ";
+		}
+	};
+	let at = 0;
+	while (at < text.length) {
+		const char = text[at];
+		if (char === "/" && text[at + 1] === "/") {
+			const end = text.indexOf("\n", at);
+			const stop = end === -1 ? text.length : end;
+			blank(at, stop);
+			at = stop;
+			continue;
+		}
+		if (char === "/" && text[at + 1] === "*") {
+			const end = text.indexOf("*/", at + 2);
+			const stop = end === -1 ? text.length : end + 2;
+			blank(at, stop);
+			at = stop;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			let cursor = at + 1;
+			while (cursor < text.length) {
+				if (text[cursor] === "\\") {
+					cursor += 2;
+					continue;
+				}
+				if (text[cursor] === char) break;
+				// A quote that never closes on its own line is punctuation inside a regex, not a string: masking from it
+				// would run past the end of the statement and swallow the brace that ends the function.
+				if (char !== "`" && text[cursor] === "\n") {
+					cursor = at;
+					break;
+				}
+				cursor++;
+			}
+			if (cursor > at) {
+				blank(at + 1, cursor);
+				at = cursor + 1;
+			} else {
+				at++;
+			}
+			continue;
+		}
+		at++;
+	}
+	return out.join("");
+}
+
+/** Every brace range in the masked source, innermost first when sorted by start. Unbalanced closers are ignored. */
+function braceRanges(masked: string): Range[] {
+	const ranges: Range[] = [];
+	const open: number[] = [];
+	for (let at = 0; at < masked.length; at++) {
+		if (masked[at] === "{") open.push(at);
+		else if (masked[at] === "}") {
+			const start = open.pop();
+			if (start !== undefined) ranges.push({ start, end: at });
+		}
+	}
+	return ranges;
+}
+
+/** The innermost range holding `index`, or `undefined` at module top level. */
+function innermost(ranges: readonly Range[], index: number): Range | undefined {
+	let found: Range | undefined;
+	for (const range of ranges) {
+		if (range.start >= index || range.end <= index) continue;
+		if (found === undefined || range.start > found.start) found = range;
+	}
+	return found;
+}
+
+/**
+ * The block a statement opens after `index`, when it opens one.
+ *
+ * A route literal sits in the condition of the `if` that answers it (`if (url.pathname === "…") {`), so the block that
+ * holds the guard begins after the literal and its condition may run over several lines. A statement with no block — an
+ * `if (…) return false;`, a `return pathname === "…"` — has none, and the caller falls back to what encloses it.
+ */
+function statementBlock(masked: string, ranges: readonly Range[], index: number): Range | undefined {
+	let depth = 0;
+	for (let at = index; at < masked.length && at < index + 4000; at++) {
+		const char = masked[at];
+		if (char === "(") depth++;
+		else if (char === ")") depth = Math.max(0, depth - 1);
+		else if (char === ";" && depth === 0) return undefined;
+		else if (char === "}" && depth === 0) return undefined;
+		else if (char === "{" && depth === 0) {
+			return ranges.find((range) => range.start === at);
+		}
+	}
+	return undefined;
+}
+
+const LITERAL_PATTERNS: readonly { readonly pattern: RegExp; readonly match: "exact" | "prefix" }[] = [
+	{ pattern: /\bpathname\s*(?:===|!==)\s*"([^"]*)"/g, match: "exact" },
+	{ pattern: /\bpathname\.startsWith\(\s*"([^"]*)"/g, match: "prefix" },
+];
+
+/** Every plain-string route literal in one file. A path built from a constant (`${CONNECTOR_PATH}/…`) is not one. */
+export function routeLiterals(text: string): Literal[] {
+	const found: Literal[] = [];
+	for (const { pattern, match } of LITERAL_PATTERNS) {
+		pattern.lastIndex = 0;
+		for (let hit = pattern.exec(text); hit !== null; hit = pattern.exec(text)) {
+			const index = hit.index;
+			found.push({
+				route: hit[1] ?? "",
+				match,
+				index,
+				line: text.slice(0, index).split("\n").length,
+			});
+		}
+	}
+	return found.sort((left, right) => left.index - right.index);
+}
+
+const GUARD_PATTERNS: readonly { readonly pattern: RegExp; readonly kind: Guard["kind"] }[] = [
+	{ pattern: /requireGrant\(\s*grants?\s*,\s*"(\w+)"/g, kind: "grant" },
+	{ pattern: /hasGrant\(\s*grantsOf\(\s*\w+\s*\)\s*,\s*"(\w+)"/g, kind: "grant" },
+	{ pattern: /\bauthenticateConnector\(/g, kind: "connector" },
+	{ pattern: /\bauthenticate\(/g, kind: "authenticated" },
+];
+
+/** Every guard call inside `range`, with the line it is on. */
+function guardsIn(text: string, range: Range): Guard[] {
+	const slice = text.slice(range.start, range.end);
+	const lineOf = (index: number): number => text.slice(0, range.start + index).split("\n").length;
+	const guards: Guard[] = [];
+	for (const { pattern, kind } of GUARD_PATTERNS) {
+		pattern.lastIndex = 0;
+		for (let hit = pattern.exec(slice); hit !== null; hit = pattern.exec(slice)) {
+			guards.push({
+				kind,
+				...(kind === "grant" ? { name: hit[1] ?? "" } : {}),
+				index: range.start + hit.index,
+				line: lineOf(hit.index),
+			});
+		}
+	}
+	return guards.sort((left, right) => left.index - right.index);
+}
+
+/** `function name(` declarations in a file: what a dispatcher block may hand a route to. */
+function declaredFunctions(masked: string): Map<string, number> {
+	const names = new Map<string, number>();
+	const pattern = /(?:^|\n)[ \t]*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*[(<]/g;
+	for (let hit = pattern.exec(masked); hit !== null; hit = pattern.exec(masked)) {
+		names.set(hit[1] ?? "", hit.index);
+	}
+	return names;
+}
+
+/**
+ * The guard that applies to one literal: nearest preceding in the block, else nearest in the function, else the
+ * delegate's. `undefined` when nothing in the file gates it.
+ */
+function guardFor(
+	text: string,
+	masked: string,
+	ranges: readonly Range[],
+	functions: Map<string, number>,
+	literal: Literal,
+): { readonly guards: readonly Guard[]; readonly delegate?: string } | undefined {
+	const block = statementBlock(masked, ranges, literal.index);
+	const regions: Range[] = [];
+	if (block !== undefined) regions.push(block);
+	let enclosing = innermost(ranges, literal.index);
+	while (enclosing !== undefined) {
+		regions.push(enclosing);
+		enclosing = innermost(ranges, enclosing.start);
+	}
+	for (const region of regions) {
+		const guards = nearest(guardsIn(text, region), literal.index);
+		if (guards.length > 0) return { guards };
+	}
+	// Nothing gates the literal directly: it may be a dispatcher handing the route to a handler in this file, which is
+	// how the panel keeps one grant check per area rather than one per URL.
+	const region = block ?? innermost(ranges, literal.index);
+	if (region === undefined) return undefined;
+	const called = /(\w+)\s*\(/g;
+	// From the literal forward, not from the block's start: a dispatcher's first delegation is the one this route takes,
+	// and a call above the literal belongs to a route above it.
+	const slice = masked.slice(literal.index, region.end);
+	for (let hit = called.exec(slice); hit !== null; hit = called.exec(slice)) {
+		const name = hit[1] ?? "";
+		const declared = functions.get(name);
+		if (declared === undefined) continue;
+		const body = statementBlock(masked, ranges, declared);
+		if (body === undefined) continue;
+		const guards = nearest(guardsIn(text, body), body.start - 1);
+		if (guards.length > 0) return { guards, delegate: name };
+	}
+	return undefined;
+}
+
+/**
+ * The guard set that applies to a literal: the nearest preceding guard of each kind, or every following one when
+ * nothing precedes it.
+ *
+ * One preceding `requireGrant` and one preceding `authenticate` are two different facts (a gate and a grant), so they
+ * are kept apart; two preceding `requireGrant`s for the same grant are one fact.
+ */
+function nearest(guards: readonly Guard[], index: number): Guard[] {
+	const before = guards.filter((guard) => guard.index < index);
+	const after = guards.filter((guard) => guard.index >= index);
+	const chosen = before.length > 0 ? before : after;
+	const keep: Guard[] = [];
+	for (const guard of chosen) {
+		const twin = keep.find((kept) => kept.kind === guard.kind && kept.name === guard.name);
+		if (twin === undefined) keep.push(guard);
+	}
+	return keep;
+}
+
+function renderGuard(guards: readonly Guard[], delegate: string | undefined): string {
+	const parts: string[] = [];
+	for (const guard of guards) {
+		if (guard.kind === "grant") parts.push(`\`${guard.name}\``);
+		else if (guard.kind === "connector") parts.push("connector credential");
+		else parts.push("`authenticate`");
+	}
+	const joined = parts.join(" + ");
+	return delegate === undefined ? joined : `${joined} (delegated to \`${delegate}\`)`;
+}
+
+/**
+ * Table A, as rows: one per route literal in `sources`, and the literals nothing guards.
+ *
+ * Pure on purpose, and exported for the test: the failure path is the reason the table exists, so it is asserted against
+ * a fixture rather than by editing a server.
+ */
+export function routeRows(
+	sources: readonly Source[],
+	allowlist: readonly { readonly route: string; readonly why: string }[] = PUBLIC_ROUTES,
+): { readonly rows: RouteRow[]; readonly unguarded: UnguardedRoute[] } {
+	const rows: RouteRow[] = [];
+	const unguarded: UnguardedRoute[] = [];
+	for (const source of sources) {
+		const masked = maskSource(source.text);
+		const ranges = braceRanges(masked);
+		const functions = declaredFunctions(masked);
+		for (const literal of routeLiterals(source.text)) {
+			const where = `${source.file}:${literal.line}`;
+			const allowed = allowlist.find((entry) => entry.route === literal.route);
+			if (allowed !== undefined) {
+				rows.push({
+					route: literal.route,
+					match: literal.match,
+					guard: `public — ${allowed.why}`,
+					routeAt: where,
+					guardAt: "not gated",
+				});
+				continue;
+			}
+			const found = guardFor(source.text, masked, ranges, functions, literal);
+			if (found === undefined) {
+				unguarded.push({ route: literal.route, match: literal.match, at: where });
+				continue;
+			}
+			rows.push({
+				route: literal.route,
+				match: literal.match,
+				guard: renderGuard(found.guards, found.delegate),
+				routeAt: where,
+				guardAt: `${source.file}:${found.guards[0]?.line ?? literal.line}`,
+			});
+		}
+	}
+	return { rows, unguarded };
+}
+
+function table(head: readonly string[], rows: readonly (readonly string[])[]): string {
+	const lines = [`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`];
+	for (const row of rows) lines.push(`| ${row.join(" | ")} |`);
+	return lines.join("\n");
+}
+
+function codeList(names: readonly string[]): string {
+	return names.length === 0 ? "--" : names.map((name) => `\`${name}\``).join(", ");
+}
+
+/** Table B: the extensions `BASE_EXTENSIONS` installs, read off the objects rather than out of the source. */
+export function extensionRows(): (readonly string[])[] {
+	return BASE_EXTENSIONS.map((extension) => [
+		`\`${extension.name}\``,
+		codeList((extension.tools ?? []).map((tool) => tool.name)),
+		codeList((extension.sections ?? []).map((section) => section.key)),
+		codeList([
+			...(extension.hooks ?? []).map((hook) => hook.task),
+			...(extension.tasks ?? []).map((task) => task.definition.name),
+		]),
+	]);
+}
+
+/**
+ * The one-line meaning of a constant: the first sentence of the nearest doc comment above it.
+ *
+ * The nearest, not the immediately preceding one: `limits.ts` documents its three connector budgets with one comment,
+ * and a meaning of "none" for the second and third would be worse than the group's own sentence.
+ */
+function meaningOf(text: string, index: number): string {
+	const before = text.slice(0, index);
+	const open = before.lastIndexOf("/**");
+	if (open === -1) return "--";
+	const close = before.indexOf("*/", open);
+	if (close === -1) return "--";
+	const body = before
+		.slice(open + 3, close)
+		.split("\n")
+		.map((line) => line.replace(/^\s*\*?\s?/, "").trim())
+		.filter((line) => line !== "")
+		.join(" ");
+	const sentence = /^(.*?[.!?])(\s|$)/.exec(body);
+	return (sentence?.[1] ?? body).trim();
+}
+
+function formatValue(value: unknown): string {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return Number.isInteger(value) ? value.toLocaleString("en-US") : String(value);
+	}
+	return String(value);
+}
+
+/** Table C: every exported constant of `limits.ts`, its value, and what its own comment says it is for. */
+export function limitRows(): (readonly string[])[] {
+	const source = readFileSync(join(root, "src/server/limits.ts"), "utf8");
+	const exports = (limits as unknown as Record<string, unknown>) ?? {};
+	const rows: (readonly string[])[] = [];
+	const pattern = /^export const (\w+)\s*=/gm;
+	for (let hit = pattern.exec(source); hit !== null; hit = pattern.exec(source)) {
+		const name = hit[1] ?? "";
+		const value = exports[name];
+		if (typeof value !== "number") continue;
+		rows.push([`\`${name}\``, `\`${formatValue(value)}\``, meaningOf(source, hit.index)]);
+	}
+	return rows;
+}
+
+/** Reads the two servers this document's Table A is about. */
+export function readSources(): Source[] {
+	return SURFACE_SOURCES.map((file) => ({ file, text: readFileSync(join(root, file), "utf8") }));
+}
+
+/** Hard-wraps a paragraph the way the hand-written documents are wrapped: ~115 columns, no matter how it is typed. */
+function wrap(text: string, width = 115): string {
+	const lines: string[] = [];
+	const words: string[] = [];
+	// A `code span` is one word however it was typed: a break inside it renders as a space, which reads as a typo.
+	let open = false;
+	for (const piece of text.split(/\s+/).filter((piece) => piece !== "")) {
+		const ticks = (piece.match(/`/g) ?? []).length;
+		if (open) words[words.length - 1] = `${words[words.length - 1] ?? ""} ${piece}`;
+		else words.push(piece);
+		if (ticks % 2 === 1) open = !open;
+	}
+	let line = "";
+	for (const word of words) {
+		if (line === "") line = word;
+		else if (line.length + 1 + word.length <= width) line = `${line} ${word}`;
+		else {
+			lines.push(line);
+			line = word;
+		}
+	}
+	if (line !== "") lines.push(line);
+	return lines.join("\n");
+}
+
+/** The whole document, from the code as it is now. */
+export function renderSurface(sources: readonly Source[] = readSources()): string {
+	const { rows, unguarded } = routeRows(sources);
+	if (unguarded.length > 0) {
+		const named = unguarded.map((route) => `${route.route} (${route.at})`).join(", ");
+		throw new Error(
+			`a route with no guard: ${named}. Call \`requireGrant\` in the block that answers it, or add it to \`PUBLIC_ROUTES\` in scripts/gen-surface.ts with the reason it answers without a credential.`,
+		);
+	}
+	const parts: string[] = [];
+	parts.push("<!-- generated by scripts/gen-surface.ts: do not edit this file; run `npm run gen:surface` -->");
+	parts.push("");
+	parts.push("# The surface");
+	parts.push("");
+	parts.push(
+		wrap(
+			"What the code offers, read out of the code: the routes and the grants that guard them, the extensions a boot installs, and the numbers a caller may spend against. Every table here is rendered, so a route or a grant that is wrong is a `npm run gen:surface:check` failure in the pull request that made it wrong, rather than a stale list someone trusts later. Where a behaviour goes, as opposed to what exists, is [`ARCHITECTURE.md`](ARCHITECTURE.md).",
+		),
+	);
+	parts.push("");
+	parts.push("## A. HTTP routes, and the grant that guards each");
+	parts.push("");
+	parts.push(
+		wrap(
+			'One row per plain-string route literal in `src/server/main.ts` and `src/server/admin.ts` — every `url.pathname === "…"` and `url.pathname.startsWith("…")`. A path built from a constant is not a literal and so is not a row: the connector\'s socket and its attachment endpoints are `CONNECTOR_PATH` in `main.ts`, and they are listed below, with the other doors that answer without the owner\'s token.',
+		),
+	);
+	parts.push("");
+	parts.push(
+		wrap(
+			"`exact` is `===`, `prefix` is `startsWith`. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, nearest above the literal in the block that answers it; when that block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission.",
+		),
+	);
+	parts.push("");
+	parts.push(table(["Route", "Match", "Guard", "Route at", "Guarded at"], rows.map(toRow)));
+	parts.push("");
+	parts.push("## Doors that answer without the owner's token");
+	parts.push("");
+	parts.push(
+		wrap(
+			"Each of these is in the generator's `PUBLIC_ROUTES` with its reason, and nothing may be added there without a sentence a reviewer can argue with. The list is also the whole answer to \"which paths answer without a token\", which is why the connector's two paths are here although they are constant-built and never a row.",
+		),
+	);
+	parts.push("");
+	parts.push(
+		table(
+			["Route", "Why it is public"],
+			PUBLIC_ROUTES.map((entry) => [`\`${entry.route}\``, entry.why]),
+		),
+	);
+	parts.push("");
+	parts.push("## B. Extensions a boot installs");
+	parts.push("");
+	parts.push(
+		wrap(
+			"`BASE_EXTENSIONS` in `src/server/runtime.ts`, with every name read off the objects rather than out of the source. Installed besides these, per boot and not in the array: `codemode` and `permissions` always, and `mcp` when an integration has a tools face.",
+		),
+	);
+	parts.push("");
+	parts.push(table(["Extension", "Tools", "Prompt sections", "Hook tasks"], extensionRows()));
+	parts.push("");
+	parts.push("## C. What a caller may spend");
+	parts.push("");
+	parts.push(
+		wrap(
+			"Every exported number in `src/server/limits.ts`: the value is the constant's own, and the meaning is the first sentence of its comment. The budgets are per class on purpose (`docs/SPEC.md` §4.1c), so a flood in one cannot starve another.",
+		),
+	);
+	parts.push("");
+	parts.push(table(["Constant", "Value", "Meaning"], limitRows()));
+	parts.push("");
+	return parts.join("\n");
+}
+
+function toRow(row: RouteRow): readonly string[] {
+	return [
+		`\`${row.route}\``,
+		row.match,
+		row.guard,
+		`\`${row.routeAt}\``,
+		row.guardAt === "not gated" ? "not gated" : `\`${row.guardAt}\``,
+	];
+}
+
+/** Where the first two renderings disagree, for a `--check` that has to say something useful. */
+function firstDifference(committed: string, rendered: string): string {
+	const left = committed.split("\n");
+	const right = rendered.split("\n");
+	const length = Math.max(left.length, right.length);
+	for (let at = 0; at < length; at++) {
+		if ((left[at] ?? "") === (right[at] ?? "")) continue;
+		return `line ${at + 1}:\n  committed: ${left[at] ?? "(end of file)"}\n  rendered:  ${right[at] ?? "(end of file)"}`;
+	}
+	return "the files differ but no line does";
+}
+
+function main(): never {
+	const check = process.argv.slice(2).includes("--check");
+	const rendered = renderSurface();
+	const bytes = Buffer.byteLength(rendered, "utf8");
+	const read = (): string | undefined => {
+		try {
+			return readFileSync(join(root, SURFACE_PATH), "utf8");
+		} catch {
+			return undefined;
+		}
+	};
+	if (check) {
+		const committed = read();
+		if (committed === rendered) {
+			console.log(`[gen-surface] ${SURFACE_PATH} is up to date (1 file, ${bytes} bytes)`);
+			process.exit(0);
+		}
+		console.error(`[gen-surface] ${SURFACE_PATH} is stale: 1 file, ${bytes} bytes rendered`);
+		console.error(
+			committed === undefined
+				? "  the file is missing; run `npm run gen:surface`"
+				: `  ${firstDifference(committed, rendered)}`,
+		);
+		console.error("  run `npm run gen:surface` and commit the result.");
+		process.exit(1);
+	}
+	writeFileSync(join(root, SURFACE_PATH), rendered);
+	console.log(`[gen-surface] wrote ${SURFACE_PATH} (1 file, ${bytes} bytes)`);
+	process.exit(0);
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
