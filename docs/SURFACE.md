@@ -23,7 +23,9 @@ means that handler refuses the grant for the areas it owns and hands the device'
 the payload instead (the panel's `state` and `control` answer a device holding `conversation`, which
 `test/panel.test.ts` pins). A literal with no guard stops the generator, which is the point: a route added without
 a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the
-guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it.
+guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it. A path
+behind two doors keeps two rows: `/api/admin/` passes the server's `authenticate` and then the panel's own grant,
+and both are true.
 
 | Route | Match | Guard | Route at | Guarded at |
 |---|---|---|---|---|

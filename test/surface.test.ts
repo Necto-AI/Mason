@@ -320,3 +320,39 @@ async function handleAdmin(request, response, url, grants) {
 	const { rows } = routeRows(sources);
 	assert.equal(rows[0]?.guard, "`admin`, filtered per area (delegated to `handleAdmin`)");
 });
+
+test("a path test nested under a non-path condition gates only that branch", () => {
+	// `if (method === "POST") { if (pathname.startsWith("/api/")) { requireGrant() } }` is a gate on POSTs. Crediting it
+	// to the routes below is round 2's sibling finding one level deeper, and the file it hides in is the panel's own.
+	const sources = fixture(`
+async function handle(request, url, response, grants) {
+	if (request.method === "POST") {
+		if (url.pathname.startsWith("/api/")) {
+			requireGrant(grants, "admin");
+		}
+	}
+	if (url.pathname === "/api/whatever") {
+		return json(response, 200, {});
+	}
+}
+`);
+	const { unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/api/whatever", match: "exact", at: "fixture.ts:8" }]);
+});
+
+test("a regex literal holding a quote does not unblank the comments after it", () => {
+	// The comment scan has to know what a regex is: `/['"]/` used to open a string that ran to the next quote in the file,
+	// and every comment between was read as code — including a `requireGrant` that had been deleted.
+	const sources = fixture(`
+const NAME = /'/;
+const other = raw.split(/["']/);
+async function handle(url, response) {
+	// requireGrant(grants, "admin");
+	if (url.pathname === "/api/secret") {
+		return json(response, 200, {});
+	}
+}
+`);
+	const { unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/api/secret", match: "exact", at: "fixture.ts:6" }]);
+});

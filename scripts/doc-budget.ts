@@ -14,6 +14,7 @@
  * The count is whitespace-split tokens with code fences included: a table row, a shell command and a paragraph all cost
  * what they cost, and a rule with a fence around it is not free.
  */
+import type { Dirent } from "node:fs";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,27 +50,50 @@ export interface Audit {
 	readonly unlisted: readonly string[];
 }
 
+/** Directories under `docs/` that hold records rather than documents: a decision, a process, a research run. */
+const EXEMPT_PREFIXES: readonly string[] = ["docs/adr/", "docs/agents/", "docs/research/"];
+
 /**
  * The documents the manifest claims to cover, found by walking rather than by listing.
  *
  * The manifest is the list of ceilings, so a document missing from it is invisible to an audit that only reads the
- * manifest: a new `docs/FOO.md` of any length would pass. This is the set that must be in it — the root documents and
- * the top level of `docs/` — and the subdirectories are the ones that are exempt on purpose: `docs/adr/` is a record of
- * decisions, `docs/agents/` is process, and `docs/research/` is evidence whose length belongs to its question.
+ * manifest: a new `docs/FOO.md` of any length would pass. This is the set that must be in it — every markdown file in the
+ * repository root, and every one under `docs/` except the three directories that are records rather than documents.
+ * A subdirectory is walked, not skipped: `docs/plans/HUGE.md` has to carry a ceiling like any other document, and a
+ * symlink to a document is one too.
  */
 export function governedDocuments(base: string, manifest: Manifest): string[] {
 	const found: string[] = [];
-	for (const entry of readdirSync(base, { withFileTypes: true })) {
-		if (entry.isFile() && entry.name.endsWith(".md")) found.push(entry.name);
-	}
+	const keep = (path: string): boolean => !manifest.generated.includes(path);
+	const walk = (relative: string): void => {
+		let entries: Dirent[];
+		try {
+			entries = readdirSync(join(base, relative), { withFileTypes: true });
+		} catch {
+			// A directory with no `docs/` is a temporary one a test points at; there is nothing to govern.
+			return;
+		}
+		for (const entry of entries) {
+			const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
+			if (entry.isDirectory()) {
+				if (EXEMPT_PREFIXES.some((prefix) => `${path}/`.startsWith(prefix))) continue;
+				walk(path);
+				continue;
+			}
+			if (!/\.md$/i.test(entry.name)) continue;
+			if (EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
+			if (keep(path)) found.push(path);
+		}
+	};
 	try {
-		for (const entry of readdirSync(join(base, "docs"), { withFileTypes: true })) {
-			if (entry.isFile() && entry.name.endsWith(".md")) found.push(`docs/${entry.name}`);
+		for (const entry of readdirSync(base, { withFileTypes: true })) {
+			if (!entry.isDirectory() && /\.md$/i.test(entry.name) && keep(entry.name)) found.push(entry.name);
 		}
 	} catch {
-		// A directory with no `docs/` is a temporary one a test points at; there is nothing to govern.
+		return [];
 	}
-	return found.filter((file) => !manifest.generated.includes(file)).sort();
+	walk("docs");
+	return found.sort();
 }
 
 /** The words in a document, as a person counts them while reading it: whitespace-separated tokens. */
