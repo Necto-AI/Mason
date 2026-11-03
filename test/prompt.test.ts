@@ -623,12 +623,8 @@ test("the integrations section is one sorted name and purpose per enabled tool f
 		{
 			github: GITHUB,
 			docs: DOCS,
-			// A trigger-only face is a door, not a tool: nothing about it belongs in the tool list's section.
-			activity: {
-				enabled: true,
-				description: "Never a tool",
-				trigger: { hook: "github-activity", secret: "s".repeat(32) },
-			},
+			// An entry with no tools face is not a tool: nothing about it belongs in the tool list's section.
+			activity: { enabled: true, description: "Never a tool" },
 			old: { enabled: false, description: "Turned off", tools: { url: "http://mason-old:8080/mcp" } },
 		},
 		async () => {
@@ -642,7 +638,7 @@ test("the integrations section is one sorted name and purpose per enabled tool f
 			assert.doesNotMatch(
 				rendered ?? "",
 				/Never a tool|Turned off/,
-				"a disabled or trigger-only integration is absent",
+				"a disabled entry and one with no tools face are absent",
 			);
 			assert.doesNotMatch(rendered ?? "", /mcp__|issues_create|8082/, "no tool names, no urls, no schemas");
 		},
@@ -655,13 +651,7 @@ test("the integrations section is absent when no integration is enabled with a t
 		{
 			old: { enabled: false, description: "Off", tools: { url: "http://mason-old:8080/mcp" } } satisfies Integration,
 		},
-		{
-			activity: {
-				enabled: true,
-				description: "Trigger only",
-				trigger: { hook: "github-activity", secret: "s".repeat(32) },
-			} satisfies Integration,
-		},
+		{ activity: { enabled: true, description: "No tools face" } satisfies Integration },
 	] as Record<string, Integration>[]) {
 		await withIntegrations(integrations, async () => {
 			assert.equal(

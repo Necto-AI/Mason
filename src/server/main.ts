@@ -1,6 +1,5 @@
 /**
- * HTTP + WebSocket server: the operator panel and its API, the connector door, the event door an integration's trigger
- * posts to, and the built web client.
+ * HTTP + WebSocket server: the operator panel and its API, the connector door, and the built web client.
  *
  * There is no conversational socket any more (#103): a person speaks to mason through a connector, and the panel is a
  * control plane that reads the projected conversation and administers the deployment. What used to be a Chord service
@@ -27,31 +26,13 @@ import {
 	type TokenRecord,
 	type TokenStore,
 } from "./auth.ts";
-import { commandTarget, runCommand } from "./commands.ts";
 import { CONNECTOR_PATH, type ConnectorDoor, createConnectorDoor } from "./connector.ts";
 import { authenticateConnector } from "./connectors.ts";
-import {
-	COMMAND_KIND,
-	commandRequestId,
-	EVENT_SIGNATURE_HEADER,
-	EVENTS_PATH,
-	readCommand,
-	readEnvelope,
-	verifySignature,
-} from "./events.ts";
-import { explicitRequestId, UnknownHookError } from "./hooks.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
 import { installEnvHttpProxy } from "./http-proxy.ts";
 import { integrationSummaries } from "./integration-status.ts";
-import { commandsFor, currentIntegrations, triggerFor } from "./integrations.ts";
-import {
-	COMMAND_LIMIT,
-	createFireLimiter,
-	EVENT_BODY_MAX_BYTES,
-	EVENT_FIRE_LIMIT,
-	type FireLimiter,
-	readRawBodyCapped,
-} from "./limits.ts";
+import { currentIntegrations } from "./integrations.ts";
+import { createFireLimiter, type FireLimiter, readRawBodyCapped } from "./limits.ts";
 import { claimedPerson, readRoster } from "./roster.ts";
 import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
 import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
@@ -303,14 +284,12 @@ async function handleRequest(
 	// an owner token is not a connector credential and a connector credential is not a token.
 	if (await handleConnectorRequest(request, response, url, attachments, fires, house)) return;
 
-	// Everything under `/api` is the owner's, except two doors that cannot present a token: the liveness probe, and
-	// the event door, which is authenticated by the sender's own HMAC below (src/server/events.ts) and can do exactly one
-	// of the things its entry declares: fire its hook, or issue one of its commands. The static shell is public on purpose:
-	// it is a bundle with no secrets in it, and the page is where a reader is told that this browser is not paired.
+	// Everything under `/api` is the owner's, except one door that cannot present a token: the liveness probe. The static
+	// shell is public on purpose: it is a bundle with no secrets in it, and the page is where a reader is told that this
+	// browser is not paired.
 	let device: TokenRecord | undefined;
 	let claimed: string | undefined;
-	const eventDoor = eventDoorPath(url.pathname);
-	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health" && eventDoor === undefined) {
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
 		const auth = await authenticate(request, store);
 		if (!auth.ok) {
 			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
@@ -333,115 +312,6 @@ async function handleRequest(
 		response.writeHead(401, { "content-type": "application/json; charset=utf-8" });
 		response.end(JSON.stringify({ error: "not on the roster" }));
 		return;
-	}
-
-	// The event door: one path, one verb, and one of the two effects its entry declares — one fire of the hook the
-	// integration's trigger names (§3.3), or one of the commands that trigger may issue. The path names the integration;
-	// the boot resolved which ones are enabled, and a delivery is never a way to read, claim or call. A misspelt name, a
-	// disabled integration and one with no trigger all answer `404` like a path that is not a door, because which of them
-	// it is is not a sender's business.
-	if (eventDoor !== undefined) {
-		if (eventDoor === "malformed") {
-			console.warn(`[events] refused a delivery to ${url.pathname}: the path names no integration`);
-			return notFound(response);
-		}
-		const name = eventDoor.name;
-		const trigger = triggerFor(currentIntegrations(), name);
-		if (trigger === undefined) {
-			console.warn(`[events] refused a delivery to ${name}: no enabled trigger face there`);
-			return notFound(response);
-		}
-		if (request.method !== "POST") return json(response, 405, { error: "method not allowed" });
-		const raw = await readRawBodyCapped(request, EVENT_BODY_MAX_BYTES);
-		if (raw === undefined) {
-			console.warn(`[events] refused a delivery for ${name}: over ${EVENT_BODY_MAX_BYTES} bytes`);
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ error: "payload too large", maxBytes: EVENT_BODY_MAX_BYTES }));
-			return;
-		}
-		// The signature is the door: it is checked over the raw bytes, before a single field is parsed, and a refusal says
-		// nothing about which half failed.
-		if (!verifySignature(trigger.secret, raw, headerValue(request, EVENT_SIGNATURE_HEADER))) {
-			console.warn(`[events] refused a delivery for ${name}: bad or missing signature`);
-			return json(response, 401, { error: "unauthorized" });
-		}
-		const envelope = readEnvelope(raw);
-		if ("error" in envelope) {
-			console.warn(`[events] refused a delivery for ${name}: ${envelope.error}`);
-			return json(response, 400, { error: envelope.error });
-		}
-		if (envelope.kind === COMMAND_KIND) {
-			// A command has a budget of its own, and it is not the fire budget. Both are a bill — `/compact` is a model call —
-			// but a person who has just sent six messages must still be able to say `/stop`, and a chat that spent the
-			// integration's minute on messages would otherwise be unable to interrupt the turn those messages started.
-			const reading = readCommand(envelope.payload, commandsFor(currentIntegrations(), name));
-			if ("error" in reading) {
-				console.warn(`[events] refused a command for ${name}: ${reading.error}`);
-				return json(response, 400, { error: reading.error });
-			}
-			if ("undeclared" in reading) {
-				// Not a refusal: the sender typed something mason has no use for, and it still has a message in hand. Saying so is
-				// what keeps `/start`, `/foo` and a mistaken `/stopp` ordinary text instead of an error.
-				return json(response, 200, { handled: false });
-			}
-			// The budget is spent here, immediately before the dispatch, and nowhere above it: only a command mason will act
-			// on is a bill. A word it does not declare and a malformed one are neither acted on nor charged, because they must
-			// not be able to spend the minute a real `/stop` needs — six `/stopp` used to make the seventh command a `429`,
-			// which is the opposite of what the separate budget was for.
-			const wait = fires.take(`command:${name}`);
-			if (wait !== undefined) {
-				console.warn(`[events] refused a command for ${name}: ${COMMAND_LIMIT} a minute is the budget`);
-				response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
-				response.end(JSON.stringify({ error: "too many commands", retryAfterSeconds: wait }));
-				return;
-			}
-			const reply = await runCommand(
-				await commandTarget(runtime),
-				commandRequestId(name, envelope.id),
-				reading.command,
-				reading.argument,
-			);
-			if (reply === undefined) {
-				// The log held this command's id, so nothing ran this time: the first delivery already answered, and the relay
-				// suppresses an empty reply (`integrations/telegram/src/door.ts`), so a redelivery says nothing in the chat and
-				// the audit line does not claim an act that did not happen.
-				console.log(`[events] ${name} already ran ${reading.command} for ${envelope.id}`);
-				return json(response, 200, { handled: true, reply: "" });
-			}
-			console.log(`[events] ${name} ran ${reading.command} for ${envelope.id}`);
-			return json(response, 200, { handled: true, reply });
-		}
-		// A fire is a whole turn, and a loop of them is a bill. The key is the integration's own, so one chatty sender cannot
-		// spend another's minute. Checked after the body only because a command is the one delivery that must survive a
-		// sender's spent budget: the body is capped, and a forged signature is refused before this line.
-		const wait = fires.take(`integration:${name}`);
-		if (wait !== undefined) {
-			console.warn(`[events] refused a delivery for ${name}: ${EVENT_FIRE_LIMIT} a minute is the budget`);
-			response.writeHead(429, { "content-type": "application/json; charset=utf-8", "retry-after": String(wait) });
-			response.end(JSON.stringify({ error: "too many deliveries", retryAfterSeconds: wait }));
-			return;
-		}
-		try {
-			// `id` is the delivery's identity, so a redelivery is this same fire however much later it arrives; `payload` is
-			// the sender's text, which the hooks engine fences as untrusted data before the model reads it. The id is unique
-			// within the integration, so the integration's name is part of the key: two integrations on one hook that both call
-			// a delivery `1` are two events, and the loser does not get a `202` for a fire someone else's event already made.
-			// `kind` is carried for the log and the prompt label only.
-			const submission = await runtime.hooks.fire(trigger.hook, {
-				payload: envelope.payload,
-				kind: envelope.kind,
-				requestId: explicitRequestId(trigger.hook, `${name}:${envelope.id}`),
-			});
-			console.log(`[events] ${name} fired ${trigger.hook} for ${envelope.kind} ${envelope.id}`);
-			return json(response, 202, { submissionId: submission.id });
-		} catch (error) {
-			if (error instanceof UnknownHookError) {
-				// Boot validation should have refused this process; a `500` here means the hook list changed under a boot.
-				console.warn(`[events] ${name} fires ${trigger.hook}, which is not a hook`);
-				return json(response, 500, { error: "the integration's hook is not a hook" });
-			}
-			throw error;
-		}
 	}
 
 	// Who this device is, and what it may do in the panel. Behind the gate above, and the only route the panel calls
@@ -543,7 +413,7 @@ async function handleConnectorRequest(
 	}
 	const name = auth.identity.name;
 	// Which of the two endpoints, and whether this request is one mason will act on — settled before the budget is
-	// charged, so a wrong verb or an unknown path costs the connector nothing. The event door makes the same trade.
+	// charged, so a wrong verb or an unknown path costs the connector nothing.
 	const base = `${CONNECTOR_PATH}/attachments`;
 	const uploading = url.pathname === base;
 	if (!uploading && !url.pathname.startsWith(`${base}/`)) {
@@ -677,21 +547,6 @@ function contentSecurityPolicy(_host: string | undefined): string {
 		"form-action 'self'",
 		"frame-ancestors 'none'",
 	].join("; ");
-}
-
-/**
- * Where a path stands with the generic event door: the integration it names, `"malformed"` for one of the door's own bad
- * shapes, or `undefined` for a path that is not the door at all.
- *
- * The bare prefix counts, and so does anything under it: a sender that lost the integration name, or added a second
- * segment, gets the door's `404` rather than the token gate's `401`. A door whose bad shapes look like a missing cookie
- * is a door whose operator cannot tell a broken sender from a broken pairing. A name is exactly one segment, and the
- * gate and the route read the same answer, so a path cannot be outside the gate and inside the door.
- */
-function eventDoorPath(pathname: string): { readonly name: string } | "malformed" | undefined {
-	if (pathname !== EVENTS_PATH.slice(0, -1) && !pathname.startsWith(EVENTS_PATH)) return undefined;
-	const name = pathname.startsWith(EVENTS_PATH) ? pathname.slice(EVENTS_PATH.length) : "";
-	return name === "" || name.includes("/") ? "malformed" : { name };
 }
 
 /** The pages a pairing link may land on: the panel, and the panel's two spellings. */

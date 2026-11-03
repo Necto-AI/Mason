@@ -55,6 +55,7 @@ The answer is the negotiation, and it is the connector's whole view of its own p
            "events":{"hooks":{"chat.message":"telegram-message"}}},
   "inactive":[{"face":"events","reason":"the entry declares no trigger"}],
   "capabilities":["text","files","approvals"],
+  "commands":["stop","compact","clear","status"],
   "limits":{"submissionsPerMinute":60,"firesPerMinute":6,"controlsPerMinute":6,"attachmentsPerMinute":30,
             "attachmentBytes":26214400,"attachmentTtlMs":86400000}}}
 ```
@@ -65,11 +66,14 @@ Rules that make the handshake a ceiling rather than a wish:
    majors.
 2. **A face the operator did not grant is inactive, not a failure.** It is named in `inactive` with a reason, because a
    connector silently missing half its behaviour is the bug nobody finds. Declaring a face never activates it.
-3. **A granted face is narrowed to what the operator configured.** `faces.user.actors` is the mapping mason will accept,
+3. **The control vocabulary is part of the answer.** `commands` is what the operator granted on `mason/control`: absent
+   is none, and a word outside it is `mason.invalid_request` — which is how a connector tells a missing permission from a
+   typo without spending a call to find out.
+4. **A granted face is narrowed to what the operator configured.** `faces.user.actors` is the mapping mason will accept,
    `faces.events.hooks` is the `kind`→hook map that will fire. Both may be shorter than what the connector advertised.
-4. **Capabilities are negotiated separately from grants.** They say what content this connector can render. A grant says
+5. **Capabilities are negotiated separately from grants.** They say what content this connector can render. A grant says
    what it may do. A connector may be granted `user` and still receive no files, because it never claimed `files`.
-5. **Unknown fields are ignored on both sides.** Within major 1, additions are the only change there is.
+6. **Unknown fields are ignored on both sides.** Within major 1, additions are the only change there is.
 
 ## Submissions and fires are different acts
 

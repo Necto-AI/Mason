@@ -82,8 +82,8 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    MASON_ENV_ALIAS=pi-env-mason-env       # optional: the name its host key is pinned under
    MASON_ENV_WAIT_ATTEMPTS=30             # optional: how long the boot waits for it to answer
    EXAMPLE_TOKEN=…                          # optional: an integration container's own credential (see "An integration")
-   TELEGRAM_BOT_TOKEN=…                    # optional: the telegram integration's bot token (see "The first integration")
-   TELEGRAM_TRIGGER_SECRET=…               # optional: printed once by `npm run integration -- secret telegram`
+   TELEGRAM_BOT_TOKEN=…                    # optional: the telegram connector's bot token (see "The first integration")
+   TELEGRAM_CONNECTOR_CREDENTIAL=…          # optional: issued once by `npm run connector -- add telegram`
    TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids or @usernames the bot may relay, comma-separated
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
    TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: the relay's transcript endpoint, the value compose.telegram.yaml defaults to
@@ -307,8 +307,8 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
    `{"integrations": {}}` is a stack with no integration at all — because a bind source that does not exist is a
    directory to the container runtime, and a directory is no input. The same split as pi's credentials: the mounted file
    is the input, and `service/integrations.json` is the copy the server reads. Every boot installs it `0600` (it can hold
-   a trigger secret) and prints one line — `copied integrations.json from /run/integrations.json`, or `unchanged`. One
-   integration:
+   a connector grant that names who may answer a question) and prints one line — `copied integrations.json from
+   /run/integrations.json`, or `unchanged`. One integration:
 
    ```jsonc
    { "integrations": { "github": {
@@ -348,17 +348,18 @@ leave the mount out; the copy on the volume is then the whole truth.
 
 ## The first integration: `mason-telegram`, and the sidecar it needs
 
-[`integrations/telegram/`](../integrations/telegram/README.md) is the first integration built in this repository rather
-than by somebody else: one package, one image, both faces of ADR-0003. The image is built from
-`integrations/telegram` — by `docker compose up -d --build`, or on its own with `docker build integrations/telegram`.
-It is still just the two services in `compose.telegram.yaml` — `mason-telegram` on `mason-mcp` with a `/data` volume
-for its offset, an `inbox` volume for the files people send it, and no `ports`, plus a `vpn` sidecar, both pulled in by
-`COMPOSE_EXTRA_FILES=compose.telegram.yaml` in `deploy/.env` — and the only thing mason knows about it is one entry
-in `integrations.json` and a trigger secret. Mint that secret on the mason side
-(`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`, then
-`secret telegram --hook team-chat`), put what it printed once into `TELEGRAM_TRIGGER_SECRET` in `deploy/.env` beside the
-bot token and the chat allowlist, and the boot refuses — naming the hook — until the `team-chat` hook this build defines
-is the one the trigger names.
+`mason-telegram` is a connector in its own repository (`github.com/DenisSud/mason-telegram`): one package, one image, a
+user face on mason's connector socket and an MCP endpoint. Its image is published by that repository — mason no longer
+builds it, and `integrations/` does not exist here any more (#104). What mason knows about it is one entry in
+`integrations.json` and one credential it issued: add the entry
+(`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`), write the
+grant into it (the actors, the permitted chats, the control words, the approver — the panel's connectors page writes the
+same block), and issue the credential with `npm run connector -- add telegram`. Put what that printed once into
+`TELEGRAM_CONNECTOR_CREDENTIAL` in `deploy/.env` beside the bot token and the chat allowlist. There is no trigger secret
+and no signed event path: the container opens one WebSocket to `/api/connector`, and the grant is a ceiling on what may
+cross it. `compose.telegram.yaml` is still the two services — `mason-telegram` on `mason-mcp` with a `/data` volume for
+its offset and the SDK's journal, the shared `inbox` volume, and no `ports`, plus a `vpn` sidecar — pulled in by
+`COMPOSE_EXTRA_FILES=compose.telegram.yaml` in `deploy/.env`.
 
 **The sidecar is not optional here, and neither is the network that carries it.** Telegram is unreachable from most hosts
 this runs on, so the integration is given `HTTPS_PROXY=http://vpn:1080` and reaches its upstream through it. The
@@ -516,7 +517,7 @@ transcription service"). `mason-agent` is the agent: `profile.md`, the dated log
 ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose history
 begins at the migration if the home was migrated, since the pre-split history stays in the repository at the home
 root, which is not a volume. `mason-service` is the server: `soul.md`, `roster.json`, `config.json` (the token hashes
-— no plaintext token lives here), `integrations.json` (the integrations mason reaches, and each one's trigger secret),
+— no plaintext token lives here), `integrations.json` (the integrations mason reaches, and each one's connector grant),
 `data/agent.sqlite` (the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
 `mason-env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
@@ -561,12 +562,13 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
   `X-Forwarded-Proto: https` so the session cookie is issued `Secure`.
 - Two paths are outside `src/server/auth.ts` on purpose, and both are narrower than a token. `/api/health` answers one word
-  and needs no credential at all (a monitor that needs a token is a monitor nobody runs), and
-  `POST /api/events/<integration>` is authenticated by that integration's trigger secret: the HMAC is the door, and the
-  door fires the hook the trigger names or issues one of the commands the entry declares, and nothing else — it cannot
-  read, claim or call. Everything else under `/api`, and the Chord socket, goes through `src/server/auth.ts`; the shell
-  itself is served publicly because it is a bundle with no secrets in it, and it is where a browser is told it is not
-  paired.
+  and needs no credential at all (a monitor that needs a token is a monitor nobody runs). `/api/connector` (the socket)
+  and `/api/connector/attachments/<contentId>` (the bytes) are authenticated as **the connector**, by a credential mason
+  issued for that one entry: it opens those paths and nothing else, and a revoke lands on the next connection. The signed
+  event door (`POST /api/events/<integration>`) is gone (#104) — that path is an ordinary `/api` path now, so it is `401`
+  without the owner's token and `404` with one. Everything else under `/api`, and the Chord socket, goes through
+  `src/server/auth.ts`; the shell itself is served publicly because it is a bundle with no secrets in it, and it is where
+  a browser is told it is not paired.
 
 ## The path agreement, and the one honest limitation
 
@@ -607,10 +609,10 @@ Two smaller honest notes:
   login that fails with a message about a directory rather than about a key. If you change the uid/gid, wipe the volumes
   (`docker compose down && docker volume rm mason-agent mason-service env-keys`) and start again; a half-migrated
   volume is a workspace nobody can write to.
-- **`mason-inbox` is the exception, and it is fixed at 1000.** The relay image runs as its own `node` account, which is
-  uid 1000 whatever `MASON_UID` says, and an inbox written `0600` by one number and read by another is a file the agent
-  cannot open. Leave `MASON_UID`/`MASON_GID` at their defaults if the relay is part of the stack; changing them is a
-  rebuild of `integrations/telegram/Dockerfile` too, not a variable.
+- **`mason-inbox` is the exception, and it is fixed at 1000.** The connector image runs as its own `node` account, which
+  is uid 1000 whatever `MASON_UID` says, and a file written `0600` by one number and read by another is a file the agent
+  cannot open. Leave `MASON_UID`/`MASON_GID` at their defaults if a connector is part of the stack; changing them is a
+  change to that connector's `Dockerfile` too, not a variable.
 
 ## What is in the env image, and why nothing else is
 

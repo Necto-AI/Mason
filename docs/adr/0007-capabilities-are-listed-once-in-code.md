@@ -344,7 +344,8 @@ the bot's own `skills/` keep their precedence: an operator's file wins over a se
 ## Migration
 
 Nothing here touches `src/server/extensions/delivery.ts`, `src/server/hooks.ts`, `src/server/projection.ts`,
-`src/shared/contract.ts` or `integrations/telegram/` — the delivery fix in flight. The one shared seam is
+`src/shared/contract.ts` or the Telegram connector (then `integrations/telegram/`, now
+`github.com/DenisSud/mason-telegram`, #104) — the delivery fix in flight. The one shared seam is
 `src/server/runtime.ts`, edited in a four-line place.
 
 1. **The library and the reader, selecting nothing.** `src/server/capabilities.ts` with the type and the `generative-ui`

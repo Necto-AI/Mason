@@ -24,7 +24,6 @@ export interface IntegrationSummary {
 	readonly name: string;
 	readonly enabled: boolean;
 	readonly hasTools: boolean;
-	readonly hasTrigger: boolean;
 	readonly connected: boolean;
 	readonly tools: number;
 	readonly error: string | null;
@@ -56,7 +55,6 @@ export function integrationSummaries(integrations: Record<string, Integration>):
 				name,
 				enabled: integration.enabled,
 				hasTools: integration.tools !== undefined,
-				hasTrigger: integration.trigger !== undefined,
 				connected: health?.connected ?? false,
 				tools: health?.tools ?? 0,
 				error: health?.error ?? null,

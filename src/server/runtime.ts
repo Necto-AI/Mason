@@ -247,10 +247,9 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
-		// The hooks manager exists before the harness opens, because a trigger that fires a hook no build defines has to
-		// refuse the boot before anything can run: the door names one hook, so a name that is not a hook is a door that would
-		// accept a delivery and drop it. This is config, not health — a missing hook is fatal whatever the container's own
-		// `required` says.
+		// The hooks manager exists before the harness opens, because a connector's `kind` that maps to a hook no build
+		// defines has to refuse the boot before anything can run: a fire naming it would be accepted and dropped. This is
+		// config, not health — a missing hook is fatal whatever the container's own `required` says.
 		const hooks = new HooksManager({
 			conversation: () => harness.root(BACKGROUND_CONTEXT),
 			statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
@@ -263,7 +262,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const roster = await readRoster(house);
 		const sole = roster.people.length === 1 ? roster.people[0]?.name : undefined;
 		for (const hook of builtinHooks(sole === undefined ? {} : { person: sole })) hooks.define(hook);
-		assertTriggersHaveHooks(currentIntegrations(), hooks, house.integrations);
+		assertConnectorHooksHaveHooks(currentIntegrations(), hooks, house.integrations);
 
 		const storage =
 			options.storageOverride ??
@@ -454,19 +453,21 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 }
 
 /**
- * A trigger's hook is a name in a file, so a build that does not define it must refuse rather than start.
+ * A connector's `kind` → hook map is a name in a file, so a build that does not define the hook must refuse rather than
+ * start: a kind that maps to a hook nobody defined is a fire that silently does nothing.
  *
- * Only enabled integrations are checked: a disabled one's door answers `404`, and a name is not a reason to keep an
+ * Only enabled integrations are checked: a disabled one's socket opens nothing, and a name is not a reason to keep an
  * integration the operator switched off from ever being switched on again. The message names the file, the integration
  * and the hook, because all three are what a person has to change.
  */
-function assertTriggersHaveHooks(integrations: Record<string, Integration>, hooks: HooksManager, path: string): void {
+function assertConnectorHooksHaveHooks(
+	integrations: Record<string, Integration>,
+	hooks: HooksManager,
+	path: string,
+): void {
 	for (const [name, integration] of Object.entries(integrations)) {
 		if (!integration.enabled) continue;
 		const named = [
-			...(integration.trigger === undefined ? [] : [{ where: "a trigger", hook: integration.trigger.hook }]),
-			// A connector's `kind`→hook map is the same promise as a trigger's, made by the same file, so it is refused the
-			// same way: a kind that maps to a hook nobody defined is a fire that silently does nothing.
 			...Object.entries(integration.connector?.events?.hooks ?? {}).map(([kind, hook]) => ({
 				where: `the kind "${kind}"`,
 				hook,

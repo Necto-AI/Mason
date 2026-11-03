@@ -6,11 +6,17 @@
  * where it stands (both halves leave its index and enter its `.gitignore`) and creates the agent's own repository with
  * one commit — so the layout change is something he can inspect and revert like any other.
  *
+ * It also finishes the configuration a cutover needs: a credential written before grants existed is stamped, and an
+ * entry that still carries the signed event door's `trigger` (and the `commands` list that belonged to it) has both keys
+ * removed — the door is gone (#104), and a boot refuses a file that still names it rather than reading past a secret
+ * nothing checks.
+ *
  * `doctor` rather than a command of its own because this is what it is: a check on the home that repairs it when asked.
  * Nothing here runs on boot. A server that moved files on start would be a server that edits the operator's home.
  */
 import { migrateTokenGrants } from "../src/server/auth.ts";
 import { currentHouse, migrateHouse } from "../src/server/house.ts";
+import { migrateIntegrationTriggers } from "../src/server/integrations.ts";
 
 const [command] = process.argv.slice(2);
 const house = currentHouse();
@@ -29,10 +35,12 @@ function usage(): never {
   when the same entry is in the root and in a half that already holds something, and when agent/.git already holds paths
   from service/ — a history from before this fix, which it names the repair for instead of touching.
 
-  It also finishes the configuration the panel needs: a credential written before grants existed is stamped with
-  conversation, admin and approve — what the console it replaced could do, and not trace. A credential that already has
-  grants is left alone, so a narrowed device stays narrowed. Neither step is done on boot: a server that rewrote the
-  operator's files on start would be a server that edits his home.`);
+  It also finishes the configuration the panel and the connector door need: a credential written before grants existed
+  is stamped with conversation, admin and approve — what the console it replaced could do, and not trace — and an entry
+  that still carries the old signed event door's "trigger" (with the "commands" list that belonged to it) loses both,
+  because that door is gone (#104). A credential that already has grants is left alone, so a narrowed device stays
+  narrowed. Neither step is done on boot: a server that rewrote the operator's files on start would be a server that
+  edits his home.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -42,6 +50,21 @@ const outcome = await migrateHouse(house);
 if (outcome.status === "refused") {
 	console.error(`[doctor] ${outcome.reason}`);
 	process.exit(1);
+}
+const migrated = await migrateIntegrationTriggers(house);
+for (const entry of migrated) {
+	console.log(`[doctor] ${entry.name}: removed the signed event door's trigger face`);
+	if (entry.moved.length > 0) {
+		console.log(
+			`[doctor] ${entry.name}: its control vocabulary moved to connector.commands: ${entry.moved.join(", ")}`,
+		);
+	}
+	if (entry.stranded.length > 0) {
+		console.log(
+			`[doctor] ${entry.name}: it declared ${entry.stranded.join(", ")} with no connector block to hold them, so ` +
+				"they are gone — grant them there (`connector.commands`) when the connector has one",
+		);
+	}
 }
 const granted = await migrateTokenGrants(house.home);
 for (const record of granted) {
