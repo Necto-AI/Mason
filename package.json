@@ -16,6 +16,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"gen:surface": "node --conditions=source --experimental-strip-types scripts/gen-surface.ts",
 		"gen:surface:check": "node --conditions=source --experimental-strip-types scripts/gen-surface.ts --check",
+		"check:docs": "node --conditions=source --experimental-strip-types scripts/doc-budget.ts --check",
 		"build:packages": "npm run build --workspace @mason/protocol && npm run build --workspace @mason/connector",
 		"prove:connector": "node --conditions=source --experimental-strip-types scripts/prove-connector-sdk.ts",
 		"lint": "node scripts/biome.mjs check .",
