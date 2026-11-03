@@ -1,5 +1,12 @@
 # An integration is a service with two halves: a tool surface and a trigger
 
+**Status:** Accepted, amended 2026-11-03 (the trigger half is gone; see the amendment at the end)
+
+> **Amended 2026-11-03** — the signed trigger door was removed in #112. A service now wakes mason with a fire over its
+> connector's socket, and receives nothing else; `connector` is the noun again (`docs/adr/0006-connectors-are-full-duplex-peers.md`).
+> The tool face, the "no per-integration code" rule and the boot-resolved set are unchanged. The amendment at the end
+> says what survives in what form.
+
 mason is meant to carry many integrations, so per-integration code in the server does not scale — every new system
 would mean a TypeScript module, a test and a review. An integration is therefore a separate process with at most two
 network faces: an MCP endpoint over Streamable HTTP that lends the bot tools, and one authenticated POST that wakes it
@@ -28,3 +35,22 @@ room, while an integration does background ingest and must never speak.
 - **ADR-0004 extends that list with one hook.** A hook's `promptTemplate` is where interface-specific prompt text
   belongs, so the suite is a container, a config entry, a secret and a hook — and nothing else in `src/` may know an
   interface's name (`docs/adr/0004-mason-is-a-headless-backend.md`).
+
+## Amendment, 2026-11-03: the trigger half is gone
+
+The signed event door this decision built (`POST /api/events/<name>`, HMAC over the raw body) was removed in #112. The
+reasoning changed under it: ADR-0006 replaced the integration's two faces with a connector's three (user, tools,
+events), and a connector is a peer mason admits once rather than a service that posts at it. So the trigger face was
+replaced rather than kept:
+
+- **What a service does instead.** It opens `/api/connector` with a credential mason issued for that entry, and fires
+  `mason/fire` over its own socket, spending the event kinds its grant names. No route accepts work from the network on
+  an integration's behalf; `/api/events/<name>` and its trigger secret are gone, and an entry that still names a
+  `trigger` refuses the boot until `npm run doctor -- migrate` removes it.
+- **"`connector` retires as a noun" is reversed.** Connector is the noun again, and an integration entry may carry a
+  `connector` grant beside its MCP endpoint (`src/server/connectors.ts`). This ADR's third bullet is history, not policy.
+- **What survives, unchanged.** An integration is still a separate process; tools are still MCP over Streamable HTTP with
+  one generic client in the server and no per-integration TypeScript; the enabled set is still resolved at boot, so a
+  container restart no longer re-prices the prompt but a config change is still a restart; the integration still owns
+  its upstream credential; and every integration is still optional unless marked `required`.
+
