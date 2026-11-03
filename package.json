@@ -14,6 +14,8 @@
 		"test": "node --conditions=source --experimental-strip-types --test test/*.test.ts",
 		"test:packages": "node --conditions=source --experimental-strip-types --experimental-sqlite --test packages/protocol/test/*.test.ts packages/connector/test/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"gen:surface": "node --conditions=source --experimental-strip-types scripts/gen-surface.ts",
+		"gen:surface:check": "node --conditions=source --experimental-strip-types scripts/gen-surface.ts --check",
 		"build:packages": "npm run build --workspace @mason/protocol && npm run build --workspace @mason/connector",
 		"prove:connector": "node --conditions=source --experimental-strip-types scripts/prove-connector-sdk.ts",
 		"lint": "node scripts/biome.mjs check .",
