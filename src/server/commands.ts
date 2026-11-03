@@ -1,13 +1,13 @@
 /**
  * The four commands a chat can ask for, and the conversation they act on.
  *
- * A command arrives from two doors — the signed event door (`main.ts`) and a connector's socket — and both dispatch here.
+ * A command arrives from one door — a connector's socket (`connector.ts`) — and dispatches here.
  * The port exists so a test can hand the dispatch a stub conversation and read what a command did, without a provider, a
  * turn or a second of waiting: the six methods are the whole of what a command may do, so a new command means changing
- * this interface as well as the vocabulary in `events.ts`.
+ * this interface as well as `CONTROL_OPS` in `@mason/protocol`, which is the vocabulary the wire carries.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { CommandName } from "./events.ts";
+import type { ControlOp } from "@mason/protocol";
 import { integrationSummaries } from "./integration-status.ts";
 import { currentIntegrations } from "./integrations.ts";
 import type { AgentRuntime } from "./runtime.ts";
@@ -19,7 +19,7 @@ import { isBusy, queuedSubmissions, statusLine } from "./status.ts";
  *
  * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
  * without a provider, a turn or a second of waiting. The six methods are the whole of what a command may do, so a new
- * command means changing this interface as well as the vocabulary in `events.ts`.
+ * command means changing this interface as well as `CONTROL_OPS` in `@mason/protocol`.
  */
 export interface CommandTarget {
 	abort(): Promise<void>;
@@ -36,7 +36,7 @@ export interface CommandTarget {
 	 * Claims this command's id in the durable log, and answers whether the claim is new. A redelivery finds the claim and
 	 * is answered with nothing at all, so nothing runs twice.
 	 */
-	claim(requestId: string, command: CommandName, argument: string | undefined): Promise<boolean>;
+	claim(requestId: string, command: ControlOp, argument: string | undefined): Promise<boolean>;
 }
 
 /** What the three commands that change something answer a chat, in one word each: the person knows what happened. */
@@ -74,7 +74,7 @@ const CLEARING_AFTER_TURN = "clearing after this turn";
 export async function runCommand(
 	target: CommandTarget,
 	requestId: string,
-	command: CommandName,
+	command: ControlOp,
 	argument: string | undefined,
 ): Promise<string | undefined> {
 	switch (command) {
@@ -102,7 +102,7 @@ export async function runCommand(
 			return busy ? CLEARING_AFTER_TURN : ONE_WORD.clear;
 		}
 		default: {
-			// Every name in `COMMAND_NAMES` has an arm above, and this line is what makes a fifth one a compile error rather
+			// Every name in `CONTROL_OPS` has an arm above, and this line is what makes a fifth one a compile error rather
 			// than a command that answers nothing.
 			const unhandled: never = command;
 			throw new Error(`no arm for command ${String(unhandled)}`);

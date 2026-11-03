@@ -147,7 +147,7 @@ echo "[deploy] pinned $(wc -l < "$known_hosts") host key(s) for $MASON_ENV_ALIAS
 #   * it is not rewritten every boot. `npm run integration` writes this file too, so a missing mount is not an
 #     instruction to delete it: an operator who added an integration inside the container did not ask for a restart to
 #     undo it. Only content that differs is installed.
-#   * it is installed 0600, like everything else in `service/` — it holds each integration's trigger secret.
+#   * it is installed 0600, like everything else in `service/` — it holds each integration's connector grant.
 integrations_target="$service_dir/integrations.json"
 if [ -f "$MASON_INTEGRATIONS_SRC" ]; then
   if [ -f "$integrations_target" ] && [ "$(sha256sum "$MASON_INTEGRATIONS_SRC" | cut -d' ' -f1)" = "$(sha256sum "$integrations_target" | cut -d' ' -f1)" ]; then

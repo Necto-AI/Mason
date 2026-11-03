@@ -183,6 +183,13 @@ export interface HelloResult {
 	};
 	readonly inactive?: readonly { readonly face: FaceName; readonly reason: string }[];
 	readonly capabilities: readonly Capability[];
+	/**
+	 * The controls this socket may spend on `mason/control`, as the operator granted them. Absent is none.
+	 *
+	 * The grant is the ceiling and this is the connector's view of it: without the list a connector that was not granted
+	 * `stop` learns it only by spending a call that is refused, and cannot tell a missing permission from a typo.
+	 */
+	readonly commands?: readonly ControlOp[];
 	readonly limits: Limits;
 }
 

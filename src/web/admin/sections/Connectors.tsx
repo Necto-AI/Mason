@@ -1,5 +1,5 @@
 /**
- * Connectors: the entries, their grants, their policies, their credentials and their trigger.
+ * Connectors: the entries, their grants, their policies and their credentials.
  *
  * An integration's `connector` block is a ceiling, never a wish (`src/server/connectors.ts`): the actors it maps, the
  * rooms it may speak in, the event kinds it may fire, the state it may mirror, the tools it may run without asking and
@@ -12,7 +12,7 @@
  */
 import { useState } from "react";
 import type { ConnectorPatch, PanelConnector, PanelHealth, PanelState } from "../../../shared/admin.ts";
-import { Badge, Card, ErrorNote, Fact, Field, Once, Toggle, useAction } from "../ui.tsx";
+import { Badge, Card, ErrorNote, Field, Once, Toggle, useAction } from "../ui.tsx";
 
 type Config = NonNullable<PanelState["config"]>;
 
@@ -22,8 +22,6 @@ export interface ConnectorActions {
 	remove(name: string): Promise<unknown>;
 	mintCredential(name: string, replace: boolean): Promise<{ credential: string }>;
 	revokeCredential(id: string): Promise<unknown>;
-	mintTrigger(name: string, hook: string): Promise<{ secret: string }>;
-	removeTrigger(name: string): Promise<unknown>;
 }
 
 /**
@@ -83,7 +81,7 @@ function draftOf(connector: PanelConnector): Draft {
 		toolsUrl: connector.tools?.url ?? "",
 		toolsRequired: connector.tools?.required ?? false,
 		toolsCredential: "",
-		commands: connector.commands,
+		commands: grant?.commands === undefined ? [] : [...grant.commands],
 		hasConnector: grant !== null,
 		user:
 			grant?.user === undefined
@@ -166,6 +164,7 @@ function patchOf(draft: Draft): ConnectorPatch {
 									),
 								},
 					state: draft.state,
+					commands: draft.commands,
 					trustMarkers: draft.trustMarkers,
 					policy: {
 						allow: lines(draft.policy.allow),
@@ -174,7 +173,6 @@ function patchOf(draft: Draft): ConnectorPatch {
 					},
 				}
 			: null,
-		commands: draft.commands,
 	};
 }
 
@@ -212,7 +210,6 @@ function ConnectorCard({
 }) {
 	const [draft, setDraft] = useState<Draft>(() => draftOf(connector));
 	const [minted, setMinted] = useState<{ label: string; value: string } | undefined>(undefined);
-	const [hook, setHook] = useState(config.hooks[0]?.id ?? "");
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const action = useAction();
 	const update = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
@@ -237,7 +234,6 @@ function ConnectorCard({
 			{connector.tools === null ? null : <Badge tone="muted">tools</Badge>}
 			{connector.connector?.user === undefined ? null : <Badge tone="muted">user</Badge>}
 			{connector.connector?.events === undefined ? null : <Badge tone="muted">events</Badge>}
-			{connector.trigger === null ? null : <Badge tone="muted">trigger</Badge>}
 			{health === undefined ? null : health.connected ? (
 				<Badge tone="ok">connected</Badge>
 			) : connector.tools === null ? null : (
@@ -671,7 +667,9 @@ function ConnectorCard({
 							</Field>
 						</div>
 						<h5>Commands</h5>
-						<p className="hint">What this entry's trigger secret may ask beyond firing its hook.</p>
+						<p className="hint">
+							What this connector may ask for on <code>mason/control</code>: the four words a chat can send back.
+						</p>
 						<div className="check-row">
 							{config.commands.map((command) => (
 								<Checkbox
@@ -745,76 +743,6 @@ function ConnectorCard({
 							))}
 						</tbody>
 					</table>
-				)}
-			</div>
-
-			<div className="subcard">
-				<header className="subcard-head">
-					<h4>Trigger</h4>
-				</header>
-				{connector.trigger === null ? (
-					<div className="row-pair">
-						<select value={hook} onChange={(event) => setHook(event.currentTarget.value)}>
-							{config.hooks.map((entry) => (
-								<option key={entry.id} value={entry.id}>
-									{entry.name} ({entry.id})
-								</option>
-							))}
-						</select>
-						<button
-							type="button"
-							className="button"
-							disabled={action.pending || config.hooks.length === 0}
-							onClick={() =>
-								void action.run(async () => {
-									const mintedSecret = await actions.mintTrigger(connector.name, hook);
-									setMinted({ label: `trigger secret for ${connector.name}`, value: mintedSecret.secret });
-									await refresh();
-								})
-							}
-						>
-							Mint a secret
-						</button>
-					</div>
-				) : (
-					<div className="facts">
-						<Fact label="fires" value={<span className="mono">{connector.trigger.hook}</span>} />
-						<div className="row-inline">
-							<button
-								type="button"
-								className="button"
-								disabled={action.pending}
-								onClick={() =>
-									void action.run(async () => {
-										const mintedSecret = await actions.mintTrigger(
-											connector.name,
-											connector.trigger?.hook ?? hook,
-										);
-										setMinted({
-											label: `rotated trigger secret for ${connector.name}`,
-											value: mintedSecret.secret,
-										});
-										await refresh();
-									})
-								}
-							>
-								Rotate the secret
-							</button>
-							<button
-								type="button"
-								className="button ghost danger-text"
-								disabled={action.pending}
-								onClick={() =>
-									void action.run(async () => {
-										await actions.removeTrigger(connector.name);
-										await refresh();
-									})
-								}
-							>
-								Remove the trigger
-							</button>
-						</div>
-					</div>
 				)}
 			</div>
 

@@ -14,9 +14,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { DAEMON_ENV_ALLOWED, daemonCommand, daemonEnv } from "../src/server/env.ts";
 import { ensureHouse, housePaths } from "../src/server/house.ts";
 import {
+	CONNECTOR_FIRE_LIMIT,
 	createFireLimiter,
-	EVENT_FIRE_LIMIT,
-	EVENT_FIRE_WINDOW_MS,
+	FIRE_WINDOW_MS,
 	JSON_BODY_MAX_BYTES,
 	parseJsonObject,
 	readBodyCapped,
@@ -76,8 +76,8 @@ describe("the fire limit", () => {
 
 	it("defaults to a budget no honest sender needs to reach", () => {
 		const limiter = createFireLimiter({ now: () => 0 });
-		for (let index = 0; index < EVENT_FIRE_LIMIT; index += 1) assert.equal(limiter.take("hook"), undefined);
-		assert.equal(limiter.take("hook"), EVENT_FIRE_WINDOW_MS / 1000);
+		for (let index = 0; index < CONNECTOR_FIRE_LIMIT; index += 1) assert.equal(limiter.take("hook"), undefined);
+		assert.equal(limiter.take("hook"), FIRE_WINDOW_MS / 1000);
 	});
 });
 

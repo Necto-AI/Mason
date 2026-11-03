@@ -68,7 +68,8 @@ carries both.
 **Shipped**, with three differences from the shape this phase first proposed. The service is `asr/` in this repository
 — one container per stack rather than one on the host, in `deploy/compose.yaml` with its own weights volume — and it is
 CPU only, because the image carries no CUDA runtime and no driver to talk to, one `POST /transcribe`. And it is not an
-MCP tool: `mason-telegram` makes the HTTP call itself (`integrations/telegram/src/asr.ts`), which is why there is no
+MCP tool: `mason-telegram` makes the HTTP call itself (then `integrations/telegram/src/asr.ts`, now
+`github.com/DenisSud/mason-telegram`, #104), which is why there is no
 `transcribe(path)` tool and no skill teaching the model a procedure. The transcript arrives as a block that says it was
 spoken and not typed, and that label is the job the proposed skill had.
 

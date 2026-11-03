@@ -70,8 +70,9 @@ to change, so the day this repository has no Telegram in it, this still holds.
 - **The outbound contract is one delivery, not yet one path.** `send_to_user` recorded in the transcript is what
   reaches a person — `src/server/extensions/delivery.ts` (the header) performs no side effect at all: delivery is the call
   being committed — and the three projected cells are what a client is sent. Those are two halves of one guarantee,
-  and today they are two writes: the chat is written to by the integration's own `send_message`
-  (`integrations/telegram/src/mcp.ts:4`), the transcript by `send_to_user`, and nothing joins them. Reconciling them
+  and today they are two writes: the chat is written to by the integration's own `send_message` (then
+  `integrations/telegram/src/mcp.ts`, now the `mason-telegram` connector's tools face, #104), the transcript by
+  `send_to_user`, and nothing joins them. Reconciling them
   into one act — the message that reaches the person being the message the projection records — is work this
   decision owes, not an implementation detail.
 - **The control contract is what an interface drives.** `submit`, `withdrawSubmission`, `abort`, `reset`, `compact`,

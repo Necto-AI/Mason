@@ -108,6 +108,8 @@ export interface Session {
 	readonly protocol: { readonly major: number; readonly minor: number };
 	readonly faces: HelloResult["faces"];
 	readonly capabilities: readonly Capability[];
+	/** The controls mason granted this socket on `mason/control`. Empty is no vocabulary: a word is refused. */
+	readonly commands: readonly string[];
 	readonly limits: Limits;
 	readonly inactive: readonly { readonly face: string; readonly reason: string }[];
 }
@@ -312,6 +314,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 			protocol: { major: answer.protocol.major, minor: answer.protocol.minors?.[0] ?? PROTOCOL_MINOR },
 			faces: answer.faces,
 			capabilities: answer.capabilities,
+			commands: answer.commands ?? [],
 			limits: answer.limits,
 			inactive: answer.inactive ?? [],
 		};

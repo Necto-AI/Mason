@@ -866,10 +866,10 @@ describe("the configuration the panel writes", () => {
 					},
 					events: { hooks: { "issue-opened": "github-activity" } },
 					state: ["status", "projection"],
+					commands: ["stop", "status"],
 					trustMarkers: true,
 					policy: { allow: ["issues.list"], deny: ["issues.delete"] },
 				},
-				commands: ["stop"],
 			});
 			assert.equal(granted.status, 200, JSON.stringify(granted.body));
 			const config = (await panel.state()).config;
@@ -879,34 +879,31 @@ describe("the configuration the panel writes", () => {
 			assert.deepEqual(entry?.connector?.state, ["status", "projection"]);
 			assert.equal(entry?.connector?.trustMarkers, true);
 			assert.deepEqual(entry?.connector?.policy?.deny, ["issues.delete"]);
-			assert.deepEqual(entry?.commands, ["stop"]);
-			assert.deepEqual(entry?.trigger, null);
+			assert.deepEqual(entry?.connector?.commands, ["stop", "status"]);
 
 			// The file is the truth: what the panel wrote is what the next boot reads.
 			const file = JSON.parse(await readFile(housePaths(panel.home).integrations, "utf8")) as {
 				integrations: { github: Record<string, unknown> };
 			};
 			assert.deepEqual((file.integrations.github.connector as { state: string[] }).state, ["status", "projection"]);
-			assert.deepEqual(file.integrations.github.commands, ["stop"]);
+			assert.deepEqual((file.integrations.github.connector as { commands: string[] }).commands, ["stop", "status"]);
 			assert.deepEqual(file.integrations.github.tools, { url: "http://mason-github:8082/mcp" });
 
-			// A credential is only issued for an entry with a grant to open, and a trigger only for a hook this build has.
-			assert.equal((await panel.call("POST", "/api/admin/connectors/github/trigger", { hook: "nope" })).status, 400);
+			// A control the protocol does not have is refused before it is written, naming the whole set.
+			const refused = await panel.call("PUT", "/api/admin/connectors/github", {
+				connector: { state: ["status"], commands: ["stopp"], trustMarkers: false },
+			});
+			assert.equal(refused.status, 400, JSON.stringify(refused.body));
+			assert.match(refused.body.error, /"stopp"/);
+			assert.match(refused.body.error, /stop, compact, clear, status/);
+
+			// A credential is only issued for an entry with a grant to open.
 			const minted = await panel.call("POST", "/api/admin/connectors/github/credential", { replace: false });
 			assert.equal(minted.status, 200, JSON.stringify(minted.body));
 			assert.match(minted.body.credential, /^masonc_/);
-			const secret = await panel.call("POST", "/api/admin/connectors/github/trigger", { hook: "github-activity" });
-			assert.equal(secret.status, 200, JSON.stringify(secret.body));
-			assert.equal(typeof secret.body.secret, "string");
-			assert.equal(
-				(await panel.state()).config?.connectors.find((entry) => entry.name === "github")?.trigger?.hook,
-				"github-activity",
-			);
 			assert.equal((await panel.state()).config?.credentials.length, 1);
 			assert.equal((await panel.call("DELETE", `/api/admin/credentials/${minted.body.id}`)).status, 200);
 			assert.equal((await panel.state()).config?.credentials.length, 0);
-			assert.equal((await panel.call("DELETE", "/api/admin/connectors/github/trigger")).status, 200);
-			assert.equal((await panel.state()).config?.connectors[0]?.trigger, null);
 			assert.equal((await panel.call("DELETE", "/api/admin/connectors/github")).status, 200);
 			assert.equal((await panel.state()).config?.connectors.length, 0);
 		} finally {
