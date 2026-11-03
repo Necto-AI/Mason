@@ -1,5 +1,7 @@
 # mason defines one bot; apiary defines a team
 
+**Status:** Accepted, amended 2026-11-02
+
 > **Amended 2026-11-02** — a bot has one profession, and peers speak A2A rather than apiary carrying the message; see
 > the amendment at the end. The split itself is unchanged.
 

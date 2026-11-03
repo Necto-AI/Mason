@@ -1,5 +1,7 @@
 # The home is split: service-owned state on the server, agent-owned state on the tool machine
 
+**Status:** Accepted
+
 The bot's files must be editable with ordinary tools — `read`, `write`, `bash`, and later its own skills and
 extensions — which means they have to live on the machine those tools run on, not in the process that thinks. But the
 same directory today also holds the pairing-token hashes, the integration secrets, the SQLite database, the SSH key and a
