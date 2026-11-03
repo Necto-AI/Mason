@@ -10,8 +10,16 @@
  * `retry-failed-run` hook on a slower schedule (seconds → minutes) — as a hook event, not a message the user never
  * wrote. Each attempt is visible in the transcript, the budget is small and it resets on success or on anything the
  * user submits, and the `retry-failed-run` hook (fired from the panel's Hooks page) stays the manual way out.
+ *
+ * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so `reply` in it
+ * reaches the person who was waiting rather than committing to a transcript nobody in the chat can see (#83). And a
+ * person who writes after the failure supersedes it — their turn leads, so the pending re-fire is dropped instead of
+ * steering the instruction to resume into the turn they are watching.
  */
-import type { ConversationView } from "@earendil-works/pi-durable";
+import type { ConversationView, EntryRecord } from "@earendil-works/pi-durable";
+import type { Origin } from "@mason/protocol";
+import { CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
+import { isInputEntry, resumedOrigin } from "./replies.ts";
 import { isBusy } from "./status.ts";
 
 /** The hook the supervisor fires (`builtinHooks()` in `hooks.ts`); the panel's Hooks page fires the same one. */
@@ -66,12 +74,22 @@ export function planRunRetry(input: RunRetryInput): RunRetryPlan {
 	};
 }
 
-/** The newest entry that ended in a model error, and the newest answer that did not. Pure: reads the view only. */
+/** A person's own words, as the transcript places them: the console's default kind, or one a connector carried. */
+function isPersonInput(entry: EntryRecord): boolean {
+	return (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) && isInputEntry(entry);
+}
+
+/**
+ * The newest entry that ended in a model error, and what came after it: an answer (the failure was made good) or a
+ * person's own words (their turn leads). Pure: reads the view only.
+ */
 export function readRunOutcome(view: ConversationView | undefined): {
 	errorId: string | undefined;
 	errorMessage: string | undefined;
 	/** Does the transcript hold an answer newer than that error? Then the failure was already made good. */
 	answeredAfterError: boolean;
+	/** Did a person write after that error? Then their turn leads, and the failed one is not resumed under them. */
+	superseded: boolean;
 } {
 	const entries = view?.entries ?? [];
 	let errorIndex = -1;
@@ -85,17 +103,24 @@ export function readRunOutcome(view: ConversationView | undefined): {
 		errorId = String(entry.id);
 		errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
 	});
-	if (errorId === undefined) return { errorId: undefined, errorMessage: undefined, answeredAfterError: false };
-	const answeredAfterError = entries.slice(errorIndex + 1).some((entry) => entry.kind === "pi.assistant");
-	return { errorId, errorMessage, answeredAfterError };
+	if (errorId === undefined) {
+		return { errorId: undefined, errorMessage: undefined, answeredAfterError: false, superseded: false };
+	}
+	const after = entries.slice(errorIndex + 1);
+	return {
+		errorId,
+		errorMessage,
+		answeredAfterError: after.some((entry) => entry.kind === "pi.assistant"),
+		superseded: after.some(isPersonInput),
+	};
 }
 
 /**
- * Holds the supervisor's memory and its timer: `observe` on every committed view, `acted` when the user submits.
- * `fire` is called with the failure text once a plan matures.
+ * Holds the supervisor's memory and its timer: `observe` on every committed view, which is also what notices a person
+ * taking over. `fire` is called with the failure text and the origin the retry inherits once a plan matures.
  */
 export class RunRetrySupervisor {
-	readonly #fire: (error: string) => Promise<void> | void;
+	readonly #fire: (error: string, origin: Origin | undefined) => Promise<void> | void;
 	readonly #options: Required<RunRetryOptions>;
 	readonly #timer: {
 		set: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -109,7 +134,7 @@ export class RunRetrySupervisor {
 	#closed = false;
 
 	constructor(
-		fire: (error: string) => Promise<void> | void,
+		fire: (error: string, origin: Origin | undefined) => Promise<void> | void,
 		options: RunRetryOptions = {},
 		timer: {
 			set: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -134,10 +159,13 @@ export class RunRetrySupervisor {
 		if (this.#closed) return;
 		const outcome = readRunOutcome(view);
 		// A good answer, or a fresh user input, clears the budget: the next failure starts over.
-		if (outcome.errorId === undefined || outcome.answeredAfterError) {
+		if (outcome.errorId === undefined || outcome.answeredAfterError || outcome.superseded) {
 			this.#attempts = 0;
 			this.#handledErrorId = outcome.errorId;
 		}
+		// A person wrote after the failure: a retry fired now would steer its instruction into the turn they are watching,
+		// and the answer would reach them twice. Their turn leads, so the pending re-fire is dropped.
+		if (outcome.superseded) this.#standDown();
 		const plan = planRunRetry({
 			busy: isBusy(view),
 			errorId: outcome.errorId,
@@ -154,19 +182,21 @@ export class RunRetrySupervisor {
 		console.warn(
 			`[run-retry] run failed (${plan.error}); retry ${plan.attempt}/${this.#options.maxAttempts} in ${Math.round(plan.delayMs / 1000)}s`,
 		);
+		// The origin is read with the plan, not with the fire: the turn that failed is the newest input at this moment, and
+		// a later sync may have moved on from it.
+		const origin = resumedOrigin(view?.entries ?? []);
 		const generation = ++this.#generation;
 		this.#pending = this.#timer.set(() => {
 			this.#pending = undefined;
 			if (this.#closed || generation !== this.#generation) return;
-			void Promise.resolve(this.#fire(plan.error)).catch((error: unknown) => {
+			void Promise.resolve(this.#fire(plan.error, origin)).catch((error: unknown) => {
 				console.error("[run-retry] could not fire the retry hook:", error);
 			});
 		}, plan.delayMs);
 	}
 
-	/** The user did something: drop the pending re-fire and let their input lead. */
-	acted(): void {
-		this.#attempts = 0;
+	/** Drop the pending re-fire, so a timer already dispatched cannot fire it. */
+	#standDown(): void {
 		this.#generation += 1;
 		if (this.#pending !== undefined) {
 			this.#timer.clear(this.#pending);
@@ -176,6 +206,6 @@ export class RunRetrySupervisor {
 
 	close(): void {
 		this.#closed = true;
-		this.acted();
+		this.#standDown();
 	}
 }

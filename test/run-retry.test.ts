@@ -8,16 +8,18 @@ import { planRunRetry, RunRetrySupervisor, readRunOutcome } from "../src/server/
 
 /** A view with nothing but the entries a test cares about. `live` decides whether the run is still going. */
 function viewOf(
-	entries: Array<{ id: number; kind: string; stopReason?: string; errorMessage?: string }>,
+	entries: Array<{ id: number; kind: string; stopReason?: string; errorMessage?: string; data?: unknown }>,
 	busy = false,
 ): ConversationView {
 	return {
 		entries: entries.map((entry) => ({
 			id: entry.id,
 			kind: entry.kind,
+			...(entry.data === undefined ? {} : { data: entry.data }),
 			model: [
 				{
-					role: entry.kind === "pi.user" ? "user" : "assistant",
+					// Every kind that carries somebody's words is a user message; the rest of these views is the model's.
+					role: entry.kind === "pi.assistant" ? "assistant" : "user",
 					content: [{ type: "text", text: "…" }],
 					...(entry.stopReason === undefined ? {} : { stopReason: entry.stopReason }),
 					...(entry.errorMessage === undefined ? {} : { errorMessage: entry.errorMessage }),
@@ -27,6 +29,9 @@ function viewOf(
 		docs: busy ? { "pi.live": { run: { taskId: 1 } } } : {},
 	} as unknown as ConversationView;
 }
+
+/** The origin a person's words through a connector carry, and the shape a retry has to hand back. */
+const TELEGRAM = { connector: "telegram", externalConversationId: "-1001234" };
 
 const base = { handledErrorId: undefined, attempts: 0, maxAttempts: 3, delaysMs: [15_000, 60_000, 300_000] };
 
@@ -82,7 +87,12 @@ test("readRunOutcome finds the newest failure and whether an answer followed it"
 			{ id: 2, kind: "pi.assistant", stopReason: "stop" },
 		]),
 	);
-	assert.deepEqual(clean, { errorId: undefined, errorMessage: undefined, answeredAfterError: false });
+	assert.deepEqual(clean, {
+		errorId: undefined,
+		errorMessage: undefined,
+		answeredAfterError: false,
+		superseded: false,
+	});
 
 	const failed = readRunOutcome(
 		viewOf([
@@ -105,6 +115,25 @@ test("readRunOutcome finds the newest failure and whether an answer followed it"
 	);
 	assert.equal(recovered.errorId, "2");
 	assert.equal(recovered.answeredAfterError, true);
+});
+
+test("a person who writes after the failure supersedes it, and a fire does not", () => {
+	const superseded = readRunOutcome(
+		viewOf([
+			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+			{ id: 3, kind: "app.connector", data: { origin: TELEGRAM } },
+		]),
+	);
+	assert.equal(superseded.superseded, true, "their words are newer than the failure, and their turn leads");
+
+	// A fire is work arriving, not a person taking the turn over: the failed one is still nobody's answer.
+	const fired = readRunOutcome(
+		viewOf([
+			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+			{ id: 3, kind: "app.hook" },
+		]),
+	);
+	assert.equal(fired.superseded, false);
 });
 
 test("the supervisor fires the retry hook once per failure and gives up after its budget", async () => {
@@ -161,6 +190,59 @@ test("the supervisor fires the retry hook once per failure and gives up after it
 	supervisor.close();
 });
 
+test("a retry inherits the origin of the turn it resumes", async () => {
+	const fired: Array<{ error: string; origin: unknown }> = [];
+	const scheduled: Array<() => void> = [];
+	const supervisor = new RunRetrySupervisor(
+		(error, origin) => {
+			fired.push({ error, origin });
+		},
+		{ maxAttempts: 3, delaysMs: [1_000] },
+		{
+			set: (fn) => {
+				scheduled.push(fn);
+				return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+			},
+			clear: () => {},
+		},
+	);
+
+	// A person wrote in the chat and the run that answered them died: the retry resumes that turn, so it answers there.
+	supervisor.observe(
+		viewOf([
+			{ id: 1, kind: "app.connector", data: { origin: TELEGRAM } },
+			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+		]),
+	);
+	scheduled[0]?.();
+	await Promise.resolve();
+	assert.deepEqual(fired, [{ error: "terminated", origin: TELEGRAM }]);
+
+	// A fire that named its conversation inherits it too: the person behind the fire is the one waiting.
+	supervisor.observe(
+		viewOf([
+			{ id: 3, kind: "app.hook", data: { hookId: "team-chat", origin: TELEGRAM } },
+			{ id: 4, kind: "pi.assistant", stopReason: "error", errorMessage: "Connection error." },
+		]),
+	);
+	scheduled[1]?.();
+	await Promise.resolve();
+	assert.deepEqual(fired[1], { error: "Connection error.", origin: TELEGRAM });
+
+	// A console turn has no chat behind it, so the retry inherits nothing and reaches nobody — the same as before.
+	supervisor.observe(
+		viewOf([
+			{ id: 5, kind: "pi.user" },
+			{ id: 6, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+		]),
+	);
+	scheduled[2]?.();
+	await Promise.resolve();
+	assert.equal(fired[2]?.origin, undefined);
+
+	supervisor.close();
+});
+
 test("the supervisor stands down when the reader submits, and after a good answer", async () => {
 	const fired: string[] = [];
 	const scheduled: Array<{ fn: () => void; ms: number }> = [];
@@ -184,8 +266,13 @@ test("the supervisor stands down when the reader submits, and after a good answe
 	const failed = viewOf([{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" }]);
 	supervisor.observe(failed);
 	assert.equal(scheduled.length, 1);
-	// the reader takes over: the pending re-fire is dropped
-	supervisor.acted();
+	// the reader takes over: their words are newer than the failure, so the pending re-fire is dropped
+	supervisor.observe(
+		viewOf([
+			{ id: 2, kind: "pi.assistant", stopReason: "error", errorMessage: "terminated" },
+			{ id: 3, kind: "app.connector", data: { origin: TELEGRAM } },
+		]),
+	);
 	assert.equal(cleared, 1);
 	scheduled[0]?.fn();
 	await Promise.resolve();
