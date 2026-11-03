@@ -1,6 +1,7 @@
 # 10. Tools are live, and every call passes one gateway
 
-Date: 2026-11-02
+**Status:** Accepted
+**Date:** 2026-11-02
 
 ## Context
 
