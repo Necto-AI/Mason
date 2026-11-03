@@ -238,3 +238,85 @@ function gate(pathname) {
 		["/api/"],
 	);
 });
+
+test("a guard that exists only in a comment is not a guard", () => {
+	// The shape a real diff takes: the call is deleted, the sentence that names it stays. Reading the raw source would
+	// report the door as gated by a line that no longer runs.
+	const sources = fixture(`
+async function handle(request, response, url, store) {
+	if (url.pathname === "/api/debug") {
+		// const auth = await authenticate(request, store);
+		return json(response, 200, {});
+	}
+}
+`);
+	const { rows, unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/api/debug", match: "exact", at: "fixture.ts:3" }]);
+	assert.deepEqual(rows, []);
+});
+
+test("a guard in a preceding block that this path never enters does not gate a later route", () => {
+	// A sibling branch's `requireGrant` is that branch's, not the function's: attributing it to a route below would make
+	// the check dead in the one file that needs it.
+	const sources = fixture(`
+async function handleAdmin(url, response, grants) {
+	if (url.pathname.startsWith("/api/admin/connectors")) {
+		requireGrant(grants, "admin");
+		return json(response, 200, {});
+	}
+	if (url.pathname === "/api/admin/debug") {
+		return json(response, 200, {});
+	}
+}
+`);
+	const { unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/api/admin/debug", match: "exact", at: "fixture.ts:7" }]);
+});
+
+test("a gate that closed before the route still guards it, when its condition admits the path", () => {
+	// The `/api/` gate in `main.ts`: one `if`, closed, and every route under it served afterwards. The condition is what
+	// ties the two together, so a route the condition excludes is not covered by it.
+	const sources = fixture(`
+async function handle(request, response, url, store) {
+	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
+		const auth = await authenticate(request, store);
+		if (!auth.ok) return;
+	}
+	if (url.pathname === "/api/session") {
+		return json(response, 200, {});
+	}
+	if (url.pathname === "/elsewhere") {
+		return json(response, 200, {});
+	}
+}
+`);
+	const { rows, unguarded } = routeRows(sources);
+	assert.deepEqual(unguarded, [{ route: "/elsewhere", match: "exact", at: "fixture.ts:10" }]);
+	assert.deepEqual(
+		rows.map((row) => [row.route, row.guard]),
+		[
+			["/api/", "`authenticate`"],
+			["/api/session", "`authenticate`"],
+		],
+	);
+});
+
+test("a handler that filters by grant is not reported as refusing that grant for every path", () => {
+	const sources = fixture(`
+async function handleOperatorRequest(request, response, url, grants) {
+	if (url.pathname.startsWith("/api/admin/")) {
+		await handleAdmin(request, response, url, grants);
+		return;
+	}
+}
+
+async function handleAdmin(request, response, url, grants) {
+	if (area === "connectors") {
+		requireGrant(grants, "admin");
+	}
+	json(response, 200, await panelState(deps, grants));
+}
+`);
+	const { rows } = routeRows(sources);
+	assert.equal(rows[0]?.guard, "`admin`, filtered per area (delegated to `handleAdmin`)");
+});

@@ -14,7 +14,7 @@
  * The count is whitespace-split tokens with code fences included: a table row, a shell command and a paragraph all cost
  * what they cost, and a rule with a fence around it is not free.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +26,8 @@ export const MANIFEST_PATH = "docs/doc-budgets.json";
 export interface Manifest {
 	/** A path relative to the repository root, and the most words it may hold. */
 	readonly ceilings: Readonly<Record<string, number>>;
+	/** Documents a script writes. They are as long as the code they describe, so they carry no ceiling. */
+	readonly generated: readonly string[];
 }
 
 export interface Row {
@@ -43,6 +45,31 @@ export interface Audit {
 	readonly over: readonly string[];
 	/** Entries whose file is gone, as the sentence to print. */
 	readonly missing: readonly string[];
+	/** Documents in the tiers the manifest covers that carry no ceiling, as the sentence to print. */
+	readonly unlisted: readonly string[];
+}
+
+/**
+ * The documents the manifest claims to cover, found by walking rather than by listing.
+ *
+ * The manifest is the list of ceilings, so a document missing from it is invisible to an audit that only reads the
+ * manifest: a new `docs/FOO.md` of any length would pass. This is the set that must be in it — the root documents and
+ * the top level of `docs/` — and the subdirectories are the ones that are exempt on purpose: `docs/adr/` is a record of
+ * decisions, `docs/agents/` is process, and `docs/research/` is evidence whose length belongs to its question.
+ */
+export function governedDocuments(base: string, manifest: Manifest): string[] {
+	const found: string[] = [];
+	for (const entry of readdirSync(base, { withFileTypes: true })) {
+		if (entry.isFile() && entry.name.endsWith(".md")) found.push(entry.name);
+	}
+	try {
+		for (const entry of readdirSync(join(base, "docs"), { withFileTypes: true })) {
+			if (entry.isFile() && entry.name.endsWith(".md")) found.push(`docs/${entry.name}`);
+		}
+	} catch {
+		// A directory with no `docs/` is a temporary one a test points at; there is nothing to govern.
+	}
+	return found.filter((file) => !manifest.generated.includes(file)).sort();
 }
 
 /** The words in a document, as a person counts them while reading it: whitespace-separated tokens. */
@@ -74,7 +101,17 @@ export function readManifest(text: string, from = MANIFEST_PATH): Manifest {
 		}
 		checked[file] = ceiling;
 	}
-	return { ceilings: checked };
+	const rawGenerated = (parsed as { generated?: unknown } | null)?.generated;
+	if (rawGenerated !== undefined && !Array.isArray(rawGenerated)) {
+		throw new Error(`${from}: "generated" must be a list of paths`);
+	}
+	const generated: string[] = [];
+	for (const file of Array.isArray(rawGenerated) ? rawGenerated : []) {
+		if (typeof file !== "string") throw new Error(`${from}: "generated" has a non-string entry`);
+		if (file in checked) throw new Error(`${from}: "${file}" is generated and has a ceiling; pick one`);
+		generated.push(file);
+	}
+	return { ceilings: checked, generated };
 }
 
 /**
@@ -86,6 +123,7 @@ export function audit(manifest: Manifest, base: string): Audit {
 	const rows: Row[] = [];
 	const over: string[] = [];
 	const missing: string[] = [];
+	const unlisted: string[] = [];
 	for (const [file, ceiling] of Object.entries(manifest.ceilings)) {
 		let text: string;
 		try {
@@ -98,7 +136,10 @@ export function audit(manifest: Manifest, base: string): Audit {
 		rows.push({ file, words, ceiling, headroom: ceiling - words });
 		if (words > ceiling) over.push(`${file} (${words} words > ${ceiling})`);
 	}
-	return { rows, over, missing };
+	for (const file of governedDocuments(base, manifest)) {
+		if (!(file in manifest.ceilings)) unlisted.push(`${file} (no ceiling; add one at its current size)`);
+	}
+	return { rows, over, missing, unlisted };
 }
 
 function table(rows: readonly Row[]): string {
@@ -125,17 +166,18 @@ function main(): never {
 		console.error(`[doc-budget] ${(error as Error).message}`);
 		process.exit(1);
 	}
-	const { rows, over, missing } = audit(manifest, root);
+	const { rows, over, missing, unlisted } = audit(manifest, root);
 	const entries = rows.length + missing.length;
 	if (!check) console.log(table(rows));
 	for (const line of over) console.error(`[doc-budget] over budget: ${line}`);
 	for (const line of missing) console.error(`[doc-budget] missing file: ${line}`);
-	if (over.length === 0 && missing.length === 0) {
+	for (const line of unlisted) console.error(`[doc-budget] no ceiling: ${line}`);
+	if (over.length === 0 && missing.length === 0 && unlisted.length === 0) {
 		console.log(`[doc-budget] ${entries} files, all inside their ceilings`);
 		process.exit(0);
 	}
 	console.error(
-		`[doc-budget] ${entries} files, ${over.length} over budget and ${missing.length} missing: cut the words, or fix the entry in ${MANIFEST_PATH}`,
+		`[doc-budget] ${entries} files, ${over.length} over budget, ${missing.length} missing and ${unlisted.length} with no ceiling: cut the words, or fix the entry in ${MANIFEST_PATH}`,
 	);
 	process.exit(1);
 }
