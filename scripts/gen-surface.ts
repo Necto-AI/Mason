@@ -252,6 +252,31 @@ export function maskComments(text: string): string {
 			if (out[at] !== "\n") out[at] = " ";
 		}
 	};
+	/** Where a regex literal opened at `at` ends, or -1 when it does not end on this line. */
+	const regexEnd = (at: number): number => {
+		let inClass = false;
+		for (let cursor = at + 1; cursor < text.length; cursor++) {
+			const char = text[cursor];
+			if (char === "\n") return -1;
+			if (char === "\\") {
+				cursor++;
+				continue;
+			}
+			if (char === "[") inClass = true;
+			else if (char === "]") inClass = false;
+			else if (char === "/" && !inClass) return cursor + 1;
+		}
+		return -1;
+	};
+	/** Whether a `/` here opens a regex rather than dividing: it follows a token that cannot end an expression. */
+	const opensRegex = (at: number): boolean => {
+		let back = at - 1;
+		while (back >= 0 && /\s/.test(text[back] ?? "")) back--;
+		if (back < 0) return true;
+		if ("(,=:[!&|?{};+-*%<>~^".includes(text[back] ?? "")) return true;
+		const word = /(\w+)$/.exec(text.slice(Math.max(0, back - 8), back + 1))?.[1] ?? "";
+		return ["return", "typeof", "case", "in", "of", "new", "delete", "void", "else", "do", "yield"].includes(word);
+	};
 	let at = 0;
 	while (at < text.length) {
 		const char = text[at];
@@ -269,11 +294,25 @@ export function maskComments(text: string): string {
 			at = stop;
 			continue;
 		}
-		// Skip a string whole, so a `//` inside one (`"https://…"`) is not read as the start of a comment.
+		// A regex literal holds quotes (`/['"]/`), so it has to be skipped whole or its apostrophe opens a string that
+		// runs to the next quote in the file — and everything between, comments included, is then read as code.
+		if (char === "/" && opensRegex(at)) {
+			const stop = regexEnd(at);
+			if (stop !== -1) {
+				at = stop;
+				continue;
+			}
+		}
+		// A string is skipped whole, so a `//` inside one (`"https://…"`) is not read as a comment. An unterminated `"` or
+		// `'` cannot span a line, so a newline means it was not a string after all and the scan stays in code.
 		if (char === '"' || char === "'" || char === "`") {
 			let cursor = at + 1;
-			while (cursor < text.length && text[cursor] !== char) cursor += text[cursor] === "\\" ? 2 : 1;
-			at = cursor + 1;
+			while (cursor < text.length && text[cursor] !== char) {
+				if (text[cursor] === "\\") cursor++;
+				else if (text[cursor] === "\n" && char !== "`") break;
+				cursor++;
+			}
+			at = text[cursor] === char ? cursor + 1 : at + 1;
 			continue;
 		}
 		at++;
@@ -334,6 +373,21 @@ function directGuards(text: string, comments: string, ranges: readonly Range[], 
 		const holder = innermost(ranges, guard.index);
 		return holder !== undefined && holder.start === region.start;
 	});
+}
+
+/**
+ * Whether a block is entered for `route`, all the way down: every `if` that encloses it must be a path test that holds.
+ *
+ * A path test nested under a method test (`if (method === "POST") { if (pathname.startsWith("/api/")) { requireGrant() } }`)
+ * is a gate on POSTs, not on the routes below it, so the chain is the fact that matters and not the nearest condition.
+ */
+function admits(comments: string, ranges: readonly Range[], outermost: Range, block: Range, route: string): boolean {
+	let cursor: Range | undefined = block;
+	while (cursor !== undefined && cursor.start > outermost.start) {
+		if (admission(comments, cursor)?.(route) !== true) return false;
+		cursor = innermost(ranges, cursor.start);
+	}
+	return true;
 }
 
 /**
@@ -448,7 +502,7 @@ function guardFor(
 	if (outermost !== undefined) {
 		const admitting = ranges
 			.filter((range) => range.start > outermost.start && range.end < literal.index)
-			.filter((range) => admission(comments, range)?.(literal.route) === true)
+			.filter((range) => admits(comments, ranges, outermost, range, literal.route))
 			.sort((left, right) => right.start - left.start);
 		for (const range of admitting) {
 			const guards = nearest(directGuards(text, comments, ranges, range));
@@ -698,7 +752,7 @@ export function renderSurface(sources: readonly Source[] = readSources()): strin
 	parts.push("");
 	parts.push(
 		wrap(
-			"`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the literal opens, or in a block above it that this path enters — the `/api/` gate is one `if` that closes, and every route under it is served after the block ended — or, failing that, in the handler it delegates to. When the block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which; `filtered per area` means that handler refuses the grant for the areas it owns and hands the device's grants to a function that filters the payload instead (the panel's `state` and `control` answer a device holding `conversation`, which `test/panel.test.ts` pins). A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it.",
+			"`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the literal opens, or in a block above it that this path enters — the `/api/` gate is one `if` that closes, and every route under it is served after the block ended — or, failing that, in the handler it delegates to. When the block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which; `filtered per area` means that handler refuses the grant for the areas it owns and hands the device's grants to a function that filters the payload instead (the panel's `state` and `control` answer a device holding `conversation`, which `test/panel.test.ts` pins). A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the guard is the same — which is sometimes a predicate (`isShellPath`) rather than the handler that serves it. A path behind two doors keeps two rows: `/api/admin/` passes the server's `authenticate` and then the panel's own grant, and both are true.",
 		),
 	);
 	parts.push("");

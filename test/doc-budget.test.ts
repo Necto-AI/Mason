@@ -112,11 +112,14 @@ test("a generated document is exempt by name, and may not also carry a ceiling",
 	);
 });
 
-test("a subdirectory is exempt on purpose: adr, agents and research are not the tiers the manifest covers", async () => {
+test("the three record directories are exempt, and every other subdirectory is not", async () => {
+	// The exemption is a list, not "the walk stops at the top of docs/": `docs/plans/HUGE.md` is a document and has to
+	// carry a ceiling, while a decision, a process page and a research run are records of their own.
 	const base = await workspace({
 		"docs/adr/0001-a.md": words(2000),
 		"docs/research/x/INDEX.md": words(2000),
+		"docs/plans/HUGE.md": words(2000),
 	});
 	const report = audit({ generated: [], ceilings: {} }, base);
-	assert.deepEqual(report.unlisted, []);
+	assert.deepEqual(report.unlisted, ["docs/plans/HUGE.md (no ceiling; add one at its current size)"]);
 });

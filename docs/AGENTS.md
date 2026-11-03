@@ -35,9 +35,8 @@ which is current. This page is the map of which tier a sentence belongs to, and 
 
 `docs/doc-budgets.json` holds one ceiling per document, and `npm run check:docs` measures each one against it — CI runs
 the check beside the surface check, so a document that grew past its number fails the pull request that grew it. The
-check also walks the tiers this page governs (the root, and the top of `docs/`), so a new document with no entry fails
-rather than escaping by not being listed; `docs/adr/`, `docs/agents/` and `docs/research/` are exempt on purpose. The
-count is whitespace-separated words with code fences included.
+check walks what this page governs, the root and `docs/` (but not `adr/`, `agents/` or `research/`), so a new document
+with no entry fails instead of escaping by not being listed. The count is whitespace-separated words, fences included.
 
 - Every ceiling started at the file's size when the budget was introduced, rounded up to the next 50 words. The pull
   request that added it is green because a ratchet has to start where the file is.
