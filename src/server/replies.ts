@@ -199,6 +199,18 @@ export function targetOfOrigin(origin: Origin): ReplyTarget {
 	return { connector: origin.connector, externalConversationId: origin.externalConversationId };
 }
 
+/**
+ * The origin a turn that resumes an older one inherits: where the turn it resumes was answering, or nowhere.
+ *
+ * A retry is a fire, so the turn it starts has no input of its own to route by — the person waiting on the run that died
+ * is behind an older entry. Handing that entry's origin to the fire is what makes the resumed turn's `reply` reach them;
+ * without it the answer is committed to a transcript nobody in the chat can see, which is what #83 caught.
+ */
+export function resumedOrigin(entries: readonly EntryRecord[]): Origin | undefined {
+	const origin = turnOriginOf(entries);
+	return origin.kind === "console" ? undefined : origin.origin;
+}
+
 /** How far back a turn's input can be — a round of tool calls is one entry each, and a page always ends. */
 const TURN_INPUT_PAGE = 128;
 const TURN_INPUT_MAX_PAGES = 16;

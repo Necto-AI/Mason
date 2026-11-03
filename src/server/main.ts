@@ -90,9 +90,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// not one per object: it is a policy over the one shared conversation, and a copy per person would each fire its own
 	// retry for the same failure.
 	const retryOptions = retryOptionsFromEnv();
-	const supervisor = new RunRetrySupervisor(async (error) => {
-		// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one.
-		await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error });
+	const supervisor = new RunRetrySupervisor(async (error, origin) => {
+		// A retry is a gesture: each attempt is its own fire, and resuming from its own context never resurrects one. It
+		// carries the origin of the turn it resumes, so the retry's `reply` goes back to whoever was waiting (#83).
+		await runtime.hooks.fire(RETRY_HOOK_ID, { payload: error, ...(origin === undefined ? {} : { origin }) });
 	}, retryOptions);
 
 	// The prompt-cache report, one line per finished run. The watch is the server's own, not a browser's — a run

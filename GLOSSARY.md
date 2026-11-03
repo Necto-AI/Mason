@@ -285,7 +285,8 @@ _Avoid_: user (for the actor), author (that is the roster name on a message)
 
 **origin**:
 The connector and external conversation a submission (or a fire) came from, and therefore the destination of its
-ordinary reply. It is structured data on the entry, never prose in a prompt.
+ordinary reply. It is structured data on the entry, never prose in a prompt. A retry inherits the origin of the turn it
+resumes, so a resumed answer still has its chat.
 _Avoid_: source, channel, session
 
 **device**:
