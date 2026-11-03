@@ -79,6 +79,43 @@ function isPersonInput(entry: EntryRecord): boolean {
 	return (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) && isInputEntry(entry);
 }
 
+/** One failed assistant entry: where it sits, and what it said. */
+interface Failure {
+	readonly index: number;
+	readonly id: string;
+	readonly message: string | undefined;
+}
+
+/** The newest assistant entry that ended in `stopReason: "error"`, or `undefined` when the run came clean. */
+function newestFailure(entries: readonly EntryRecord[]): Failure | undefined {
+	let failure: Failure | undefined;
+	entries.forEach((entry, index) => {
+		if (entry.kind !== "pi.assistant") return;
+		const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
+		if (message?.stopReason !== "error") return;
+		failure = {
+			index,
+			id: String(entry.id),
+			message: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
+		};
+	});
+	return failure;
+}
+
+/**
+ * Where a retry's words go: the origin of the turn the failure interrupted, read from the entries before it.
+ *
+ * Not the newest input. Between the failure and the re-fire — fifteen seconds, or fifteen minutes — an ordinary fire can
+ * land: a scheduled check, another connector's event, an operator pressing any hook on the panel. Inheriting that fire's
+ * destination would send the resumed answer to a chat that never asked for it, and one that named no conversation would
+ * blank the resume back to "nobody was reached" with the failure still unanswered (#83).
+ */
+export function retryOrigin(view: ConversationView | undefined): Origin | undefined {
+	const entries = view?.entries ?? [];
+	const failure = newestFailure(entries);
+	return failure === undefined ? undefined : resumedOrigin(entries.slice(0, failure.index));
+}
+
 /**
  * The newest entry that ended in a model error, and what came after it: an answer (the failure was made good) or a
  * person's own words (their turn leads). Pure: reads the view only.
@@ -92,24 +129,14 @@ export function readRunOutcome(view: ConversationView | undefined): {
 	superseded: boolean;
 } {
 	const entries = view?.entries ?? [];
-	let errorIndex = -1;
-	let errorId: string | undefined;
-	let errorMessage: string | undefined;
-	entries.forEach((entry, index) => {
-		if (entry.kind !== "pi.assistant") return;
-		const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
-		if (message?.stopReason !== "error") return;
-		errorIndex = index;
-		errorId = String(entry.id);
-		errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
-	});
-	if (errorId === undefined) {
+	const failure = newestFailure(entries);
+	if (failure === undefined) {
 		return { errorId: undefined, errorMessage: undefined, answeredAfterError: false, superseded: false };
 	}
-	const after = entries.slice(errorIndex + 1);
+	const after = entries.slice(failure.index + 1);
 	return {
-		errorId,
-		errorMessage,
+		errorId: failure.id,
+		errorMessage: failure.message,
 		answeredAfterError: after.some((entry) => entry.kind === "pi.assistant"),
 		superseded: after.some(isPersonInput),
 	};
@@ -182,9 +209,9 @@ export class RunRetrySupervisor {
 		console.warn(
 			`[run-retry] run failed (${plan.error}); retry ${plan.attempt}/${this.#options.maxAttempts} in ${Math.round(plan.delayMs / 1000)}s`,
 		);
-		// The origin is read with the plan, not with the fire: the turn that failed is the newest input at this moment, and
-		// a later sync may have moved on from it.
-		const origin = resumedOrigin(view?.entries ?? []);
+		// The origin is read with the plan, not with the fire: the turn that failed is what the retry resumes, and a later
+		// sync may have moved on from it.
+		const origin = retryOrigin(view);
 		const generation = ++this.#generation;
 		this.#pending = this.#timer.set(() => {
 			this.#pending = undefined;
