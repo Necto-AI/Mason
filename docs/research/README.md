@@ -1,7 +1,7 @@
 # Research, and what it changed
 
-Five runs, in the order they happened. Each is a directory with an index of its own; this page exists so that nobody
-starts a sixth one without knowing what the first five already answered.
+Six runs, in the order they happened. Each is a directory with an index of its own; this page exists so that nobody
+starts a seventh one without knowing what the first six already answered.
 
 | Run | Question it was asked | Files | Sources | What it actually decided |
 |---|---|---|---|---|
@@ -11,6 +11,7 @@ starts a sixth one without knowing what the first five already answered.
 | [`agent-computers.md`](agent-computers.md) (2026-10-26) | Can every agent have a real computer, snapshotted and asleep when idle? Firecracker against Cloud Hypervisor, Kata, gVisor, libkrun and the managed sandboxes | 1 | 60+ | The VMM that meets all of it is Cloud Hypervisor, not Firecracker: Firecracker refuses virtiofs and 9p, so a host directory cannot be shared, and its rootless story is a PoC. **Firecracker was chosen anyway on 2026-11-02** — the file service and a privileged supervisor became work instead of a reason to switch ([`../adr/0009`](../adr/0009-firecracker-first-then-a-shared-vm.md)); [`../ENV-PLAN.md`](../ENV-PLAN.md) is built on that |
 | [`browser-service/`](browser-service/INDEX.md) (2026-11-01) | What should the browser be? A service the agent drives over CDP and a person can take over, with Bitwarden filling logins | 2 | 25 | The browser is a service, not a library: Steel is the only self-hostable session API under a usable licence, Kernel is a better box with no session API, Browserbase ships nothing to run, browserless is SSPL. A handoff is a lease nobody sells; a credential is filled, never read |
 | [`yandex-integrations/`](yandex-integrations/INDEX.md) (2026-10-26) | Can mason reach Denis's Yandex Disk, Calendar and Mail, and what does each cost? | 3 | 107 | Three protocols, no webhooks: Disk is one OAuth token, Calendar is CalDAV with a password that never expires, Mail is IMAP/SMTP with an error taxonomy nobody wrote down. All three are the `mason-telegram` shape. **Later work since 2026-11-02**: Gmail and Google Calendar come first for the application bot; this run stays the design for when Yandex is built |
+| [`local-model-harness/`](local-model-harness/INDEX.md) (2026-11-03) | What changes in a harness and its system prompt when the model is a 27B-class local model (Qwen 3.8 27B) rather than a frontier model, and what is measured rather than repeated? | 5 | 30+ | The harness layer: at 27B the same model spans 5 to 16 points across harnesses on the same benchmark; every local harness converges on a small static prompt, a small core tool set, deferred skills, a code-owned loop and an executable completion gate; tool and skill cardinality is the most reproducible failure axis; and Qwen 3.8 27B's thinking-preservation, XML tool dialect and hybrid-attention cache are the three properties a generic harness trips over |
 
 ## The five findings that survived all four runs
 
@@ -38,6 +39,13 @@ Stated once here, because they are what the plans are built on. Each names where
    what they make durable. Mason already makes the turn durable; the gap the plans name is the *task* (a unit of work
    that outlives a conversation), which is also what agents delegating to each other requires.
    (`always-on-agents/07`, `grokbot-insights/10`)
+
+## A sixth finding, from the local-model run
+
+The five above come from the first four runs. The sixth, [`local-model-harness/`](local-model-harness/INDEX.md), adds one
+that belongs beside them: **a harness is worth about one model generation, and the model itself is worth more.** It is
+the run to read before tuning any prompt, local or frontier, because it is the one that puts a number on what that
+tuning can buy.
 
 ## What the research did not settle
 
