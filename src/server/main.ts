@@ -235,6 +235,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		pairingToken,
 		connectors,
 		async close() {
+			// Nothing the supervisor still owes is worth a fire into a closed runtime: a shutdown is the last thing that
+			// drops a pending re-fire.
+			supervisor.close();
 			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
 			await runWatch.stop();
 			// The door first: it stops the state watch and closes every connector socket, and a delivery that arrives during
