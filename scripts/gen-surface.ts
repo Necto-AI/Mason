@@ -20,7 +20,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CODEMODE_TOOL_NAME } from "@earendil-works/pi-durable/codemode";
 import * as limits from "../src/server/limits.ts";
+import { MCP_TOOL } from "../src/server/mcp.ts";
 import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -208,7 +210,9 @@ function statementBlock(masked: string, ranges: readonly Range[], index: number)
 }
 
 const LITERAL_PATTERNS: readonly { readonly pattern: RegExp; readonly match: "exact" | "prefix" }[] = [
-	{ pattern: /\bpathname\s*(?:===|!==)\s*"([^"]*)"/g, match: "exact" },
+	// `!==` is not a route: it excludes one path from the branch below it, and listing it would name the liveness probe as
+	// a door at the line that skips it. A negated `startsWith` is kept: a guard clause is how the panel routes a prefix.
+	{ pattern: /\bpathname\s*(===|!==)\s*"([^"]*)"/g, match: "exact" },
 	{ pattern: /\bpathname\.startsWith\(\s*"([^"]*)"/g, match: "prefix" },
 ];
 
@@ -218,9 +222,10 @@ export function routeLiterals(text: string): Literal[] {
 	for (const { pattern, match } of LITERAL_PATTERNS) {
 		pattern.lastIndex = 0;
 		for (let hit = pattern.exec(text); hit !== null; hit = pattern.exec(text)) {
+			if (match === "exact" && hit[1] === "!==") continue;
 			const index = hit.index;
 			found.push({
-				route: hit[1] ?? "",
+				route: (match === "exact" ? hit[2] : hit[1]) ?? "",
 				match,
 				index,
 				line: text.slice(0, index).split("\n").length,
@@ -267,8 +272,13 @@ function declaredFunctions(masked: string): Map<string, number> {
 }
 
 /**
- * The guard that applies to one literal: nearest preceding in the block, else nearest in the function, else the
- * delegate's. `undefined` when nothing in the file gates it.
+ * The guard that applies to one literal: the nearest guard that precedes it inside its block, else the nearest that
+ * precedes it in an enclosing block, else the guard the handler it delegates to opens with. `undefined` when nothing
+ * gates it.
+ *
+ * Precedence matters more than proximity. A guard *below* a literal does not gate it: a route matched above the gate is
+ * exactly the omission this table exists to catch, and an extractor that pairs it with the `authenticate` call further
+ * down would report the one route that never reaches it as guarded.
  */
 function guardFor(
 	text: string,
@@ -277,21 +287,26 @@ function guardFor(
 	functions: Map<string, number>,
 	literal: Literal,
 ): { readonly guards: readonly Guard[]; readonly delegate?: string } | undefined {
-	const block = statementBlock(masked, ranges, literal.index);
+	// The block the literal opens is the most specific gate there is: `if (pathname.startsWith("/api/")) { authenticate() }`
+	// guards every route below it, and the call sits after the literal rather than before it.
+	const opened = guardsIn(
+		text,
+		statementBlock(masked, ranges, literal.index) ?? { start: literal.index, end: literal.index },
+	);
+	if (opened.length > 0) return { guards: nearest(opened) };
 	const regions: Range[] = [];
-	if (block !== undefined) regions.push(block);
 	let enclosing = innermost(ranges, literal.index);
 	while (enclosing !== undefined) {
 		regions.push(enclosing);
 		enclosing = innermost(ranges, enclosing.start);
 	}
 	for (const region of regions) {
-		const guards = nearest(guardsIn(text, region), literal.index);
+		const guards = nearest(guardsIn(text, region).filter((guard) => guard.index < literal.index));
 		if (guards.length > 0) return { guards };
 	}
 	// Nothing gates the literal directly: it may be a dispatcher handing the route to a handler in this file, which is
 	// how the panel keeps one grant check per area rather than one per URL.
-	const region = block ?? innermost(ranges, literal.index);
+	const region = statementBlock(masked, ranges, literal.index) ?? innermost(ranges, literal.index);
 	if (region === undefined) return undefined;
 	const called = /(\w+)\s*\(/g;
 	// From the literal forward, not from the block's start: a dispatcher's first delegation is the one this route takes,
@@ -303,25 +318,22 @@ function guardFor(
 		if (declared === undefined) continue;
 		const body = statementBlock(masked, ranges, declared);
 		if (body === undefined) continue;
-		const guards = nearest(guardsIn(text, body), body.start - 1);
+		const guards = nearest(guardsIn(text, body));
 		if (guards.length > 0) return { guards, delegate: name };
 	}
 	return undefined;
 }
 
 /**
- * The guard set that applies to a literal: the nearest preceding guard of each kind, or every following one when
- * nothing precedes it.
+ * The guard set that applies to a literal: the nearest preceding guard of each kind.
  *
  * One preceding `requireGrant` and one preceding `authenticate` are two different facts (a gate and a grant), so they
- * are kept apart; two preceding `requireGrant`s for the same grant are one fact.
+ * are kept apart; two preceding `requireGrant`s for the same grant are one fact. Nothing that follows the literal is
+ * considered: a guard the code reaches later is not a guard on this route.
  */
-function nearest(guards: readonly Guard[], index: number): Guard[] {
-	const before = guards.filter((guard) => guard.index < index);
-	const after = guards.filter((guard) => guard.index >= index);
-	const chosen = before.length > 0 ? before : after;
+function nearest(guards: readonly Guard[]): Guard[] {
 	const keep: Guard[] = [];
-	for (const guard of chosen) {
+	for (const guard of guards) {
 		const twin = keep.find((kept) => kept.kind === guard.kind && kept.name === guard.name);
 		if (twin === undefined) keep.push(guard);
 	}
@@ -351,6 +363,12 @@ export function routeRows(
 ): { readonly rows: RouteRow[]; readonly unguarded: UnguardedRoute[] } {
 	const rows: RouteRow[] = [];
 	const unguarded: UnguardedRoute[] = [];
+	// One row per (path, match, guard): the same shell is matched in three places and the same probe twice, and a table
+	// that repeats them reads as three doors where there is one. The first occurrence keeps its line.
+	const push = (row: RouteRow): void => {
+		if (rows.some((kept) => kept.route === row.route && kept.match === row.match && kept.guard === row.guard)) return;
+		rows.push(row);
+	};
 	for (const source of sources) {
 		const masked = maskSource(source.text);
 		const ranges = braceRanges(masked);
@@ -359,7 +377,7 @@ export function routeRows(
 			const where = `${source.file}:${literal.line}`;
 			const allowed = allowlist.find((entry) => entry.route === literal.route);
 			if (allowed !== undefined) {
-				rows.push({
+				push({
 					route: literal.route,
 					match: literal.match,
 					guard: `public — ${allowed.why}`,
@@ -373,7 +391,7 @@ export function routeRows(
 				unguarded.push({ route: literal.route, match: literal.match, at: where });
 				continue;
 			}
-			rows.push({
+			push({
 				route: literal.route,
 				match: literal.match,
 				guard: renderGuard(found.guards, found.delegate),
@@ -406,6 +424,15 @@ export function extensionRows(): (readonly string[])[] {
 			...(extension.tasks ?? []).map((task) => task.definition.name),
 		]),
 	]);
+}
+
+/** Table B, second half: the extensions a boot builds for itself. */
+export function perBootRows(): (readonly string[])[] {
+	return [
+		["`mcp`", codeList(Object.values(MCP_TOOL)), "an integration has a tools face"],
+		["`codemode`", codeList([CODEMODE_TOOL_NAME]), "always"],
+		["`permissions`", "--", "always"],
+	];
 }
 
 /**
@@ -512,7 +539,7 @@ export function renderSurface(sources: readonly Source[] = readSources()): strin
 	parts.push("");
 	parts.push(
 		wrap(
-			"`exact` is `===`, `prefix` is `startsWith`. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, nearest above the literal in the block that answers it; when that block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission.",
+			'`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the `requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the literal opens (`if (pathname.startsWith("/api/")) { authenticate() }` guards everything below it) or, failing that, the nearest one above it. When the block is a dispatcher, the row names the handler it hands the route to and `delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the guard is the same.',
 		),
 	);
 	parts.push("");
@@ -537,17 +564,25 @@ export function renderSurface(sources: readonly Source[] = readSources()): strin
 	parts.push("");
 	parts.push(
 		wrap(
-			"`BASE_EXTENSIONS` in `src/server/runtime.ts`, with every name read off the objects rather than out of the source. Installed besides these, per boot and not in the array: `codemode` and `permissions` always, and `mcp` when an integration has a tools face.",
+			"`BASE_EXTENSIONS` in `src/server/runtime.ts`, with every name read off the objects rather than out of the source.",
 		),
 	);
 	parts.push("");
 	parts.push(table(["Extension", "Tools", "Prompt sections", "Hook tasks"], extensionRows()));
 	parts.push("");
+	parts.push(
+		wrap(
+			"Built per boot rather than declared in the array, so they are listed from their own definitions: the MCP tools are `MCP_TOOL` in `src/server/mcp.ts` and are the only way a service's tools are reached; the code-mode tool is the one a script writes; `permissions` contributes no tool at all, only the `beforeTool` gate.",
+		),
+	);
+	parts.push("");
+	parts.push(table(["Extension", "Tools", "Installed when"], perBootRows()));
+	parts.push("");
 	parts.push("## C. What a caller may spend");
 	parts.push("");
 	parts.push(
 		wrap(
-			"Every exported number in `src/server/limits.ts`: the value is the constant's own, and the meaning is the first sentence of its comment. The budgets are per class on purpose (`docs/SPEC.md` §4.1c), so a flood in one cannot starve another.",
+			"Every exported number in `src/server/limits.ts`: the value is the constant's own, and the meaning is the first sentence of its comment. The three connector budgets share one comment, so they share one meaning and are counted separately; the budgets are per class on purpose (`docs/SPEC.md` §4.1c), so a flood in one cannot starve another.",
 		),
 	);
 	parts.push("");

@@ -14,15 +14,17 @@ One row per plain-string route literal in `src/server/main.ts` and `src/server/a
 not a row: the connector's socket and its attachment endpoints are `CONNECTOR_PATH` in `main.ts`, and they are
 listed below, with the other doors that answer without the owner's token.
 
-`exact` is `===`, `prefix` is `startsWith`. The guard is the `requireGrant`, or the inline `hasGrant` for a route
-that filters rather than refuses, nearest above the literal in the block that answers it; when that block is a
-dispatcher, the row names the handler it hands the route to and `delegated to` says which. A literal with no guard
-stops the generator, which is the point: a route added without a `requireGrant` is unauthenticated by omission.
+`exact` is `===`, `prefix` is `startsWith`; a `!==` is not a route and is not a row. The guard is the
+`requireGrant`, or the inline `hasGrant` for a route that filters rather than refuses, found in the block the
+literal opens (`if (pathname.startsWith("/api/")) { authenticate() }` guards everything below it) or, failing that,
+the nearest one above it. When the block is a dispatcher, the row names the handler it hands the route to and
+`delegated to` says which. A literal with no guard stops the generator, which is the point: a route added without a
+`requireGrant` is unauthenticated by omission. A path matched in several places is one row, the first, when the
+guard is the same.
 
 | Route | Match | Guard | Route at | Guarded at |
 |---|---|---|---|---|
 | `/api/` | prefix | `authenticate` | `src/server/main.ts:292` | `src/server/main.ts:293` |
-| `/api/health` | exact | public — the liveness probe: it answers one word and holds nothing | `src/server/main.ts:292` | not gated |
 | `/api/session` | exact | `authenticate` | `src/server/main.ts:320` | `src/server/main.ts:293` |
 | `/api/admin/` | prefix | `authenticate` | `src/server/main.ts:335` | `src/server/main.ts:293` |
 | `/api/admin` | exact | `authenticate` | `src/server/main.ts:336` | `src/server/main.ts:293` |
@@ -35,10 +37,6 @@ stops the generator, which is the point: a route added without a `requireGrant` 
 | `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:554` | not gated |
 | `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:554` | not gated |
 | `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:554` | not gated |
-| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:568` | not gated |
-| `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:568` | not gated |
-| `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:568` | not gated |
-| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:569` | not gated |
 | `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:98` | `src/server/admin.ts:550` |
 | `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:98` | `src/server/admin.ts:550` |
 | `/api/admin/` | prefix | `admin` (delegated to `handleAdmin`) | `src/server/admin.ts:102` | `src/server/admin.ts:153` |
@@ -63,8 +61,6 @@ which is why the connector's two paths are here although they are constant-built
 ## B. Extensions a boot installs
 
 `BASE_EXTENSIONS` in `src/server/runtime.ts`, with every name read off the objects rather than out of the source.
-Installed besides these, per boot and not in the array: `codemode` and `permissions` always, and `mcp` when an
-integration has a tools face.
 
 | Extension | Tools | Prompt sections | Hook tasks |
 |---|---|---|---|
@@ -75,11 +71,21 @@ integration has a tools face.
 | `sandboxed-ui` | `generateSandboxedUi` | -- | -- |
 | `tool-search` | `tool_search` | -- | -- |
 
+Built per boot rather than declared in the array, so they are listed from their own definitions: the MCP tools are
+`MCP_TOOL` in `src/server/mcp.ts` and are the only way a service's tools are reached; the code-mode tool is the one
+a script writes; `permissions` contributes no tool at all, only the `beforeTool` gate.
+
+| Extension | Tools | Installed when |
+|---|---|---|
+| `mcp` | `mcp_search`, `mcp_describe`, `mcp_call` | an integration has a tools face |
+| `codemode` | `codemode` | always |
+| `permissions` | -- | always |
+
 ## C. What a caller may spend
 
 Every exported number in `src/server/limits.ts`: the value is the constant's own, and the meaning is the first
-sentence of its comment. The budgets are per class on purpose (`docs/SPEC.md` §4.1c), so a flood in one cannot
-starve another.
+sentence of its comment. The three connector budgets share one comment, so they share one meaning and are counted
+separately; the budgets are per class on purpose (`docs/SPEC.md` §4.1c), so a flood in one cannot starve another.
 
 | Constant | Value | Meaning |
 |---|---|---|
