@@ -4,12 +4,12 @@
 
 mason is a headless, always-on agent backend, and an interface attaches to it (`GLOSSARY.md`,
 `docs/adr/0004-mason-is-a-headless-backend.md`): a durable, proactive bot ("Muse"-style) on `pi-durable`,
-plus the contracts a chat or a console speaks. mason owns the tool and the projection — what the model may call, and
-what may cross the wire — and never the rendering. The operator console in this repository is frozen and only has to
-keep working (§4.3).
+plus the contracts a connector speaks and the panel an operator administers from. mason owns the tool and the
+projection — what the model may call, and what may cross the wire — and never the rendering. The operator panel in this
+repository is a control plane, not a chat (§4.3).
 
 1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, an integration's signed trigger, the transcript's controls) so the agent can proactively message the user first.
-2. **Chord Client-Server Transport:** Uses `@earendil-works/chord` (`createHost`, `remote`, `acceptWebSockets`, `webSocketLink`) to replicate what the projection derives — `transcript`, `queued` and `agentStatus` — to connected clients in real time; the durable `ConversationView` itself never crosses the wire (§4.1a).
+2. **The projection, and one operator panel:** `src/server/projection.ts` derives `transcript`, `queued` and `agentStatus` from the durable view, and a device granted `conversation` reads them at `GET /api/admin/state`; the durable `ConversationView` itself crosses only to a device granted `trace`, and only as that device's own area of the answer (§4.1a, §4.2). There is no conversational socket: a person speaks through a connector, and administration is a grant of its own.
 3. **A Widget Tool and Its Artifact Contract:** `generateSandboxedUi` is a `pi-durable` extension (`GenerateSandboxedUiExtension`) in `BASE_EXTENSIONS`, so every conversation is offered the tool from its first turn and on every turn after it: there is no toggle, and therefore no tool that appears mid-conversation (§3.5). The server maps the call's arguments to widget content and only that content crosses the wire; framing, streaming and drawing it is a client's job (§5). The manual the model needs — parameter order, design system, sandbox limits — lives in `skills/generative-ui/SKILL.md`, which it reads when it decides to build a widget.
 
 ### One deployment is one specialized bot
@@ -73,12 +73,14 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   └── generative-ui/SKILL.md         # The widget manual: the prompt carries only the pointer (§3.5)
 ├── src/
 │   ├── shared/
-│   │   └── contract.ts                # Shared @earendil-works/chord remote contract (AgentService)
+│   │   ├── contract.ts                # The shapes the projection writes and the panel renders: rows, status, kinds
+│   │   └── admin.ts                   # The panel's wire and the operator grants: one file, imported by both sides
 │   ├── server/
 │   │   ├── env.ts                     # pi-env Connection + RemoteExecutionEnv factory
-│   │   ├── admission.ts               # Where a submission came from, and where it waits (console, connector, hook)
+│   │   ├── admission.ts               # Where a submission came from, and where it waits (connector, hook)
 │   │   ├── attachments.ts             # Content ids and bytes: the connector's authenticated upload/download store
-│   │   ├── auth.ts                    # Who may talk to the server: token file, bearer/query, Origin gate
+│   │   ├── admin.ts                   # The panel's routes: a state per grant, the writes, and the approval answers
+│   │   ├── auth.ts                    # Who may talk to the server: token file, grants, bearer/query, Origin gate
 │   │   ├── commands.ts                # The four controls, the claim that makes a delivery id an identity, and the door's target
 │   │   ├── connector.ts               # The connector socket: handshake, admission, state mirrors, the reply outbox
 │   │   ├── connectors.ts              # A connector's grants and the credential it opens its socket with
@@ -92,19 +94,21 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, a trigger's fire, proactive submit)
 │   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
+│   │   ├── trace.ts                   # The other half of it: the raw entries, for a device granted `trace`
 │   │   ├── replies.ts                 # What a turn's reply is: its origin, its target, and the entry that carries both
 │   │   ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
-│   │   └── main.ts                    # HTTP + WebSocket server + Chord host serving AgentService
+│   │   └── main.ts                    # HTTP + the connector socket + the panel, its API and the event door
 │   └── web/
-│       ├── index.html                 # Mobile-first HTML shell (viewport-fit=cover, dvh layout)
-│       ├── main.tsx                   # React root + Chord browser host connection
-│       ├── client.ts                  # Chord webSocketLink wrapper + reconnect state
-│       ├── lib/                        # Pure helpers + renderers (see docs/UI-PLAN.md)
-│       │   ├── working.ts              # The one line that says what the agent is doing
-│       │   ├── token.ts                # The browser's credential: taken from `?token=` once, kept, put on the socket
+│       ├── index.html                 # The panel's shell: one page, `admin.js` + `admin.css`
+│       ├── admin/
+│       │   ├── main.tsx               # The panel: shell, poll, routing and every write
+│       │   ├── api.ts                 # `GET /api/admin/state` and the writes, with the server's sentence on a refusal
+│       │   ├── ui.tsx                 # Card, field, badge, switch: the panel's small vocabulary
+│       │   ├── admin.css              # The panel's own layout; tokens.css and widgets.css are shared with the cards
+│       │   └── sections/              # Overview, Conversation, Trace, Approvals, Connectors, Roster, Access, Hooks
+│       ├── components/                 # The widget card, kept from the console: SandboxedUiCard, WidgetCard
+│       ├── lib/                        # The renderers a widget needs (see docs/UI-PLAN.md)
 │       │   ├── markdown.ts             # marked + link hardening (apiary's markdown.ts, verbatim)
-│       │   ├── stream-text.tsx         # Settled markdown + fading tail reveal (apiary's stream.ts)
-│       │   ├── follower.ts             # Scroll pinning: pinnedAfterScroll + useFollower (apiary's scroll.ts)
 │       │   ├── frame-content.ts        # CSP, importmap, design-system styles, preview morph, measurement
 │       │   ├── process-partial-html.ts # Incomplete-tag-tolerant streaming markup
 │       │   ├── websandbox-loader.ts    # @jetbrains/websandbox UMD loader + widget bridge type
@@ -124,11 +128,10 @@ does not add them. It fixes the product direction the plans and issues execute.
 └── test/
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
     ├── house.test.ts                  # ~/.mason: paths, the log, the caps, the git repository
-    ├── auth.test.ts                   # The door: token mint/verify/revoke, `/api` 401s, the socket's principal check
-    ├── web-token.test.ts              # The browser's side of pairing: `?token=` once, then storage, then the socket URL
+    ├── auth.test.ts                   # The door: token mint/verify/revoke/grants, `/api` 401s, the cookie, Origin
     ├── prompt.test.ts                 # The resident prompt: soul, profile, skills index, the widget pointer
     ├── cache-telemetry.test.ts        # The [cache] line of a finished run
-    ├── chord-e2e.test.ts              # Tests Milestone 2 & 3: Chord WS client <-> server, steer, abort, widget tool
+    ├── panel.test.ts                  # The panel over HTTP: the projection, the queue, the grants, the writes
     ├── projection.test.ts             # The wire boundary: what the reader is sent, and what stays behind
     ├── admission.test.ts              # Which origin an input is placed as, and where it waits
     ├── connector.test.ts              # The socket: handshake ceiling, submissions vs fires, state, controls, budgets
@@ -252,7 +255,7 @@ export interface EventHookConfig {
   4. **The fire's identity is the caller's**, because only the caller knows what "the same event" means: `pi-durable` admits one submission per `requestId` and never forgets one. The key builders, one per kind of caller, each exported from `src/server/hooks.ts`:
      - `explicitRequestId(hookId, senderId)` → `hook:<id>:request:<sender>`: a sender that names its delivery. Every way in does, and the event door puts the integration's name inside the key. Exact, and permanent, so a redelivery days later is the same fire.
      - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
-     - Anything else is a **gesture** — the Retry control, the run supervisor, a chord `fireHook` without a `requestId` — and `gestureRequestId()` gives each its own random key: a click is an intent, so two clicks are two fires, and a fire after a restart cannot collide with one from before it.
+     - Anything else is a **gesture** — a hook fired from the panel's Hooks page, the run supervisor, a caller with no `requestId` — and `gestureRequestId()` gives each its own random key: a press is an intent, so two presses are two fires, and a fire after a restart cannot collide with one from before it.
      A fire that names its delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
   5. A hook trigger steers: `whenBusyFor("hook")` places it in the turn in flight, and pi-durable puts it at the boundary after the tool round that is running, so a message arriving mid-work is read by that work. The case that decided it: a chat message cancelling the poster the agent was rebuilding sat queued for twenty-eight minutes and the poster went out anyway. A hook that asks for a follow-up gets one, because a routine whose report has nothing to interrupt for says so at the submit (`src/server/admission.ts`).
   6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The reply is one Mason-owned call, `reply` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript — the newest input entry that is not the gate's own reminder — and targets it. No template names a vendor's tool: what a fire's instruction says is where its words came from, not which tool a medium exposes. A hook whose fire carried no origin — the morning brief, `github-activity`, a retry — records the reply and answers the model with the sentence that nobody was reached, because a message nobody received is the failure this arrangement exists to avoid. A fire whose origin is outside the entry's granted conversations is refused at admission (`mason.conversation_not_permitted`), and one that names another connector than the socket it arrived on is `mason.invalid_request`.
@@ -289,7 +292,7 @@ export interface EventHookConfig {
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
 - **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui`, `tool-search` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5). `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
-- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a console turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode`, then `permissions` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode`, then `permissions` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
@@ -413,87 +416,22 @@ tokens writes no line.
 
 ---
 
-## 4. Milestone 2 Specification: the Chord Contract and the Browser Client
+## 4. Milestone 2 Specification: the wire, the door, and the operator panel
 
-### 4.1 `src/shared/contract.ts` — Shared `@earendil-works/chord` Contract
+### 4.1 `src/shared/` — the shapes both sides spell
 
-Browser and server share one TypeBox contract:
+Two files, and the rule that keeps them honest is that neither imports a server module: the panel bundles them into a
+browser, so a `node:` import here is a build that cannot fail early enough.
 
-```ts
-import { hostNamed, method, remote } from "@earendil-works/chord";
-import { Type, type Static } from "typebox";
-
-export const HookSummarySchema = Type.Object({
-  id: Type.String(),
-  name: Type.String(),
-  description: Type.String(),
-  enabled: Type.Boolean(),
-  intervalMs: Type.Optional(Type.Number()),
-  lastFiredAt: Type.Optional(Type.String()),
-  fireCount: Type.Number(),
-});
-
-export const AgentStatusSchema = Type.Object({
-  runStatus: Type.Union([
-    Type.Literal("idle"),
-    Type.Literal("generating"),
-    Type.Literal("running_tools"),
-    Type.Literal("retrying"),
-    Type.Literal("compacting"),
-  ]),
-  busy: Type.Boolean(),
-  activeRunTaskId: Type.Optional(Type.String()),
-  // Names only: no arguments, no output. What runs is not what the reader reads.
-  runningTools: Type.Array(Type.String()),
-  model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
-  cwd: Type.Optional(Type.String()),
-  hooks: Type.Array(HookSummarySchema),
-});
-
-export const AgentService = remote("personal.agent", {
-  version: 1,
-  input: Type.Object({}),
-  host: hostNamed("server"),
-  variants: {
-    owner: {
-      state: {
-        // The reader's transcript: their words, the messages the agent sent, widgets, triggers, coarse notices.
-        // Never the raw conversation: reasoning, tool calls, tool arguments and tool output stay on the server.
-        transcript: Type.Array(TranscriptItemSchema),
-        // The queue behind the running turn, labelled for the reader.
-        queued: Type.Array(QueuedItemSchema),
-        // Not `status`: Chord reserves that name on references (`RESERVED_MEMBERS`), so the status cell is `agentStatus`.
-        agentStatus: AgentStatusSchema,
-      },
-      methods: {
-        submit: method(
-          Type.Object({
-            content: Type.String(),
-            whenBusy: Type.Optional(
-              Type.Union([Type.Literal("followUp"), Type.Literal("steer"), Type.Literal("reject")]),
-            ),
-          }),
-          Type.Object({ submissionId: Type.Number() }),
-        ),
-        withdrawSubmission: method(Type.Object({ submissionId: Type.Number() })),
-        abort: method(),
-        reset: method(Type.Optional(Type.Object({ handoff: Type.Optional(Type.String()) }))),
-        compact: method(Type.Optional(Type.Object({ instructions: Type.Optional(Type.String()) }))),
-        fireHook: method(
-          Type.Object({
-            hookId: Type.String(),
-            payload: Type.Optional(Type.String()),
-            // Idempotency key; omit for a gesture such as pressing the transcript's Retry control.
-            requestId: Type.Optional(Type.String()),
-          }),
-          Type.Object({ submissionId: Type.Number() }),
-        ),
-        toggleHook: method(Type.Object({ hookId: Type.String(), enabled: Type.Boolean() })),
-      },
-    },
-  },
-});
-```
+- **`contract.ts`** holds what the projection writes and the panel renders: `TranscriptItem` (`user`, `delivered`,
+  `widget`, `notice`), `QueuedItem`, `AgentStatus` and `HookSummary`, the entry kinds the projection reads
+  (`app.hook`, `app.connector`, `app.reply`, `app.delivery`), the reply tool's name, and the author prefix
+  (`[from <name>] `) with `withAuthor`/`splitAuthor`. There is no remote service definition here any more (#103): the
+  console's `AgentService` went with the console, and a browser reads an HTTP answer instead (§4.2).
+- **`admin.ts`** holds the panel's wire and its grants: `OperatorGrant` (`conversation`, `trace`, `admin`,
+  `approve`), `grantsOf`/`hasGrant`, and the `PanelState` a device is sent along with the request bodies its writes
+  carry. A field that is sometimes absent is a field the client cannot pretend to have, which is why the state is
+  modelled as optional areas rather than as empty ones.
 
 ### 4.1a What the client is sent — the wire boundary
 
@@ -518,19 +456,20 @@ Two rules keep it honest:
   trigger crosses as nothing at all: a proactive turn is the message it sent, and the schedule, its payload and the
   prompt it built are the schedule's business, not the conversation's.
 
-Consequences, deliberately accepted: the chat cannot show a trace, a tool row, reasoning, usage or an error's cause.
-A message a hooked turn sent through the integration's own chat tool is one of the things that does not cross — the
-console records nothing of what reached a chat, which is the reconvergence `docs/adr/0004-mason-is-a-headless-backend.md`
-still owes. The raw view stays available server-side (the run supervisor reads it), and a trace endpoint can expose it
-later — separately, deliberately, and with its own access rules.
+Consequences, deliberately accepted: the projected conversation cannot show a trace, a tool row, reasoning, usage or an
+error's cause. A message a hooked turn sent through an integration's own chat tool is one of the things that does not
+cross — mason records what reached a chat as its own entries, which is the reconvergence
+`docs/adr/0004-mason-is-a-headless-backend.md` still owes. The raw view is a different area of the panel's answer, and it
+is granted separately: `trace.ts` forwards the entries as stored to a device the operator granted `trace`, and to no one
+else (§4.2, §4.3).
 
 ### 4.1b Who may talk to the server — the door
 
-There is one owner, so every entry point proves it: the Chord socket and `/api/*`. `src/server/auth.ts` owns
-the rule; `src/server/main.ts` applies it in exactly five places — the socket's `principal(request)`, the pairing
-exchange in `handleRequest`, the gate at the top of `handleRequest` that `/api/*` passes through, the roster refusal
-that gate applies to a claimed name, and the same refusal at the socket handshake, which a removed person's live socket
-survives only until it reconnects.
+There is one owner, so every entry point proves it: `/api/*` and the connector's socket. `src/server/auth.ts` owns
+the rule; `src/server/main.ts` applies it in four places — the pairing exchange in `handleRequest`, the gate at the top
+of `handleRequest` that `/api/*` passes through, the roster refusal that gate applies to a claimed name, and the
+`/api/admin/*` route which then checks the device's grants (`src/server/admin.ts`). A browser holds no socket at all:
+an upgrade on any path but `/api/connector` is closed.
 
 Three paths are deliberately outside that gate, and each is narrower than a token. `/api/health` is a
 liveness probe that answers one word and needs no credential at all, and `POST /api/events/<integration>` (§3.3) is
@@ -578,12 +517,11 @@ cookie (`HttpOnly`, `SameSite=Strict`, `Path=/`, 30 days, `Secure` where the con
 `302` to the same path with the token removed. The address bar, the history and every `Referer` see a bare URL before
 the first element renders, and the client bundle never touches a token at all.
 
-The cookie is `v1.<token id>.<HMAC>` for a device that has claimed nobody, and `v2.<token id>.<person>.<HMAC>` once a
-browser has named itself: the person is base64url inside the signed material, so a cookie cannot be decoded into someone
-else, and `v1` is still read — as an unnamed device — so paired browsers keep working through the change. The join route
-is what writes a `v2`: `POST /api/join` reads a name off the roster, refuses one that is not on the list, and answers
-with the cookie, keeping the device the browser was already paired as. `GET /join` serves the same bundle, so the picker
-is a third path into one build rather than a second entry point.
+The cookie is `v1.<token id>.<HMAC>` for a device that speaks for nobody, and `v2.<token id>.<person>.<HMAC>` for one
+that names a person: the person is base64url inside the signed material, so a cookie cannot be decoded into someone
+else. Nothing writes a `v2` any more — the console's join screen is gone with the console (#103) — but `v2` is still
+**read**, and every gate still checks the name against the roster, so a browser that joined before the cutover keeps its
+place until the person is removed, and then loses it on the next request.
 
 The cookie names a token id and carries no secret, so it is worth exactly one device's access: revoking that token ends
 its sessions at the same moment. `SameSite=Strict` is the CSRF defence that does not depend on the Origin gate — a
@@ -594,10 +532,10 @@ site but a different port.
 `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. The CSP is the widget policy plus this origin: a `srcdoc`
 iframe inherits the embedder's policy, so `script-src` has to allow what a widget needs (`'unsafe-inline'`,
 `'unsafe-eval'`, the four CDNs the importmap names) — what it still enforces is what an injected script would otherwise
-do freely: frame this origin, retarget relative URLs through `<base>`, post a form elsewhere, or open a socket to a host
-that is not this one. `connect-src` names the socket's own origin, checked for `;` first because a `Host` header is
-sender-controlled. A browser with no cookie is not paired and says so (`/api/session` answers `401`): an empty
-transcript would look like a broken agent instead of a closed door.
+do freely: frame this origin, retarget relative URLs through `<base>`, or post a form elsewhere. `connect-src` is
+`'self'` and those CDNs: the panel polls its own origin, and no page here opens a socket. A browser with no cookie is
+not paired and says so (`/api/session` answers `401`): an empty panel would look like a broken deployment instead of a
+closed door.
 
 **The second gate: Origin.** A token says *which device*; `Origin` says *which page*.
 
@@ -606,12 +544,11 @@ transcript would look like a broken agent instead of a closed door.
 
 A page on `evil.example` cannot obtain a credential in the first place — this origin stores no token, and the cookie is
 `HttpOnly` and `SameSite=Strict` — so the Origin check is the belt to that pair of braces, and it also stops such a page
-from opening a socket at all. Both gates are checked on the socket and on `/api/*`. `GET /api/health` stays open, because a monitor that needs a credential is a monitor nobody
-runs, and the static shell stays public: it is a bundle with no secrets in it, and it is where the reader is told their
-browser is not paired.
-
-A refusal is explicit, never silence: Chord closes the link with `{"t":"bye","reason":"unauthorized"}` (so no frame
-of state is ever sent), and `/api/*` answers `401` with `WWW-Authenticate: Bearer`.
+from making a request to a route that would open one. `/api/*` is checked on every request. `GET /api/health` stays
+open, because a monitor that needs a credential is a monitor nobody runs, and the static shell stays public: it is a
+bundle with no secrets in it, and it is where the reader is told their browser is not paired. A refusal is explicit,
+never silence: `/api/*` answers `401` with `WWW-Authenticate: Bearer`, and a socket on any path but the connector's is
+closed at the upgrade.
 
 **What this is not.** It is not transport security. On a non-loopback address the token, the transcript and every reply
 cross the network in clear text: an SSH tunnel, or a TLS proxy, is the honest answer for a phone on an untrusted
@@ -624,7 +561,7 @@ said* is the fence in §3.3 — a payload arrives labelled as data, and a reques
 The door decides *who may speak*; these are the bounds that hold after it has. Each one answers a cost a caller
 controls, and each is in `src/server/limits.ts` or `src/server/env.ts` rather than scattered through the handler.
 
-**Bytes.** A small JSON write to `/api/join` is capped at `JSON_BODY_MAX_BYTES` (32 KiB), and an event delivery at
+**Bytes.** A small JSON write — a panel mutation, an approval answer — is capped at `JSON_BODY_MAX_BYTES` (32 KiB), and an event delivery at
 `EVENT_BODY_MAX_BYTES` (256 KiB, §3.3). `content-length` is checked first so an oversized body is refused without being
 received, and the running total is checked too, because a sender that chunks the body declares nothing. Over the cap:
 `413` with `{ error, maxBytes }`, never a truncation.
@@ -726,11 +663,10 @@ connector that spent its minute on compactions can still stop the turn they were
 settles it: see §4.1e for what is asked, who may answer, and what happens to the call that is waiting. Neither is a
 second way to speak — an answer is not a submission, and a question is not a reply.
 
-**What is not here yet.** The admin panel and the one-way migration are #103, and the removal of the HMAC event door and
-the old Telegram relay is #104. Until #103, an owner answers a question through `GET`/`POST /api/permissions` (§4.1e),
-which is the panel's route without the panel. Until #104, the old door still fires hooks with no origin, so a turn it
-starts records its reply and reaches nobody — the honest state of a half-migrated deployment, and the reason the
-connector's own path is the one to build on.
+**What is not here yet.** The removal of the HMAC event door and the old Telegram relay is #104. Until then the old
+door still fires hooks with no origin, so a turn it starts records its reply and reaches nobody — the honest state of a
+half-migrated deployment, and the reason the connector's own path is the one to build on. The panel and the one-way
+migration are in (§4.2, §4.3).
 
 ### 4.1e The tool catalog and the permission gateway
 
@@ -779,110 +715,108 @@ starts asking for every call until its tools declare one or the operator trusts 
 **A question is a transcript entry.** An `ask` writes an `app.permission` entry with the permission id, the tool, the
 arguments, the reason, the two answers, the roster name the words are attributed to, and the origin, and waits. The
 question is routed to a surface only when the person who asked is the approver the operator configured
-(`connector.user.approver`) on the connector that carried the turn; otherwise it stays pending and the owner answers it
-through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an `app.permission-answer` entry:
+(`connector.user.approver`) on the connector that carried the turn; otherwise it stays pending and a device holding
+`approve` answers it from the panel, through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an
+`app.permission-answer` entry:
 `allow`, `deny`, or `cancelled` when `/stop` ended the wait. The first authorized answer settles the request, a later one
 changes nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an
-administrative act (#103), not a chat button. The owner's route answers the same two shapes it holds:
+administrative act on the connectors page (§4.3), not a chat button. The route answers the same two shapes it holds:
 `GET /api/permissions` is `{"permissions":[{"permissionId","tool","arguments","reason","answers","askedAt","approver","origin"}]}`
 (oldest first, `askedAt` an ISO string, or `null` when the entry carried no clock), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
 `{"settled":true}` with `200`, or `409` with `{"settled":false,"reason"}` when the request had already settled. It records
-the roster name the device joined with, or `owner` when the device never named one: the route is behind the owner's
-credential, so the credential is the identity. A denial reaches the caller as a structured result —
+the roster name the device speaks for, or `owner` when it never named one: the route is behind the owner's credential
+and the `approve` grant, so the credential is the identity. A denial reaches the caller as a structured result —
 `{"denied":true,"tool":"mcp_call","operation":"github/issues.create","reason":"…","execute":"not run"}` — so a script
 can branch on it and the model reads it as the failure it is. An offline approver leaves the request pending rather
 than silently denying it: the tool task waits, the reader sees the turn working, and `stop` is what ends it.
 
-### 4.2 Bridging the Conversation View to Chord State on the Server
+### 4.2 The state a panel device reads — `GET /api/admin/state`
 
-In `src/server/main.ts`, inside `server.serve(AgentService, (_input, _principal, self) => ...)`:
-```ts
-const viewResource = self.resource("viewState", {
-  version: 1,
-  open: async ({ signal }) => {
-    return await runtime.viewState(withAbortSignal(signal, BACKGROUND_CONTEXT));
-  },
-  close: (vs) => vs.dispose(),
-});
+The console's browser socket is gone (#103). What replaced it is one HTTP answer, built per request from the committed
+view, and it carries only the areas this device's grants cover:
 
-// The projection, not the view: three cells a reader can be sent (see 4.1a).
-const transcript = self.state("transcript", Type.Array(TranscriptItemSchema), {
-  init: () => projectTranscript(viewResource.value.value),
-});
-const queued = self.state("queued", Type.Array(QueuedItemSchema), {
-  init: () => projectQueued(viewResource.value.value),
-});
+| Grant | The key it adds | Holds | Never holds |
+|---|---|---|---|
+| `conversation` | `conversation` | `status` (run status, busy, the **names** of running tools, model, hooks, cwd), `transcript`, `queued` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
+| `trace` | `trace` | the durable entries, verbatim: model messages, tool calls and results, hook payloads, questions and answers, deliveries, commands, compaction and context edits | nothing is filtered — this *is* the raw view |
+| `approve` | `permissions` | the pending questions: tool, arguments, reason, answers, approver, origin, askedAt | anything else the trace holds |
+| `admin` | `config` | connectors and their grants, health, roster, tokens, connector credentials, hooks, the command and scope vocabularies, `restartRequired` | any secret: a token, a connector credential and a trigger secret are written once and never read back |
 
-self.on("viewSync", viewResource, (nextView, ctx) => {
-  transcript.replace(ctx, projectTranscript(nextView));
-  queued.replace(ctx, projectQueued(nextView));
-  agentStatus.replace(ctx, statusFor(nextView));
-});
-```
-`runtime.viewState()` is `Conversation.watch()` (`@earendil-works/pi-durable`) fanned out: a watch takes one listener,
-so `src/server/runtime.ts` keeps the subscriber set, delivers the current view to each new subscriber the way the
-replicated state it replaces hydrated its own, and stops the watch in `dispose()`. A read that should leave no watch
-behind — `/api/status` — is `runtime.viewSnapshot()`.
-`projectTranscript()` / `projectQueued()` are pure functions in `src/server/projection.ts`; `statusFor()` is
-`deriveAgentStatus()` from `src/server/status.ts`: a pure function of the committed view
-(`pi.live`, `pi.inbox`, `pi.agent`), the hook list and the model reference.
-This streams exact Chord structural diffs to every connected browser tab over
-`acceptWebSockets(wss, host, { principal: () => ({ kind: "owner" }) })`.
+`session` is always there — the device's id, label, the roster name it speaks for, and its grants — because a device
+with no grants still has to learn that it has none. An area the grant does not cover is **absent**: a browser that
+receives no `trace` key has not been handed a filtered one, and no route below can be talked into producing it.
 
-### 4.3 The Operator Console (frozen)
+**Where the areas come from.** `projection.ts` builds the conversation exactly as it did for the console (§4.1a), so
+the projection is one implementation serving one reader-shaped view; `trace.ts` forwards the entries as stored, which
+is only a `map` because the durable record already holds everything the trace is for; `admin.ts` builds the config from
+the files the commands write, and reads `integrations.json` from disk beside the boot's snapshot so the page can say
+`restartRequired` when they differ.
 
-**The shell does not narrate itself.** `SessionBar` is a wordmark plus one overflow menu (compact, reset, and the
-run/model facts as text inside it): a bot is assumed to work, so there is no status dot, model pill or
-connection badge to read. A run's progress is one line under the transcript — `working: bash` — and `Stop` sits in the
-composer where the send action is; a lost connection is announced once — above
-the composer, after a 1.2s grace period, so a reload does not flash a warning (`Composer` → `connection`).
+**Two script routes carry one area each.** `GET /api/status` and `GET /api/integrations` predate the panel and answer
+the same two areas for a caller that asks one question with curl: the first is behind `conversation`, the second behind
+`admin`, so a device cannot read through them what its state would not carry.
 
-The browser client in this repository is the operator console, frozen: a React client on our Chord subscription, whose
-chat area was ported from apiary (`DenisSud/apiary` → `packages/web`) and whose porting plan and decisions log is
-`docs/UI-PLAN.md`. It receives maintenance fixes only — the freeze is at the end of this section. One transcript, and it
-is the reader's:
+**Why HTTP and not a socket.** The panel is a control plane: it is read while the agent works, and an operator is not
+typing into it. A poll every 2.5 seconds (paused while the tab is hidden) costs one committed read per tick, keeps the
+server's only socket reserved for the thing that genuinely needs to push — a connector — and means a dropped request
+degrades to a stale panel with a banner rather than a closed connection. Nothing in a browser opens a WebSocket at all:
+`main.ts` closes an upgrade on any path but `/api/connector`.
 
-**The transcript is the conversation, not the trace.** Rows arrive already projected (see 4.1a) and render in order:
-the reader's messages, the messages the agent sent (`data-testid="msg-user"`, `data-testid="msg-delivered"`), widget
-cards, and one coarse notice when a run died (`data-testid="msg-notice"`). A proactive turn shows no trigger banner:
-the message stands on its own, and nothing tells the reader which schedule woke the agent or what payload it carried. Nothing renders reasoning, a tool row, a tool's arguments or its output, because none of
-it arrives. A delivered message keeps its text when the call that sent it failed, and says it may not have arrived.
+### 4.3 The operator panel
 
-**The working line is the whole of the machine.** While a turn runs, one line under the transcript says what it is
-doing — `working`, `working: bash`, `compacting context`, `retrying` (`data-testid="working"`, from
-`src/web/lib/working.ts`). The line names the last tool call and gives any name that appeared for a moment a full
-second on the line (`TOOL_LABEL_HOLD_MS`), so a fast tool is read rather than flashed; compacting and retrying outrank
-it, and the line leaves with the turn. A tool name is all the reader is told: it makes work visible without exposing
-what the work touches. The session bar carries the run status in words inside its menu, plus `connecting` and
-`disconnected` when the socket is not live.
+**A control plane, not a conversational client.** The panel is served by mason at `/` and `/admin` from the same
+bundle (`dist/web/admin.js`), authenticates with the same pairing cookie as everything else, and cannot speak: there is
+no composer, and the only conversation controls left are the two an operator has — stop the running turn, and compact
+the context (`POST /api/admin/control`). A person's words reach mason through a connector, which is where attribution,
+origin and delivery live (§4.1d).
 
-Queued submissions render as faded user bubbles at the very end of the chat, each carrying its boundary
-(`steering` / `follow-up`) and a withdraw button (`data-testid="inbox-item"`, `data-testid="withdraw-<id>"`). The queue
-renders whenever the inbox holds items, busy or dead: a provider error leaves the submissions displayed where they wait
-to be processed once the run (or process) comes back, and every submission that is still plain user text in the queue
-can be withdrawn through the durable backend until the moment it is placed.
+**Eight areas, one per grant-covered key of the state.** Overview (agent status, integration health, the restart banner),
+Conversation (the projected transcript across every connector, plus the queue behind the running turn), Trace (the raw
+entries, filterable by kind, with model messages, tool arguments and results, payloads and context changes), Approvals
+(the pending questions, answered allow-once or deny), Connectors (faces, description, tools endpoint and credential,
+the grant: actors → roster names, external rooms, event kinds → hooks, state scopes, marker trust, policy rules, the
+approver, and the commands the trigger may issue; plus its credentials, its trigger and an audit of file-versus-boot),
+Roster (the names mason attributes to), Access (devices with their grants, and every connector credential), and Hooks
+(the switches and the fire button — a routine is a hook with an interval).
 
-**A widget can take the screen** (`data-testid="widget-fullscreen"`): a quiet icon in the card's corner, revealed on hover
-and always visible where there is no hover. The wrapper becomes a fixed, viewport-filling overlay (`data-fullscreen="true"`)
-and the sandbox fills it, so the widget's own scrolling takes over; the browser's fullscreen is requested on top of that
-where available. The card is never re-mounted, so state inside the widget survives the switch, and the transcript's bottom
-fade (a mask, which would clip the overlay) is dropped while it is up. Exit is the button, `Esc`, or leaving the browser's
-fullscreen. Widgets are therefore authored to be fluid — the sandbox instruction tells the model to fill the available
-height and re-render on `resize`.
+**Grants are the panel's powers, and they are separate.** `conversation` reads the projected conversation; `trace` reads
+the machine behind it; `admin` reads and writes configuration; `approve` answers the gateway's questions. None implies
+another: a phone paired to watch the room holds `conversation`, a laptop holds `admin`, and the trace is granted to the
+device that debugs. A new device gets `conversation`; the first credential of a fresh home gets `conversation`, `admin`
+and `approve`, because a home nobody can administer is broken. Approval authority and policy administration are
+different powers (§4.1e): answering a question is not writing a rule.
 
-**No debug mode, no trace panel.** `?debug=1`, the diagnostics sheet, the usage ledger and the raw `pi.live` /
-`pi.inbox` / `pi.agent` inspector were removed with the raw view: they existed to browse state the client no longer
-receives. Inspecting a run's trace is a server-side concern now, and a future endpoint can expose it deliberately.
+**What is live and what is a restart.** Tokens, roster names, connector credentials and hook switches are read per
+request (or are process state), so the panel's change lands on the next call — including on the device that made it.
+`integrations.json` is the boot's: a connector, its grant, its trigger and the tools catalog are read once, so saving
+there answers `restartRequired`, the Overview says so above everything, and the panel never pretends a saved entry is a
+running one.
 
-**The client is frozen as a reference operator console.** mason is a headless backend whose interfaces are
-integrations (`docs/adr/0004-mason-is-a-headless-backend.md`): Telegram is the first interface, and this client is kept
-for transcript inspection, debugging and a fallback when Telegram or the tunnel is down, with maintenance fixes only
-and no features. apiary is the intended rich client and the multi-agent future, integrating with mason as a backend
-through the wire contract apiary depends on, rather than replacing it.
+**Approvals, from the same control plane.** `GET /api/permissions` and `POST /api/permissions/<id>` are the panel's
+routes (§4.1e), behind `approve`, and they answer exactly what the gateway asked: first authorized answer wins, a later
+one is `409`, and there is no "always allow" — that is a policy edit on the connectors page. The answer is recorded
+under the roster name the browser speaks for, or `owner` when it never joined one, because the credential is the
+identity.
 
----
+**The console is removed, and so is its contract.** `src/web/main.tsx`, the Chord browser host, `AgentService`, the
+conversation socket, the join screen and `/api/join` were deleted in the same change as the panel (#103, #99 criterion
+10). Nothing serves a second conversational surface, and no legacy wire protocol is kept for compatibility. What the
+console was still needed for — inspecting the conversation, answering a question, stopping a run, editing what the
+deployment reaches — moved here, and what only a chat could do (speaking) belongs to the connectors.
 
-### 4.4 Failure handling: the run supervisor and the Retry control
+**The migration.** `npm run doctor -- migrate` is the one command that moves a home forward, and it now does two things:
+it moves a pre-split home into `agent/` and `service/` as before, and it stamps `conversation`, `admin` and `approve`
+onto every credential that predates grants — what the console it replaced could do, and never `trace`. The step is
+one-way and idempotent: a credential that already carries grants is left exactly as it is, including one an operator
+narrowed by hand. A boot that finds an ungranted credential says so once, in the log, rather than rewriting the
+operator's file on start.
+
+**The widget card survived the console.** A widget in the conversation is the artifact a reader was sent, so the panel
+renders it with the same sandbox, the same preview and the same fullscreen control (`src/web/components/`, styles in
+`widgets.css`). What it does not have is a way to send: a prompt typed inside a widget has no reader to arrive at from
+here, and the bridge answers that instead of dropping the click.
+
+### 4.4 Failure handling: the run supervisor and the retry hook
 
 Three layers, because a provider outage has three different timescales.
 
@@ -904,23 +838,23 @@ Three layers, because a provider outage has three different timescales.
    The schedule is deliberately slower than the in-run retries: **15s, 60s, 5min, 15min** (four attempts, ~20 minutes
    in total), overridable with `PDA_RUN_RETRY_DELAYS_MS` and `PDA_RUN_RETRY_ATTEMPTS`. The budget resets the moment an
    answer succeeds, and a pending re-fire is dropped as soon as the reader submits anything — their input leads.
-3. **On demand, the reader retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
+3. **On demand, the operator retries.** `hooks.ts` ships `retry-failed-run` disabled and without an interval, so nothing
    schedules it; the prompt tells the agent to resume from where it stopped instead of starting over, with the failure
-   text appended as the payload. The client's **Retry** control (`data-testid="retry-run"`) fires the same hook with
-   the error lines it shows, and disappears once anything follows the failed turn. Its prompt explains the durable
-   promise in the terms the reader needs: *the task is still open*.
+   text appended as the payload. The panel's Hooks page fires the same hook (the console's own Retry control went with
+   the console, #103), and the hook's prompt explains the durable promise in the terms the reader needs: *the task is
+   still open*.
 
 What durability does and does not promise, in one line: the conversation, the run, the subscriptions and the hook
 state survive a **process** restart — kill the server mid-tool and it resumes the run in place — while a provider
-outage that outlasts every retry budget leaves a failed turn, which the supervisor and the Retry control now pick up
+outage that outlasts every retry budget leaves a failed turn, which the supervisor and the retry hook now pick up
 again.
 
 ## 5. Milestone 3 Specification: the Widget Tool and Its Artifact Contract
 
 The milestone is mason's half of a widget: a tool every conversation is offered (§3.5), and the artifact contract that
 carries its output — `generateSandboxedUi`'s arguments mapped to `OpenGenUIContent` in `src/shared/genui-content.ts`,
-with only that content crossing the wire (§4.1a). Rendering it is a client's: the console draws it today and is frozen
-(§4.3), so what follows is the contract and the one worked consumer the console kept.
+with only that content crossing the wire (§4.1a). Rendering it is a client's: the operator panel draws it in the
+conversation view (§4.3), and the sandbox that renders it is the one worked consumer that survived the console.
 
 ### 5.1 Why We Adapt Components Instead of Forking the Next.js Shell
 Inspecting `vendor/open-intelligent-ui`:
@@ -984,10 +918,11 @@ widget's own content.
    log line, the caps, the git repository; the resident prompt — `soul.md` or `DEFAULT_SOUL`, the first-run profile
    interview, the skills index (one seeded root, nesting) and the pointer-only widget section; and the
    `[cache]` line's arithmetic. Every test uses a temporary `houseHome` and never the real `~/.mason`.
-3. **`test/chord-e2e.test.ts`:**
-   - Starts the HTTP + WebSocket server and connects a real Chord browser-mode `Host` over `webSocketLink`.
-   - Verifies initial `view` and `status` hydration.
-   - Verifies `submit`, live streaming updates (`status.runStatus`), tool execution status transitions, `steer` / `followUp` inbox queueing + withdrawal, `abort`, and proactive hook firing pushing updates to the connected client.
+3. **`test/panel.test.ts`:**
+   - Starts the server, pairs a browser into a cookie, and reads `GET /api/admin/state` the way the panel does.
+   - Verifies the pairing redirect, the panel bundle, and that the console's `/api/join` and browser socket are gone.
+   - Verifies initial `view` and `status` hydration, and that a device without a grant is sent no area for it.
+   - Verifies live status updates (`status.runStatus`), tool execution status transitions, `steer` / `followUp` inbox queueing + withdrawal, `stop` and `compact` over the control route, and a hook fired from the panel starting a proactive turn.
    - Verifies `generateSandboxedUi` is in the first turn's tool list and that a second turn's list is identical, and that a widget streams and settles with no toggle to open.
    - Verifies the resident prompt carries the `generative-ui` pointer and not the manual (no parameter-order block).
    - Verifies a threshold compaction: with a small context window and `compaction: { reserveTokens: 1, keepRecentTokens: 1 }`,
@@ -1011,26 +946,25 @@ on message quality against `evals/rubric.md`. Scenario shape, flags, trace field
 
 ---
 
-## 7. Notes from building this (Chord behaviour worth knowing)
+## 7. Notes from building this (what the cutover taught)
 
-1. **A reference created before the host has an upstream never binds.** `createHost()` (client) + `host.hold()`
-   (or an awaited `host.get()`) + `host.connect()` leaves the reference in `loading` forever: the re-hold pass in
-   `connect()` only visits references that already lost a link. The browser client therefore connects first and takes
-   the reference afterwards (`src/web/client.ts`); later reconnects re-hold that same reference.
-2. **A remote state hydrates only while subscribed.** `ref.member.value` is `undefined` until something
-   subscribes, and the first delivery to a new subscriber is `undefined` before the snapshot arrives. Every
-   client keeps its `view` / `agentStatus` subscriptions (and its last snapshot) for the lifetime of the page.
-3. **The reference has `status` and `ready`.** `ref.status` is `loading | live | released | gone`, `ref.ready`
-   resolves when the reference is live; `ref.onStatus()` reports "gone" with the error, which is what the UI
-   surfaces as the error banner.
+1. **An absent area is not an empty one.** The panel's state is built as optional keys, one per grant, and the server
+   never sends a placeholder. A client that received `trace: { entries: [] }` would draw a trace tab for a device that
+   may not have one — the difference between "granted and quiet" and "not granted" has to exist on the wire, not in the
+   browser's judgement.
+2. **Grants are read per request, so a narrowing lands on the device being narrowed.** `authenticate` reads the config
+   file every time; a `PATCH /api/admin/tokens/<id>` that removes `trace` is in force for that device's very next call,
+   which `test/panel.test.ts` pins. Nothing here is cached at boot except `integrations.json`, and the panel says
+   `restartRequired` when that one has moved.
+3. **A secret is a write-only field.** A token, a connector credential and a trigger secret are minted by a response and
+   stored as hashes; the panel can list what exists and replace it, and no read can print it again. The `config` area of
+   the state names them by id and `hasCredential`, and nothing else.
 4. **A sandbox holds stable dependencies.** The widget bridge is rebuilt on every render; handing that object
    straight to `Websandbox.create`'s `localApi` (through `useMemo`) tore the iframe down and up on every
    transcript update and lost the widget's own state. `SandboxedUiCard` keeps a stable forwarder and reads the
    current bridge through a ref instead.
 5. **`WebSocketServer.close()` waits for clients.** Server shutdown terminated open WebSocket clients first;
-   otherwise `close()` never calls back and `npm run dev` survives SIGTERM while a browser is connected
+   otherwise `close()` never calls back and `npm run dev` survives SIGTERM while a connector is connected
    (`server.closeAllConnections()` releases lingering HTTP keep-alives too).
-6. **Tests must not inherit ambient state.** Suites used to pass `enableSandboxedUi: false` explicitly so an ambient
-   `ENABLE_SANDBOXED_UI=1` could not flip a default under test; the toggle is gone, and what a test now isolates is the
-   agent's home. Every place that opens a runtime passes `houseHome` (and `MASON_HOME`) pointed at a fresh temporary
-   directory, so no test creates or reads the real `~/.mason`.
+6. **Tests must not inherit ambient state.** Every place that opens a runtime passes `houseHome` (and `MASON_HOME`)
+   pointed at a fresh temporary directory, so no test creates or reads the real `~/.mason`.

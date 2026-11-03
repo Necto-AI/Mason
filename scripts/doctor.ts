@@ -9,6 +9,7 @@
  * `doctor` rather than a command of its own because this is what it is: a check on the home that repairs it when asked.
  * Nothing here runs on boot. A server that moved files on start would be a server that edits the operator's home.
  */
+import { migrateTokenGrants } from "../src/server/auth.ts";
 import { currentHouse, migrateHouse } from "../src/server/house.ts";
 
 const [command] = process.argv.slice(2);
@@ -26,7 +27,12 @@ function usage(): never {
   interrupted one left (the agent's first commit, the freeze of the repository at the root) when it is missing. The
   repository at the home root stays where it is and is frozen; the agent's history starts fresh in agent/.git. It refuses
   when the same entry is in the root and in a half that already holds something, and when agent/.git already holds paths
-  from service/ — a history from before this fix, which it names the repair for instead of touching.`);
+  from service/ — a history from before this fix, which it names the repair for instead of touching.
+
+  It also finishes the configuration the panel needs: a credential written before grants existed is stamped with
+  conversation, admin and approve — what the console it replaced could do, and not trace. A credential that already has
+  grants is left alone, so a narrowed device stays narrowed. Neither step is done on boot: a server that rewrote the
+  operator's files on start would be a server that edits his home.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -36,6 +42,13 @@ const outcome = await migrateHouse(house);
 if (outcome.status === "refused") {
 	console.error(`[doctor] ${outcome.reason}`);
 	process.exit(1);
+}
+const granted = await migrateTokenGrants(house.home);
+for (const record of granted) {
+	console.log(
+		`[doctor] ${record.id} (${record.label}) had no grants: stamped conversation, admin, approve. ` +
+			`Narrow it with: npm run token -- grants ${record.id} conversation`,
+	);
 }
 if (outcome.status === "unchanged") {
 	console.log(

@@ -37,7 +37,7 @@ type PersistedHookState = Record<string, { enabled?: boolean; lastFiredAt?: stri
  * The key belongs to the caller, because only the caller knows what "the same event" means:
  * - a sender that names its delivery, through `explicitRequestId()`: exact, and permanent;
  * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
- * - a gesture — the Retry control, the run supervisor, a chord `fireHook` — passes none: a click is an intent, so two
+ * - a gesture — a press on the panel's Hooks page, the run supervisor — passes none: a press is an intent, so two
  *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
  *
  * A fire that names its delivery collapses on the first tier, however late it repeats; a gesture is never collapsed,
@@ -373,11 +373,11 @@ export function builtinHooks(options: BuiltinHookOptions = {}): Array<Omit<Event
 				"It is {{date}} and the day is starting. Check the workspace and the calendar for what today needs, then send a short brief: what is fixed, what is open, and the one thing to do first.",
 		},
 		{
-			// Manual only: nothing schedules it, and the client's Retry control is the one caller.
+			// Manual only: nothing schedules it, and the panel's Hooks page is the one caller.
 			id: "retry-failed-run",
 			name: "Retry a failed run",
 			description:
-				"Resume a run that ended in a model error. Fired by the Retry control on the failed turn, with the error as payload.",
+				"Resume a run that ended in a model error. Fired from the Hooks page or by the supervisor, with the error as payload.",
 			enabled: false,
 			promptTemplate:
 				"Your previous attempt failed before it finished, so the task is still open. Resume it from where it stopped: keep what is already done, redo only the step that failed, and do not start over from scratch. The failure was:\n{{payload}}",
