@@ -207,12 +207,17 @@ test("a retry inherits the origin of the turn it resumes", async () => {
 		},
 	);
 
-	/** Observes one view, lets its delay mature, and answers what the fire was told. */
+	/**
+	 * Observes one view, lets its delay mature, and answers what the fire was told. A view that arms nothing fails here
+	 * rather than handing back the previous fire's origin: a case that passes without a fire is not a case.
+	 */
 	const firedFor = async (view: ConversationView): Promise<unknown> => {
+		const before = fired.length;
 		supervisor.observe(view);
 		scheduled.at(-1)?.();
 		await Promise.resolve();
-		return fired.at(-1)?.origin;
+		assert.equal(fired.length, before + 1, "the view did not arm a re-fire");
+		return fired[before]?.origin;
 	};
 
 	// A person wrote in the chat and the run that answered them died: the retry resumes that turn, so it answers there.
