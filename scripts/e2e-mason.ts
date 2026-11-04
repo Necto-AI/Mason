@@ -11,7 +11,7 @@
  * is, and the credential each connector entry was issued. Everything a medium does — a fake Telegram, a fake Slack — is
  * the connector's own business, on the other side of that socket.
  *
- *     node --conditions=source --experimental-strip-types scripts/e2e-mason.ts \
+ *     node --experimental-strip-types scripts/e2e-mason.ts \
  *       --config /tmp/run/integrations.json --script /tmp/run/turns.json [--home /tmp/run/house]
  *
  * The script is a JSON array; each element is one assistant message:
