@@ -2,11 +2,13 @@
 # Push whatever is in git onto a running deployment.
 #
 # The deployment is a checkout of this repository on another machine, built and started there by `podman compose`. So an
-# update is five things in this order: fetch and check out the ref, move `vendor/pi` to the commit that ref pins, build,
-# up, and then *prove* that the running containers are the ones this build made. Two of those steps exist because their
-# absence is invisible: a checkout that keeps last week's submodule builds last week's pi with today's tag (#84), and
+# update is three things in this order: fetch and check out the ref, build, up, and then *prove* that the running
+# containers are the ones this build made. That last step exists because its absence is invisible:
 # `podman compose up -d --build` has been seen to finish a build and leave the old process running. A container still
 # running the previous image is a deployment that did not happen, and this script says so instead of printing "done".
+#
+# The submodule step is gone with `vendor/pi` (#122): the `@earendil-works/*` packages come from npm at the versions in
+# `package.json`, so the commit that is checked out is the whole of what the image is built from.
 #
 # It does not touch `deploy/.env`. That file is the deployment's own state (tokens, secrets, the port, the uid, the
 # profiles) and lives only on the host, so an update changes code, never credentials. It does not run migrations and it
@@ -34,10 +36,6 @@ ref="${1:-main}"
 host="${DEPLOY_HOST:-pc}"
 dir="${DEPLOY_DIR:-~/dev/mason}"
 compose="${COMPOSE_CMD:-podman compose}"
-# The directory holding this script, so the submodule step below streams the file from the checkout being deployed rather
-# than from whatever copy the host has.
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 say() { printf '==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'deploy failed: %s\n' "$*" >&2; exit 1; }
@@ -59,14 +57,6 @@ say "checkout"
 # deployment is: a place that runs exactly one commit, not a place somebody edits.
 remote "git fetch --quiet --tags --force origin '$ref' && git checkout --quiet --force --detach \$(git rev-parse FETCH_HEAD) && git log -1 --format='    %h %s'"
 commit="$(remote "git rev-parse --short HEAD" | tr -d '[:space:]')"
-
-say "submodules"
-# The pin moves with the ref and nothing used to move the working tree with it: the image was built from the previous
-# `vendor/pi` and the log said nothing (issue #84). Streamed from this checkout rather than run from the deployment's own
-# copy, because a tag does not have this file at all and an update must use the logic it is deploying with.
-submodules="$(ssh "$host" "set -euo pipefail; cd $dir; bash -s" < "$here/submodules.sh")"
-printf '%s\n' "$submodules"
-vendor_pi="$(printf '%s\n' "$submodules" | awk '$1 == "vendor/pi" { print $2 }')"
 
 # The project name comes from the deployment's own .env, not from the compose file: `name:` there is `${MASON_STACK:-mason}`,
 # and a substitution read with `cut -d: -f2` is the string `${MASON_STACK`, which matches no container and turns the
@@ -149,4 +139,4 @@ done <<< "$running"
 [ -n "$running" ] || fail "no container of the $project stack is running"
 [ "$stale" = 0 ] || fail "a container is not running the image this build produced (podman compose left it running)"
 
-say "deployed $commit (vendor/pi ${vendor_pi:-unknown}) to $host, answering on 127.0.0.1:$port"
+say "deployed $commit to $host, answering on 127.0.0.1:$port"

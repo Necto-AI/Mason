@@ -258,4 +258,4 @@ export PI_ENV_SSH_ALIAS="$MASON_ENV_ALIAS"
 echo "[deploy] tools run on $MASON_ENV_USER@$MASON_ENV_HOST:$MASON_ENV_PORT, in $agent_dir/workspace"
 # `npm run dev` is this same command; exec'ing node directly keeps one process as PID 1, so SIGTERM reaches the server
 # that installs the handler rather than an npm wrapper that may not pass it on.
-exec node --conditions=source --experimental-strip-types src/server/main.ts
+exec node --experimental-strip-types src/server/main.ts
