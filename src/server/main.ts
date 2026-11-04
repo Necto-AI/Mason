@@ -116,9 +116,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// that the previous process died on is still a task nobody answered.
 	reportRun(runWatch.value);
 	supervisor.observe(runWatch.value);
-	runWatch.start(async (view) => {
-		reportRun(view);
-		supervisor.observe(view);
+	// The failure branch is the watch saying it cannot read the view any more; nothing reaches the supervisor from it,
+	// because a supervisor told about a run nobody can read is a supervisor that retries on a guess.
+	runWatch.start(async (call) => {
+		if (call.kind !== "value") {
+			console.error("[run] the conversation view failed", call.error);
+			return;
+		}
+		reportRun(call.value);
+		supervisor.observe(call.value);
 	});
 
 	// One owner, a few credentials, and a session key for the browser's cookie. The store is the config file, read per

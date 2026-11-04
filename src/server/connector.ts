@@ -26,7 +26,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { basename, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Conversation, ConversationView, EntryRecord } from "@earendil-works/pi-durable";
+import type { Conversation, ConversationView, EntryRecord, SubmissionDraft } from "@earendil-works/pi-durable";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import {
 	type Capability,
@@ -858,7 +858,7 @@ export class ConnectorSession {
 	 * `whenBusy: "reject"` is the connector saying it would rather be told than queued, so the answer is a refusal it can
 	 * act on — not `mason.internal`, which is the one code a client reads as a bug in mason.
 	 */
-	async #submitInput(draft: Parameters<Conversation["submit"]>[0]) {
+	async #submitInput(draft: SubmissionDraft) {
 		try {
 			return await this.#conversation.submit(draft, BACKGROUND_CONTEXT);
 		} catch (error) {
