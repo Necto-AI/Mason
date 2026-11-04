@@ -392,8 +392,12 @@ async function closeOpened(opened: readonly (() => Promise<void>)[], report: (er
 async function watchConversation(conversation: Conversation, context: Context): Promise<ConversationState> {
 	const watch = await conversation.watch(context);
 	const listeners = new Set<(view: ConversationView) => void>();
-	watch.start(async (view) => {
-		for (const listener of [...listeners]) listener(view);
+	// A listener gets values. A `failed` call is the source reporting a failure the watch may recover from, and it
+	// carries no view: handing the last one to the listeners again would tell a client the conversation changed when
+	// what happened is that nobody can read it.
+	watch.start(async (call) => {
+		if (call.kind !== "value") return;
+		for (const listener of [...listeners]) listener(call.value);
 	});
 	return {
 		get value() {
