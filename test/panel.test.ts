@@ -34,7 +34,7 @@ import { addPerson } from "../src/server/roster.ts";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
 import { grantsOf, type OperatorGrant, type PanelState } from "../src/shared/admin.ts";
-import { REPLY_TOOL } from "../src/shared/contract.ts";
+import { HOOK_ENTRY_KIND, REPLY_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -533,6 +533,40 @@ describe("the operator panel", () => {
 			assert.match(answered, /Second wish\./);
 			assert.match(answered, /\[EVENT HOOK: Retry a failed run\]/);
 			assert.equal(entries(panel.view()).filter((entry) => entry.kind === "app.hook").length, 1);
+		} finally {
+			if (previous === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
+			else process.env.PDA_RUN_RETRY_ATTEMPTS = previous;
+			await panel.close();
+		}
+	});
+
+	it("presses a retry that resumes the turn it was pressed for, so the answer has a chat", async () => {
+		const previous = process.env.PDA_RUN_RETRY_ATTEMPTS;
+		process.env.PDA_RUN_RETRY_ATTEMPTS = "0";
+		const panel = await openPanel();
+		try {
+			panel.faux.setResponses([
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "the provider is down" }),
+				fauxAssistantMessage(fauxText("Resumed where it stopped.")),
+			]);
+			// A person wrote through a connector: their entry carries the origin a reply goes back to, and a retry pressed
+			// here resumes that turn rather than starting one with nowhere to answer (#83).
+			const origin = { connector: "telegram", externalConversationId: "-1001234" };
+			await panel.server.runtime.hooks.fire("team-chat", { payload: "Таня: ?", origin });
+			await until("the run to fail", async () =>
+				(await panel.state()).conversation?.status.busy === false ? true : undefined,
+			);
+
+			const fired = await panel.call("POST", `/api/admin/hooks/${RETRY_HOOK_ID}/fire`);
+			assert.equal(fired.status, 200, JSON.stringify(fired.body));
+			const pressed = await until("the pressed retry", () =>
+				entries(panel.view()).find(
+					(entry) =>
+						entry.kind === HOOK_ENTRY_KIND &&
+						(entry.data as { hookId?: string } | undefined)?.hookId === RETRY_HOOK_ID,
+				),
+			);
+			assert.deepEqual((pressed.data as { origin?: unknown }).origin, origin);
 		} finally {
 			if (previous === undefined) delete process.env.PDA_RUN_RETRY_ATTEMPTS;
 			else process.env.PDA_RUN_RETRY_ATTEMPTS = previous;

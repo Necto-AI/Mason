@@ -52,6 +52,7 @@ import {
 import { JSON_BODY_MAX_BYTES, parseJsonObject, readBodyCapped } from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { addPerson, readRoster, removePerson } from "./roster.ts";
+import { RETRY_HOOK_ID, retryOrigin } from "./run-retry.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveAgentStatus } from "./status.ts";
 import { projectTrace } from "./trace.ts";
@@ -233,8 +234,12 @@ async function handleAdmin(
 		requireGrant(grants, "admin");
 		if (action === "fire" && method === "POST") {
 			if (!deps.runtime.hooks.has(name)) throw new PanelError(404, `no hook ${name}`);
-			// Pressing fire is a gesture: no request id, so each press is its own fire.
-			const submission = await deps.runtime.hooks.fire(name, {});
+			// Pressing fire is a gesture: no request id, so each press is its own fire. A retry is pressed to resume a run
+			// that died, so it carries the origin of the turn it resumes and the answer lands in the chat that was waiting
+			// (#83). Any other hook is a job of its own and has no turn behind it to inherit a destination from.
+			const origin =
+				name === RETRY_HOOK_ID ? retryOrigin(await deps.runtime.viewSnapshot(BACKGROUND_CONTEXT)) : undefined;
+			const submission = await deps.runtime.hooks.fire(name, origin === undefined ? {} : { origin });
 			json(response, 200, { submissionId: String(submission.id) });
 			return;
 		}

@@ -328,8 +328,9 @@ export function formatPrompt(
  * console is the only way a turn of their own can be read as a hook's. What the turn's reply then targets is decided by
  * the origin the fire carried — not by prose in the template, and not by a vendor tool's name.
  *
- * A hook whose fire carried no origin has no chat behind it — a schedule, a repository event, a retry — and its reply is
- * recorded with nobody reached, which `reply` says in its result.
+ * A hook whose fire carried no origin has no chat behind it — a schedule, a repository event — and its reply is recorded
+ * with nobody reached, which `reply` says in its result. A retry is the one fire that inherits an origin: it resumes a
+ * turn that had one.
  */
 /** Whether an event hook started this turn. The one question, spelled once. */
 export function isHookTurn(input: string | undefined): boolean {
