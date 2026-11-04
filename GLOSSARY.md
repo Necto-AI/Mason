@@ -55,25 +55,29 @@ _Avoid_: the assistant, the pilot
 The bot's job and personality — what it is for, how it speaks, what it declines. Set by whoever deploys it.
 _Avoid_: persona, system prompt, SYSTEM.md
 
+**person**:
+Who a bot works for. A person is `~/people/<name>/`, a git repository holding their profile; one person may own
+several bots, and a bot works for one.
+_Avoid_: user, account, owner
+
 **profile**:
-Durable facts about the person the bot works for, kept current by the bot itself.
+Durable facts about the person, curated by every bot that works for them and shared between those bots. A bot writes
+it the way it writes its own memory: a change is a commit (`docs/adr/0012-a-person-is-not-a-bot.md`).
 _Avoid_: user memory, memory, context
 
 ## The fleet
 
 **fleet**:
-Several separately deployed mason bots that may talk to each other. One container hosts one root bot conversation; a
-second bot is a second container with its own home.
+Several separately deployed mason bots that may talk to each other: one process, home and port per bot, started and
+watched by a control plane and never by mason itself.
 _Avoid_: team (that is the arrangement sibling shows), group, cluster
 
 **A2A**:
-Agent2Agent Protocol, the Linux Foundation standard for agent-to-agent communication: the peer-communication boundary
-between separately deployed bots. The Agent Communication Protocol (ACP) merged into it in August 2025, so A2A is the
-only peer standard mason speaks; it is carried by the deployments and independent of whether they share a VM, and
-mason's own code grows no peer registry or router for it; the bots it accepts are a list a person edits, not a
-registry (`docs/FLEET-PLAN.md`).
-_Avoid_: ACP (merged into A2A in 2025), calling it mason's protocol, or confusing it with the editor-facing Agent Client
-Protocol
+Agent2Agent Protocol, the Linux Foundation standard for agent-to-agent communication and the peer boundary between
+separately deployed bots (ACP merged into it in August 2025). It is carried by the deployments, independent of whether
+bots share a VM; mason's code grows no peer registry or router, and the peers it accepts are a list a person edits
+(`docs/FLEET-PLAN.md`).
+_Avoid_: ACP, calling it mason's protocol, confusing it with the editor-facing Agent Client Protocol
 
 ## The home
 
@@ -83,8 +87,8 @@ the machine its tools run on.
 _Avoid_: house, state dir, `.mason`
 
 **agent-owned files**:
-The part of the home the bot reads and edits with its own tools, on the machine its tools run on: profile, log,
-journal, skills, worker definitions, workspace.
+The part of the home the bot reads and edits with its own tools, on the machine its tools run on: log, journal,
+skills, worker definitions, workspace.
 _Avoid_: user data, workspace (the workspace is one directory inside it)
 
 **service-owned files**:
