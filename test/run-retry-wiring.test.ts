@@ -280,14 +280,18 @@ describe("a shutdown with a re-fire still pending", () => {
 			console.error = (line: unknown) => {
 				reported.push(String(line));
 			};
+			let closed = false;
 			try {
 				await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?" });
 				// The supervisor says it armed the re-fire; from here the timer is the only thing that can act.
 				await waitForLog(armed, "[run-retry] run failed");
 				await server.close();
+				closed = true;
 				// The delay matures after the process stopped: a supervisor nobody closed fires here, into a closed runtime.
 				await new Promise((resolve) => setTimeout(resolve, 700));
 			} finally {
+				// A case that failed before its own shutdown leaves a listening server behind, and the file hangs instead.
+				if (!closed) await server.close().catch(() => undefined);
 				console.warn = warn;
 				console.error = error;
 			}
