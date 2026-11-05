@@ -17,8 +17,8 @@ export interface RuntimeEnvManager {
 
 /**
  * What an execution target says a conversation works on: the machine's kind and the directory inside it. `local` is
- * the only kind this build runs; the field is stored as written, so a later kind needs no migration and nothing reads
- * one this build does not run.
+ * the only kind this build runs; the field is stored whole, so a later kind needs no migration; a kind this build does
+ * not run resolves to a hard error, not a default.
  */
 export interface ExecutionTargetState {
 	[key: string]: JsonValue;
@@ -162,7 +162,7 @@ function unknownTargetKind(kind: string): Error {
  * it through its durable `app.target` document, and the connections it names held until shutdown.
  *
  * The memoization is twofold. `ensure()` gives one `ExecutionTarget` per conversation, so a second turn of the same
- * conversation reuses both the document it read and the connection it resolved; `envFor()` keeps one
+ * conversation resolves the document again and reuses the target it names and the connection behind it; `envFor()` keeps one
  * `RemoteExecutionEnv` per conversation and working directory, as before, whichever machine the target named. The
  * resources leave in `stop()`, at process shutdown.
  */
