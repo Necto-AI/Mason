@@ -37,6 +37,9 @@ jobs:
       # One ceiling per document (`docs/doc-budgets.json`, `docs/AGENTS.md`). A document that grew past its number fails
       # the pull request that grew it, and a ceiling only ever goes down.
       - run: npm run check:docs
+      # The same ratchet for code (`docs/code-budgets.json`): one ceiling per area, and it only ever goes down. A cut
+      # that shrinks an area is expected to lower its number in the same commit.
+      - run: npm run check:code
       - run: npm run build:web
       - run: npm test
       - run: npm run test:packages

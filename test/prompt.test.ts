@@ -101,9 +101,9 @@ function sectionOf(key: string): PromptSection {
 }
 
 /**
- * A section as it reaches the system prompt, mirroring `renderSections` in
- * `vendor/pi/packages/durable/src/harness/prompt.ts`: a tagged section is wrapped in its key, a tag-less one is passed
- * through bare, and a renderer that throws keeps the text that was already shown.
+ * A section as it reaches the system prompt, mirroring the engine's `renderSections` (not exported from the package's
+ * root, so this is the rule restated): a tagged section is wrapped in its key, a tag-less one is passed through bare,
+ * and a renderer that throws keeps the text that was already shown.
  */
 async function renderSection(
 	promptSection: PromptSection,
@@ -137,6 +137,26 @@ test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does 
 		await writeFile(housePaths().soul, "  You are SOUL-MARKER, the test agent.\n", "utf8");
 		assert.equal(await renderSection(soul), `You are SOUL-MARKER, the test agent.\n\n${WAKE_RULE}`);
 	});
+});
+
+test("the whole prompt fits in its budget, and the tool list is the six", async () => {
+	// A ceiling on the prompt, not on one section: this text is paid again on every turn of every conversation, and the
+	// sections grow a sentence at a time. Raising it is a decision, like raising a code ceiling.
+	await withHouseHome(async () => {
+		// The module's integrations are global: a test that set some would otherwise be counted here.
+		setIntegrations({});
+		let total = 0;
+		for (const promptSection of PROMPT_SECTIONS) {
+			total += (await renderSection(promptSection))?.length ?? 0;
+		}
+		assert.ok(total <= 4_000, `the prompt is ${total} characters, over its 4,000`);
+	});
+
+	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));
+	// `codemode` is built per boot, so it is not in the base list, and it is the last tool a request carries. Growing
+	// this list is a decision of its own: a tool is a declaration in every request, and a capability the model may use
+	// without asking a script for it.
+	assert.deepEqual([...declared, "codemode"], ["read", "write", "edit", "bash", "reply", "codemode"]);
 });
 
 test("the codemode section is a count and three ways to look a tool up, not a catalogue", async () => {

@@ -1,0 +1,11 @@
+{
+	"ceilings": {
+		"evals": 600,
+		"packages/connector/src": 2650,
+		"packages/protocol/src": 300,
+		"scripts": 1850,
+		"src/server": 6950,
+		"src/shared": 300,
+		"src/web": 2950
+	}
+}
