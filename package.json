@@ -1,5 +1,9 @@
 {
 	"name": "mason-agent",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DenisSud/mason.git"
+	},
 	"version": "0.1.0",
 	"type": "module",
 	"workspaces": [
