@@ -2,8 +2,7 @@
  * HTTP + WebSocket server: the connector door, a liveness probe, and the attachment endpoints.
  *
  * There is no conversational socket and no browser application. A person speaks to mason through a connector, and the
- * only credential on this surface is the connector's own; the panel that used to be here (#103) administered a
- * deployment from a browser, and apiary is where that becomes a product.
+ * only credential on this surface is the connector's own. A panel is apiary's to build, not mason's.
  */
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -120,9 +119,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			response.end("internal error");
 		});
 	});
-	// One socket server behind the listener: a connector's JSON-RPC door. There is no browser socket any more — the
-	// panel polls `/api/admin/state`, and nothing else in a browser speaks to mason. `noServer` because the path in the
-	// upgrade request decides whether there is a door at all, and a path that is not the connector's opens none.
+	// One socket server behind the listener: a connector's JSON-RPC door, and nothing else in a browser speaks to mason.
+	// `noServer` because the path in the upgrade request decides whether there is a door at all, and a path that is not
+	// the connector's opens none.
 	const connectorSockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 	server.on("upgrade", (request, socket, head) => {
 		const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -210,12 +209,15 @@ async function handleRequest(
 }
 
 /**
- * The connector's HTTP endpoints: `POST /api/connector/attachments` and `GET /api/connector/attachments/<contentId>`.
+ * The connector's one HTTP endpoint: `POST /api/connector/attachments`.
+ *
+ * The store is write-only for a connector: an upload answers the content id, and the agent reads the bytes itself when a
+ * message carrying one arrives. A connector therefore never needs a download, and the route that served one went with
+ * the panel.
  *
  * Authenticated as the connector (`authenticateConnector`), never as the owner, and answered with the protocol's own
- * statuses: `413` over the cap, `410` for an id that expired, `404` for one this connector did not upload — which is the
- * same answer a malformed id gets, because whether another connector's id exists is not a sender's business. The budget
- * is the connector's attachment class, separate from its submissions, fires and controls.
+ * statuses: `413` over the cap, `405` for a verb that is not a POST, and `404` for any other path. The budget is the
+ * connector's attachment class, separate from its submissions, fires and controls.
  */
 async function handleConnectorRequest(
 	request: IncomingMessage,

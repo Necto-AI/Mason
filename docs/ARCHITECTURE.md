@@ -21,9 +21,9 @@ One process, started by `npm run dev`, is one bot.
   `/api/connector`, opened by a service that carries a *user* face, a *tools* face, an *events* face, or some of them.
 - **The home is `~/.mason/`** (`src/server/house.ts`): `agent/`, which the tool machine mounts — `profile.md`, the dated
   `log/`, `skills/`, `workspace/`, and the git history of all of it — and `service/`, which the tool machine never sees.
-- **The prompt** is `src/server/prompt.ts` and only that file: every section, in the order the model reads them.
-- **Tools** are extensions (`src/server/extensions/`) plus the two per-boot ones — `mcp` and `codemode`.
-- **Hooks** (`src/server/hooks.ts`) are the ways a turn starts without a person: a timer, a connector's fire, and the run
+- **The prompt** is `src/server/prompt.ts` and only that file: every section, in reading order.
+- **Tools** are extensions (`src/server/extensions/`) plus the two per-boot ones, `mcp` and `codemode`.
+- **Hooks** (`src/server/hooks.ts`) are the ways a turn starts without a person: a timer, a fire, and the run
   supervisor's retry.
 
 The file-by-file tree is [`docs/SPEC.md` §2](SPEC.md#2-repository-structure); this file answers the other question.
@@ -36,7 +36,7 @@ this table says so rather than implying a test exists.
 
 | Goal | Owner | Mechanism | Pinned by |
 |---|---|---|---|
-| A new agent capability (a tool) | `src/server/extensions/<name>.ts`, then the array in `src/server/runtime.ts` | `defineTool` + `defineExtension`, added to `BASE_EXTENSIONS`. A tool that a script may also call is `callers: ["tools"]`. Nothing a service offers may become a tool: it is asked for through `mcp_search` / `mcp_describe` / `mcp_call` | `test/delivery.test.ts` (the registration facts of `reply`), `test/mcp.test.ts` (a connected server moves no tool in the list). No test fails when an extension is merely added to `BASE_EXTENSIONS` — `docs/SURFACE.md` Table B is what shows it |
+| A new agent capability (a tool) | `src/server/extensions/<name>.ts`, then the array in `src/server/runtime.ts` | `defineTool` + `defineExtension`, added to `BASE_EXTENSIONS`. A tool that a script may also call is `callers: ["tools"]`. Nothing a service offers may become a tool: it is asked for through `mcp_search` / `mcp_describe` / `mcp_call` | `test/delivery.test.ts` (the registration facts of `reply`), `test/mcp.test.ts` (a connected server moves no tool in the list). No test fails when an extension is merely added to `BASE_EXTENSIONS` — the extensions line in `docs/SURFACE.md` is what shows it |
 | A new prompt section | `src/server/prompt.ts` | `section(key, render)` in `PROMPT_SECTIONS`, in reading order. A section renders from files on the tool machine and must render byte-identically while nothing changed | `test/prompt.test.ts` — "every section renders byte-identically in the next turn" |
 | A new way for words to arrive (a connector face) | `src/server/connector.ts`, plus the entry's `connector.user` grant in `service/integrations.json` | The face is advertised at the handshake from the grant; `admission.ts` decides where the submission waits. The credential is minted by `npm run connector` and is the entry's, never a person's | `test/connector.test.ts` (submissions, actors, rooms, capabilities), `test/admission.test.ts` |
 | A new service the agent reaches | `service/integrations.json`; `src/server/integrations.ts` for the file, `src/server/mcp.ts` for the tools face | `npm run integration -- add` writes a tools face (an MCP endpoint over Streamable HTTP and the one line the model is told about it); the entry's `connector` block beside it is edited in the file. Read once at boot, so a change is a restart | `test/integrations.test.ts` (the file, the refusals, the route), `test/mcp.test.ts` (a live catalog, reconnection, the required-vs-optional boot) |
@@ -47,25 +47,25 @@ this table says so rather than implying a test exists.
 | A new skill | `skills/<name>/SKILL.md` in the repository, or `<home>/agent/skills/<name>/SKILL.md` for a personal one | A directory with a `SKILL.md` is one skill; the index is rendered into the prompt with the path to read, never the body. Shipped skills are seeded into the home at boot, and a personal skill of the same name wins | `test/prompt.test.ts` (`discoverSkills`, the one root, the shadowing), `test/capability-wiring.test.ts` (what the repository says it ships) |
 | A new control a connector may send | `src/server/commands.ts` and the closed set in `packages/protocol` | `connector.commands` in the entry's grant decides which of them that connector may say; a word the entry does not declare spends nothing | `test/connector.test.ts` — "runs a declared command once per request id, and an undeclared word spends nothing" |
 
-## The four invariants
+## The three invariants
 
-A change that breaks one of these is not a trade-off to weigh, it is the wrong change.
+A change that breaks one is not a trade-off to weigh, it is the wrong change.
 
 1. **Every way in is authenticated.** One credential class: the connector's own, on its socket and its attachment
    paths (`src/server/connectors.ts`), read on every connection so a revoke lands immediately; `/api/health` outside it, by
    decision. Pinned by `test/connector.test.ts` and `npm run gen:surface:check`.
 2. **Nothing reaches a reader before the projection.** `src/server/projection.ts` derives `transcript`, `queued` and
-   `agentStatus` from the committed view, and reasoning, tool calls, arguments and output are in none of them. Pinned by
-   `test/projection.test.ts`.
-4. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
+   `agentStatus` from the committed view, and reasoning, tool calls, arguments and output are in none of them. Nothing
+   consumes it yet: a reply reaches its connector through the outbox. Pinned by `test/projection.test.ts`.
+3. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
    that arrived mid-conversation would re-price every later turn, which is why a service's tools are a catalog
    (`docs/SPEC.md` §4.1e). Pinned by `test/prompt.test.ts` (a section renders byte-identically twice) and
    `test/mcp.test.ts` (the tool list does not move when a server connects).
 
 ## What can be generated, is generated
 
-`docs/SURFACE.md` holds the tables a hand cannot keep honest — the four doors, the extensions a boot installs with
-their tools and prompt sections, and every exported budget in `src/server/limits.ts`. It
+`docs/SURFACE.md` holds the tables a hand cannot keep honest — the four doors and what opens each, the extensions a
+boot installs, and every exported budget in `src/server/limits.ts`. It
 is rendered by `scripts/surface.ts`, written by `npm run gen:surface`, and checked in CI by
 `npm run gen:surface:check`. Hand-editing it is a failing check, which is the point: the diff that adds a route without a
 grant is the diff that says so. The word budgets in `docs/doc-budgets.json`, and which document owns which kind of fact,

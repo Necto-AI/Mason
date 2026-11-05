@@ -432,7 +432,7 @@ describe("a restart", () => {
 });
 
 describe("a reply nobody can reach", () => {
-	it("is recorded and reported, and the console still displays it", async () => {
+	it("is recorded and reported, and the transcript still holds it", async () => {
 		const served = await serveConnector({
 			steps: [
 				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "into the void" })], { stopReason: "toolUse" }),
@@ -453,7 +453,7 @@ describe("a reply nobody can reach", () => {
 				const view = await served.server.runtime.viewSnapshot(BACKGROUND_CONTEXT);
 				assert.ok(
 					projectTranscript(view).some((item) => item.kind === "delivered" && item.text === "into the void"),
-					"the console reads what was recorded",
+					"the transcript holds what was recorded",
 				);
 			} finally {
 				await connected.close();

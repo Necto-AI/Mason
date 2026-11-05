@@ -20,7 +20,6 @@ import { promisify } from "node:util";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
 	type Integration,
-	migrateIntegrationTriggers,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
@@ -184,7 +183,7 @@ describe("the integration list on disk", () => {
 		assert.match(await refusal(paths), /needs "enabled": true or "enabled": false/);
 	});
 
-	it("refuses a file that still names the signed event door, and points at the migration", async () => {
+	it("refuses a file that still names the signed event door, and says what to delete", async () => {
 		const paths = await temporaryHome();
 		// The door is gone (#104). Reading past a secret nothing checks would leave a sender that looks configured and
 		// receives nothing, so the boot refuses and says which command removes it.
@@ -197,14 +196,14 @@ describe("the integration list on disk", () => {
 		const trigger = await refusal(paths);
 		assert.ok(trigger.includes(paths.integrations), `the refusal names the file: ${trigger}`);
 		assert.match(trigger, /"trigger"/);
-		assert.match(trigger, /npm run doctor -- migrate/);
+		assert.match(trigger, /Delete the key by hand/);
 		assert.match(trigger, /npm run connector -- add github/);
 
 		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: ["stop"] } } }));
 		const commands = await refusal(paths);
 		assert.match(commands, /"commands"/);
 		assert.match(commands, /connector\.commands/);
-		assert.match(commands, /npm run doctor -- migrate/);
+		assert.match(commands, /Delete the key by hand/);
 	});
 
 	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
@@ -247,7 +246,7 @@ describe("the integration list on disk", () => {
 			);
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
-			assert.match(refused, /npm run doctor -- migrate/, key);
+			assert.match(refused, /by hand/, key);
 		}
 
 		// An owner that is not an actor id is refused as well: an empty string is nobody, spelled as if it were somebody.
@@ -263,63 +262,6 @@ describe("the integration list on disk", () => {
 			}),
 		);
 		assert.match(await refusal(paths), /"connector\.user\.owner" that is not an actor id/);
-	});
-
-	it("migrates both old keys away, once, and carries a granted vocabulary onto the grant", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					github: {
-						...github,
-						note: "a key mason has never heard of",
-						trigger: { hook: "github-activity", secret: "s".repeat(32) },
-						commands: ["stop"],
-					},
-					docs: { enabled: false, description: "The docs", tools: { url: "http://mason-docs:8080/mcp" } },
-				},
-			}),
-		);
-
-		assert.deepEqual(await migrateIntegrationTriggers(paths), [{ name: "github", moved: [], stranded: ["stop"] }]);
-		const migrated = (await readIntegrations(paths)).integrations;
-		assert.equal(migrated.github?.trigger, undefined);
-		assert.equal(migrated.github?.commands, undefined);
-		assert.equal((migrated.github as Record<string, unknown>).note, "a key mason has never heard of");
-		assert.deepEqual(migrated.github?.tools, github.tools, "the tools face survives the migration");
-		assert.deepEqual(migrated.docs?.tools, { url: "http://mason-docs:8080/mcp" });
-
-		// Idempotent: a second run finds nothing to do and does not rewrite the file.
-		const before = await readFile(paths.integrations, "utf8");
-		assert.deepEqual(await migrateIntegrationTriggers(paths), []);
-		assert.equal(await readFile(paths.integrations, "utf8"), before);
-	});
-
-	it("moves the old command list onto the grant rather than dropping a permission a person granted", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					telegram: {
-						enabled: true,
-						trigger: { hook: "team-chat", secret: "s".repeat(32) },
-						commands: ["stop", "status"],
-						connector: { events: { hooks: {} }, state: ["status"], trustMarkers: false },
-					},
-					// No connector block: there is nothing to hold the words, and doctor says so rather than inventing one.
-					bare: { enabled: true, commands: ["compact"] },
-				},
-			}),
-		);
-
-		assert.deepEqual(await migrateIntegrationTriggers(paths), [
-			{ name: "telegram", moved: ["stop", "status"], stranded: [] },
-			{ name: "bare", moved: [], stranded: ["compact"] },
-		]);
-		const migrated = (await readIntegrations(paths)).integrations;
-		assert.deepEqual(migrated.telegram?.connector?.commands, ["stop", "status"]);
 	});
 
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {

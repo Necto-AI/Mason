@@ -268,7 +268,7 @@ test("a retry inherits the origin of the turn it resumes", async () => {
 		TELEGRAM,
 	);
 
-	// A console turn has no chat behind it, so the retry inherits nothing and reaches nobody — the same as before.
+	// A local turn has no chat behind it, so the retry inherits nothing and reaches nobody — the same as before.
 	assert.equal(
 		await firedFor(
 			viewOf([

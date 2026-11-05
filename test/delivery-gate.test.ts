@@ -123,7 +123,7 @@ async function runTurn(
 	}
 }
 
-/** A turn a person started in the console: the only case where `reply` is the reader. */
+/** A turn nothing outside mason started: the only case where `reply` is the reader. */
 function runScripted(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -350,7 +350,7 @@ test("a hooked turn answers with reply, and the gate counts the call", async () 
 	assert.deepEqual(
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Привет!"],
-		"the console still reads what the turn recorded",
+		"the transcript still holds what the turn recorded",
 	);
 });
 
@@ -410,15 +410,15 @@ test("a hooked turn that says nothing is reminded, and the reminder names reply"
 	assert.match(String(reminder?.content), /`reply`/);
 });
 
-test("a console turn still delivers with reply while a chat-facing hook exists", async () => {
+test("a local turn still delivers with reply while a chat-facing routine exists", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
 	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?");
 
 	assert.equal(settled.status, "done");
-	assert.equal(answerTo(entries, "sent").isError, false, "the console turn's delivery is not refused");
-	assert.equal(answerTo(entries, "sent").text, "delivered to the operator console");
-	assert.equal(requests.length, 2, "no reminder: the console is this turn's reader");
+	assert.equal(answerTo(entries, "sent").isError, false, "the local turn's delivery is not refused");
+	assert.equal(answerTo(entries, "sent").text, "delivered to the transcript");
+	assert.equal(requests.length, 2, "no reminder: the transcript is this turn's reader");
 	assert.deepEqual(
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Standup moved to nine."],

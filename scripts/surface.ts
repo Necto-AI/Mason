@@ -40,11 +40,6 @@ export const DOORS: readonly Door[] = [
 		kind: "connector",
 		why: "an upload, authenticated as the connector that posts it",
 	},
-	{
-		path: `${CONNECTOR_PATH}/attachments/<contentId>`,
-		kind: "connector",
-		why: "the bytes, served only to the connector that uploaded them",
-	},
 ];
 
 /** The pathname literals a server compares against, as a person reading the file counts them. */

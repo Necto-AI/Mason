@@ -16,7 +16,6 @@ connector presents a credential mason issued for it.
 | `/api/health` | public | the liveness probe: one word, so a dead process is distinguishable |
 | `/api/connector` | connector | the connector's JSON-RPC socket, authenticated at the upgrade |
 | `/api/connector/attachments` | connector | an upload, authenticated as the connector that posts it |
-| `/api/connector/attachments/<contentId>` | connector | the bytes, served only to the connector that uploaded them |
 
 ## Extensions a boot installs
 

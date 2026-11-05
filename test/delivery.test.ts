@@ -225,8 +225,8 @@ function apiFor(
 	} as never;
 }
 
-/** A person's words in the operator console: an ordinary `pi.user` entry. */
-function consoleTurn(text: string): FakeEntry[] {
+/** A turn mason wrote itself: an ordinary `pi.user` entry. */
+function localTurn(text: string): FakeEntry[] {
 	return [{ id: 1, kind: "pi.user", model: [{ role: "user", content: text }] }];
 }
 
@@ -278,15 +278,15 @@ const TELEGRAM = {
 	},
 } as const;
 
-test("a console turn is delivered by the entry the call commits", async () => {
+test("a local turn is delivered by the entry the call commits", async () => {
 	const appended: unknown[] = [];
 	const result = await replyTool.execute(
 		{ message: "Standup moved to nine." },
-		apiFor({ callId: "call-7", entries: consoleTurn("Move standup.") }, appended),
+		apiFor({ callId: "call-7", entries: localTurn("Move standup.") }, appended),
 		{} as never,
 	);
 	assert.equal(result.isError, undefined);
-	assert.equal(outputText(result.output), "delivered to the operator console");
+	assert.equal(outputText(result.output), "delivered to the transcript");
 	// The commit is the delivery: one `app.reply` entry, no target, no origin — the transcript is the medium.
 	assert.deepEqual(appended, [
 		{
@@ -392,20 +392,20 @@ test("a named target is used for a turn that has no origin, and a room the entry
 	}
 });
 
-test("a turn with no input at all is read as the console's, as a resumed one is", async () => {
+test("a turn with no input at all is read as a local turn, as a resumed one is", async () => {
 	const result = await replyTool.execute(
 		{ message: "Resuming." },
 		apiFor({ callId: "call-13", entries: [] }),
 		{} as never,
 	);
-	assert.equal(outputText(result.output), "delivered to the operator console");
+	assert.equal(outputText(result.output), "delivered to the transcript");
 });
 
 test("a call made from inside a script is refused, and told where the message has to go", async () => {
 	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
 	const result = await replyTool.execute(
 		{ message: "Standup moved to nine." },
-		apiFor({ callId: "call-7/1", entries: consoleTurn("Move standup.") }),
+		apiFor({ callId: "call-7/1", entries: localTurn("Move standup.") }),
 		{} as never,
 	);
 	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");

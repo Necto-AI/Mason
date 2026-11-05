@@ -31,8 +31,8 @@
  * commits to it from the tool machine with ordinary `git`. `service/` is deliberately unversioned.
  *
  * A home that predates the split is *not* opened by the server: its entries sit at the root, and booting it would write
- * the new layout on top of them and lose the soul and the profile to the defaults. `npm run doctor -- migrate` is the
- * one command that moves it, and `migrateHouse` refuses to do anything else.
+ * the new layout on top of them and lose the soul and the profile to the defaults. `refuseLegacyHome` names them and
+ * says to move them by hand; nothing here moves an operator's file.
  *
  * The home is `0700`, files in it `0600`: it holds a transcript of everything Denis said, which is not a thing to leave
  * readable by every other account on the machine.

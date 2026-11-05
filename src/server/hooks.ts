@@ -37,7 +37,7 @@ type PersistedHookState = Record<string, { enabled?: boolean; lastFiredAt?: stri
  * The key belongs to the caller, because only the caller knows what "the same event" means:
  * - a sender that names its delivery, through `explicitRequestId()`: exact, and permanent;
  * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
- * - a gesture — a press on the panel's Hooks page, the run supervisor — passes none: a press is an intent, so two
+ * - a gesture — the run supervisor, or a caller naming no delivery — passes none: an act is an intent, so two
  *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
  *
  * A fire that names its delivery collapses on the first tier, however late it repeats; a gesture is never collapsed,
@@ -346,7 +346,7 @@ export function builtinHooks(): Array<Omit<EventHookConfig, "fireCount">> {
 				"It is {{date}} and the day is starting. Check the workspace and the calendar for what today needs, then send a short brief: what is fixed, what is open, and the one thing to do first.",
 		},
 		{
-			// Manual only: nothing schedules it, and the panel's Hooks page is the one caller.
+			// Manual only: nothing schedules it; the run supervisor is the one caller.
 			id: "retry-failed-run",
 			name: "Retry a failed run",
 			description:

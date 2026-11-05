@@ -159,8 +159,7 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
  * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
  *
  * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
- * decides that, and the one sentence that moves it is the doctor's. Spelled once, because three readers depend on
- * agreeing: the boot's refusal, the panel's refusal and the migration that rewrites them.
+ * decides that. Spelled once, because the refusal and what a command prints must agree.
  */
 export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
@@ -177,8 +176,7 @@ function readUser(where: string, name: string, value: unknown): ConnectorUserGra
 				where,
 				name,
 				`has a retired "connector.user.${retired[0]}": mason works for one person, so a user face names one ` +
-					'"owner" actor and no mapping, no unattributed switch and no approver. Run `npm run doctor -- migrate` ' +
-					"to rewrite it",
+					'"owner" actor and no mapping, no unattributed switch and no approver. Delete that key by hand',
 			),
 		);
 	}
@@ -225,7 +223,11 @@ function readConversations(where: string, name: string, value: unknown): Externa
 		if (title !== undefined && typeof title !== "string") {
 			throw new Error(refusal(where, name, `has a conversation "${id}" with a "title" that is not a string`));
 		}
-		return { externalConversationId: id, kind, ...(title === undefined ? {} : { title }) };
+		return {
+			externalConversationId: id,
+			kind,
+			...(title === undefined ? {} : { title }),
+		};
 	});
 }
 
@@ -427,9 +429,15 @@ export async function authenticateConnector(
 	if (record === undefined) return { ok: false, reason: "credential" };
 	const integration = integrations[record.connector];
 	if (integration === undefined || !integration.enabled || integration.connector === undefined) {
-		return { ok: false, reason: "the connector entry is absent, switched off or declares no connector" };
+		return {
+			ok: false,
+			reason: "the connector entry is absent, switched off or declares no connector",
+		};
 	}
-	return { ok: true, identity: { name: record.connector, integration, record } };
+	return {
+		ok: true,
+		identity: { name: record.connector, integration, record },
+	};
 }
 
 /** The bearer credential of a request, and nothing else: no query string, no cookie, no second way in. */

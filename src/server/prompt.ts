@@ -68,14 +68,14 @@ export const TONE = `Write as a colleague would message them: plain sentences, y
  * The delivery invariant, in every turn: words reach the reader through one call and never as prose, so anything the
  * model writes outside it is working notes nobody reads.
  *
- * The call is `reply`, and it is the same call everywhere — the console, a chat, a schedule. What differs is where it
+ * The call is `reply`, and it is the same call everywhere — the transcript, a chat, a schedule. What differs is where it
  * goes, and the model does not choose that: mason reads the turn's origin from the transcript and targets it. So this
  * section names one operation and the rule that keeps it one: never another medium's tool, and a named target only when
  * there is no origin to answer.
  */
 export const DELIVERY_INVARIANT = `Nothing you write during a turn is shown to the reader: words reach them through \`reply\`, and everything
 else you write is working notes. A reply returns to wherever the turn came from — the chat that carried the words, or
-the operator console — so never reach for a chat by another tool's name. A turn nobody wrote to (a schedule, a retry)
+the transcript itself — so never reach for a chat by another tool's name. A turn nobody wrote to (a schedule, a retry)
 records the reply and tells you nobody was reached: when you know the conversation, name it with \`reply\`'s \`to\`
 parameter. Answer every turn with a reply, even a one-line answer to a direct question.`;
 

@@ -12,7 +12,7 @@ import type { InputEntry, JsonObject } from "@earendil-works/pi-durable";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND } from "../shared/contract.ts";
 
 /**
- * Where an input came from. `user` is a person typing in the operator console; `external` is a person whose words
+ * Where an input came from. `user` is a message mason wrote itself; `external` is a person whose words
  * arrived through a connector, carrying the origin a reply goes back to; `hook` is an event hook firing.
  */
 export type Origin = "user" | "external" | "hook";

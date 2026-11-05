@@ -90,7 +90,7 @@ export interface AgentRuntime {
 	readonly dataDir: string;
 	readonly hooks: HooksManager;
 	readonly env: RuntimeEnvManager;
-	/** What the integrations' tools faces offer right now: the catalog `mcp_search` reads and the gateway asks about markers. */
+	/** What the integrations' tools faces offer right now: the catalog `mcp_search` reads. */
 	readonly mcp: McpCatalog;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
@@ -99,7 +99,7 @@ export interface AgentRuntime {
 	conversation(): Promise<Conversation>;
 	/** The view, watched until `dispose()`: what the Chord resource mirrors into the client's cells. */
 	viewState(context: Context): Promise<ConversationState>;
-	/** One committed read of the view, leaving no watch behind: what `/api/status` asks for. */
+	/** One committed read of the view, leaving no watch behind: what the status line is built from. */
 	viewSnapshot(context: Context): Promise<ConversationView>;
 	close(): Promise<void>;
 }
@@ -334,8 +334,8 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
 		});
 		// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
-		// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
-		// had connected. A failed repair is a failed guarantee, so the server does not start with it.
+		// or before an integration offered tools — would leave the conversation without it, while a catalog said it had
+		// connected. A failed repair is a failed guarantee, so the server does not start with it.
 		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
 		hooks.start();
 		// Picks up a run the last process left unfinished.

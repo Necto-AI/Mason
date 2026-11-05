@@ -56,7 +56,7 @@ export interface DeriveStatusOptions {
 }
 
 /**
- * The words a chat reads for a run status. `runStatus` is a token for the console, where it is mapped to a label the
+ * The words a chat reads for a run status. `runStatus` is a token for a client, where it is mapped to a label the
  * client owns; a chat gets the sentence itself, because the relay posts this line into a conversation.
  */
 const RUN_STATUS_WORDS: Record<RunStatus, string> = {
@@ -68,9 +68,9 @@ const RUN_STATUS_WORDS: Record<RunStatus, string> = {
 };
 
 /**
- * The one line a chat gets for `/status`: what the agent is doing, whether anything is waiting, which integrations
- * answered at boot, and how many did not. A sentence rather than the JSON `/api/status` answers, and derived from the
- * same view, so it cannot say something the console does not.
+ * The one line a chat gets for `status`: what the agent is doing, whether anything is waiting, which integrations
+ * answered at boot, and how many did not. A sentence, derived from the committed view, so it cannot say something the
+ * view does not hold.
  *
  * The integrations are the caller's: `integration-status.ts` holds this boot's findings, and passing them in keeps the
  * sentence a pure function of what was found.

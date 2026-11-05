@@ -1,15 +1,17 @@
 /**
  * Replies: the one operation through which a turn's words reach a reader, and the durable record it commits.
  *
- * A turn always has an **origin** — the connector that carried the person's words, or the operator console when nobody
- * carried them — and `reply` targets it. The model never names a vendor's tool, and a hook instruction never names one
- * either: the routing is mason's, decided from what actually started the turn rather than from prose in a prompt.
+ * A turn always has an **origin** — the connector that carried the person's words, or the transcript itself when
+ * nobody carried them — and `reply` targets it. The model never names a vendor's tool, and a fire's instruction never
+ * names one either: the routing is mason's, decided from what actually started the turn rather than from prose in a
+ * prompt.
  *
  * Three shapes, and they differ in where the words land, not in how they are committed:
  *
  * - a person wrote in a connector: the reply is addressed to that connector and that external conversation, and the
  *   outbox sends it;
- * - a person wrote in the console: the transcript is the medium, so the reply is committed and that is the delivery;
+ * - mason wrote the words (a routine, a retry): the transcript is the medium, so the reply is committed and that is
+ *   the delivery;
  * - nothing that carries words started the turn (a schedule, a retry, an event from a service with no reader), and the
  *   model named no target: the reply is still committed — the work is recorded — and the result says nobody was reached.
  *   Claiming a delivery nobody received is the one outcome the whole arrangement exists to avoid.
@@ -40,7 +42,7 @@ export interface ReplyTarget {
 /**
  * One committed reply, as the `app.reply` entry holds it.
  *
- * `target` absent means the transcript is the medium: the operator console reads it, and nothing is sent anywhere.
+ * `target` absent means the transcript is the medium: a reader of the home sees it, and nothing is sent anywhere.
  * `origin` is kept even when a target is derived from it, so a later reader can tell which submission a message answers.
  */
 export interface ReplyRecord {
@@ -52,7 +54,7 @@ export interface ReplyRecord {
 
 /** What started the turn whose reply is being written. */
 export type TurnOrigin =
-	| { readonly kind: "console" }
+	| { readonly kind: "local" }
 	| { readonly kind: "connector"; readonly origin: Origin }
 	| { readonly kind: "hook"; readonly origin?: Origin };
 
@@ -92,14 +94,14 @@ export function originOf(data: unknown): Origin | undefined {
  * The turn whose reply is being written: the newest input entry that is not the gate's own reminder.
  *
  * Read from the end because the newest one is the input in hand. `undefined` when the transcript holds no input at all —
- * a compacted or resumed turn — which is read as the console's, the same fallback the delivery gate takes.
+ * a compacted or resumed turn — which is read as a local turn, the same fallback the delivery gate takes.
  */
 export function turnOriginOf(entries: readonly EntryRecord[]): TurnOrigin {
 	for (let index = entries.length - 1; index >= 0; index -= 1) {
 		const entry = entries[index] as EntryRecord;
 		if (isInputEntry(entry)) return turnOriginOfEntry(entry);
 	}
-	return { kind: "console" };
+	return { kind: "local" };
 }
 
 /** Whether an entry is an input at all: a user message that is not the gate's own nudge. */
@@ -110,18 +112,18 @@ export function isInputEntry(entry: EntryRecord): boolean {
 
 /**
  * What one input entry makes the turn: a connector's words carry an origin, a fire may, and everything else is the
- * console's.
+ * local turn's.
  *
  * A connector entry without a usable origin cannot be answered — the words are still a person's, but nothing says where
- * they came from — so the reply falls back to the console rather than inventing a destination.
+ * they came from — so the reply falls back to the transcript rather than inventing a destination.
  */
 export function turnOriginOfEntry(entry: EntryRecord): TurnOrigin {
 	const origin = originOf(entry.data);
 	if (entry.kind === CONNECTOR_ENTRY_KIND) {
-		return origin === undefined ? { kind: "console" } : { kind: "connector", origin };
+		return origin === undefined ? { kind: "local" } : { kind: "connector", origin };
 	}
 	if (entry.kind === HOOK_ENTRY_KIND) return origin === undefined ? { kind: "hook" } : { kind: "hook", origin };
-	return { kind: "console" };
+	return { kind: "local" };
 }
 
 /** The entry a reply is written against: the turn's input, for a caller that needs the whole record rather than its origin. */
@@ -157,7 +159,7 @@ function isContentBlock(value: unknown): value is ContentBlock {
 	return type === "text" || type === "markdown" || type === "file" || type === "notice";
 }
 
-/** The text of a reply: text and markdown blocks joined, which is what a console bubble shows. */
+/** The text of a reply: text and markdown blocks joined, which is what a reader's bubble shows. */
 export function textOfBlocks(blocks: readonly ContentBlock[]): string {
 	return blocks
 		.flatMap((block) =>
@@ -208,7 +210,7 @@ export function targetOfOrigin(origin: Origin): ReplyTarget {
  */
 export function resumedOrigin(entries: readonly EntryRecord[]): Origin | undefined {
 	const origin = turnOriginOf(entries);
-	return origin.kind === "console" ? undefined : origin.origin;
+	return origin.kind === "local" ? undefined : origin.origin;
 }
 
 /** How far back a turn's input can be — a round of tool calls is one entry each, and a page always ends. */
@@ -225,9 +227,8 @@ export interface TurnOriginReader {
  * The turn this call belongs to, read from the transcript.
  *
  * A tool cannot see the request that made its call, so this reads the newest input entry — the same entry the delivery
- * gate reads — rather than trusting the model to remember where the turn came from. Shared with the permission gateway,
- * which routes a question to whoever the turn's own surface can approve it, so the two cannot disagree about where a
- * turn came from.
+ * gate reads — rather than trusting the model to remember where the turn came from, so a reply and the gate cannot
+ * disagree about where a turn came from.
  */
 export async function readTurnOrigin(api: TurnOriginReader, context: Context): Promise<TurnOrigin> {
 	return api.commit((tx) => turnOriginIn(tx, api.conversationId), context);
@@ -237,12 +238,12 @@ export async function readTurnOrigin(api: TurnOriginReader, context: Context): P
  * The same read, against a transaction the caller already has.
  *
  * It exists because the two callers commit differently: a tool's `commit` answers with the callback's value, while a
- * hook's `commit` adopts that value as the task's own state (`permissions.ts` wraps it so it can return nothing). The
- * scan itself is one function, so neither caller can drift from the other's idea of the newest input.
+ * task's `commit` adopts that value as its own state. The scan itself is one function, so neither caller can drift from
+ * the other's idea of the newest input.
  */
 export async function turnOriginIn(tx: Tx, conversationId: ConversationId): Promise<TurnOrigin> {
 	const entry = await turnInputIn(tx, conversationId);
-	return entry === undefined ? { kind: "console" } : turnOriginOfEntry(entry);
+	return entry === undefined ? { kind: "local" } : turnOriginOfEntry(entry);
 }
 
 /**

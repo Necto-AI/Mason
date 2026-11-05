@@ -160,17 +160,6 @@
 				{
 					"type": "object",
 					"additionalProperties": false,
-					"required": ["type", "content"],
-					"properties": {
-						"type": {
-							"const": "widget"
-						},
-						"content": {}
-					}
-				},
-				{
-					"type": "object",
-					"additionalProperties": false,
 					"required": ["type", "text"],
 					"properties": {
 						"type": {

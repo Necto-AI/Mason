@@ -30,9 +30,6 @@ import {
 
 const run = promisify(execFile);
 
-/** The checkout these tests live in: `doctor` is a command, and a refusal has to reach it as an exit code. */
-const _REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-
 const directories = new Set<string>();
 
 /**

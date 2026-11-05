@@ -11,9 +11,9 @@
  * 2. **The handshake is a ceiling.** The answer is what the operator granted, narrowed by what the connector advertised.
  *    A face the entry does not grant is named in `inactive` rather than dropped, and a scope, an actor, a room, a kind or
  *    a command outside the grant is a refusal.
- * 3. **State.** Four scopes, and only those: `status`, `presence`, the whitelisted `projection`, and the *names* of the
- *    tools a turn is running. Snapshot on subscribe; deltas after it; a gap means resync, so this side keeps no history
- *    and says `resumed: false` rather than pretending.
+ * 3. **No state is pushed.** A connector renders what it is sent: a reply, streamed and then final, and a control's
+ *    answer. There is no snapshot, no delta and no subscription; the projection is mason's own reading of the
+ *    transcript, not a second copy for a surface that already has one.
  * 4. **Delivery.** A reply committed as an `app.reply` entry is owed to the connector it targets. The outbox sends it,
  *    records the acknowledgement as an `app.delivery` entry, resends what was never acknowledged, and never retries an
  *    `uncertain` answer — a person who received the same message twice is the failure this arrangement exists to avoid.

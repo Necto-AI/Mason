@@ -92,15 +92,14 @@ function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
 /**
  * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
- * A person's words are an input entry — `pi.user` from the console, `app.connector` through a connector, neither when an
- * event hook fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
- * message that carried the call contributes nothing, so a message appears once whether it was streamed, sent or read in
- * the console. A widget is the artifact, read off the call that built it. Tool results are read for failure alone,
- * never forwarded.
+ * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them, neither
+ * when a routine fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
+ * message that carried the call contributes nothing, so a message appears once whether it was streamed or committed.
+ * Tool results are read for failure alone, never forwarded.
  *
- * The round in flight contributes the same two shapes, streaming: a reply appears as the model writes it and a widget as
- * its markup arrives, exactly as they will stand once committed. A streaming reply whose entry has already landed is
- * skipped — the entry is the truth, and two copies of one message is the duplicate the outbox exists to prevent.
+ * The round in flight contributes the same shape, streaming: a reply appears as the model writes it, exactly as it will
+ * stand once committed. A streaming reply whose entry has already landed is skipped — the entry is the truth, and two
+ * copies of one message is the duplicate the outbox exists to prevent.
  *
  * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
  * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
@@ -134,7 +133,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND || entry.kind === CONNECTOR_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
 			// The delivery gate's reminder is a user entry the model reads, not one the reader sent — in either shape,
-			// the console's and the one a hooked turn gets.
+			// a local turn's and the one a fired turn gets.
 			const reminder = entry.kind !== CONNECTOR_ENTRY_KIND && isDeliveryReminder(spoken);
 			if (!reminder) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
@@ -200,7 +199,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
  * The calls of the in-flight round, projected the same way, marked streaming.
  *
  * A reply streams under the id its entry will carry — `reply:<callId>` — so the bubble a reader is watching becomes the
- * message without a second row appearing. A widget streams as its markup arrives.
+ * message without a second row appearing.
  */
 function streamingItems(
 	view: ConversationView | undefined,

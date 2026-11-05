@@ -59,6 +59,8 @@ roster, no pairing link and no second credential class: `/api/health` is the onl
 │       ├── connector.ts               # The socket: handshake, admission, streaming replies, the outbox
 │       ├── connectors.ts              # A connector's grant, and the credential it opens its socket with
 │       ├── admission.ts               # Where a submission came from, and where it waits
+│       ├── atomic.ts                  # The one write that cannot be half-done: a JSON file through a rename
+│       ├── integration-status.ts      # What the boot's connections came to, for the report
 │       ├── commands.ts                # The four controls, and the claim that makes a control id an identity
 │       ├── hooks.ts                   # What wakes the bot: a routine's timer, a connector's event
 │       ├── replies.ts                 # What a turn's reply is: its origin, its target, and the entry carrying both
@@ -210,7 +212,7 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and two more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, and `codemode`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the reply tool and the gate that decides whether a turn's reader hears anything, so no conversation may be without it. `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it.
@@ -361,14 +363,13 @@ Two rules keep it honest:
   prompt it built are the schedule's business, not the conversation's.
 
 Consequences, deliberately accepted: the projected conversation cannot show a tool row, reasoning, usage or an error's
-cause. A message a hooked turn sent through an integration's own chat tool is one of the things that does not cross —
-mason records what reached a chat as its own entries, which is the reconvergence
-`docs/adr/0004-mason-is-a-headless-backend.md` still owes.
+cause. A message a turn sent through a service's own tool rather than `reply` is one of the things that does not cross,
+which is why `reply` is the only call the prompt asks for.
 
 ### 4.1b Who may talk to the server — the door
 
 There is one credential class, and it is the connector's. `/api/connector` (the socket, §4.1d) and
-`/api/connector/attachments[/<contentId>]` (the byte transfer) are opened as **the connector**, by a credential mason
+`/api/connector/attachments` (the upload) are opened as **the connector**, by a credential mason
 issued for one entry (`src/server/connectors.ts`, `npm run connector`): `Authorization: Bearer masonc_…` on the upgrade
 request, read from `service/config.json` on every connection, so a revoke lands on the next one. `Origin` must be the
 request's own host or absent (`src/server/auth.ts`); a connector is a program, so the header's absence is the honest
@@ -472,19 +473,19 @@ fanned out: one target, and a connector receives no second copy of it by any oth
 else; a call withdrawn before it was final is `delivery.cancel`.
 
 **Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a
-content id and answers `{contentId, size, expiresAt}`; `GET /api/connector/attachments/<contentId>` returns them. The
-store is `service/data/attachments/<connector>/`, durable because a restart between an upload and the submission that
-references it is the moment a resend happens. Over the cap is `413`, an expired id is `410`, another connector's id and
-a malformed one are both `404`, and the id never reaches the filesystem unless it matches `cnt_<32 hex>`.
+content id and answers `{contentId, size, expiresAt}`. The store is `service/data/attachments/<connector>/`, durable
+because a restart between an upload and the submission that references it is the moment a resend happens, and write-only
+for a connector: the agent reads the bytes itself when a message carrying an id arrives, so nothing has to serve them
+back. Over the cap is `413`, and the id never reaches the filesystem unless it matches `cnt_<32 hex>`.
 
 **Budgets.** Submissions (60), fires (6), controls (6) and attachments (30) are counted separately per connector, in
 the process's sliding-window limiter (`src/server/limits.ts`); `stop` has a budget of its own beside the controls, so a
 connector that spent its minute on compactions can still stop the turn they were about. Every refusal is
 `mason.rate_limited` with `retryAfterMs`, capped at a minute.
 
-**The question.** `connector/interaction.request` is the connector's shape of an approval, and `mason/interaction.answer`
-settles it: see §4.1e for what is asked, who may answer, and what happens to the call that is waiting. Neither is a
-second way to speak — an answer is not a submission, and a question is not a reply.
+**The question, and why nothing asks it.** `connector/interaction.request` and `mason/interaction.answer` are reserved
+method names and nothing else: this build sends neither, because there is no approval step (§4.1e). An answer is not a
+submission and a question is not a reply, so no second way to speak exists while the pair is inert.
 
 **The cutover is done, and there is nothing behind it.** #104 removed the HMAC event door (`POST /api/events/<name>` and
 its verifier), the trigger face in `integrations.json`, the vendor-aware delivery path and the boot-frozen MCP

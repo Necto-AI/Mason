@@ -14,7 +14,7 @@ import type { AgentRuntime } from "./runtime.ts";
 import { isBusy, queuedSubmissions, statusLine } from "./status.ts";
 
 /**
- * What a command acts on, apart from the door: the three conversation methods the console already calls, the claim that
+ * What a command acts on, apart from the door: the three conversation methods every surface already calls, the claim that
  * makes an envelope id an identity, whether the conversation is busy, and the line `status` answers.
  *
  * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
@@ -113,7 +113,7 @@ export async function runCommand(
 /** The entry a command leaves behind: the record that makes its id an identity, and the trace of what a chat asked for. */
 const COMMAND_ENTRY_KIND = "app.command";
 
-/** The real target: the root conversation the console drives, the durable log that remembers a command's id, and the
+/** The real target: the root conversation mason drives, the durable log that remembers a command's id, and the
  * status line this boot derives. */
 export async function commandTarget(runtime: AgentRuntime): Promise<CommandTarget> {
 	const conversation = await runtime.conversation();

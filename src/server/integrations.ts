@@ -25,7 +25,6 @@
  * between two turns of one build.
  */
 import { readFile } from "node:fs/promises";
-import { CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { writeFileAtomic } from "./atomic.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";
@@ -188,8 +187,8 @@ function validate(where: string, name: string, value: unknown): Integration {
 				where,
 				name,
 				'has a "trigger": the signed event door is gone, and a service wakes mason over the connector socket ' +
-					"now. Run `npm run doctor -- migrate` to remove it, then grant the connector a `connector` block and " +
-					"issue it a credential with `npm run connector -- add " +
+					"now. Delete the key by hand, then grant the connector a `connector` block and issue it a credential " +
+					"with `npm run connector -- add " +
 					name +
 					"`",
 			),
@@ -201,7 +200,7 @@ function validate(where: string, name: string, value: unknown): Integration {
 				where,
 				name,
 				'has a "commands" list: what a connector may ask for is its grant now (`connector.commands`), not the ' +
-					"old trigger block's. Run `npm run doctor -- migrate` to remove the old key",
+					"old trigger block's. Delete the key by hand",
 			),
 		);
 	}
@@ -309,70 +308,6 @@ export async function writeIntegration(
 	const { file, integrations } = await load(paths.integrations);
 	await writeFileAtomic(paths.integrations, { ...file, integrations: ordered({ ...integrations, [name]: entry }) });
 	return entry;
-}
-
-/**
- * The one-way migration of a file written before the cutover: the trigger face and its command list are removed, and
- * nothing else is touched. It is a row rewrite, not a semantic move — the secret checked a door that no longer exists
- * — so an entry keeps its tools, its switch and its connector grant, and gains nothing.
- *
- * Returns the names it changed, which is what `npm run doctor -- migrate` prints. Idempotent: a file with no trigger in
- * it is left exactly as it is, byte for byte, because a command that rewrites a person's file on every run is one they
- * stop running.
- */
-export async function migrateIntegrationTriggers(paths: HousePaths): Promise<TriggerMigration[]> {
-	const raw = await loadRaw(paths.integrations);
-	if (raw === undefined) return [];
-	const migrated: Record<string, unknown> = {};
-	const outcome: TriggerMigration[] = [];
-	for (const [name, value] of Object.entries(raw.declared)) {
-		const entry = value as Record<string, unknown>;
-		if (entry.trigger === undefined && entry.commands === undefined) {
-			migrated[name] = entry;
-			continue;
-		}
-		const { trigger: _trigger, commands, ...rest } = entry;
-		// The control vocabulary the old trigger secret owned was *this entry's* — the socket spent exactly this list
-		// (`connector.ts` read `integration.commands`), so removing it without saying so is the quiet loss this module
-		// refuses. It moves onto the grant when there is a grant to move it onto, and is reported when there is not: a
-		// permission is a person's decision, and doctor does not invent one.
-		const words = Array.isArray(commands)
-			? commands.filter(
-					(word): word is ControlOp =>
-						typeof word === "string" && (CONTROL_OPS as readonly string[]).includes(word),
-				)
-			: [];
-		const grant = rest.connector;
-		if (words.length === 0) {
-			migrated[name] = rest;
-			outcome.push({ name, moved: [], stranded: [] });
-			continue;
-		}
-		if (
-			typeof grant === "object" &&
-			grant !== null &&
-			!Array.isArray(grant) &&
-			(grant as { commands?: unknown }).commands === undefined
-		) {
-			migrated[name] = { ...rest, connector: { ...(grant as Record<string, unknown>), commands: words } };
-			outcome.push({ name, moved: words, stranded: [] });
-			continue;
-		}
-		migrated[name] = rest;
-		outcome.push({ name, moved: [], stranded: words });
-	}
-	if (outcome.length === 0) return [];
-	await writeFileAtomic(paths.integrations, { ...raw.file, integrations: ordered(migrated) });
-	return outcome;
-}
-
-/** What the migration did with one entry: the controls it carried onto the grant, and the ones nothing could hold. */
-export interface TriggerMigration {
-	readonly name: string;
-	/** Controls now under `connector.commands`. */
-	readonly moved: readonly ControlOp[];
-	/** Controls the entry declared with no `connector` block to receive them: the operator re-grants them. */
-	readonly stranded: readonly ControlOp[];
 }
 
 /** Removes one entry. `false` when there is none: a typo must not read as a successful removal. */
