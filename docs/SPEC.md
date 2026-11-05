@@ -25,7 +25,7 @@ scholarships and university applications are later expansions, and there is no p
 submission. A later bot may be a chief of staff; that is a second deployment, not a new mode of this one.
 
 **Work inside one bot is a worker, not a bot.** A worker is a conversation owned by one tool call, given a narrow job
-and a small context, that returns a report: browser work is worker-owned, and a worker has no home, no roster name and
+and a small context, that returns a report: browser work is worker-owned, and a worker has no home, no voice and
 no peer identity of its own.
 
 ### Several bots are separately deployed, and peers speak A2A
@@ -101,7 +101,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │       │   ├── api.ts                 # `GET /api/admin/state` and the writes, with the server's sentence on a refusal
 │       │   ├── ui.tsx                 # Card, field, badge, switch: the panel's small vocabulary
 │       │   ├── admin.css              # The panel's own layout; tokens.css and widgets.css are shared with the cards
-│       │   └── sections/              # Overview, Conversation, Trace, Approvals, Connectors, Roster, Access, Hooks
+│       │   └── sections/              # Overview, Conversation, Trace, Approvals, Connectors, Access, Hooks
 │       ├── components/                 # The widget card, kept from the console: SandboxedUiCard, WidgetCard
 │       ├── lib/                        # The renderers a widget needs (see docs/UI-PLAN.md)
 │       │   ├── markdown.ts             # marked + link hardening (sibling's markdown.ts, verbatim)
@@ -304,7 +304,6 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 └── service/                # Never mounted into the tool machine
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # Credentials that may talk to the server: one hashed token per device (§4.1b)
-    ├── roster.json         # Who is in the room: the names a person may speak as, mapped by whichever interface they use, read per request (§4.1b)
     ├── integrations.json   # The services mason reaches: each entry's MCP endpoint, connector grant and commands, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
@@ -320,9 +319,9 @@ opened or when a pre-split home is migrated; `npm run doctor -- migrate` moves a
 shape, freezes the old repository at the home root (both halves leave its index and enter its `.gitignore`) and starts
 the agent's history fresh in `agent/`.
 
-The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `roster.json`, `integrations.json` and
-`agent.sqlite` are `0600`. It holds a transcript of everything Denis said, and the names of everyone who says it — neither
-is a thing to leave readable by every other account on the machine.
+The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `integrations.json` and
+`agent.sqlite` are `0600`. It holds a transcript of everything Denis said, which is not a thing to leave readable by
+every other account on the machine.
 
 `integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a connector that wakes
 it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
@@ -355,7 +354,7 @@ than appended to per turn.
 | `soul` (tag-less: the prompt's opening) | `service/soul.md`, or `DEFAULT_SOUL` on a fresh install | none enforced — it is Denis's own voice, ~480 characters by default |
 | `cwd` | the workspace the tools run in | one path |
 | `proactive_guidelines` | how to answer an `[EVENT HOOK: ...]` input, and what an untrusted payload fence means | a fixed ~1,000-character constant |
-| `team` | the transcript is shared; a person's message starts `[from <name>] `, and no prefix means no author | a fixed ~300-character constant |
+| `team` | the conversation is one person's; a stored `[from <name>] ` is history from when a bot carried a room, and a trigger is nobody's words | a fixed ~300-character constant |
 | `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
 | `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
 | `generative_ui` | the pointer: widgets exist, read the skill | ~300 characters |
@@ -455,10 +454,9 @@ else (§4.2, §4.3).
 ### 4.1b Who may talk to the server — the door
 
 There is one owner, so every entry point proves it: `/api/*` and the connector's socket. `src/server/auth.ts` owns
-the rule; `src/server/main.ts` applies it in four places — the pairing exchange in `handleRequest`, the gate at the top
-of `handleRequest` that `/api/*` passes through, the roster refusal that gate applies to a claimed name, and the
-`/api/admin/*` route which then checks the device's grants (`src/server/admin.ts`). A browser holds no socket at all:
-an upgrade on any path but `/api/connector` is closed.
+the rule; `src/server/main.ts` applies it in three places — the pairing exchange in `handleRequest`, the gate at the top
+of `handleRequest` that `/api/*` passes through, and the `/api/admin/*` route which then checks the device's grants
+(`src/server/admin.ts`). A browser holds no socket at all: an upgrade on any path but `/api/connector` is closed.
 
 Two paths are deliberately outside that gate, and each is narrower than a token. `/api/health` is a liveness probe that
 answers one word and needs no credential at all.
@@ -502,11 +500,10 @@ cookie (`HttpOnly`, `SameSite=Strict`, `Path=/`, 30 days, `Secure` where the con
 `302` to the same path with the token removed. The address bar, the history and every `Referer` see a bare URL before
 the first element renders, and the client bundle never touches a token at all.
 
-The cookie is `v1.<token id>.<HMAC>` for a device that speaks for nobody, and `v2.<token id>.<person>.<HMAC>` for one
-that names a person: the person is base64url inside the signed material, so a cookie cannot be decoded into someone
-else. Nothing writes a `v2` any more — the console's join screen is gone with the console (#103) — but `v2` is still
-**read**, and every gate still checks the name against the roster, so a browser that joined before the cutover keeps its
-place until the person is removed, and then loses it on the next request.
+The cookie is `v1.<token id>.<HMAC>` and names a device: `/api/session` answers `{device, grants}`, and the credential is
+the identity (#126). A `v2.<token id>.<person>.<HMAC>` from before the cutover is still **read** — the person sits inside
+the signed material, so it has to be decoded to check the signature — and the name is then dropped, because refusing it
+would log out every browser paired before the cutover for no gain.
 
 The cookie names a token id and carries no secret, so it is worth exactly one device's access: revoking that token ends
 its sessions at the same moment. `SameSite=Strict` is the CSRF defence that does not depend on the Origin gate — a
@@ -602,21 +599,23 @@ frame, `connector/ping` answered with `{at}` and a socket closed after 60 s of s
 for one connector supersedes the first, and the first is closed with a reason.
 
 **The handshake is a ceiling.** `mason/hello` answers with what the operator granted, narrowed by what the connector
-advertised: the actor mapping, the permitted conversations, the capabilities that are in both lists, the `kind` → hook
+advertised: the one actor the entry calls its `owner` — kept as the connector advertised it, or empty when it advertised
+no such id, which is one line in the log at the handshake — the permitted conversations, the capabilities that are in both lists, the `kind` → hook
 map, the control vocabulary the grant holds (`commands`, so a connector learns what it may send rather than spending a
 refused call to find out), and the limits. A face the entry does not grant is named in `inactive` with a reason rather than dropped, and a
 major version this build does not speak is `mason.protocol_mismatch` and closes the socket. Nothing else is accepted
 before the answer.
 
 **Admission.** `mason/submit` places ordinary human conversation: an `app.connector` entry whose `data` carries the
-origin and the roster name the operator's mapping attributed. `mason/fire` fires a hook and never becomes conversation;
+origin, and nothing else — one bot has one person, so there is no name to attribute. `mason/fire` fires a hook and never becomes conversation;
 its entry is `app.hook`, with the origin when the fire named one. Both are claimed durably before they are acknowledged
 (`connector:<connector>:submission:<id>` / `:fire:<id>`), and the claim is the deduplication: a resend is answered
-`{accepted: true, duplicate: true}` and creates no second operation, before or after a restart. An actor the mapping
-does not name is `mason.actor_unknown` unless the entry permits unattributed participants, a room outside the grant is
-`mason.conversation_not_permitted`, and a kind that maps to no hook is `mason.kind_not_permitted`. Content is typed
-blocks: text and markdown become the message with the server-written author prefix, and a file block is read from the
-attachment store and written into the agent's `workspace/inbox/`, with images also passed as image blocks.
+`{accepted: true, duplicate: true}` and creates no second operation, before or after a restart. An actor that is not the
+entry's `owner` is `mason.actor_unknown`, and so is any actor at all when the entry names no owner; a submission with no
+actor is accepted and attributed to nobody. A room outside the grant is `mason.conversation_not_permitted`, and a kind
+that maps to no hook is `mason.kind_not_permitted`. Content is typed blocks: text and markdown become the message
+unprefixed, and a file block is read from the attachment store and written into the agent's `workspace/inbox/`, with
+images also passed as image blocks.
 
 **One reply, and an outbox that survives a restart.** `reply` commits an `app.reply` entry — the delivery id is
 `reply:<callId>`, so a streaming start and the committed message share it — and the outbox (`src/server/connector.ts`)
@@ -707,22 +706,22 @@ about an operation has not said it is safe — and it means an existing integrat
 starts asking for every call until its tools declare one or the operator trusts the entry.
 
 **A question is a transcript entry.** An `ask` writes an `app.permission` entry with the permission id, the tool, the
-arguments, the reason, the two answers, the roster name the words are attributed to, and the origin, and waits. The
-question is routed to a surface only when the person who asked is the approver the operator configured
-(`connector.user.approver`) on the connector that carried the turn; otherwise it stays pending and a device holding
-`approve` answers it from the panel, through `GET /api/permissions` and `POST /api/permissions/<id>`. An answer is an
-`app.permission-answer` entry:
-`allow`, `deny`, or `cancelled` when `/stop` ended the wait. The first authorized answer settles the request, a later one
-changes nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an
-administrative act on the connectors page (§4.3), not a chat button. The route answers the same two shapes it holds:
-`GET /api/permissions` is `{"permissions":[{"permissionId","tool","arguments","reason","answers","askedAt","approver","origin"}]}`
+arguments, the reason, the two answers and the origin, and waits. The question goes back to the conversation it came
+from — whoever asked, as long as the entry still grants that conversation — and is settled either by a device holding
+`approve`, through `GET /api/permissions` and `POST /api/permissions/<id>`, or by the connector's own `owner` actor over
+`connector/interaction.answer`. A request that came through one connector is not settleable through another, and a
+connector with no `owner` has nobody who may answer through it. An answer is an `app.permission-answer` entry: `allow`,
+`deny`, or `cancelled` when `/stop` ended the wait. The first authorized answer settles the request, a later one changes
+nothing (`settled: false`, with the reason), and there is no "always allow" — standing policy is an administrative act
+on the connectors page (§4.3), not a chat button. The route answers the same two shapes it holds:
+`GET /api/permissions` is `{"permissions":[{"permissionId","tool","arguments","reason","answers","askedAt","origin"}]}`
 (oldest first, `askedAt` an ISO string, or `null` when the entry carried no clock), and `POST /api/permissions/<id>` takes `{"answer":"allow"}` or `{"answer":"deny"}` and answers
 `{"settled":true}` with `200`, or `409` with `{"settled":false,"reason"}` when the request had already settled. It records
-the roster name the device speaks for, or `owner` when it never named one: the route is behind the owner's credential
-and the `approve` grant, so the credential is the identity. A denial reaches the caller as a structured result —
+`owner` as the answerer, and a socket's answer records the connector's name: the credential is the identity, and a
+device has no name to answer as. A denial reaches the caller as a structured result —
 `{"denied":true,"tool":"mcp_call","operation":"github/issues.create","reason":"…","execute":"not run"}` — so a script
-can branch on it and the model reads it as the failure it is. An offline approver leaves the request pending rather
-than silently denying it: the tool task waits, the reader sees the turn working, and `stop` is what ends it.
+can branch on it and the model reads it as the failure it is. A question the connector could not show stays pending
+rather than being silently denied: the tool task waits, the reader sees the turn working, and `stop` is what ends it.
 
 ### 4.2 The state a panel device reads — `GET /api/admin/state`
 
@@ -733,11 +732,11 @@ view, and it carries only the areas this device's grants cover:
 |---|---|---|---|
 | `conversation` | `conversation` | `status` (run status, busy, the **names** of running tools, model, hooks, cwd), `transcript`, `queued` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
 | `trace` | `trace` | the durable entries, verbatim: model messages, tool calls and results, hook payloads, questions and answers, deliveries, commands, compaction and context edits | nothing is filtered — this *is* the raw view |
-| `approve` | `permissions` | the pending questions: tool, arguments, reason, answers, approver, origin, askedAt | anything else the trace holds |
-| `admin` | `config` | connectors and their grants, health, roster, tokens, connector credentials, hooks, the command and scope vocabularies, `restartRequired` | any secret: a token and a connector credential are written once and never read back |
+| `approve` | `permissions` | the pending questions: tool, arguments, reason, answers, origin, askedAt | anything else the trace holds |
+| `admin` | `config` | connectors and their grants, health, tokens, connector credentials, hooks, the command and scope vocabularies, `restartRequired` | any secret: a token and a connector credential are written once and never read back |
 
-`session` is always there — the device's id, label, the roster name it speaks for, and its grants — because a device
-with no grants still has to learn that it has none. An area the grant does not cover is **absent**: a browser that
+`session` is always there — the device's id, label and grants — because a device with none still has to learn that.
+`GET /api/session` answers the same pair, `{device, grants}`, and no name: the credential is the identity. An area the grant does not cover is **absent**: a browser that
 receives no `trace` key has not been handed a filtered one, and no route below can be talked into producing it.
 
 **Where the areas come from.** `projection.ts` builds the conversation exactly as it did for the console (§4.1a), so
@@ -764,14 +763,13 @@ no composer, and the only conversation controls left are the two an operator has
 the context (`POST /api/admin/control`). A person's words reach mason through a connector, which is where attribution,
 origin and delivery live (§4.1d).
 
-**Eight areas, one per grant-covered key of the state.** Overview (agent status, integration health, the restart banner),
+**Seven areas, one per granted key of the state.** Overview (agent status, integration health, the restart banner),
 Conversation (the projected transcript across every connector, plus the queue behind the running turn), Trace (the raw
 entries, filterable by kind, with model messages, tool arguments and results, payloads and context changes), Approvals
 (the pending questions, answered allow-once or deny), Connectors (faces, description, tools endpoint and credential,
-the grant: actors → roster names, external rooms, event kinds → hooks, state scopes, marker trust, policy rules, the
-approver, and the commands the grant may spend; plus its credentials and an audit of file-versus-boot),
-Roster (the names mason attributes to), Access (devices with their grants, and every connector credential), and Hooks
-(the switches and the fire button — a routine is a hook with an interval).
+the grant: the owner actor, external rooms, event kinds → hooks, state scopes, marker trust, policy rules, and the
+commands the grant may spend; plus its credentials and an audit of file-versus-boot), Access (devices with their grants,
+and every connector credential), and Hooks (the switches and the fire button — a routine is a hook with an interval).
 
 **Grants are the panel's powers, and they are separate.** `conversation` reads the projected conversation; `trace` reads
 the machine behind it; `admin` reads and writes configuration; `approve` answers the gateway's questions. None implies
@@ -780,8 +778,8 @@ device that debugs. A new device gets `conversation`; the first credential of a 
 and `approve`, because a home nobody can administer is broken. Approval authority and policy administration are
 different powers (§4.1e): answering a question is not writing a rule.
 
-**What is live and what is a restart.** Tokens, roster names, connector credentials and hook switches are read per
-request (or are process state), so the panel's change lands on the next call — including on the device that made it.
+**What is live and what is a restart.** Tokens, connector credentials and hook switches are read per request (or are
+process state), so the panel's change lands on the next call — including on the device that made it.
 `integrations.json` is the boot's: a connector, its grant and the tools catalog are read once, so saving
 there answers `restartRequired`, the Overview says so above everything, and the panel never pretends a saved entry is a
 running one.
@@ -789,8 +787,7 @@ running one.
 **Approvals, from the same control plane.** `GET /api/permissions` and `POST /api/permissions/<id>` are the panel's
 routes (§4.1e), behind `approve`, and they answer exactly what the gateway asked: first authorized answer wins, a later
 one is `409`, and there is no "always allow" — that is a policy edit on the connectors page. The answer is recorded
-under the roster name the browser speaks for, or `owner` when it never joined one, because the credential is the
-identity.
+under `owner`: the credential is the identity, and there is no name to answer as.
 
 **The console is removed, and so is its contract.** `src/web/main.tsx`, the Chord browser host, `AgentService`, the
 conversation socket, the join screen and `/api/join` were deleted in the same change as the panel (#103, #99 criterion
@@ -798,12 +795,14 @@ conversation socket, the join screen and `/api/join` were deleted in the same ch
 console was still needed for — inspecting the conversation, answering a question, stopping a run, editing what the
 deployment reaches — moved here, and what only a chat could do (speaking) belongs to the connectors.
 
-**The migration.** `npm run doctor -- migrate` is the one command that moves a home forward, and it now does two things:
-it moves a pre-split home into `agent/` and `service/` as before, and it stamps `conversation`, `admin` and `approve`
-onto every credential that predates grants — what the console it replaced could do, and never `trace`. The step is
-one-way and idempotent: a credential that already carries grants is left exactly as it is, including one an operator
-narrowed by hand. A boot that finds an ungranted credential says so once, in the log, rather than rewriting the
-operator's file on start.
+**The migration.** `npm run doctor -- migrate` is the one command that moves a home forward, and it now does four things:
+it moves a pre-split home into `agent/` and `service/` as before; it stamps `conversation`, `admin` and `approve` onto
+every credential that predates grants — what the console it replaced could do, and never `trace`; it rewrites a
+connector's `connector.user` actor map, `unattributed` switch and named approver into the one `owner` actor (#126),
+refusing when the map named several people because that choice is the operator's; and it prints the names in
+`service/roster.json` and deletes the file. Every step is one-way and idempotent: a credential that already carries
+grants is left as it is, including one an operator narrowed by hand. A boot that finds an ungranted credential says so
+once in the log rather than rewriting the operator's file on start.
 
 **The widget card survived the console.** A widget in the conversation is the artifact a reader was sent, so the panel
 renders it with the same sandbox, the same preview and the same fullscreen control (`src/web/components/`, styles in
