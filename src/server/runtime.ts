@@ -28,7 +28,8 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
-import { builtinHooks, HooksManager } from "./hooks.ts";
+import { HooksManager } from "./hooks.ts";
+import { RETRY_HOOK } from "./run-retry.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
@@ -106,7 +107,7 @@ export interface AgentRuntime {
 
 export interface OpenAgentRuntimeOptions {
 	/**
-	 * Where `agent.sqlite` and `hooks.json` live. Defaults to `MASON_DATA`, else `<home>/service/data`.
+	 * Where `agent.sqlite` and the routines' state live. Defaults to `MASON_DATA`, else `<home>/service/data`.
 	 *
 	 * It used to default to `.data` in the current directory, which meant the agent's state was a property of the shell
 	 * it was started from: two checkouts ran two agents, a script run from a copy read the conversation in the copy,
@@ -254,16 +255,19 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
-		// The hooks manager exists before the harness opens, because a connector's `kind` that maps to a hook no build
+		// The hooks manager exists before the harness opens, because a connector's `kind` that names a hook no build
 		// defines has to refuse the boot before anything can run: a fire naming it would be accepted and dropped. This is
-		// config, not health — a missing hook is fatal whatever the container's own `required` says.
+		// config, not health — a missing hook is fatal whatever the container's own `required` says. The routines are
+		// read from the agent's half of the home, and their state lives in the server's half.
 		const hooks = new HooksManager({
 			conversation: () => harness.root(BACKGROUND_CONTEXT),
-			statePath: options.storage === "memory" ? undefined : join(dataDir, "hooks.json"),
+			statePath: options.storage === "memory" ? undefined : join(dataDir, "routines-state.json"),
+			routinesPath: join(house.agentDir, "routines.json"),
 			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
 		});
 		opened.push(() => hooks.close());
-		for (const hook of builtinHooks()) hooks.define(hook);
+		// The supervisor's hook is code, not a routine: the agent does not edit it, and nothing schedules it.
+		hooks.define(RETRY_HOOK);
 		assertConnectorHooksHaveHooks(currentIntegrations(), hooks, house.integrations);
 
 		const storage =
