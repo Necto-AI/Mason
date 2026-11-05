@@ -30,9 +30,9 @@ jobs:
 
       - run: npm run lint
       - run: npm run typecheck
-      # `docs/SURFACE.md` is rendered from the servers (`scripts/gen-surface.ts`): the routes and the grant that guards
-      # each, the extensions a boot installs, and the budgets. A route added without a `requireGrant` fails here, by
-      # name, instead of shipping as an endpoint nothing gates.
+      # `docs/SURFACE.md` is rendered from the servers (`scripts/surface.ts`): the doors and what opens each, the
+      # extensions a boot installs, and the budgets. A route added without a door fails here, by name, instead of
+      # shipping as an endpoint nothing opens.
       - run: npm run gen:surface:check
       # One ceiling per document (`docs/doc-budgets.json`, `docs/AGENTS.md`). A document that grew past its number fails
       # the pull request that grew it, and a ceiling only ever goes down.
