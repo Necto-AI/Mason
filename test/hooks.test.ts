@@ -12,7 +12,7 @@
  * while it was down fires once, however long the downtime was.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -27,9 +27,9 @@ import {
 	gestureRequestId,
 	HooksManager,
 	parseRoutines,
+	type RoutineConfig,
 	routineMarker,
 	scheduledRequestId,
-	type RoutineConfig,
 } from "../src/server/hooks.ts";
 import type { AgentRuntime } from "../src/server/runtime.ts";
 import { openAgentRuntime } from "../src/server/runtime.ts";
@@ -234,7 +234,10 @@ describe("a fire's marker", () => {
 
 	it("a routine's own fire never carries an event kind, only its name", async () => {
 		await withFiringManager(async (hooks, runtime) => {
-			const fire = await hooks.fire("digest", { payload: "check the calendar", requestId: explicitRequestId("digest", "plain") });
+			const fire = await hooks.fire("digest", {
+				payload: "check the calendar",
+				requestId: explicitRequestId("digest", "plain"),
+			});
 			await fire.wait(BACKGROUND_CONTEXT);
 			const entries = await hookEntries(runtime);
 			const fired = entries.find((entry) => entry.data.payload === "check the calendar");
@@ -287,7 +290,12 @@ describe("a disabled hook", () => {
 
 describe("agent/routines.json", () => {
 	/** A directory holding the agent half (the file) and the data half (the persisted state). */
-	async function routineHome(): Promise<{ readonly agent: string; readonly data: string; readonly file: string; readonly state: string }> {
+	async function routineHome(): Promise<{
+		readonly agent: string;
+		readonly data: string;
+		readonly file: string;
+		readonly state: string;
+	}> {
 		const root = await tempHouse();
 		const agent = join(root, "agent");
 		const data = join(root, "data");
@@ -336,9 +344,7 @@ describe("agent/routines.json", () => {
 	}
 
 	/** A real runtime for the fire path: a faux model, memory storage, a throwaway home. */
-	async function withFauxConversation(
-		run: (runtime: AgentRuntime) => Promise<void>,
-	): Promise<void> {
+	async function withFauxConversation(run: (runtime: AgentRuntime) => Promise<void>): Promise<void> {
 		const faux = fauxProvider();
 		const models = createModels();
 		models.setProvider(faux.provider);
@@ -361,7 +367,10 @@ describe("agent/routines.json", () => {
 			const paths = await routineHome();
 			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
 			try {
-				assert.deepEqual(hooks.list().map((entry) => [entry.id, entry.intervalMs]), []);
+				assert.deepEqual(
+					hooks.list().map((entry) => [entry.id, entry.intervalMs]),
+					[],
+				);
 			} finally {
 				await hooks.close();
 			}
@@ -402,12 +411,14 @@ describe("agent/routines.json", () => {
 					JSON.stringify([{ name: "digest", intervalSeconds: 5, prompt: "too fast" }], undefined, 2),
 				);
 				await waitUntil("the notice to arrive", () => problems.length > 0);
-				assert.deepEqual(hooks.list().map((entry) => entry.id), ["digest"], "the last good set is unchanged");
+				assert.deepEqual(
+					hooks.list().map((entry) => entry.id),
+					["digest"],
+					"the last good set is unchanged",
+				);
 				assert.deepEqual(
 					problems.map((problem) => problem.message),
-					[
-						`${paths.file} is malformed: "digest" has an intervalSeconds that is not an integer of at least 30`,
-					],
+					[`${paths.file} is malformed: "digest" has an intervalSeconds that is not an integer of at least 30`],
 					"the notice names the file and the problem",
 				);
 			} finally {
@@ -468,9 +479,9 @@ describe("agent/routines.json", () => {
 				await writeFile(paths.file, JSON.stringify([routine("digest", 3_600)]));
 				await waitUntil("the rename to land", () => hooks.has("digest") && hooks.has("brief") === false);
 				const state = await stateOf(paths.state);
-				assert.equal(state["brief"], undefined, "a removed routine leaves no definition behind");
+				assert.equal(state.brief, undefined, "a removed routine leaves no definition behind");
 				assert.ok(
-					Date.parse(String(state["digest"]?.nextFireAt)) > clock.at(),
+					Date.parse(String(state.digest?.nextFireAt)) > clock.at(),
 					"the renamed routine is scheduled after its interval, not immediately",
 				);
 
@@ -478,7 +489,7 @@ describe("agent/routines.json", () => {
 				await writeFile(paths.file, JSON.stringify([routine("digest", 60)]));
 				await waitUntil("the interval change to land", () => hooks.get("digest")?.intervalMs === 60_000);
 				assert.equal(
-					(await stateOf(paths.state))["digest"]?.nextFireAt,
+					(await stateOf(paths.state)).digest?.nextFireAt,
 					new Date(clock.at() + 60_000).toISOString(),
 					"the changed routine fires after its new interval from now",
 				);
@@ -502,7 +513,7 @@ describe("agent/routines.json", () => {
 			try {
 				hooks.start();
 				assert.equal(
-					(await stateOf(paths.state))["digest"]?.nextFireAt,
+					(await stateOf(paths.state)).digest?.nextFireAt,
 					new Date(dueMs).toISOString(),
 					"the boot waits the remainder instead of resetting the schedule",
 				);
@@ -513,7 +524,7 @@ describe("agent/routines.json", () => {
 				}
 				assert.equal(hooks.get("digest")?.fireCount, 4, "the pending wake fired once the slot came due");
 				assert.ok(
-					Date.parse(String((await stateOf(paths.state))["digest"]?.nextFireAt)) >= dueMs + 30_000 - 1,
+					Date.parse(String((await stateOf(paths.state)).digest?.nextFireAt)) >= dueMs + 30_000 - 1,
 					"the next slot was written from the slot that fired, not from now",
 				);
 			} finally {
@@ -544,7 +555,7 @@ describe("agent/routines.json", () => {
 				assert.equal(hooks.get("digest")?.fireCount, 2, "one catch-up fire");
 				// And the skip is written down: the next due slot is the first one beyond the present, not the first
 				// missed one.
-				const next = Date.parse(String((await stateOf(paths.state))["digest"]?.nextFireAt));
+				const next = Date.parse(String((await stateOf(paths.state)).digest?.nextFireAt));
 				assert.ok(next > clock.at(), "the schedule resumed in the future");
 				assert.ok(
 					next - clock.at() <= 30_000,
@@ -683,7 +694,11 @@ describe("the routines file's validation", () => {
 
 	it("rejects a name that is not a hook id, or one named twice", () => {
 		assert.throws(() => parseRoutines('[{"name":"Morning Brief","intervalSeconds":60,"prompt":"x"}]'));
-		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":30,"prompt":"x"},{"name":"digest","intervalSeconds":60,"prompt":"y"}]'));
+		assert.throws(() =>
+			parseRoutines(
+				'[{"name":"digest","intervalSeconds":30,"prompt":"x"},{"name":"digest","intervalSeconds":60,"prompt":"y"}]',
+			),
+		);
 	});
 
 	it("rejects an interval under thirty seconds and an empty prompt", () => {

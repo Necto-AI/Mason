@@ -380,7 +380,7 @@ describe("durable harness + pi-env", () => {
 			assert.equal(data.payload, "Connection error.");
 			// The prompt tells the agent to resume rather than restart, with the failure in it.
 			const prompt = textOf(hookEntry.model?.[0]);
-			assert.match(prompt, /^\[EVENT HOOK: Retry a failed run\]/);
+			assert.match(prompt, /^\[ROUTINE: Retry a failed run\]/);
 			assert.match(prompt, /resume it from where it stopped/i);
 			assert.match(prompt, /Connection error\./);
 		} finally {
