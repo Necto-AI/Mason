@@ -13,7 +13,6 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
 import { Memory } from "../../src/server/extensions/memory.ts";
-import { GenerateSandboxedUiExtension } from "../../src/server/extensions/sandboxed-ui.ts";
 import { formatPrompt } from "../../src/server/hooks.ts";
 import { HOUSE_ENTRIES, type HousePaths, housePaths, logPathFor } from "../../src/server/house.ts";
 import { projectTranscript } from "../../src/server/projection.ts";
@@ -29,7 +28,7 @@ export interface RunOptions {
 	readonly onProgress?: (line: string) => void;
 }
 
-/** The extensions a scenario runs with: the prompt, the memory and delivery tools, the widget tool, and stubs. */
+/** The extensions a scenario runs with: the prompt, the memory and delivery tools, and stubs. */
 const CONTEXT: Context = BACKGROUND_CONTEXT;
 
 export async function runScenario(scenario: Scenario, options: RunOptions): Promise<{ trace: Trace; logText: string }> {
@@ -46,7 +45,7 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 			model: options.model,
 			extensions: [stub],
 			// The stubs stand in for `coding-tools`; the base repair would put the real ones back.
-			selection: [Prompt, Memory, Delivery, GenerateSandboxedUiExtension, stub],
+			selection: [Prompt, Memory, Delivery, stub],
 			repairBase: false,
 			onReport: (error) => options.onProgress?.(`[report] ${String(error)}`),
 		});
@@ -77,8 +76,6 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 				delivered: [],
 				notices: [],
 				toolCalls: [],
-				widgets: 0,
-				widgetArguments: undefined,
 				inputTokens: 0,
 				outputTokens: 0,
 				reminders: 0,
@@ -163,16 +160,13 @@ function collect(
 	const items = projectTranscript(view);
 	const delivered: string[] = [];
 	const notices: string[] = [];
-	const widgets: { content: unknown }[] = [];
 	for (const item of items) {
 		if (item.kind === "delivered") delivered.push(item.text);
 		else if (item.kind === "notice") notices.push(item.text);
-		else if (item.kind === "widget") widgets.push({ content: item.content });
 	}
-	// Every call the model made, in order, including the real tools a stub did not replace: `reply`, `remember`
-	// and the widget tool are the same delivery path the reader sees, so an eval must count what the harness committed.
+	// Every call the model made, in order, including the real tools a stub did not replace: `reply` and `remember`
+	// are the same delivery path the reader sees, so an eval must count what the harness committed.
 	const calls = toolCallsOf(view);
-	const widgetCall = calls.find((call) => call.name === "generateSandboxedUi");
 	const usage = view.docs["pi.usage"] as { models?: Record<string, { input?: number; output?: number }> } | undefined;
 	let input = 0;
 	let output = 0;
@@ -187,8 +181,6 @@ function collect(
 		notices,
 		reminders: remindersOf(view),
 		toolCalls: calls,
-		widgets: widgets.length,
-		widgetArguments: widgetCall?.args as Record<string, unknown> | undefined,
 		inputTokens: input,
 		outputTokens: output,
 		turns,

@@ -703,7 +703,11 @@ describe("the operator panel", () => {
 		}
 	});
 
-	it("offers the widget tool on every turn and settles a generateSandboxedUi call", async () => {
+	/**
+	 * The loadout and the prompt are part of the request prefix: a tool or a section that appears on the second turn
+	 * re-prices what the provider has already cached, and nothing else in the suite would notice.
+	 */
+	it("offers the same tools and the same sections on the second turn as the first", async () => {
 		const panel = await openPanel();
 		try {
 			panel.faux.setResponses([fauxAssistantMessage(fauxText("Ready when you are."))]);
@@ -713,64 +717,25 @@ describe("the operator panel", () => {
 			);
 			const firstTurnTools = offeredTools(panel.view());
 			const firstTurnDeclarations = offeredDeclarations(panel.view());
-			assert.ok(
-				firstTurnTools.includes("generateSandboxedUi"),
-				`the widget tool is in the first turn's loadout: ${firstTurnTools.join(", ")}`,
+
+			panel.faux.setResponses([fauxAssistantMessage(fauxText("Still here."))]);
+			await panel.submit("And again.");
+			await until("the second answer", () =>
+				entries(panel.view()).some((entry) => messageText(entry) === "Still here.") ? true : undefined,
 			);
 
-			panel.faux.setResponses([
-				fauxAssistantMessage(
-					[
-						fauxToolCall(
-							"generateSandboxedUi",
-							{
-								initialHeight: 240,
-								css: "body{font:14px system-ui}",
-								html: ["<div id='w'>widget</div>"],
-								jsFunctions: "function boot(){}",
-								jsExpressions: ["boot()"],
-							},
-							{ id: "ui" },
-						),
-						fauxToolCall("bash", { command: "sleep 1" }, { id: "after-ui" }),
-					],
-					{ stopReason: "toolUse" },
-				),
-				fauxAssistantMessage(fauxText("Here is the widget.")),
-			]);
-			await panel.submit("Show me a widget.");
-			const slot = await until("the widget tool slot", () =>
-				live(panel.view())?.tools?.find((entry) => entry.name === "generateSandboxedUi"),
-			);
-			assert.ok(["pending", "running", "done"].includes(slot.status));
-			const widgets = await until("the widget in the transcript", async () => {
-				const state = await panel.state();
-				const found = state.conversation?.transcript.filter((item) => item.kind === "widget");
-				return found !== undefined && found.length === 1 ? found : undefined;
-			});
-			assert.deepEqual((widgets[0] as { content?: { html?: string[] } }).content?.html, [
-				"<div id='w'>widget</div>",
-			]);
-			await until("idle", async () =>
-				(await panel.state()).conversation?.status.busy === false ? true : undefined,
-			);
-
-			// The loadout the second turn was offered is the first one, in the same order: no tool appears or
-			// disappears mid-conversation, so the prefix the provider caches stays valid.
 			assert.deepEqual(offeredTools(panel.view()), firstTurnTools, "a second turn offers the same tools in order");
 			assert.deepEqual(
 				offeredDeclarations(panel.view()),
 				firstTurnDeclarations,
 				"and the same declarations, so the cached prefix stays valid",
 			);
-
 			const prompt = renderedSections(panel.view());
 			assert.deepEqual(
 				[...prompt.keys()],
 				promptSectionKeys().filter((key) => key !== "integrations"),
 				"the model reads exactly the sections prompt.ts declares, in that order",
 			);
-			assert.match(prompt.get("generative_ui") ?? "", /generative-ui/);
 		} finally {
 			await panel.close();
 		}

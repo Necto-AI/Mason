@@ -40,7 +40,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -236,7 +236,8 @@ export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promi
  * `SKILL.md`), and a copy whose hash still matches the record is one nobody touched: the shipped copy replaces it. A
  * copy that differs from the record was edited — by the agent, by Denis, or by a person who brought their own skill of
  * that name before there was a record — and is left alone, with the seeded hash still beside it so no later boot takes
- * it for one of ours.
+ * it for one of ours. A skill the repository stops shipping is withdrawn: unchanged, the copy goes with the tool it
+ * documented, and edited, it stays.
  *
  * `shippedDir` is the repository's `skills/` unless a caller names another: the upgrade rule needs a "before" and an
  * "after" of the same skill, and a test should not have to edit the checkout to get one.
@@ -264,6 +265,14 @@ export async function seedShippedSkills(paths: HousePaths, shippedDir = SHIPPED_
 		}
 		// Edited, or never seeded by this code: not ours to overwrite.
 		if (seeded[name] !== undefined) record[name] = seeded[name];
+	}
+	// A skill mason no longer ships. The copy is ours and nobody touched it, so it goes with the tool it documented;
+	// an edited copy belongs to the person who edited it and stays, out of the record and out of our way.
+	for (const [name, hash] of Object.entries(seeded)) {
+		if (record[name] !== undefined) continue;
+		const target = join(paths.skillsDir, name);
+		if ((await hashOf(join(target, "SKILL.md"))) !== hash) continue;
+		await rm(target, { recursive: true, force: true }).catch(() => undefined);
 	}
 	await writeFileIfChanged(recordPath, `${JSON.stringify(record, null, "\t")}\n`);
 }

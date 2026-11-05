@@ -334,34 +334,6 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 	);
 });
 
-test("a widget built from inside a script is refused the same way", async () => {
-	const directory = await temporary();
-	const answers: NestedAnswer[] = [];
-	const script = recorder([
-		call("deliverFromScript", { widget: true }, "run"),
-		deliver("Here is the chart."),
-		said("Done."),
-	]);
-	const { settled, transcript, requests } = await runScripted(directory, script, "Anything new?", [
-		scriptedDelivery(answers),
-	]);
-
-	assert.equal(settled.status, "done");
-	assert.equal(answers[0]?.isError, true, "the nested widget was refused, not rendered");
-	assert.match(answers[0]?.text ?? "", /cannot render from inside a script/, "the refusal says what went wrong");
-	assert.match(answers[0]?.text ?? "", /Call generateSandboxedUi directly/, "and what to do instead");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "widget"),
-		[],
-		"nothing a script built reaches the reader",
-	);
-	assert.equal(reminded(requests), false, "the model's own message spoke for the turn");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["Here is the chart."],
-	);
-});
-
 /**
  * The other reader: a turn an event hook started.
  *

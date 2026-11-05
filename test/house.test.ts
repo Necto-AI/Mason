@@ -260,7 +260,7 @@ test("ensureRepository() initialises the agent's half as a git repository, with 
 	assert.deepEqual(history.stdout.trim().split("\n"), ["The agent's memory starts here"]);
 	const tracked = await run("git", ["ls-files"], { cwd: paths.agentDir });
 	assert.match(tracked.stdout, /^\.gitignore$/m);
-	assert.match(tracked.stdout, /^skills\/generative-ui\/SKILL\.md$/m, "the skills seeded at this boot are committed");
+	assert.match(tracked.stdout, /^skills\/ocr\/SKILL\.md$/m, "the skills seeded at this boot are committed");
 	assert.match(await readFile(join(paths.agentDir, ".gitignore"), "utf8"), /^workspace\/$/m);
 	assert.equal((await run("git", ["status", "--porcelain"], { cwd: paths.agentDir })).stdout.trim(), "");
 
@@ -992,11 +992,11 @@ test("the same home boots once it has been migrated", async (t) => {
 test("ensureHouse() seeds the skills mason ships into the agent's half, and records what it seeded", async () => {
 	const paths = housePaths(join(await tempDir("mason-house-seed-"), "home"));
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
-	const seeded = join(paths.skillsDir, "generative-ui", "SKILL.md");
+	const seeded = join(paths.skillsDir, "ocr", "SKILL.md");
 	assert.ok(existsSync(seeded), "the shipped skill is in the home, which is what the tool machine has");
 	const index = await discoverSkills(toolMachine(paths.home), [paths.skillsDir], BACKGROUND_CONTEXT);
 	assert.ok(
-		index.some((skill) => skill.name === "generative-ui"),
+		index.some((skill) => skill.name === "ocr"),
 		"and the index lists it, so the prompt's pointer is not pointing at nothing",
 	);
 
@@ -1013,7 +1013,7 @@ test("ensureHouse() seeds the skills mason ships into the agent's half, and reco
 		"one entry per shipped skill",
 	);
 	assert.equal(
-		recorded["generative-ui"],
+		recorded["ocr"],
 		createHash("sha256")
 			.update(await readFile(seeded))
 			.digest("hex"),
@@ -1031,13 +1031,13 @@ test("ensureHouse() seeds the skills mason ships into the agent's half, and reco
 test("a shipped skill follows the shipped copy, and an edited copy is never touched", async () => {
 	const paths = housePaths(join(await tempDir("mason-house-seed-upgrade-"), "home"));
 	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
-	const copy = join(paths.skillsDir, "generative-ui", "SKILL.md");
+	const copy = join(paths.skillsDir, "ocr", "SKILL.md");
 
 	const shipped = await tempDir("mason-house-shipped-");
-	await mkdir(join(shipped, "generative-ui"), { recursive: true });
+	await mkdir(join(shipped, "ocr"), { recursive: true });
 	await writeFile(
-		join(shipped, "generative-ui", "SKILL.md"),
-		"---\nname: generative-ui\ndescription: The widget manual, first edition.\n---\n",
+		join(shipped, "ocr", "SKILL.md"),
+		"---\nname: ocr\ndescription: The OCR manual, first edition.\n---\n",
 		"utf8",
 	);
 	await seedShippedSkills(paths, shipped);
@@ -1045,22 +1045,63 @@ test("a shipped skill follows the shipped copy, and an edited copy is never touc
 
 	// The next release of the same skill: nobody edited the home's copy, so it follows.
 	await writeFile(
-		join(shipped, "generative-ui", "SKILL.md"),
-		"---\nname: generative-ui\ndescription: The widget manual, second edition.\n---\n",
+		join(shipped, "ocr", "SKILL.md"),
+		"---\nname: ocr\ndescription: The OCR manual, second edition.\n---\n",
 		"utf8",
 	);
 	await seedShippedSkills(paths, shipped);
 	assert.match(await readFile(copy, "utf8"), /second edition/, "an upgrade reaches a home that already booted");
 
 	// Denis's own copy of the same skill: the hash no longer matches the record, so seeding leaves it alone.
-	await writeFile(copy, "---\nname: generative-ui\ndescription: Denis's own widget notes.\n---\n", "utf8");
+	await writeFile(copy, "---\nname: ocr\ndescription: Denis's own OCR notes.\n---\n", "utf8");
 	await writeFile(
-		join(shipped, "generative-ui", "SKILL.md"),
-		"---\nname: generative-ui\ndescription: The widget manual, third edition.\n---\n",
+		join(shipped, "ocr", "SKILL.md"),
+		"---\nname: ocr\ndescription: The OCR manual, third edition.\n---\n",
 		"utf8",
 	);
 	await seedShippedSkills(paths, shipped);
-	assert.match(await readFile(copy, "utf8"), /Denis's own widget notes/, "an edited copy is theirs, upgrade or not");
+	assert.match(await readFile(copy, "utf8"), /Denis's own OCR notes/, "an edited copy is theirs, upgrade or not");
+});
+
+/**
+ * The other side of seeding: a skill the repository stops shipping. The copy mason put there is ours and untouched, so
+ * it goes; a copy somebody edited is theirs, and no release deletes it.
+ */
+test("a seeded skill the repository stops shipping is withdrawn unless somebody edited it", async () => {
+	const paths = housePaths(join(await tempDir("mason-house-seed-withdraw-"), "home"));
+	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
+
+	const shipped = await tempDir("mason-house-shipped-");
+	for (const name of ["kept", "dropped"]) {
+		await mkdir(join(shipped, name), { recursive: true });
+		await writeFile(join(shipped, name, "SKILL.md"), `---\nname: ${name}\ndescription: A manual.\n---\n`, "utf8");
+	}
+	await seedShippedSkills(paths, shipped);
+	assert.ok(await readdir(paths.skillsDir).then((names) => names.includes("dropped")), "both skills are seeded");
+
+	// The next release ships one of them.
+	await rm(join(shipped, "dropped"), { recursive: true });
+	await seedShippedSkills(paths, shipped);
+	const names = await readdir(paths.skillsDir);
+	assert.ok(names.includes("kept"), "the skill still shipped stays");
+	assert.ok(!names.includes("dropped"), "the withdrawn one goes, so the index cannot point at a manual for no tool");
+
+	// And the rule does not reach a copy the person wrote over.
+	await mkdir(join(shipped, "edited"), { recursive: true });
+	await writeFile(join(shipped, "edited", "SKILL.md"), "---\nname: edited\ndescription: Mine.\n---\n", "utf8");
+	await seedShippedSkills(paths, shipped);
+	await writeFile(
+		join(paths.skillsDir, "edited", "SKILL.md"),
+		"---\nname: edited\ndescription: My own words.\n---\n",
+		"utf8",
+	);
+	await rm(join(shipped, "edited"), { recursive: true });
+	await seedShippedSkills(paths, shipped);
+	assert.match(
+		await readFile(join(paths.skillsDir, "edited", "SKILL.md"), "utf8"),
+		/My own words/,
+		"an edited copy survives the release that drops the skill",
+	);
 });
 
 async function gitAvailable(): Promise<boolean> {

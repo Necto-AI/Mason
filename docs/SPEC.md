@@ -10,8 +10,6 @@ repository is a control plane, not a chat (§4.3).
 
 1. **Durable Agent Harness + `pi-env` Split:** Runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`), executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a `Connection` to the `pi-env` Rust daemon), and supports **event hooks** (interval timers, a connector's fire, the transcript's controls) so the agent can proactively message the user first.
 2. **The projection, and one operator panel:** `src/server/projection.ts` derives `transcript`, `queued` and `agentStatus` from the durable view, and a device granted `conversation` reads them at `GET /api/admin/state`; the durable `ConversationView` itself crosses only to a device granted `trace`, and only as that device's own area of the answer (§4.1a, §4.2). There is no conversational socket: a person speaks through a connector, and administration is a grant of its own.
-3. **A Widget Tool and Its Artifact Contract:** `generateSandboxedUi` is a `pi-durable` extension (`GenerateSandboxedUiExtension`) in `BASE_EXTENSIONS`, so every conversation is offered the tool from its first turn and on every turn after it: there is no toggle, and therefore no tool that appears mid-conversation (§3.5). The server maps the call's arguments to widget content and only that content crosses the wire; framing, streaming and drawing it is a client's job (§5). The manual the model needs — parameter order, design system, sandbox limits — lives in `skills/generative-ui/SKILL.md`, which it reads when it decides to build a widget.
-
 ### One deployment is one specialized bot
 
 A mason deployment serves one profession. Its soul, skills, routines and integration grants are chosen for that job —
@@ -66,7 +64,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
 │   └── token.ts                       # `npm run token -- add|list|revoke`: the credentials that may connect
 ├── skills/
-│   └── generative-ui/SKILL.md         # The widget manual: the prompt carries only the pointer (§3.5)
+│   └── ocr/SKILL.md                   # A skill mason ships; the prompt carries only the index (§3.5)
 ├── src/
 │   ├── shared/
 │   │   ├── contract.ts                # The shapes the projection writes and the panel renders: rows, status, kinds
@@ -86,8 +84,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   ├── extensions/
 │   │   │   ├── skills.ts              # The skills index: one root, agent/skills/ (seeded at boot), walked by discoverSkills
 │   │   │   ├── memory.ts              # The `remember` tool: one dated fact in agent/log/
-│   │   │   ├── delivery.ts            # The reply tool and the gate: one operation, targeted at the turn's origin
-│   │   │   └── sandboxed-ui.ts        # generateSandboxedUi tool + the pointer to its skill
+│   │   │   └── delivery.ts            # The reply tool and the gate: one operation, targeted at the turn's origin
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, a connector's fire, proactive submit)
 │   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
 │   │   ├── trace.ts                   # The other half of it: the raw entries, for a device granted `trace`
@@ -125,7 +122,7 @@ does not add them. It fixes the product direction the plans and issues execute.
     ├── harness-env.test.ts            # Tests Milestone 1: pi-durable + pi-env daemon + proactive hooks
     ├── house.test.ts                  # ~/.mason: paths, the log, the caps, the git repository
     ├── auth.test.ts                   # The door: token mint/verify/revoke/grants, `/api` 401s, the cookie, Origin
-    ├── prompt.test.ts                 # The resident prompt: soul, profile, skills index, the widget pointer
+    ├── prompt.test.ts                 # The resident prompt: soul, tone, profile, skills index
     ├── cache-telemetry.test.ts        # The [cache] line of a finished run
     ├── panel.test.ts                  # The panel over HTTP: the projection, the queue, the grants, the writes
     ├── projection.test.ts             # The wire boundary: what the reader is sent, and what stays behind
@@ -165,47 +162,29 @@ export interface RuntimeEnvManager {
 
 `prompt.ts` is the single registry: every section the model receives is declared there, in order, by key and by source.
 No other extension contributes a section, and the root agent carries no `instructions`, so reading that one file tells
-you everything the agent is told. A test fails if another base extension grows a section (§6).
+you everything the agent is told. A test fails if another base extension grows a section (§5).
 
 | key | tag | source |
 |---|---|---|
-| `preamble` | none (the prompt's opening) | `service/soul.md`, else `DEFAULT_SOUL` |
+| `preamble` | none (the prompt's opening) | `service/soul.md`, else `DEFAULT_SOUL`, then the wake rule: how to handle `[EVENT HOOK: …]`, act and report once |
+| `tone` | `<tone>` | plain text: how a reply sounds, and what it never does |
 | `cwd` | `<cwd>` | `input.env?.cwd` |
-| `proactive_guidelines` | `<proactive_guidelines>` | plain text: how to handle `[EVENT HOOK: …]`, act and report once |
 | `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
-| `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 | `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
-| `codemode` | `<codemode>` | pi-durable's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
+| `codemode` | `<codemode>` | a count of the tools a script can call, and the three globals that find one (`ALL_TOOLS`, `searchTools`, `describeTool`); no declaration is resident |
 
 Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
-`profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the guidelines, the
-delivery invariant, the widget pointer), or a **rendering of something the prompt does not own** — the **boot
-configuration** (`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one
-file are the same bytes) and the **`codemode` section pi-durable renders**, whose text is its own composition and
-whose position alone is mason's.
+`profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the wake rule, the tone
+rules, the delivery invariant), or a **computation the prompt does not own** — the **boot configuration**
+(`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one file are the
+same bytes) and the **count of callable tools**, read off the request's own agent.
 
 There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
 tree so it can change its own extensions, themes and skills; mason's agent is not meant to have that. A test asserts
-the rendered prompt names no path into pi, no documentation tree, and no `docs` section key (§6). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
+the rendered prompt names no path into pi, no documentation tree, and no `docs` section key (§5). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
 what the runtime installs.
-
-2. **`GenerateSandboxedUiExtension` (`sandboxed-ui.ts`):**
-   - Defines the `generateSandboxedUi` tool using `defineTool` from `@earendil-works/pi-durable` and `Type` from `typebox`:
-     ```ts
-     export const GenerateSandboxedUiParams = Type.Object({
-       initialHeight: Type.Optional(Type.Number({ description: "Estimated height in pixels" })),
-       placeholderMessages: Type.Optional(Type.Array(Type.String())),
-       css: Type.String({ description: "Complete CSS for the widget" }),
-       html: Type.Array(Type.String({ description: "HTML chunks for body content" })),
-       jsFunctions: Type.Optional(Type.String({ description: "Named JS function declarations" })),
-       jsExpressions: Type.Optional(Type.Array(Type.String({ description: "Synchronous JS statements" }))),
-     });
-     ```
-   - `execute: async (args) => ({ output: [{ type: "text", text: "UI generated" }], details: args })`.
-   - The prompt's `generative_ui` section (§3.2) is a **pointer**, not the manual: it says the model can answer with a live widget and names the `generative-ui` skill. The parameter order (`initialHeight` → `placeholderMessages` → `css` → `html` → `jsFunctions` → `jsExpressions`), the design-system tokens and the `Websandbox.connection.remote.sendPrompt({ text })` bridge live in `skills/generative-ui/SKILL.md`, which the agent reads when it decides to build something.
-   - **Always registered.** `GenerateSandboxedUiExtension` is a base extension (§3.4), so it is in the tool list of the first turn and of every turn after it. There is no per-conversation toggle and no `ENABLE_SANDBOXED_UI`: the client renders a widget whenever one arrives, and a tool list that changes mid-conversation would invalidate the provider's prompt cache (§3.5).
 
 ### 3.3 `src/server/hooks.ts` — Proactive Event Hooks Engine
 
@@ -280,7 +259,7 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `sandboxed-ui`, `tool-search` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `sandboxed-ui` is unconditional too: the client renders a widget whenever one arrives, and a tool list that changes between turns is exactly the cache break this design removes (§3.5). `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `tool-search` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode`, then `permissions` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
@@ -351,19 +330,17 @@ than appended to per turn.
 
 | Section | What it holds | Budget |
 |---|---|---|
-| `soul` (tag-less: the prompt's opening) | `service/soul.md`, or `DEFAULT_SOUL` on a fresh install | none enforced — it is Denis's own voice, ~480 characters by default |
+| `preamble` (tag-less: the prompt's opening) | `service/soul.md`, or `DEFAULT_SOUL` on a fresh install, then the wake rule: how to answer an `[EVENT HOOK: ...]` input and what an untrusted payload fence means | the soul is the operator's voice, ~200 characters by default; the wake rule a fixed ~800-character constant |
+| `tone` | how a reply sounds: prose first, what it did, where it came from, and an unverified claim that says so | a fixed ~600-character constant |
 | `cwd` | the workspace the tools run in | one path |
-| `proactive_guidelines` | how to answer an `[EVENT HOOK: ...]` input, and what an untrusted payload fence means | a fixed ~1,000-character constant |
-| `team` | the conversation is one person's; a stored `[from <name>] ` is history from when a bot carried a room, and a trigger is nobody's words | a fixed ~300-character constant |
 | `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
 | `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
-| `generative_ui` | the pointer: widgets exist, read the skill | ~300 characters |
 | `delivery` | words reach the reader only through `reply`, which targets the turn's origin; a turn nobody wrote to records the reply and says so | a fixed ~600-character constant |
 
-**The tool list does not change.** `generateSandboxedUi` is in `BASE_EXTENSIONS` (§3.4), so it is offered on the first
-turn and on every turn after it. The per-conversation toggle, the `setSandboxedUiEnabled` method and
-`ENABLE_SANDBOXED_UI` are gone: the client renders a widget whenever one arrives, so hiding the tool protected nothing,
-and a tool that appears mid-conversation invalidates the provider's prompt cache.
+**The tool list does not change.** The tools a turn is offered come from `BASE_EXTENSIONS` and the per-boot extensions
+(§3.4), never from the conversation: nothing inside a turn adds or removes one, because a tool that appears
+mid-conversation invalidates the provider's prompt cache. A capability that is not in the list is reached from a script
+(the `codemode` section, §3.2), which is how an integration's tools arrive without re-pricing the prefix.
 
 **Skills.** One root, one index. `agent/skills/` is walked recursively for `SKILL.md` — nesting is allowed
 (`engineering/pr/SKILL.md`), because grouping skills is how a person keeps them. Mason's own skills are seeded into that
@@ -371,8 +348,7 @@ root at boot, copied only when no directory of that name exists, so a personal s
 copy is not restored over: `<repo>/skills/` is not a root at all, which is what makes the index the same in the dev
 stack and in the deployment, where the tool machine has the home and not the repository. A `SKILL.md` is YAML frontmatter (`name`, `description`) then markdown; a
 missing `name` falls back to the directory name. The prompt carries the index only, and the agent reads the file when a
-task matches, so a large skill library costs nothing until it is used. `skills/generative-ui/SKILL.md` — the parameter
-order, the design system, the sandbox limits — is why the widget manual left the resident prompt.
+task matches, so a large skill library costs nothing until it is used.
 
 **Profile.** `profile.md` is the agent's own description of who it works for: resident every turn, and maintained by the
 agent with `write`. On a fresh install the section says the file does not exist and asks the agent to interview Denis in
@@ -841,65 +817,7 @@ What durability does and does not promise, in one line: the conversation, the ru
 state survive a **process** restart — kill the server mid-tool and it resumes the run in place — while a provider
 outage that outlasts every retry budget leaves a failed turn.
 
-## 5. Milestone 3 Specification: the Widget Tool and Its Artifact Contract
-
-The milestone is mason's half of a widget: a tool every conversation is offered (§3.5), and the artifact contract that
-carries its output — `generateSandboxedUi`'s arguments mapped to `OpenGenUIContent` in `src/shared/genui-content.ts`,
-with only that content crossing the wire (§4.1a). Rendering it is a client's: the operator panel draws it in the
-conversation view (§4.3), and the sandbox that renders it is the one worked consumer that survived the console.
-
-### 5.1 Why We Adapt Components Instead of Forking the Next.js Shell
-Inspecting `vendor/open-intelligent-ui`:
-- `apps/app/src/app/page.tsx` delegates the chat list to `<CopilotChat>` from `@copilotkit/react-core/v2`, which requires `@copilotkit/runtime` + Python `LangGraphHttpAgent` and has no support for `pi-durable` state (`pi.live`, `pi.inbox`, proactive hooks, tool output streaming).
-- However, the actual **OpenIntelligentUI generative UI engine and design system** in `vendor/open-intelligent-ui` are clean, standalone modules:
-  1. `@repo/design-system` (`vendor/open-intelligent-ui/packages/design-system/src/index.ts`): `THEME_CSS`, `SVG_CLASSES_CSS`, `FORM_STYLES_CSS`, `IMPORT_MAP`, `CDN_URLS`.
-  2. `vendor/open-intelligent-ui/apps/app/src/components/generative-ui/open-generative-ui/`:
-     - `schema.ts` (`OpenGenUIContent`)
-     - `frame-content.ts` (`PREVIEW_FRAME_CONTENT`, `buildPreviewHeadContent`, `buildPreviewBodyMorph`, `buildFinalFrameContent`, `MEASUREMENT_JS`, `RESIZE_MESSAGE_TYPE`)
-     - `process-partial-html.ts` (`processPartialHtml`, `extractCompleteStyles`)
-     - `websandbox-loader.ts` (`loadWebsandbox`)
-     - `idiomorph-inline.ts` (`IDIOMORPH_JS`)
-     - `renderer.tsx` (`OpenGenUIActivityRenderer`)
-
-### 5.2 The Artifact Contract: How a `generateSandboxedUi` Call Becomes `OpenGenUIContent`
-1. **While the model is streaming the tool call** (`docs["pi.live"].generation.message.content` has a `toolCall` with `name === "generateSandboxedUi"`):
-   - `pi-ai` parses partial JSON arguments into `toolCall.arguments` on every chunk (`partialIntervalMs: 100`).
-   - We map the partial `toolCall.arguments` directly to `OpenGenUIContent`:
-     - `cssComplete`: `Array.isArray(args.html)` (since `html` is emitted after `css` in the strict parameter order!)
-     - `htmlComplete`: `typeof args.jsFunctions === "string" || Array.isArray(args.jsExpressions)` (or tool call finished)
-     - `generating`: `true` while streaming, `false` once settled.
-2. **Once settled** (assistant entry committed in `view.entries`):
-   - `cssComplete: true`, `htmlComplete: true`, `generating: false`.
-   - `jsFunctions` / `jsExpressions` reach the sandbox only now: a half-streamed function declaration would throw
-     inside the iframe, so the preview shows markup and the behavior runs once the call is complete.
-   - The frame element carries `data-sandbox-state="idle | creating | ready | failed"`, so a test (or a human)
-     can tell whether the sandbox finished loading rather than guessing from pixels.
-3. **Host Bridge (`Websandbox` localApi):**
-   - `sendPrompt: async ({ text }) => { await agentService.submit({ content: `[WIDGET ${callId}] ${text}`, whenBusy: "followUp" }); }`
-     (the `[WIDGET <callId>]` tag tells the agent which widget spoke; `followUp` keeps a click from interrupting a run)
-   - `openLink: async ({ url }) => { window.open(url, "_blank", "noopener,noreferrer"); }`
-   - Any interactive button inside a generated widget that calls `Websandbox.connection.remote.sendPrompt({ text })` submits directly back into our `pi-durable` conversation!
-
----
-
-**The card has three phases, and the frame's height is a policy, not a measurement** (`src/web/lib/frame-height.ts`):
-
-| Phase | What renders | Height |
-| --- | --- | --- |
-| `placeholder` | shimmering skeleton + the model's `placeholderMessages`, cycling | the model's `initialHeight`, clamped to 96–480 |
-| `preview` | a second sandbox that morphs the partial body (Idiomorph); `PREVIEW_MEASUREMENT_JS` measures it | grows only, from the estimate as a floor, capped at 80% of the viewport |
-| `settled` | the complete document (CSP, importmap, design-system styles) with the host bridge | the document's own measurement, shrink included |
-
-The preview is not destroyed when the final document is built: both sandboxes are on screen through a 200ms crossfade,
-so the card never blanks. Behavior (`jsFunctions`, `jsExpressions`) is still withheld until the call settles — a
-half-streamed declaration would throw inside the iframe.
-
-Height reports are clamped (`CONTENT_MAX` 4000px, 50px floor), sub-2px changes are ignored so the CSS transition is not
-restarted on every report, and the height the settled document reported is cached per call id: the settled turn is a
-different React subtree, and since an iframe cannot be re-parented without reloading, the widget is mounted a second
-time. That mount starts at the cached height and skips the skeleton, which reduces the artifact to one repaint of the
-widget's own content.
-## 6. Verification & Acceptance Criteria
+## 5. Verification & Acceptance Criteria
 
 1. **`test/harness-env.test.ts`:**
    - Starts `Harness` on SQLite with `RemoteExecutionEnv` connected to `localDaemon()`.
@@ -908,37 +826,35 @@ widget's own content.
    - Verifies crash/reopen recovery (`harness.close()` -> `Harness.open()` -> `harness.resume()`).
 2. **`test/house.test.ts`, `test/prompt.test.ts`, `test/cache-telemetry.test.ts`:** the home — its layout, the dated
    log line, the caps, the git repository; the resident prompt — `soul.md` or `DEFAULT_SOUL`, the first-run profile
-   interview, the skills index (one seeded root, nesting) and the pointer-only widget section; and the
+   interview, the skills index (one seeded root, nesting) and the tone rules; and the
    `[cache]` line's arithmetic. Every test uses a temporary `houseHome` and never the real `~/.mason`.
 3. **`test/panel.test.ts`:**
    - Starts the server, pairs a browser into a cookie, and reads `GET /api/admin/state` the way the panel does.
    - Verifies the pairing redirect, the panel bundle, and that the console's `/api/join` and browser socket are gone.
    - Verifies initial `view` and `status` hydration, and that a device without a grant is sent no area for it.
    - Verifies live status updates (`status.runStatus`), tool execution status transitions, `steer` / `followUp` inbox queueing + withdrawal, `stop` and `compact` over the control route, and a hook fired from the panel starting a proactive turn.
-   - Verifies `generateSandboxedUi` is in the first turn's tool list and that a second turn's list is identical, and that a widget streams and settles with no toggle to open.
-   - Verifies the resident prompt carries the `generative-ui` pointer and not the manual (no parameter-order block).
+   - Verifies a second turn offers the same tools, in the same order, and the same prompt sections as the first.
    - Verifies a threshold compaction: with a small context window and `compaction: { reserveTokens: 1, keepRecentTokens: 1 }`,
      the second turn writes a `pi.compaction` entry (reason `threshold`) and still answers.
 4. **Browser / Mobile Verification:**
    - `npm run build:web && npm run dev` serves the mobile-responsive web app on `http://127.0.0.1:8787`.
 
-### 6.1 Behaviour evals (`npm run eval`)
+### 5.1 Behaviour evals (`npm run eval`)
 
-The suites above pin mechanisms; `evals/` pins the behaviour they are meant to produce. Six scenarios run the real
+The suites above pin mechanisms; `evals/` pins the behaviour they are meant to produce. Five scenarios run the real
 prompt, the real harness and the real projection against one model and check what a reader would have seen: a fired
 hook acted on and reported once, a quiet check-in that stays quiet and invents nothing, a question answered without a
-tool call, a file read before its number is claimed, a preference written to the log and read back the next turn, a
-chart delivered as a widget with `css` before `html`. `bash`, `read`, `write` and `edit` are stubs that answer from the
+tool call, a file read before its number is claimed, a preference written to the log and read back the next turn. `bash`, `read`, `write` and `edit` are stubs that answer from the
 scenario, and each run gets a throwaway temp home and workspace, so the only variable is the model.
 
-`npm run eval` runs all six against `opencode-go/deepseek-v4.1-flash` for about a cent, writes traces to
+`npm run eval` runs all five against `opencode-go/deepseek-v4.1-flash` for about a cent, writes traces to
 `.data/evals/` and exits non-zero on a failed check; `npm run eval:judge -- .data/evals/<run>` scores stored traces
 on message quality against `evals/rubric.md`. Scenario shape, flags, trace fields and how to add a scenario:
 [`evals/README.md`](../evals/README.md).
 
 ---
 
-## 7. Notes from building this (what the cutover taught)
+## 6. Notes from building this (what the cutover taught)
 
 1. **An absent area is not an empty one.** The panel's state is built as optional keys, one per grant, and the server
    never sends a placeholder. A client that received `trace: { entries: [] }` would draw a trace tab for a device that
@@ -951,12 +867,8 @@ on message quality against `evals/rubric.md`. Scenario shape, flags, trace field
 3. **A secret is a write-only field.** A token and a connector credential are minted by a response and
    stored as hashes; the panel can list what exists and replace it, and no read can print it again. The `config` area of
    the state names them by id and `hasCredential`, and nothing else.
-4. **A sandbox holds stable dependencies.** The widget bridge is rebuilt on every render; handing that object
-   straight to `Websandbox.create`'s `localApi` (through `useMemo`) tore the iframe down and up on every
-   transcript update and lost the widget's own state. `SandboxedUiCard` keeps a stable forwarder and reads the
-   current bridge through a ref instead.
-5. **`WebSocketServer.close()` waits for clients.** Server shutdown terminated open WebSocket clients first;
+4. **`WebSocketServer.close()` waits for clients.** Server shutdown terminated open WebSocket clients first;
    otherwise `close()` never calls back and `npm run dev` survives SIGTERM while a connector is connected
    (`server.closeAllConnections()` releases lingering HTTP keep-alives too).
-6. **Tests must not inherit ambient state.** Every place that opens a runtime passes `houseHome` (and `MASON_HOME`)
+5. **Tests must not inherit ambient state.** Every place that opens a runtime passes `houseHome` (and `MASON_HOME`)
    pointed at a fresh temporary directory, so no test creates or reads the real `~/.mason`.

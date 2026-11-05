@@ -12,7 +12,6 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { Delivery, replyTool } from "../src/server/extensions/delivery.ts";
-import { generateSandboxedUiTool } from "../src/server/extensions/sandboxed-ui.ts";
 import { Prompt } from "../src/server/prompt.ts";
 import {
 	type AgentRuntime,
@@ -47,11 +46,10 @@ test("the delivery extension rides in the base extension list, not behind a togg
 	);
 });
 
-test("the tool descriptions say the rule the refusal enforces: call it directly, never from inside a script", () => {
+test("the tool description says the rule the refusal enforces: call it directly, never from inside a script", () => {
 	// The refusal is the backstop for a model that sends from a script anyway; the description is what asks it not to,
-	// so the sentence the refusal answers is pinned here, for both tools that reach the reader.
+	// so the sentence the refusal answers is pinned here.
 	assert.match(replyTool.description, /never from inside a script/);
-	assert.match(generateSandboxedUiTool.description, /never from inside a script/);
 });
 
 /** The same agent over the same storage in the same directory: a restart. */

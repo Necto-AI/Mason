@@ -20,7 +20,7 @@
  * process, which is what the test suite does constantly.
  */
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
-import { defineExtension, type Extension, type PromptSection } from "@earendil-works/pi-durable";
+import { defineExtension, type Extension, type PromptSection, section } from "@earendil-works/pi-durable";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 
 /** The extension's name, the tool's name, and the key of its prompt section: pi-durable spells all three this way. */
@@ -45,22 +45,22 @@ export function createCodemode(): Codemode {
 }
 
 /**
- * The `codemode` section, as pi-durable renders it, for `prompt.ts` to declare in its own order.
+ * The `codemode` section: how many tools a script can call, and how to find one.
  *
- * It comes from a probe extension built once here, because the vendor does not export the renderer itself (only
- * `DEFAULT_CODEMODE_INLINE_BUDGET`). The renderer reads `input.agent.callable` and constants — never the sandbox — so
- * the probe's sandbox is inert: no worker thread exists until a script runs, and this one never does.
+ * pi-durable's own section lists the declarations, as far as a token budget allows, and that budget is paid in every
+ * turn: a service lending forty tools would re-price the prompt prefix the day it connected. The tools are findable
+ * from inside the script anyway — `ALL_TOOLS`, `searchTools`, `describeTool` are globals of the sandbox — so the section
+ * carries the count and the three ways to look one up, and the model pays for a declaration only when it asks for one.
+ *
+ * Nothing is hidden by this: `tools.<name>(args)` reaches every callable tool, named in the prompt or not. The count is
+ * `agent.callable` unfiltered because `models: false` registers no internal `pi.codemode.` tools; if model tools are
+ * ever switched on, that prefix is the filter this line needs.
  */
-export const CODEMODE_SECTION: PromptSection = probeSection();
-
-function probeSection(): PromptSection {
-	const sections = createCodemodeExtension({ sandbox: new CodemodeSandbox(), models: false }).sections ?? [];
-	const found = sections.find((candidate) => candidate.key === CODEMODE);
-	if (found === undefined) {
-		throw new Error(
-			"pi-durable's codemode extension no longer declares a `codemode` section: the prompt would lose the list of " +
-				"tools a script can call, so mason refuses to boot instead of shipping a tool nobody is told how to use",
-		);
-	}
-	return found;
-}
+export const CODEMODE_SECTION: PromptSection = section("codemode", (input) => {
+	const count = input.agent.callable.length;
+	if (count === 0) return undefined;
+	return [
+		`${count} tools can be called from a script, and none of them is listed here.`,
+		'`ALL_TOOLS` names them; `searchTools("<what you want>")` finds the ones that match; `describeTool(name)` gives the declaration to call one with.',
+	].join("\n");
+});

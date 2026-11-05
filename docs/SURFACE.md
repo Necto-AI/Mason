@@ -69,10 +69,9 @@ which is why the connector's two paths are here although they are constant-built
 | Extension | Tools | Prompt sections | Hook tasks |
 |---|---|---|---|
 | `coding-tools` | `read`, `write`, `edit`, `bash` | -- | -- |
-| `prompt` | -- | `preamble`, `cwd`, `proactive_guidelines`, `team`, `skills`, `profile`, `generative_ui`, `integrations`, `codemode`, `delivery` | -- |
+| `prompt` | -- | `preamble`, `tone`, `cwd`, `skills`, `profile`, `integrations`, `codemode`, `delivery` | -- |
 | `memory` | `remember` | -- | -- |
 | `delivery` | `reply` | -- | `pi.generation` |
-| `sandboxed-ui` | `generateSandboxedUi` | -- | -- |
 | `tool-search` | `tool_search` | -- | -- |
 
 Built per boot rather than declared in the array, so they are listed from their own definitions: the MCP tools are

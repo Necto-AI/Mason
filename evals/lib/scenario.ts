@@ -38,8 +38,6 @@ export interface Expected {
 	readonly absentText?: readonly string[];
 	/** Regexes today's log file must match: "it wrote the fact down". */
 	readonly log?: readonly string[];
-	/** A widget must reach the reader, built with `css` before `html`. */
-	readonly widget?: boolean;
 	/** Bounds how often the delivery gate had to rescue a turn, so a model that stops delivering is visible. */
 	readonly reminders?: { readonly min?: number; readonly max?: number };
 	/** The run must not send more prompt tokens than this. */
@@ -64,8 +62,6 @@ export interface Trace {
 	/** How many times the delivery gate had to remind the model that nothing had been sent this turn. */
 	readonly reminders: number;
 	readonly toolCalls: { name: string; args: unknown }[];
-	readonly widgets: number;
-	readonly widgetArguments: Record<string, unknown> | undefined;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	/** One entry per submitted turn: how many messages the reader got, and how the turn settled. */
@@ -119,13 +115,6 @@ export function check(trace: Trace, expected: Expected, logText: string): Check[
 	}
 	for (const pattern of expected.log ?? []) {
 		add(`log.${pattern}`, new RegExp(pattern, "im").test(logText));
-	}
-	if (expected.widget === true) {
-		const keys = Object.keys(trace.widgetArguments ?? {});
-		const css = keys.indexOf("css");
-		const html = keys.indexOf("html");
-		add("widget.rendered", trace.widgets > 0, `${trace.widgets} widget(s)`);
-		add("widget.order", css !== -1 && html !== -1 && css < html, keys.join(", ") || "no arguments");
 	}
 	if (expected.maxTools !== undefined) {
 		const work = trace.toolCalls.filter((call) => call.name !== "reply").length;

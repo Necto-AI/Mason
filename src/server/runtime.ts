@@ -30,7 +30,6 @@ import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } fro
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { Memory } from "./extensions/memory.ts";
-import { GenerateSandboxedUiExtension } from "./extensions/sandboxed-ui.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
@@ -52,9 +51,6 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 	Prompt,
 	Memory,
 	Delivery,
-	// Always on: the client renders a widget whenever one arrives, so hiding the tool protected nothing and a tool list
-	// that changes between turns breaks the prompt cache.
-	GenerateSandboxedUiExtension,
 	// Also always on, and inert while nothing is deferred: with no MCP tools loaded and no other deferred tool, it has
 	// nothing to find. Installed rather than added when something arrives, so the tool list does not grow a second time
 	// when an integration connects.
