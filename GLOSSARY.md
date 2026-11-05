@@ -92,7 +92,7 @@ skills, worker definitions, workspace.
 _Avoid_: user data, workspace (the workspace is one directory inside it)
 
 **service-owned files**:
-The part of the home the bot never sees: soul, roster, credentials, integration secrets, the database, keys.
+The part of the home the bot never sees: soul, credentials, integration secrets, the database, keys.
 _Avoid_: config, internal state
 
 **workspace**:
@@ -107,10 +107,6 @@ _Avoid_: journal, diary, memory
 A day's consolidated account, rewritten from that day's log.
 _Avoid_: summary, daily log, notes
 
-**roster**:
-The names a person may speak as in the room. An interface maps its sender onto one of them; none of them is a bot.
-_Avoid_: team, users, members
-
 ## The prompt
 
 **section**:
@@ -118,7 +114,7 @@ One named piece of the system prompt, rendered from a function before each model
 _Avoid_: block, part, fragment
 
 **resident**:
-Text that is in the prompt on every request: soul, profile, skills index, the room.
+Text that is in the prompt on every request: soul, profile, the skills index.
 _Avoid_: static, always-on, cached
 
 **prompt delta**:
@@ -254,38 +250,38 @@ writes it because the service knows the operation's effect; missing or unknown m
 _Avoid_: annotation (MCP's own, which is a claim and not authority), risk level, permission
 
 **permission request**:
-A committed question about one call: its permission id, the tool and arguments, the reason, and who may answer. It is an
-`app.permission` entry, sent to an approver's surface as `connector/interaction.request`, and it outlives the process
-that asked.
+A committed question about one call: its permission id, the tool and arguments, the reason, and where it goes back to. It
+is an `app.permission` entry, sent to the conversation it came from as `connector/interaction.request`, and it outlives
+the process that asked.
 _Avoid_: approval prompt, confirmation dialog, ask
 
 **permission answer**:
 The one answer that settles a request — `allow`, `deny`, or `cancelled` when `stop` ended the wait. It is an
-`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow". It records the roster
-name of the person who gave it; `owner` is the name an answer from `/api/permissions` carries when the device has not
-joined as anyone, because there the owner's credential is the identity.
+`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow". It records who gave it:
+the connector's name, or `owner` for a device answering through `/api/permissions`, where the credential is the identity.
 _Avoid_: grant, consent, vote
 
-**approver**:
-The roster person a connector's entry names in `connector.user.approver`, and the only actor whose answer settles a
-request that came through it. Approval authority is a grant, separate from the ability to speak.
-_Avoid_: admin, owner (that is the operator, who answers through `/api/permissions`), moderator
-
 **operator control plane**:
-The separate administrative contract for credentials, connector entries, roster, and global configuration. It is not
+The separate administrative contract for credentials, connector entries, owner actor and global configuration. It is not
 a privilege a conversational connector receives.
 _Avoid_: admin channel, connector management face
 
-## The room
+## The conversation
 
 **person**:
-A human with a name on the roster.
-_Avoid_: user, member, teammate
+The human a home works for. One bot, one person: who that is, is `agent/profile.md`, and no file repeats it.
+_Avoid_: user, member, teammate, owner (see **owner actor**)
 
 **actor**:
-Who caused a submission, a fire, an approval or a refusal: the external id a connector asserted, and the roster person
-mason's mapping makes of it. An assertion, not an identity, until that mapping makes it one.
-_Avoid_: user (for the actor), author (that is the roster name on a message)
+Who caused a submission, a fire, an approval or a refusal: the external id a connector asserted. mason accepts exactly
+one of them, the entry's `owner`; anything else is refused, and no actor at all is accepted as a message nobody signed.
+_Avoid_: user (for the actor), author (that is a name on a message written before the cutover)
+
+**owner actor**:
+The one external actor id a connector's user face names in `connector.user.owner`. Its words are the person's, and an
+answer it gives settles a permission request that came through that connector — the other authority being a device
+holding `approve`.
+_Avoid_: approver, admin, primary user
 
 **origin**:
 The connector and external conversation a submission (or a fire) came from, and therefore the destination of its
@@ -298,8 +294,9 @@ One pairing: the token, the label beside it, and what a revoke kills. A person a
 _Avoid_: session, phone
 
 **room**:
-The people present in one bot's conversation. mason has a room.
-_Avoid_: team, channel
+One kind of external conversation a connector may carry words in (`kind: "room"`), as opposed to a direct message
+(`kind: "person"`). A property of the medium, not something a single-person home has.
+_Avoid_: team, channel, group chat
 
 **team**:
 Several bots arranged to work together, each with a profession, as apiary shows them. The deployment word is **fleet**;
@@ -310,8 +307,7 @@ _Avoid_: room, group, or **fleet** when you mean the deployments
 
 **worker**:
 A conversation owned by one tool call, given a narrow job and a small context, that returns a report. A tool, not
-a peer: it has no home, no name in the room, no way to speak to anyone, and no A2A link. It is never a mason
-deployment.
+a peer: it has no home, no way to speak to anyone, and no A2A link. It is never a mason deployment.
 _Avoid_: subagent (that is the API), helper, child bot, delegate
 
 **agent definition**:
