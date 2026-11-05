@@ -418,6 +418,7 @@ test("a fire that named its conversation routes the reply back to it", async () 
 test("a hooked turn that says nothing is reminded, and the reminder names reply", async () => {
 	const directory = await temporary();
 	const script = recorder([said("I will look into it."), deliver("Привет!"), said("Done.")]);
+	await seedRoutine(directory);
 	const { settled, requests } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");

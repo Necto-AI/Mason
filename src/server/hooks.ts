@@ -11,7 +11,7 @@
  * and the durable run that answers it starts immediately.
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { type FSWatcher, readFileSync, watch, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
@@ -222,8 +222,16 @@ export class HooksManager {
 		for (const routine of routines) {
 			const intervalMs = routine.intervalSeconds * 1_000;
 			const current = this.#hooks.get(routine.name);
-			const changed = current?.intervalMs !== intervalMs || current?.promptTemplate !== routine.prompt;
-			const state = this.#state[routine.name] ?? (this.#state[routine.name] = {});
+			// A definition this manager already held is the only one a re-read can reset: on the first load the persisted
+			// slot came from the previous process's schedule, and there is nothing to compare it against — the boot scan
+			// inherits it as the schedule was written.
+			const changed =
+				current !== undefined && (current.intervalMs !== intervalMs || current.promptTemplate !== routine.prompt);
+			let state = this.#state[routine.name];
+			if (state === undefined) {
+				state = {};
+				this.#state[routine.name] = state;
+			}
 			if (changed) delete state.nextFireAt;
 			this.#hooks.set(routine.name, {
 				id: routine.name,
@@ -364,7 +372,11 @@ export class HooksManager {
 		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this.
 		if (hook === undefined || intervalMs === undefined || !hook.enabled || this.#closed) return;
 		this.#disarm(id);
-		const state = this.#state[id] ?? (this.#state[id] = {});
+		let state = this.#state[id];
+		if (state === undefined) {
+			state = {};
+			this.#state[id] = state;
+		}
 		// The boot scan: the schedule was written when the slot was, so a restart waits the remainder instead of arming a
 		// fresh full interval, and a slot already past due fires once from its own slot key — never once per missed slot.
 		if (state.nextFireAt === undefined) {
@@ -386,10 +398,11 @@ export class HooksManager {
 	/** The slot is due now: one fire, then the next slot is written at once, so a timeout never stacks. */
 	async #due(hook: EventHookConfig, intervalMs: number, dueMs: number): Promise<void> {
 		// The slot is written before it is submitted: a fire that cannot be admitted was still scheduled, and the
-		// rhythm survives the next restart instead of an error silencing the routine for good.
+		// rhythm survives the next restart instead of an error silencing the routine for good. The identity is the
+		// slot that fired, not the moment the fire went out, so a slow hand of the clock cannot rename it.
 		this.#advance(hook.id, intervalMs, dueMs);
 		try {
-			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, this.#now().getTime()) });
+			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
@@ -397,12 +410,14 @@ export class HooksManager {
 
 	/** A slot the process did not keep: one catch-up fire from the missed slot's own key, then skip the rest. */
 	async #catchUp(hook: EventHookConfig, intervalMs: number, dueMs: number): Promise<void> {
+		// Skipped through before the submission, the same order `#due` keeps: a re-arm that walks in while the catch-up
+		// awaits then finds the schedule resumed in the future, so the delayed fire is the only one the slot gets.
+		this.#advance(hook.id, intervalMs, dueMs);
 		try {
 			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs - 1) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
-		this.#advance(hook.id, intervalMs, dueMs);
 	}
 
 	/** Writes the next due slot and arms the timer for it: the rhythm is `dueMs + interval`, skipped past the present. */
@@ -410,8 +425,11 @@ export class HooksManager {
 		if (this.#closed) return;
 		const state = this.#state[id];
 		if (state === undefined) return;
-		const behind = this.#now().getTime() - (dueMs + intervalMs);
-		const nextMs = behind > 0 ? dueMs + (Math.floor(behind / intervalMs) + 1) * intervalMs : dueMs + intervalMs;
+		// The slot that fired is spent; the next one is the first slot boundary strictly beyond the present. When the
+		// present sits exactly on a boundary the downtime of a downtime cannot fire twice from it, so the arithmetic
+		// counts it as spent and recovers beyond it — a restart's gap is skipped, never queued as a stampede.
+		const elapsedSlots = Math.max(Math.floor((this.#now().getTime() - dueMs) / intervalMs), 0);
+		const nextMs = dueMs + (elapsedSlots + 1) * intervalMs;
 		state.nextFireAt = new Date(nextMs).toISOString();
 		this.#writeState();
 		this.#arm(id);
@@ -460,7 +478,9 @@ export class HooksManager {
 				}, 100);
 			});
 		} catch (error: unknown) {
-			this.#report(new Error(`agent/routines.json cannot be watched (${error instanceof Error ? error.message : error})`));
+			this.#report(
+				new Error(`agent/routines.json cannot be watched (${error instanceof Error ? error.message : error})`),
+			);
 		}
 	}
 

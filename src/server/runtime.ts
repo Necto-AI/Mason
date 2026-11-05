@@ -29,11 +29,11 @@ import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } fro
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { HooksManager } from "./hooks.ts";
-import { RETRY_HOOK } from "./run-retry.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
+import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
