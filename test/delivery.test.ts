@@ -26,7 +26,7 @@ import {
  * nothing to a tools face, so the per-boot part is those two; they are named rather than assumed, and the runtime's own
  * list is what is asserted against, so a base extension added later is covered without a second list going stale.
  */
-const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode", "permissions"]);
+const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["codemode"]);
 
 test("reply is replay-unsafe, so a restart never delivers the same message twice", () => {
 	assert.equal(replyTool.name, "reply");

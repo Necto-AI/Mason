@@ -437,7 +437,6 @@ describe("the integration command", () => {
 		const stored = (await readIntegrations(paths)).integrations.github;
 		assert.equal(stored?.description, "New");
 		assert.deepEqual(stored?.tools, { url: "http://new:8082/mcp", required: true });
-		assert.equal(stored?.connector?.trustMarkers, true);
 	});
 
 	it("lists a connector by the faces it grants, and names no credential", async () => {

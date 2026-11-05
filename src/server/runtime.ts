@@ -32,7 +32,6 @@ import { builtinHooks, HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
-import { createPermissions, type PermissionBook } from "./permissions.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 
 /**
@@ -93,8 +92,6 @@ export interface AgentRuntime {
 	readonly env: RuntimeEnvManager;
 	/** What the integrations' tools faces offer right now: the catalog `mcp_search` reads and the gateway asks about markers. */
 	readonly mcp: McpCatalog;
-	/** The pending permission questions: what the connector door sends and `/api/permissions` answers. */
-	readonly permissions: PermissionBook;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
 	/** `false` when the model access is the offline faux provider, so the UI can say so. */
@@ -242,10 +239,6 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// across boots would refuse the next runtime in the same process. It is the way the model reaches a tool it was not
 	// offered, and the one that can read a whole result.
 	const codemode = createCodemode();
-	// The permission gateway, per boot: one `beforeTool` hook in front of every direct and nested call, a book of pending
-	// questions, and the catalog it reads `dev.mason/approval` from. It is bound to the root conversation below, before
-	// anything can run.
-	const permissions = createPermissions({ integrations: () => currentIntegrations(), catalog: mcp });
 	// Everything below opens something that outlives the line that made it — a hook timer, a socket to an MCP server, a
 	// sandbox, an execution daemon — and a boot that refuses must not leave any of it running. There is one list, written
 	// in the order things were opened, and the success path and the unwind path both close it in reverse: a resource
@@ -284,12 +277,10 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(options.extensions ?? []),
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
-			permissions.extension,
 		];
 		const unconditional = unconditionalExtensionNames([
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
 			codemode.extension.name,
-			permissions.extension.name,
 		]);
 		const registry: Registry = createRegistry();
 		for (const extension of extensionList) registry.install(extension);
@@ -346,9 +337,6 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// or before an integration offered tools — would leave the conversation without it, while `/api/integrations` said it
 		// had connected. A failed repair is a failed guarantee, so the server does not start with it.
 		if (options.repairBase !== false) await appendMissingExtensions(root, unconditional, context);
-		// Nothing may run a turn before the book can answer it: a permission request is a transcript entry, and every
-		// reader of it — the hook, the door, the routes — reads through this conversation.
-		permissions.attach(root);
 		hooks.start();
 		// Picks up a run the last process left unfinished.
 		harness.resume();
@@ -360,7 +348,6 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			hooks,
 			env: envManager,
 			mcp,
-			permissions: permissions.book,
 			workspaceDir,
 			model: ref,
 			modelIsFaux: faux,

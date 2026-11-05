@@ -572,30 +572,6 @@ describe("control", () => {
 			await served.close();
 		}
 	});
-
-	it("answers an unknown permission with mason.unknown_permission, and settles nothing", async () => {
-		const served = await serveConnector();
-		try {
-			const session = await rawConnect(served);
-			try {
-				const answer = await session.call("mason/interaction.answer", { permissionId: "perm-1", answer: "allow" });
-				assert.equal(answer.error?.data?.code, "mason.unknown_permission");
-			} finally {
-				session.close();
-			}
-			const connected = await connectConnector(served);
-			try {
-				// What the SDK makes of the same refusal: not settled, with mason's sentence as the reason.
-				const result = await connected.connector.answer({ permissionId: "perm-1", answer: "deny" });
-				assert.equal(result.settled, false);
-				assert.match(result.reason ?? "", /not pending/);
-			} finally {
-				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
 });
 
 describe("budgets", () => {

@@ -1,8 +1,8 @@
 # mason
 
 mason is a headless, always-on agent backend: a durable agent engine plus a small set of contracts that interfaces
-attach to. Telegram is the first interface; the web app in this repository is the operator panel, a control plane and
-not an interface, and this glossary is the vocabulary for the backend and for what attaches to it.
+attach to. Telegram is the first interface, and there is no application in this repository: this glossary is the
+vocabulary for the backend and for what attaches to it.
 
 ## The backend
 
@@ -19,12 +19,6 @@ _Avoid_: frontend, UI (for the abstract thing), channel
 **client**:
 A consumer of a connector's user face: it may submit a person's words and receive what the face's grant lets it render.
 _Avoid_: frontend, UI, channel, app
-
-**operator panel**:
-The web application mason serves at `/` and `/admin`: the projected conversation, the raw trace, the pending
-approvals, and the deployment's configuration, each behind its own operator grant. A control plane, not a
-conversational client — there is no composer, and a person speaks through a connector.
-_Avoid_: console, dashboard, admin UI, chat, frontend
 
 **grant**:
 One power a device's credential carries: `conversation` (the projected transcript), `trace` (the raw entries), `admin`
@@ -164,12 +158,6 @@ _Avoid_: event, invocation, delivery, submission
 A hook that fires on a schedule.
 _Avoid_: cron job, schedule, timer
 
-**permission request**:
-A correlated interaction asking an authorized person whether one paused tool call may execute. Its `allow` and `deny`
-answers apply once; neither creates a standing rule. A connector declares whether its tools require one, within the
-ceiling the operator sets.
-_Avoid_: approval message (the request is not ordinary prose), always allow, tool annotation
-
 **delivery**:
 One outbound act that reaches the turn's origin connector and records the same reply in the transcript. The model calls
 `reply`; it does not choose a vendor's message tool. A turn with no reachable reader says so rather than recording a
@@ -238,23 +226,6 @@ What one service offers *now*: each tool's own name, description, JSON Schema an
 and never registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never
 offered it, so a server that redeploys does not move the prompt.
 _Avoid_: tool list, tool surface (that is the face's name, not its contents), MCP tools (that is what a catalog holds)
-
-**approval marker**:
-The `dev.mason/approval` value an MCP tool declares in its `_meta`, `required` or `not_required`. The connector author
-writes it because the service knows the operation's effect; missing or unknown means `required`.
-_Avoid_: annotation (MCP's own, which is a claim and not authority), risk level, permission
-
-**permission request**:
-A committed question about one call: its permission id, the tool and arguments, the reason, and where it goes back to. It
-is an `app.permission` entry, sent to the conversation it came from as `connector/interaction.request`, and it outlives
-the process that asked.
-_Avoid_: approval prompt, confirmation dialog, ask
-
-**permission answer**:
-The one answer that settles a request — `allow`, `deny`, or `cancelled` when `stop` ended the wait. It is an
-`app.permission-answer` entry, the first authorized answer wins, and there is no "always allow". It records who gave it:
-the connector's name, or `owner` for a device answering through `/api/permissions`, where the credential is the identity.
-_Avoid_: grant, consent, vote
 
 **operator control plane**:
 The separate administrative contract for credentials, connector entries, owner actor and global configuration. It is not

@@ -110,7 +110,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		workspaceDir: runtime.workspaceDir,
 		attachments,
 		limiter: fires,
-		permissions: runtime.permissions,
 		home: house.home,
 	});
 

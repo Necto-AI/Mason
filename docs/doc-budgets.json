@@ -3,12 +3,12 @@
 		"docs/SURFACE.md"
 	],
 	"ceilings": {
-		"AGENTS.md": 2294,
-		"GLOSSARY.md": 2513,
+		"AGENTS.md": 2156,
+		"GLOSSARY.md": 2235,
 		"docs/AGENTS.md": 950,
 		"docs/APIARY-PLAN.md": 1700,
 		"docs/APPLICATION-PLAN.md": 1550,
-		"docs/ARCHITECTURE.md": 1438,
+		"docs/ARCHITECTURE.md": 1307,
 		"docs/BACKEND-PLAN.md": 2350,
 		"docs/CAPABILITY-PLAN.md": 2050,
 		"docs/CONNECTOR-PROTOCOL.md": 550,

@@ -193,11 +193,8 @@ describe("a script asks the catalog", () => {
 			const script = outputOf((await scriptResults(runtime)).at(-1) ?? "");
 			assert.match(script, /is not offered any more/, "the call said the tool is gone");
 			assert.match(script, /mcp_describe/, "and named the rediscovery step");
-			// The gate's own shape, not the tool's: the refusal has to come from the decision (`denied` + `execute: not
-			// run`), because `mcp_call`'s own `unknown_tool` result reads the same and would pass this test on the code
-			// before the marker was resolved live.
-			assert.match(script, /"denied":true/, "the gateway refused it, not the tool's own lookup");
-			assert.match(script, /"execute":"not run"/);
+			// The rediscovery refusal is the catalog's own: with no gateway in front of the call, this sentence is the
+			// whole of what a stale name gets.
 			assert.deepEqual(server.calls, [], "nothing reached the server");
 		} finally {
 			await runtime.close();
