@@ -36,7 +36,8 @@ work from a source checkout with `npm run dev`, whose tests run with `npm test`.
 ## The workspace packages inside the tarball
 
 The server imports `mason-protocol` (the connector wire contract) bare. The packages are not on the registry yet
-(#124), so the build vendors each package's compiled `dist` into `dist/node_modules` inside this tarball, under the
-bare name the code imports, and that is the copy an installed bot resolves. It shadows any `mason-protocol` the
-consuming project happens to have installed: this runtime speaks its own pinned copy of the wire protocol, deliberately.
-When #124 publishes, the same commit moves these to ordinary dependencies and drops the vendoring.
+(#124), so `npm run build` copies exactly the packages the emitted imports name — today that is `mason-protocol`,
+nothing else — into `dist/node_modules` under that bare name, and that is the copy an installed bot resolves. It
+shadows any `mason-protocol` the consuming project happens to have installed: this runtime speaks its own pinned
+copy of the wire protocol, deliberately. When #124 publishes, the same commit moves it to an ordinary dependency
+and drops the vendoring.
