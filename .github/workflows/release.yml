@@ -34,6 +34,19 @@ jobs:
         with:
           node-version: 22
 
+      # Node 22's npm 10 has no OIDC publish exchange: the OIDC token flow landed in npm 11.5.0, and without it
+      # the `--provenance` publishes below would die ENEEDAUTH at the first tag (there is no secret to fall back
+      # to). The compile and the checks above run under node 22 the same way `ci` does.
+      - run: npm install -g npm@latest
+
+      # The tag names the tree: a version pushed on a tree with different manifest versions publishes those
+      # numbers, so the mismatch becomes the run's failure instead of a discovery after the publish.
+      - run: |
+          v="${GITHUB_REF_NAME#v}"
+          node -p "require('./package.json').version" | grep -qx "$v"
+          node -p "require('./packages/protocol/package.json').version" | grep -qx "$v"
+          node -p "require('./packages/connector/package.json').version" | grep -qx "$v"
+
       # The same recipe a fresh clone runs: the root install, then the two workspace packages the tests and the
       # runtime import from `dist`.
       - run: bash scripts/setup.sh
@@ -61,8 +74,9 @@ jobs:
           npm pack --workspaces=false --pack-destination .release/
 
       # Provenance needs each package.json to name this repository (npm's documented prerequisite), which the three
-      # files carry. `--access public` because a first publish of an unscoped package has no other default.
-      # Publishing is gated on the tag event, so a run on any other ref stops here: verification without a release.
+      # files carry. `--access public` says the visibility outright, because an access default is not a thing to
+      # inherit. Publishing is gated on the tag event, so a run on any other ref stops here: verification without
+      # a release.
       - name: publish the packages, protocol first
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
