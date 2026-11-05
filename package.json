@@ -1,7 +1,6 @@
 {
 	"name": "mason-agent",
 	"version": "0.1.0",
-	"private": true,
 	"type": "module",
 	"workspaces": [
 		"packages/*"
@@ -28,7 +27,19 @@
 		"test:asr": "asr/run.sh asr/.venv/bin/python -m unittest discover -s asr/tests -v",
 		"pretest": "npm run build:packages",
 		"predev": "npm run build:packages",
-		"pregen:surface": "npm run build:packages"
+		"pregen:surface": "npm run build:packages",
+		"prebuild": "npm run build:packages",
+		"build": "node scripts/build-runtime.ts"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"bin": {
+		"mason": "dist/bin/mason.js"
+	},
+	"engines": {
+		"node": ">=22.6"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.5.0",
