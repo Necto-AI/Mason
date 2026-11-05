@@ -36,6 +36,7 @@ import {
 	type ConnectorGrant,
 	listConnectorCredentials,
 	mintConnectorCredential,
+	RETIRED_USER_KEYS,
 	revokeConnectorCredential,
 } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";
@@ -402,9 +403,7 @@ function grantFromInput(input: ConnectorGrantInput, existing: ConnectorGrant | u
 		} else {
 			// A client that still sends the room's keys is told so rather than quietly losing them: a merge that dropped
 			// `actors` would answer 200 to an edit that did nothing.
-			const retired = ["actors", "unattributed", "approver"].filter(
-				(key) => (input.user as Record<string, unknown>)[key] !== undefined,
-			);
+			const retired = RETIRED_USER_KEYS.filter((key) => (input.user as Record<string, unknown>)[key] !== undefined);
 			if (retired.length > 0) {
 				throw new PanelError(
 					400,

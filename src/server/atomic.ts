@@ -2,7 +2,7 @@
  * The one way a service-half file is written: privately, whole, and through a rename.
  *
  * `config.json` (the hashes of the tokens that may talk to the server and of the connector credentials) and
- * `integrations.json` (a connector's grant) is a small file the server reads while running and a person reads in a
+ * `integrations.json` (a connector's grant) are small files the server reads while running and a person reads in a
  * diff. Two things follow, and they are the same for both: a reader must never see half a file, so the write goes
  * to a temporary in the same directory and is renamed over the target once it is whole — a crash leaves the previous
  * file, not a truncated one; and nothing outside the owner may read it, so the file is `0600` and its directory `0700`.

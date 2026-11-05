@@ -165,7 +165,7 @@ export interface ConnectorDoorOptions {
 	readonly attachments: AttachmentStore;
 	/** One limiter for the process, shared with the attachment routes: a class budget is the connector's, not a socket's. */
 	readonly limiter: FireLimiter;
-	/** The pending permission questions: what this door sends to an approver's surface, and what an answer settles. */
+	/** The pending permission questions: what this door sends back to the conversation they came from, and settles. */
 	readonly permissions: PermissionBook;
 	readonly log?: (line: string) => void;
 	readonly now?: () => number;
@@ -409,7 +409,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			return;
 		}
 		log(
-			`[connector] ${session.name}: the question ${request.permissionId} ${ack.delivered ? "reached the approver" : `was not shown (${ack.detail ?? "no surface"})`}`,
+			`[connector] ${session.name}: the question ${request.permissionId} ${ack.delivered ? "reached the conversation" : `was not shown (${ack.detail ?? "no surface"})`}`,
 		);
 	}
 

@@ -188,9 +188,10 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
  * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
  *
  * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
- * decides that, and the one sentence that moves it is the doctor's.
+ * decides that, and the one sentence that moves it is the doctor's. Spelled once, because three readers depend on
+ * agreeing: the boot's refusal, the panel's refusal and the migration that rewrites them.
  */
-const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
+export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {
 	if (value === undefined) return undefined;

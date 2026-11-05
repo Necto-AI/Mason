@@ -27,17 +27,15 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { RETIRED_USER_KEYS } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";
-
-/** The keys a `connector.user` block no longer has. They are refused at boot, and rewritten here. */
-const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
 /** One entry's rewrite: the owner it became, and the keys that went. */
 export interface UserGrantCutover {
 	readonly name: string;
 	/** The actor id the entry's owner became. `undefined` when the map was empty: the entry keeps a face and no voice. */
 	readonly owner: string | undefined;
-	/** The retired keys that were removed, in the order the file spelled them. */
+	/** The retired keys that were removed, in the one order this module and the boot agree on. */
 	readonly retired: readonly string[];
 }
 
@@ -48,9 +46,14 @@ export interface CutoverOutcome {
 	readonly roster: readonly string[] | undefined;
 }
 
-/** `service/roster.json`: not a path the layout has any more, only a file this command finishes off. */
-function rosterPath(paths: HousePaths): string {
-	return join(paths.serviceDir, "roster.json");
+/**
+ * `roster.json`: not a path the layout has any more, only a file this command finishes off.
+ *
+ * Two places, because a home from before the split never had it moved: `HOUSE_ENTRIES` no longer lists it, so a root
+ * copy is left where it was and would otherwise survive the cutover as a file nothing reads.
+ */
+function rosterPaths(paths: HousePaths): string[] {
+	return [join(paths.serviceDir, "roster.json"), join(paths.home, "roster.json")];
 }
 
 /**
@@ -120,24 +123,27 @@ async function rewriteUserGrants(paths: HousePaths): Promise<UserGrantCutover[]>
  * them this bot now works for, and `agent/profile.md` is where that lives.
  */
 async function retireRoster(paths: HousePaths): Promise<string[] | undefined> {
-	const path = rosterPath(paths);
-	const text = await readFile(path, "utf8").catch(() => undefined);
-	if (text === undefined) return undefined;
-	let names: string[] = [];
-	try {
-		const parsed: unknown = JSON.parse(text);
-		const people = asRecord(parsed)?.people;
-		if (Array.isArray(people)) {
-			names = people.flatMap((person) => {
-				const name = asRecord(person)?.name;
-				return typeof name === "string" ? [name] : [];
-			});
+	const names: string[] = [];
+	let found = false;
+	for (const path of rosterPaths(paths)) {
+		const text = await readFile(path, "utf8").catch(() => undefined);
+		if (text === undefined) continue;
+		found = true;
+		try {
+			const parsed: unknown = JSON.parse(text);
+			const people = asRecord(parsed)?.people;
+			if (Array.isArray(people)) {
+				for (const person of people) {
+					const name = asRecord(person)?.name;
+					if (typeof name === "string") names.push(name);
+				}
+			}
+		} catch {
+			// A file that is not JSON held no names to print. It is still removed: nothing reads it.
 		}
-	} catch {
-		// A file that is not JSON held no names to print. It is still removed: nothing reads it.
+		await rm(path, { force: true });
 	}
-	await rm(path, { force: true });
-	return names;
+	return found ? names : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

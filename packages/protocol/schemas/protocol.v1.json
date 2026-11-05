@@ -46,7 +46,7 @@
 		},
 		"externalActor": {
 			"type": "object",
-			"description": "A person as the connector's medium names them. Mason maps it to a roster name and decides what it may do; a display name never grants owner identity or approval authority.",
+			"description": "A person as the connector's medium names them. Mason admits exactly one of them per user face, the external id its grant calls the owner, and decides what each may do; a display name never grants identity or approval authority.",
 			"additionalProperties": false,
 			"required": ["externalActorId"],
 			"properties": {
@@ -319,7 +319,7 @@
 							"properties": {
 								"actors": {
 									"type": "array",
-									"description": "The external actors mason maps to a roster name. An actor absent from this list is refused unless the entry permits unattributed participants.",
+									"description": "The actors mason admits on this face: narrowed in the answer to the one whose id the entry's grant names as its owner, or empty when the connector advertised no such id. A submission naming any other actor is refused; one naming no actor is accepted.",
 									"items": {
 										"$ref": "#/$defs/externalActor"
 									}
@@ -463,7 +463,7 @@
 				},
 				"approver": {
 					"type": "boolean",
-					"description": "Whether the submitting actor claims approval authority. Mason decides: a claim the roster does not grant is dropped, never widened."
+					"description": "Accepted for compatibility and ignored. Approval authority is the connector's owner actor, and the operator's approve grant on a device; there is no per-actor approver to claim."
 				}
 			}
 		},

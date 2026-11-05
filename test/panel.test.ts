@@ -970,8 +970,9 @@ describe("the configuration the panel writes", () => {
 
 			// The room's last area is gone: there is no roster to add a name to, and the state carries none.
 			assert.equal((await panel.call("POST", "/api/admin/roster", { name: "Ilya" })).status, 404);
-			assert.equal((await panel.state()).config === undefined, false);
-			assert.equal("roster" in ((await panel.state()).config ?? {}), false);
+			const config = (await panel.state()).config;
+			assert.ok(config !== undefined, "this device holds the admin grant");
+			assert.equal("roster" in config, false);
 
 			// A hook's switch is the process's, not the file's: it lands now, and the state says so.
 			const off = await panel.call("PATCH", "/api/admin/hooks/workspace-check", { enabled: false });
