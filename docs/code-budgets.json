@@ -3,9 +3,8 @@
 		"evals": 565,
 		"packages/connector/src": 2533,
 		"packages/protocol/src": 241,
-		"scripts": 1828,
-		"src/server": 6829,
-		"src/shared": 276,
-		"src/web": 2886
+		"scripts": 1135,
+		"src/server": 5882,
+		"src/shared": 146
 	}
 }

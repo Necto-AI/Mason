@@ -24,10 +24,6 @@
     node --experimental-strip-types src/server/main.ts
   '';
 
-  scripts.build-web.exec = ''
-    node scripts/build-web.mjs
-  '';
-
   scripts.test-all.exec = ''
     node --experimental-strip-types --test test/*.test.ts
   '';

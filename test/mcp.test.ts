@@ -15,7 +15,8 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { housePaths } from "../src/server/house.ts";
-import { integrationStatus } from "../src/server/integration-status.ts";
+import { integrationStatus, integrationSummaries } from "../src/server/integration-status.ts";
+import { currentIntegrations } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
 import { type McpTransportFactory, openMcpCatalog } from "../src/server/mcp.ts";
 import {
@@ -484,13 +485,8 @@ describe("the integrations route", () => {
 			mcpTransport: () => server.transport,
 		});
 		try {
-			assert.ok(mason.pairingToken, "a fresh home mints one token, which is what pairs this test");
-			const answer = await fetch(`http://127.0.0.1:${mason.port}/api/integrations`, {
-				headers: { authorization: `Bearer ${mason.pairingToken}` },
-			});
-			assert.equal(answer.status, 200);
-			const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
-			assert.deepEqual(body.integrations, [
+			// The boot's own answer, as a caller with no HTTP route reads it: the panel that served one is gone.
+			assert.deepEqual(integrationSummaries(currentIntegrations()), [
 				{
 					name: "github",
 					enabled: true,

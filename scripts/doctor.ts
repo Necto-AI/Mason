@@ -15,7 +15,6 @@
  * `doctor` rather than a command of its own because this is what it is: a check on the home that repairs it when asked.
  * Nothing here runs on boot. A server that moved files on start would be a server that edits the operator's home.
  */
-import { migrateTokenGrants } from "../src/server/auth.ts";
 import { cutOverSingleUser } from "../src/server/cutover.ts";
 import { currentHouse, migrateHouse } from "../src/server/house.ts";
 import { migrateIntegrationTriggers } from "../src/server/integrations.ts";
@@ -84,13 +83,6 @@ if (cutover.roster !== undefined) {
 	console.log(
 		`[doctor] deleted roster.json: it held ${cutover.roster.length === 0 ? "no names" : cutover.roster.join(", ")}. ` +
 			"Who this bot works for is agent/profile.md",
-	);
-}
-const granted = await migrateTokenGrants(house.home);
-for (const record of granted) {
-	console.log(
-		`[doctor] ${record.id} (${record.label}) had no grants: stamped conversation, admin, approve. ` +
-			`Narrow it with: npm run token -- grants ${record.id} conversation`,
 	);
 }
 if (outcome.status === "unchanged") {

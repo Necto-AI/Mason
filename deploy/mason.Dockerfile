@@ -46,9 +46,6 @@ COPY . /app
 # scripts/verify-vendor.mjs). It needs the network.
 RUN npm install
 
-# `src/web/main.tsx` -> `dist/web/`, which is what the server serves and what the pairing link lands on.
-RUN npm run build:web
-
 # The daemon that runs on the far side of the tool machine is a binary from the checkout, not from this image's package
 # manager: `bin/pi-env-linux-<arch>/pi-env` is built by `npm run build:daemon` on whichever machine owns the submodule, and
 # on a NixOS machine that build links the dynamic loader out of the Nix store. The file then carries

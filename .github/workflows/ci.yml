@@ -40,7 +40,6 @@ jobs:
       # The same ratchet for code (`docs/code-budgets.json`): one ceiling per area, and it only ever goes down. A cut
       # that shrinks an area is expected to lower its number in the same commit.
       - run: npm run check:code
-      - run: npm run build:web
       - run: npm test
       - run: npm run test:packages
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
