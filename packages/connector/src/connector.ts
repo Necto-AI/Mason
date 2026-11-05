@@ -45,7 +45,7 @@ import {
 	type StateSnapshotParams,
 	type StateSubscribeResult,
 	type SubmitParams,
-} from "@mason/protocol";
+} from "mason-protocol";
 import { type AttachmentClient, createAttachmentClient, type Fetcher } from "./attachments.ts";
 import { protocolFailure } from "./jsonrpc.ts";
 import { type Link, type LinkFactory, webSocketLink } from "./link.ts";

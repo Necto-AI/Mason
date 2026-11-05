@@ -15,11 +15,11 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@mason/protocol": ["./packages/protocol/src/index.ts"],
-      "@mason/connector": ["./packages/connector/src/index.ts"],
-      "@mason/connector/testkit": ["./packages/connector/src/testkit/index.ts"],
-      "@mason/connector/store/memory": ["./packages/connector/src/store-memory.ts"],
-      "@mason/connector/store/sqlite": ["./packages/connector/src/store-sqlite.ts"],
+      "mason-protocol": ["./packages/protocol/src/index.ts"],
+      "mason-connector": ["./packages/connector/src/index.ts"],
+      "mason-connector/testkit": ["./packages/connector/src/testkit/index.ts"],
+      "mason-connector/store/memory": ["./packages/connector/src/store-memory.ts"],
+      "mason-connector/store/sqlite": ["./packages/connector/src/store-sqlite.ts"],
     }
   },
   "include": ["src/**/*", "test/**/*", "scripts/**/*", "packages/**/*"],

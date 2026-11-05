@@ -49,7 +49,7 @@ import {
 	ToolTask,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import type { ApprovalMarker, Origin } from "@mason/protocol";
+import type { ApprovalMarker, Origin } from "mason-protocol";
 import type { Integration } from "./integrations.ts";
 import { MCP_TOOL, type McpCatalog, rediscovery } from "./mcp.ts";
 import { type TurnOrigin, turnInputIn, turnOriginOfEntry } from "./replies.ts";

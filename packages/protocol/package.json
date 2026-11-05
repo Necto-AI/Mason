@@ -1,5 +1,5 @@
 {
-	"name": "@mason/protocol",
+	"name": "mason-protocol",
 	"version": "1.0.0",
 	"description": "The mason connector protocol, v1: language-neutral JSON Schema plus the TypeScript view of the same shapes.",
 	"license": "MIT",

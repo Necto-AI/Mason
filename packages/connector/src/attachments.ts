@@ -8,7 +8,7 @@
  * The mechanics a connector would otherwise reimplement badly live here: the headers, the size cap, the expiry, and the
  * fact that an error is a coded refusal rather than a mystery status.
  */
-import type { AttachmentUploadResult, ProtocolErrorData } from "@mason/protocol";
+import type { AttachmentUploadResult, ProtocolErrorData } from "mason-protocol";
 
 export interface AttachmentDownload {
 	readonly bytes: Uint8Array;

@@ -97,7 +97,7 @@ export async function openSqliteStore(options: SqliteStoreOptions): Promise<Conn
 		sqlite = (await import("node:sqlite")) as unknown as SqliteModule;
 	} catch {
 		throw new Error(
-			"this Node has no node:sqlite. Run it with --experimental-sqlite (Node 22) or use @mason/connector/store/memory in a test.",
+			"this Node has no node:sqlite. Run it with --experimental-sqlite (Node 22) or use mason-connector/store/memory in a test.",
 		);
 	}
 	return new SqliteStore(new sqlite.DatabaseSync(options.path), { now: options.now });

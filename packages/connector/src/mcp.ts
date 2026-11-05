@@ -9,7 +9,7 @@
  * tool's name, and never treats MCP's own `readOnlyHint`/`destructiveHint` annotations as authority: an annotation is a
  * claim, and the operator's trust in this connector's claims is a separate, explicit setting.
  */
-import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker } from "@mason/protocol";
+import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker } from "mason-protocol";
 
 /** A JSON Schema fragment, which is all an MCP tool's `inputSchema` has to be. */
 export type InputSchema = Readonly<Record<string, unknown>>;

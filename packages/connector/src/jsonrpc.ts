@@ -4,7 +4,7 @@
  * Both sides of the connector socket are clients and servers at once, so a frame is only ever one of these. Keeping the
  * union small is what makes the transport able to say what it received rather than guessing at a half-typed object.
  */
-import { type ProtocolErrorData, RPC_ERROR } from "@mason/protocol";
+import { type ProtocolErrorData, RPC_ERROR } from "mason-protocol";
 
 export type RpcId = string | number;
 

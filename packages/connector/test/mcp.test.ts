@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { APPROVAL, APPROVAL_META_KEY } from "@mason/protocol";
+import { APPROVAL, APPROVAL_META_KEY } from "mason-protocol";
 import { approvalMeta, declareTool, describeProblem, readApprovalMarker } from "../src/mcp.ts";
 
 test("a tool declares its approval marker in mason's own namespace", () => {

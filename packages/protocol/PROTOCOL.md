@@ -2,7 +2,7 @@
 
 This document and [`schemas/protocol.v1.json`](schemas/protocol.v1.json) are the normative contract for an external
 connector. The schema is the machine-readable half: where the two disagree, the schema wins and this file is a bug. A
-connector in another language needs nothing else — `@mason/connector` is a convenience, not the definition.
+connector in another language needs nothing else — `mason-connector` is a convenience, not the definition.
 
 A connector is a process, never a page. It may be any combination of three **faces**: it carries people's words
 (`user`), it lends tools (`tools`), it reports events (`events`). A calculator has only `tools`; an alarm only `events`; a
@@ -312,8 +312,8 @@ A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence,
 
 ## The conformance suite
 
-A connector is conformant when the published suite passes against it. It ships with `@mason/connector` as
-`@mason/connector/testkit` — a fake mason that enforces this document rather than agreeing with everything — and it runs
+A connector is conformant when the published suite passes against it. It ships with `mason-connector` as
+`mason-connector/testkit` — a fake mason that enforces this document rather than agreeing with everything — and it runs
 in a connector's own repository, with no path into mason's source:
 
 ```ts
@@ -352,5 +352,5 @@ hour — a wait, not a verdict.
 major 1 the only allowed change is a new optional field or a new enum member a receiver may ignore, and an unknown field
 is always ignored. Anything else is major 2.
 
-The SDK's own version is not the protocol's version. A connector pins `@mason/connector` for its ergonomics and pins
+The SDK's own version is not the protocol's version. A connector pins `mason-connector` for its ergonomics and pins
 `protocol.major` for its wire compatibility, and the two move independently.
