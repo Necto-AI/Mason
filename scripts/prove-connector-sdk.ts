@@ -20,8 +20,10 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
+/** The two packages, by the names a consumer installs them under. */
+const PACKAGES = ["mason-protocol", "mason-connector"] as const;
 
-const FIXTURE = `import { runConformance } from "@mason/connector/testkit";
+const FIXTURE = `import { runConformance } from "mason-connector/testkit";
 
 const chat = {
 	name: "external-chat",
@@ -71,7 +73,7 @@ async function main(): Promise<void> {
 		const packs = join(workspace, "packs");
 		await mkdir(packs, { recursive: true });
 		await step("pack them", async () => {
-			for (const name of ["protocol", "connector"]) {
+			for (const name of ["protocol", "connector"] as const) {
 				await exec("npm", ["pack", "--pack-destination", packs], { cwd: join(root, "packages", name) });
 			}
 		});
@@ -90,12 +92,16 @@ async function main(): Promise<void> {
 		});
 
 		await step("no package ships a TypeScript file", async () => {
-			const stray = await typescriptIn(join(project, "node_modules", "@mason"));
+			// Both packages are top-level in `node_modules` because their names are unscoped; a scope would have put them
+			// one directory deeper and this walk would have looked at the wrong place.
+			const stray = (
+				await Promise.all(PACKAGES.map((name) => typescriptIn(join(project, "node_modules", name))))
+			).flat();
 			if (stray.length > 0) throw new Error(`a published package ships source: ${stray.join(", ")}`);
 		});
 
 		await step("the schemas travel with the protocol package", async () => {
-			const schema = join(project, "node_modules", "@mason", "protocol", "schemas", "protocol.v1.json");
+			const schema = join(project, "node_modules", "mason-protocol", "schemas", "protocol.v1.json");
 			const document = JSON.parse(await readFile(schema, "utf8")) as { $id?: string };
 			if (document.$id !== "https://mason.dev/connector/protocol.v1.json") {
 				throw new Error("the published schema is not the normative document");

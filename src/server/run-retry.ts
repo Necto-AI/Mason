@@ -17,7 +17,7 @@
  * steering the instruction to resume into the turn they are watching.
  */
 import type { ConversationView, EntryRecord } from "@earendil-works/pi-durable";
-import type { Origin } from "@mason/protocol";
+import type { Origin } from "mason-protocol";
 import { CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
 import { isInputEntry, resumedOrigin } from "./replies.ts";
 import { isBusy } from "./status.ts";

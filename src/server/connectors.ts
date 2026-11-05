@@ -36,7 +36,7 @@ import {
 	type ExternalConversation,
 	STATE_SCOPES,
 	type StateScope,
-} from "@mason/protocol";
+} from "mason-protocol";
 import { originAllowed, readConfig, writeConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
 

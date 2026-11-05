@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
-import type { Origin } from "@mason/protocol";
+import type { Origin } from "mason-protocol";
 import type { HookSummary } from "../shared/contract.ts";
 import { entryFor, whenBusyFor } from "./admission.ts";
 import { fenceUntrusted } from "./untrusted.ts";

@@ -46,7 +46,7 @@ import {
 	StreamableHttpTransport,
 	toLlmContent,
 } from "@earendil-works/pi-mcp";
-import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker, isApprovalMarker } from "@mason/protocol";
+import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker, isApprovalMarker } from "mason-protocol";
 import { Type } from "typebox";
 import { integrationStatus } from "./integration-status.ts";
 import type { Integration, IntegrationTools } from "./integrations.ts";

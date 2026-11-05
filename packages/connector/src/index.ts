@@ -1,5 +1,5 @@
 /**
- * `@mason/connector` — the TypeScript SDK for one external connector.
+ * `mason-connector` — the TypeScript SDK for one external connector.
  *
  * A connector is a process that may carry people's words, lend tools, and report events. This package owns the parts
  * that are the same for every connector and wrong in the same way when each one writes them itself: the socket, the
@@ -35,7 +35,7 @@ export type {
 	StateSubscribeResult,
 	SubmissionMode,
 	SubmitParams,
-} from "@mason/protocol";
+} from "mason-protocol";
 export {
 	APPROVAL,
 	APPROVAL_META_KEY,
@@ -44,7 +44,7 @@ export {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	STATE_SCOPES,
-} from "@mason/protocol";
+} from "mason-protocol";
 export {
 	type AttachmentClient,
 	type AttachmentClientOptions,
