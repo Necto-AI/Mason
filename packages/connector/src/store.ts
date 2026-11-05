@@ -36,8 +36,6 @@ export const NAMESPACE = {
 	delivered: "sdk.delivered",
 	/** `permissionId` → the answer this connector already reported, so an answer is applied once. */
 	settled: "sdk.settled",
-	/** The last state sequence applied, per scope, for `since`. */
-	state: "sdk.state",
 } as const;
 
 /**

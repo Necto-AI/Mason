@@ -173,22 +173,6 @@ describe("the transcript the client is sent", () => {
 		}
 	});
 
-	it("sends a widget as the artifact it is, never as the call that built it", () => {
-		const transcript = projectTranscript(
-			viewOf([
-				assistant(1, [call("generateSandboxedUi", { html: ["<p>hello</p>"], jsFunctions: "() => hunter2" }, "w1")]),
-				result(2, "w1", "rendered", false),
-			]),
-		);
-		assert.equal(transcript.length, 1);
-		const widget = transcript[0] as { kind: string; content: Record<string, unknown>; streaming: boolean };
-		assert.equal(widget.kind, "widget");
-		assert.equal(widget.streaming, false);
-		assert.deepEqual(widget.content.html, ["<p>hello</p>"]);
-		// The mapper takes the artifact's own fields; nothing of the call's shape survives.
-		assert.ok(!JSON.stringify(widget).includes("toolCall"));
-	});
-
 	it("says a run failed without the machine's reason", () => {
 		const transcript = projectTranscript(
 			viewOf([
@@ -302,7 +286,7 @@ describe("who said it", () => {
 
 	it("keeps a stored prefix as an author row, because the message was written with one", () => {
 		// mason writes no prefix any more. A home from before the cutover has messages that do, and rewriting their text
-		// at read time would change what somebody actually said (docs/ROOM-IDENTITY.md, #126). It is read, and left alone.
+		// at read time would change what somebody actually said (#126). It is read, and left alone.
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "[from Ilya] ship it" }]),

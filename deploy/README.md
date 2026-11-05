@@ -1,10 +1,10 @@
 # Deploying mason
 
-Three containers of our own. `mason` is the server: the repo run from source, the built web client, the agent's home on
-a volume, the Chord socket and the web UI on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu
+Three containers of our own. `mason` is the server: the repo run from source, the agent's home on a volume, and the
+connector socket on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu
 24.04 and an sshd, reached only by mason, with no route out. `mason-asr` is mason's own speech-to-text, which is what
 turns a voice note from a phone into words (see "The transcription service" below). The split is not packaging taste —
-every `read`, `write`, `edit`, `bash` and `listFiles` call already goes through `@earendil-works/pi-env`, so the
+every `read`, `write`, `edit` and `bash` call already goes through `@earendil-works/pi-env`, so the
 boundary between thinking and doing was in the code before it was in a compose file. A deployment may add one more
 container per integration (see "An integration" below); those are other people's images, not this repo's.
 
@@ -28,30 +28,26 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 
 | Half | What is in it | Where it is mounted |
 |---|---|---|
-| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
-| `service/` | `soul.md`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `routines.json`, `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
+| `service/` | `soul.md`, `config.json` (connector credential hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the routine state, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
 its own provider credential even if a prompt tells it to. The soul is the clearest case: the bot has no path to the job
 it was hired to do, which is what lets apiary hand several bots different souls from the same codebase.
 
-**The home's repository is the memory repo, and it lives at `agent/.git`.** `remember` appends a fact to
-`agent/log/YYYY-MM-DD.md` and commits it *on the tool machine*, in that repository, in one call — the log and its
-history share a filesystem, so a memory is never written without its commit because a second process in another
-container was down. `service/` is deliberately **unversioned** from the split onwards: the soul, the credentials
+**The home's repository is the memory repo, and it lives at `agent/.git`.** The agent writes a fact to
+`agent/log/YYYY-MM-DD.md` with `write` and commits it *on the tool machine*, in that repository — the log and its
+history share a filesystem, so a memory is never written without a way to commit it. `service/` is deliberately **unversioned** from the split onwards: the soul, the credentials
 and the database are not in the history.
 
-A home migrated from before the split (`npm run doctor -- migrate`) is the one place to be careful about `git`. The
-migration does not move the old repository into `agent/`: it stays at the home root, on the server, with the history it
-had, and both halves leave its index and enter its `.gitignore` so the agent's writes are not dirt in it forever.
-`agent/.git` is then created fresh, and the agent's history begins at the migration. Only `agent/` is a volume, so the
-frozen repository at the home root lives in the mason container's filesystem: run `doctor` before the first `up` on the
-host if you want to keep that history, because recreating the container takes it with it.
+A home from before the split is refused at boot rather than migrated: the server names the entries it found and says
+to move each into `agent/` or `service/` by hand. Nothing is created, so a wrong guess cannot lose the soul to the
+default one.
 
 In the **dev stack** (`npm run dev:stack`) there are no containers: `agent/` and `service/` are ordinary sibling
-directories on one filesystem, reached by the loopback SSH daemon. That is a layout, not a boundary — a tool can see
-`service/` there — and the writable-roots policy is what protects it for a developer.
+directories on one filesystem, reached by the loopback SSH daemon. That is a layout, not a boundary: a tool can see
+`service/` there, and only the deployment protects it.
 
 ## Before the first `up`
 
@@ -167,31 +163,21 @@ holding, after which the other stack's tool machine refuses logins.
 The networks are per project (`tanya_mason-internal`, `tanya_mason-edge`, …), and DNS inside one cannot resolve a name
 in the other. What they do share is the rootless network namespace: podman accepts traffic between two non-internal
 bridges, so the two `*-edge` networks can reach each other, and the two `*-out` networks with them. No credential
-crosses — each stack's sshd accepts only its own key and each `/api/*` wants its own token — but it is reachability,
+crosses — each stack's sshd accepts only its own key and each socket wants its own connector credential — but it is
+reachability,
 not isolation, and the paragraph above should not be read as saying otherwise.
 
 The one thing they do share is the host port range (`MASON_PORT`) and the provider credential directory
 (`MASON_PI_AGENT_DIR`), which is read-only input and copied into each home.
 
-## First boot, and the pairing link
+## First boot, and the connector credential
 
-`docker compose logs mason` on a fresh home prints, once:
+`docker compose logs mason` on a fresh home prints where its data lives and that masonry is listening. Nothing is
+minted for a browser, because there is no browser application here: a person speaks through a connector, and a
+connector needs a credential.
 
-```text
-mason listening on http://0.0.0.0:8787
-[data] /home/mason/.mason/service/data
-[auth] minted a token for this home; open one of these once, per browser or device:
-[auth]   http://127.0.0.1:8787/?token=mason_…
-```
-
-Open that link once, in each browser. It spends the token on an `HttpOnly` cookie and redirects to the bare page, so the
-token never stays in the address bar, the history or a `Referer`. The plaintext token is shown exactly once and stored
-only as a hash in `mason-service/config.json`; a lost one is replaced, never recovered.
-
-The URL in that line is assembled from what the server knows about itself, which is the container: `127.0.0.1:8787` is
-right on the host as long as `MASON_PORT` is 8787 and nothing sits in front of it. Behind a proxy, or on a different
-port, take the `?token=…` part and put it on the URL you actually serve — the token is the whole credential, the rest is
-an address. The same applies to the link `npm run token -- add` prints.
+`npm run connector -- add <connector>` prints one once, and it is stored only as a hash in `service/config.json`. A lost
+one is replaced by `revoke` and `add`, never recovered.
 
 Before the server starts, the boot prints what it prepared:
 
@@ -235,18 +221,18 @@ checkout is left on the ref you asked for, so the way back is the previous tag a
 `DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_PORT` and `COMPOSE_CMD` override the defaults; the podman override file is always
 applied, and `COMPOSE_EXTRA_FILES` comes from `deploy/.env` on the host like every other setting.
 
-## A device
+## A connector
 
-One person, one bot. A device is something holding a token, and the credential is the identity: mason works for whoever
-holds one, and there is no name to join as.
+One person, one bot. A connector holds the credential mason issued for its entry, and the credential is the identity:
+mason answers whoever holds one, and there is no name to join as.
 
 ```sh
-docker compose exec mason npm run token -- add --label phone   # prints a pairing link, once
-docker compose exec mason npm run token -- list
-docker compose exec mason npm run token -- revoke <id>
+docker compose exec mason npm run connector -- add telegram --replace   # prints the credential, once
+docker compose exec mason npm run connector -- list
+docker compose exec mason npm run connector -- revoke <id>
 ```
 
-The file is read per request, so an add or a revoke lands on the next request without a restart.
+The file is read per connection, so an add or a revoke lands on the next one without a restart.
 
 ## Provider credentials, and what the volume now holds
 
@@ -332,8 +318,7 @@ user face on mason's connector socket and an MCP endpoint. Its image is publishe
 builds it, and `integrations/` does not exist here any more (#104). What mason knows about it is one entry in
 `integrations.json` and one credential it issued: add the entry
 (`npm run integration -- add telegram --url http://mason-telegram:8082/mcp --description "The team chat"`), write the
-grant into it (the actors, the permitted chats, the control words, the approver — the panel's connectors page writes the
-same block), and issue the credential with `npm run connector -- add telegram`. Put what that printed once into
+grant into it (the owner actor, the permitted chats, the control words), and issue the credential with `npm run connector -- add telegram`. Put what that printed once into
 `TELEGRAM_CONNECTOR_CREDENTIAL` in `deploy/.env` beside the bot token and the chat allowlist. There is no trigger secret
 and no signed event path: the container opens one WebSocket to `/api/connector`, and the grant is a ceiling on what may
 cross it. `compose.telegram.yaml` is still the two services — `mason-telegram` on `mason-mcp` with a `/data` volume for
@@ -493,12 +478,10 @@ when the relay runs; the commands below use the first two of those names. `mason
 them, and neither is `asr-models`: the inbox holds the files a chat sent, which are somebody else's documents and
 which the sweep deletes after a week anyway, and the model volume holds weights that one command refills (see "The
 transcription service"). `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the shipped
-ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose history
-begins at the migration if the home was migrated, since the pre-split history stays in the repository at the home
-root, which is not a volume. `mason-service` is the server: `soul.md`, `config.json` (the token hashes
-— no plaintext token lives here), `integrations.json` (the integrations mason reaches, and each one's connector grant),
-`data/agent.sqlite` (the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
-seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
+ones seeded on first boot), `routines.json`, `workspace/` and the git repository its memory is committed to. `mason-service` is the server: `soul.md`, `config.json` (the connector credential hashes — no plaintext credential lives
+here), `integrations.json` (the integrations mason reaches, and each one's connector grant), `data/agent.sqlite` (the
+transcript and the routine state), `data/seeded-skills.json` (which shipped skills this home was seeded with), `ssh/`
+(the env key and the pinned host key) and `pi/` (the copied provider credential).
 `mason-env-keys` is one public key and needs no backup of its own. A backup that includes `mason-service` includes the
 provider key; treat the archive accordingly.
 
@@ -536,18 +519,12 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   that filters the model provider needs the model to leave through the same sidecar, and for no other reason: mason
   already reaches the internet on `mason-edge`. `mason-env` is never a member, so the tool machine cannot reach the
   proxy even though it has the internet of its own.
-- **No TLS here.** The server speaks plain HTTP and says so in its own boot line. Terminate TLS in a reverse proxy on the
-  host and forward to `127.0.0.1:8787`. Two headers are not optional: the proxy must preserve the original `Host` (the
-  Origin gate compares `Origin` to it, and a rewritten `Host` refuses every browser), and it should send
-  `X-Forwarded-Proto: https` so the session cookie is issued `Secure`.
-- Two paths are outside `src/server/auth.ts` on purpose, and both are narrower than a token. `/api/health` answers one word
-  and needs no credential at all (a monitor that needs a token is a monitor nobody runs). `/api/connector` (the socket)
-  and `/api/connector/attachments/<contentId>` (the bytes) are authenticated as **the connector**, by a credential mason
-  issued for that one entry: it opens those paths and nothing else, and a revoke lands on the next connection. The signed
-  event door (`POST /api/events/<integration>`) is gone (#104) — that path is an ordinary `/api` path now, so it is `401`
-  without the owner's token and `404` with one. Everything else under `/api`, and the Chord socket, goes through
-  `src/server/auth.ts`; the shell itself is served publicly because it is a bundle with no secrets in it, and it is where
-  a browser is told it is not paired.
+- **No TLS here.** The server speaks plain HTTP and says so in its own boot line. A connector's socket is outbound from
+  its own container, so nothing has to be terminated: keep the port unpublished.
+- `/api/health` answers one word and needs no credential at all: a monitor that needs a token is a monitor nobody runs.
+  `/api/connector` (the socket) and `/api/connector/attachments` (the upload) are authenticated as **the connector**, by a
+  credential mason issued for that one entry: it opens those paths and nothing else, and a revoke lands on the next
+  connection. There is no other route: no panel, no `/api/admin`, no Chord socket, and the signed event door is gone.
 
 ## The path agreement, and the one honest limitation
 
@@ -612,7 +589,7 @@ torch, no GPU, no port, no credential, and no configuration. It is installed int
 are fetched at build time into the Hugging Face cache of the `mason` account and looked up again with the Hub offline, so
 the first message is not the slow one, a machine with no route out reads a page all the same, and a build that could not
 fetch fails instead of shipping an OCR that downloads later. The agent reaches for it through the `ocr` skill
-(`skills/ocr/SKILL.md`), not through code (`docs/CAPABILITY-PLAN.md`, phase 3).
+(`skills/ocr/SKILL.md`), not through code.
 
 It is also the one thing here that makes the image noticeably bigger: 214 MB → 688 MB when this was written, of which a
 349 MB virtualenv (`opencv-python-headless` 72 MB, `onnxruntime` 68 MB, `numpy` 43 MB, `pip` 16 MB, the rest their

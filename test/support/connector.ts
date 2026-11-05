@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { type Connector, type ConnectorHandlers, createConnector, nodeWebSocketLink } from "mason-connector";
 import { MemoryStore } from "mason-connector/store/memory";
-import type { FacesDeclaration, ProtocolErrorData, StateScope } from "mason-protocol";
+import type { FacesDeclaration, ProtocolErrorData } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../../src/server/house.ts";
@@ -71,7 +71,6 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 						capabilities: ["text", "markdown", "files", "approvals", "streaming"],
 					},
 					events: { hooks: { "chat.message": "team-chat" } },
-					state: ["status", "presence", "projection"],
 				},
 			},
 			// A second user-face connector, off by default: the outbox claims the door reads owed replies for every open
@@ -85,7 +84,6 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 									owner: "777",
 									conversations: [{ externalConversationId: "777", kind: "person" }],
 								},
-								state: ["status"],
 							},
 						},
 					}
@@ -222,7 +220,6 @@ export async function connectConnector(
 		readonly name?: string;
 		readonly credential?: string;
 		readonly faces?: FacesDeclaration;
-		readonly state?: readonly StateScope[];
 		readonly handlers?: ConnectorHandlers;
 		readonly deliveries?: Array<{ deliveryId: string; text: string }>;
 		readonly heartbeatMs?: number;
@@ -238,7 +235,6 @@ export async function connectConnector(
 		store: new MemoryStore(),
 		link: nodeWebSocketLink(WebSocket as never),
 		heartbeatMs: options.heartbeatMs ?? 0,
-		...(options.state === undefined ? {} : { state: options.state }),
 		handlers: {
 			onDelivery: (params) => {
 				const text = params.blocks

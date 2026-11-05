@@ -20,12 +20,12 @@
  * look again rather than quietly run against the replacement. An in-flight call is never replayed: every tool here is
  * `replay: "unsafe"` except the two reads, because an MCP call may have created an issue.
  *
- * Every MCP tool declares its own effect in `_meta["dev.mason/approval"]`, and the permission gateway reads it
- * (`permissions.ts`). This module only reports it: a missing or unknown marker is `required`, because a server that said
- * nothing about an operation has not said it is safe.
+ * Every MCP tool declares its own effect in `_meta["dev.mason/approval"]`. This module reports it and nothing acts on
+ * it: a missing or unknown marker is `required`, because a server that said nothing about an operation has not said it
+ * is safe, and the report is how an operator can tell.
  *
  * Nothing here is fatal by default. A container that is down leaves its tools out of the catalog, says so in one line
- * and in `/api/integrations`, and the boot carries on: an always-on agent that refuses to start because a documentation
+ * and in the boot's own report, and the boot carries on: an always-on agent that refuses to start because a documentation
  * server is redeploying is worse than one without that server. `"required": true` is the operator's opt-in to the other
  * behaviour, for the one integration the team cannot work without.
  */
@@ -190,9 +190,8 @@ export interface McpCatalog {
 	/**
 	 * One tool as it stands, or `undefined` when the server no longer offers it or cannot be reached.
 	 *
-	 * This is what the permission gateway reads before it decides, and it *asks*: a server that dropped is reconnected
-	 * and re-listed first. A marker read from the last successful listing would be a marker a call could refresh out
-	 * from under its own decision.
+	 * It *asks*: a server that dropped is reconnected and re-listed first, because a marker read from the last
+	 * successful listing is a marker that went stale without saying so.
 	 */
 	describe(integration: string, tool: string): Promise<DiscoveredTool | undefined>;
 	call(integration: string, tool: string, args: JsonObject, expectedVersion?: string): Promise<McpCallOutcome>;
@@ -370,8 +369,8 @@ function emptyCatalog(): McpCatalog {
  * What a caller reads when the tool it named is gone or changed: what happened, and the one step that fixes it. Both
  * halves matter — a script that only read "not found" would give up on a tool that is still there under a new shape.
  *
- * Exported because the permission gateway refuses the same call for the same reason one layer earlier: a tool it cannot
- * see is a call it will not let run, and the caller has to be told the same thing either way.
+ * Exported because a caller reads the same sentence whether the tool is gone or was replaced: the fix is the same
+ * either way.
  */
 export function rediscovery(integration: string, tool: string, what: string): string {
 	return `mcp: ${integration}/${tool} ${what}. Look again — mcp_describe {integration:"${integration}", tool:"${tool}"}, or mcp_search to find what the server offers now — and retry with the version it answers.`;
@@ -543,7 +542,7 @@ class McpServer {
 		return this.#refreshing;
 	}
 
-	/** The list as the catalog holds it, and the health line `/api/integrations` reads. */
+	/** The list as the catalog holds it, and the health line the boot report reads. */
 	#apply(listed: readonly McpTool[]): void {
 		const next = new Map<string, DiscoveredTool>();
 		for (const tool of listed) {
@@ -569,7 +568,7 @@ class McpServer {
 	}
 
 	#record(connected: boolean, error: string | null): void {
-		// Server state, so `/api/integrations` answers truthfully without the log being read.
+		// Server state, so the boot report is truthful without the log being read.
 		integrationStatus().set(this.name, { connected, tools: connected ? this.#listed.size : 0, error });
 	}
 

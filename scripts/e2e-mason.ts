@@ -35,6 +35,8 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { housePaths } from "../src/server/house.ts";
+import { integrationSummaries } from "../src/server/integration-status.ts";
+import { currentIntegrations } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
 
@@ -110,9 +112,9 @@ console.log(
 		base: `http://127.0.0.1:${server.port}`,
 		url: `ws://127.0.0.1:${server.port}/api/connector`,
 		home: paths.home,
-		// The owner's token, so the caller can read the one HTTP answer that is not the connector's: `/api/integrations`,
-		// which is how the tools face's connection is seen from mason's side. A fresh home mints one; it is never written.
-		token: server.pairingToken ?? undefined,
+		// How the tools face's connection looks from mason's side. There is no HTTP route for it any more: the panel that
+		// read one is gone, and this line is the caller's answer instead.
+		integrations: integrationSummaries(currentIntegrations()),
 		credentials,
 	})}`,
 );

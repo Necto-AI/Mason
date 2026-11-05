@@ -1,6 +1,6 @@
 {
 	"id": "remember",
-	"about": "Told a preference, then asked for it later: written to the log, and read back instead of guessed.",
+	"about": "Told a preference, then asked for it later: written down with `write`, and read back instead of guessed.",
 	"home": {
 		"soul.md": "You are mason, Denis's personal assistant. Keep what Denis tells you that you will need again.\n"
 	},
@@ -9,8 +9,8 @@
 		{ "text": "What do you know about my preferences? One line." }
 	],
 	"expect": {
-		"calls": { "reply": { "min": 2 }, "remember": { "min": 1 } },
-		"log": ["terse"],
+		"calls": { "reply": { "min": 2 }, "write": { "min": 1 } },
+		"written": ["terse"],
 		"text": ["terse"],
 		"maxInputTokens": 24000
 	}

@@ -34,6 +34,33 @@ Create a GitHub issue.
 
 Read it as in **Read an issue** above.
 
+## Waves: from a ticket to a merged branch
+
+An issue is written at a moment and the code moves. A ticket is audited against the tree before it is specified: a spec
+that names a file, symbol or test which does not exist is refused, and the audit's verdict goes on the issue as a
+comment.
+
+A wave is one issue, one spec, one branch, one worktree, one writer. Five things, and a spec without one of them does not
+start:
+
+- **Seam**: the file and the type the behaviour joins at, named as it is today.
+- **Acceptance**: the tests that fail before and pass after, by name.
+- **Budget**: the lines the area may gain, and the ceiling it lowers in `docs/code-budgets.json`.
+- **Not in this spec**: the adjacent work it deliberately leaves, so the next reader does not mistake an omission for a
+  plan.
+- **Failure it prevents**: one sentence, because a spec with no failure is a preference.
+
+The branch runs `/full-send <pointer>`. It ends green or it does not end: lint, typecheck, `npm test`,
+`test:packages`, `prove:connector`, `gen:surface:check`, `check:docs`, `check:code`. A commit that removes code lowers
+the ceiling it leaves behind, in the same commit.
+
+**Parallel only where the files do not overlap.** Read the seam, not the title: two issues that both move `runtime.ts`
+run in sequence, however unrelated they look. Each branch gets its own worktree and one writer.
+
+**Merge one branch at a time.** An integrator session rebases the wave, reads the diffs together, and resolves an
+overlap at the seam rather than by adding an abstraction over both. Review is short and fixed: anything the issue marked
+as a decision, any diff that crosses a budget, and any change to the prompt, the declared tool list or the protocol.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.

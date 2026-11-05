@@ -28,14 +28,11 @@ export const METHOD = {
 	fire: "mason/fire",
 	control: "mason/control",
 	interactionAnswer: "mason/interaction.answer",
-	stateSubscribe: "mason/state.subscribe",
 	deliveryStart: "connector/delivery.start",
 	deliveryDelta: "connector/delivery.delta",
 	deliveryFinal: "connector/delivery.final",
 	deliveryCancel: "connector/delivery.cancel",
 	interactionRequest: "connector/interaction.request",
-	stateSnapshot: "connector/state.snapshot",
-	stateDelta: "connector/state.delta",
 	ping: "connector/ping",
 } as const;
 
@@ -89,13 +86,9 @@ export function isApprovalMarker(value: unknown): value is ApprovalMarker {
 	return value === APPROVAL.required || value === APPROVAL.notRequired;
 }
 
-export type Capability = "text" | "markdown" | "files" | "approvals" | "widgets" | "streaming";
+export type Capability = "text" | "markdown" | "files" | "approvals" | "streaming";
 
-export const CAPABILITIES: readonly Capability[] = ["text", "markdown", "files", "approvals", "widgets", "streaming"];
-
-export type StateScope = "status" | "presence" | "projection" | "tools";
-
-export const STATE_SCOPES: readonly StateScope[] = ["status", "presence", "projection", "tools"];
+export const CAPABILITIES: readonly Capability[] = ["text", "markdown", "files", "approvals", "streaming"];
 
 export type FaceName = "user" | "tools" | "events";
 
@@ -139,7 +132,6 @@ export type ContentBlock =
 			readonly size?: number;
 			readonly caption?: string;
 	  }
-	| { readonly type: "widget"; readonly content: unknown }
 	| { readonly type: "notice"; readonly text: string };
 
 export interface Limits {
@@ -243,17 +235,6 @@ export interface InteractionAnswerResult {
 	readonly reason?: string;
 }
 
-export interface StateSubscribeParams {
-	readonly scopes: readonly StateScope[];
-	readonly since?: number;
-}
-
-export interface StateSubscribeResult {
-	readonly scopes: readonly StateScope[];
-	readonly seq: number;
-	readonly resumed?: boolean;
-}
-
 /** A proactive or explicit destination. Absent means "back to the origin", which is the only default there is. */
 export interface DeliveryTarget {
 	readonly connector: string;
@@ -306,32 +287,6 @@ export interface InteractionAck {
 	readonly delivered: boolean;
 	readonly surface?: string;
 	readonly detail?: string;
-}
-
-export interface ProjectionItem {
-	readonly [key: string]: unknown;
-}
-
-export interface ProjectionState {
-	readonly items: readonly ProjectionItem[];
-	readonly queued?: readonly ProjectionItem[];
-}
-
-export interface StateSnapshotParams {
-	readonly seq: number;
-	readonly scopes: readonly StateScope[];
-	readonly status?: Readonly<Record<string, unknown>>;
-	readonly presence?: Readonly<Record<string, unknown>>;
-	readonly projection?: ProjectionState;
-	readonly tools?: { readonly running: readonly string[] };
-}
-
-export interface StateDeltaParams {
-	readonly seq: number;
-	readonly scope: StateScope;
-	readonly op: "set" | "push" | "reset";
-	readonly value?: unknown;
-	readonly path?: string;
 }
 
 export interface AttachmentUploadResult {

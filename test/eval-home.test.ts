@@ -52,7 +52,11 @@ test("the eval seeder plants a scenario's files where the prompt reads them", as
 		await ensureHouse(paths, DEFAULT_SOUL);
 		const preamble = PROMPT_SECTIONS.find((section) => section.key === "preamble");
 		assert.ok(preamble, "the prompt opens with the soul");
-		assert.equal(await rendered(preamble), "You are SOUL-MARKER, the scenario's persona.");
+		assert.match(
+			(await rendered(preamble)) ?? "",
+			/^You are SOUL-MARKER, the scenario's persona\./,
+			"the scenario's soul opens the prompt, and the wake rule follows it",
+		);
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;
 		else process.env.MASON_HOME = previous;

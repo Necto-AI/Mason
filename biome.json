@@ -40,16 +40,5 @@
 			}
 		}
 	},
-	"overrides": [
-		{
-			"includes": ["src/web/**"],
-			"linter": {
-				"rules": {
-					"correctness": {
-						"useExhaustiveDependencies": "off"
-					}
-				}
-			}
-		}
-	]
+	"overrides": []
 }

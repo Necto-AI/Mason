@@ -5,17 +5,15 @@
  * sees, and `delivery`. Everything expensive or unpredictable is replaced: tools answer from the scenario, and the home
  * is a temp directory that no other test or eval can see.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
-import { Memory } from "../../src/server/extensions/memory.ts";
-import { GenerateSandboxedUiExtension } from "../../src/server/extensions/sandboxed-ui.ts";
 import { formatPrompt } from "../../src/server/hooks.ts";
-import { HOUSE_ENTRIES, type HousePaths, housePaths, logPathFor } from "../../src/server/house.ts";
+import { HOUSE_ENTRIES, type HousePaths, housePaths } from "../../src/server/house.ts";
 import { projectTranscript } from "../../src/server/projection.ts";
 import { Prompt } from "../../src/server/prompt.ts";
 import { openAgentRuntime } from "../../src/server/runtime.ts";
@@ -29,10 +27,13 @@ export interface RunOptions {
 	readonly onProgress?: (line: string) => void;
 }
 
-/** The extensions a scenario runs with: the prompt, the memory and delivery tools, the widget tool, and stubs. */
+/** The extensions a scenario runs with: the prompt, the delivery tool, and stubs for the four coding tools. */
 const CONTEXT: Context = BACKGROUND_CONTEXT;
 
-export async function runScenario(scenario: Scenario, options: RunOptions): Promise<{ trace: Trace; logText: string }> {
+export async function runScenario(
+	scenario: Scenario,
+	options: RunOptions,
+): Promise<{ trace: Trace; writtenText: string }> {
 	const directory = await mkdtemp(join(tmpdir(), `mason-eval-${scenario.id}-`));
 	const stub = StubTools(scenario, [directory, join(directory, "workspace")]);
 
@@ -46,7 +47,7 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 			model: options.model,
 			extensions: [stub],
 			// The stubs stand in for `coding-tools`; the base repair would put the real ones back.
-			selection: [Prompt, Memory, Delivery, GenerateSandboxedUiExtension, stub],
+			selection: [Prompt, Delivery, stub],
 			repairBase: false,
 			onReport: (error) => options.onProgress?.(`[report] ${String(error)}`),
 		});
@@ -65,7 +66,7 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 				deliveredBefore = deliveredNow;
 			}
 			const view = await runtime.viewSnapshot(CONTEXT);
-			return { trace: collect(scenario, options.model, view, turns), logText: await readLog(directory) };
+			return { trace: collect(scenario, options.model, view, turns), writtenText: await readWritten(directory) };
 		} finally {
 			await runtime.close();
 		}
@@ -77,8 +78,6 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 				delivered: [],
 				notices: [],
 				toolCalls: [],
-				widgets: 0,
-				widgetArguments: undefined,
 				inputTokens: 0,
 				outputTokens: 0,
 				reminders: 0,
@@ -86,7 +85,7 @@ export async function runScenario(scenario: Scenario, options: RunOptions): Prom
 				finished: false,
 				error: error instanceof Error ? error.message : String(error),
 			},
-			logText: "",
+			writtenText: "",
 		};
 	} finally {
 		await rm(directory, { recursive: true, force: true });
@@ -163,16 +162,13 @@ function collect(
 	const items = projectTranscript(view);
 	const delivered: string[] = [];
 	const notices: string[] = [];
-	const widgets: { content: unknown }[] = [];
 	for (const item of items) {
 		if (item.kind === "delivered") delivered.push(item.text);
 		else if (item.kind === "notice") notices.push(item.text);
-		else if (item.kind === "widget") widgets.push({ content: item.content });
 	}
-	// Every call the model made, in order, including the real tools a stub did not replace: `reply`, `remember`
-	// and the widget tool are the same delivery path the reader sees, so an eval must count what the harness committed.
+	// Every call the model made, in order, including the real tools a stub did not replace: `reply` and `remember`
+	// are the same delivery path the reader sees, so an eval must count what the harness committed.
 	const calls = toolCallsOf(view);
-	const widgetCall = calls.find((call) => call.name === "generateSandboxedUi");
 	const usage = view.docs["pi.usage"] as { models?: Record<string, { input?: number; output?: number }> } | undefined;
 	let input = 0;
 	let output = 0;
@@ -187,8 +183,6 @@ function collect(
 		notices,
 		reminders: remindersOf(view),
 		toolCalls: calls,
-		widgets: widgets.length,
-		widgetArguments: widgetCall?.args as Record<string, unknown> | undefined,
 		inputTokens: input,
 		outputTokens: output,
 		turns,
@@ -224,11 +218,21 @@ function toolCallsOf(view: ConversationView): { name: string; args: unknown }[] 
 	return calls;
 }
 
-async function readLog(home: string): Promise<string> {
-	try {
-		// The same layout the `remember` tool writes through: `logPathFor` needs the whole `HousePaths`, not just the home.
-		return await readFile(logPathFor(housePaths(home)), "utf8");
-	} catch {
-		return "";
+/**
+ * Every file the agent wrote into its own temp home, concatenated: a fact it wrote down is one of these, whether it
+ * named `agent/profile.md`, `log/` or a relative path in the workspace. `.git` and the seeded skills are skipped — a
+ * skill is mason's prose, not the agent's.
+ */
+async function readWritten(home: string): Promise<string> {
+	const parts: string[] = [];
+	async function walk(dir: string): Promise<void> {
+		for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+			if (entry.name === ".git" || entry.name === "skills" || entry.name === "data") continue;
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) await walk(path);
+			else parts.push(await readFile(path, "utf8").catch(() => ""));
+		}
 	}
+	for (const root of [home, join(home, "workspace")]) await walk(root);
+	return parts.join("\n");
 }

@@ -5,8 +5,8 @@
  * assertion like "it read the file before it claimed the number" mean something. The tools keep the real names,
  * descriptions and parameters, so the model sees the same declarations it sees in production; only `execute` differs.
  */
-import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { Scenario } from "./scenario.ts";
@@ -73,9 +73,21 @@ export function StubTools(scenario: Scenario, roots: readonly string[] = []) {
 		parameters: Type.Object({ path: Type.String(), content: Type.String() }),
 		replay: "unsafe",
 		execute: async (args: { path: string; content: string }) => {
+			// A real write into the temp home, so "write it down, then read it back" is a check and not a claim: the
+			// next turn's `read` finds the file the last turn's `write` left.
+			const target = resolveInside(args.path);
+			if (target === undefined) return failed(`EACCES: not under the machine: ${args.path}`);
+			await mkdir(dirname(target), { recursive: true });
+			await writeFile(target, args.content, "utf8");
 			return text(`Wrote ${args.path}`);
 		},
 	});
+
+	/** Where a write lands: the same resolution `read` uses, so a file written by name is the file read back by name. */
+	function resolveInside(path: string): string | undefined {
+		const candidates = isAbsolute(path) ? [resolve(path)] : [...roots].reverse().map((root) => resolve(root, path));
+		return candidates.find((target) => roots.some((root) => !relative(root, target).startsWith("..")));
+	}
 
 	/**
 	 * Read a real file from the temp home or workspace. A relative path is tried in every root, workspace first: the

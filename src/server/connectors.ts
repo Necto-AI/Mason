@@ -4,12 +4,11 @@
  * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
  * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
  * `connector` block is what the operator grants it: which external actor is the owner's, which external conversations may
- * be spoken in, which event kinds fire which hook, which state scopes it may mirror, which controls it may spend on
- * `mason/control`, and whether its approval markers may waive approval.
+ * be spoken in, which event kinds fire which routine, and which controls it may spend on `mason/control`.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
  * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
- * a kind that maps to no hook is refused, a scope that is not granted is refused. A face the entry does not grant is
+ * a kind that maps to no routine is refused. A face the entry does not grant is
  * named in `inactive` with a reason rather than dropped, because a connector silently missing half its behaviour is the
  * bug nobody finds.
  *
@@ -18,12 +17,11 @@
  *
  * ## The credential
  *
- * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — beside the
- * browser tokens and for the same reason, that file ends up in bug reports — and read on every upgrade request, so a
- * revoke lands on the next connection rather than on the next restart. It is **not** an owner token: it opens
- * `/api/connector` and the attachment endpoints, and nothing else. A connector never receives the owner's token, and
- * the connector's own credential for mason's MCP calls is configured on the tools face (`tools.credential`), which is
- * the other direction and never leaves the server except on that call.
+ * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — that file ends up
+ * in bug reports — and read on every upgrade request, so a revoke lands on the next connection rather than on the next
+ * restart. It opens `/api/connector` and the attachment upload, and nothing else. The credential for mason's own MCP
+ * calls is the other direction: it is configured on the tools face (`tools.credential`) and never leaves the server
+ * except on that call.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -34,8 +32,6 @@ import {
 	type ControlOp,
 	type ExternalActor,
 	type ExternalConversation,
-	STATE_SCOPES,
-	type StateScope,
 } from "mason-protocol";
 import { originAllowed, readConfig, writeConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
@@ -66,33 +62,12 @@ export interface ConnectorEventGrant {
 export interface ConnectorGrant {
 	readonly user?: ConnectorUserGrant;
 	readonly events?: ConnectorEventGrant;
-	/** The state scopes this connector may subscribe to. A scope absent from here is refused, not narrowed. */
-	readonly state: readonly StateScope[];
 	/**
 	 * The controls this connector's socket may spend on `mason/control`, out of the protocol's closed vocabulary. Absent
 	 * or empty is no vocabulary at all: a chat that was never granted `stop` is a chat that cannot interrupt a turn, and
 	 * saying so at the handshake's first refusal is better than a word that silently never runs.
 	 */
 	readonly commands?: readonly ControlOp[];
-	/**
-	 * Whether this connector's `dev.mason/approval` markers may waive approval. Off unless the operator says so: a
-	 * connector describes its own operations, and trusting that description is a decision only the operator makes.
-	 */
-	readonly trustMarkers: boolean;
-	/**
-	 * The operator's own rules for this connector's tools, each naming a tool as the server does (`issues.create`) or
-	 * `*` for every tool on the connector. `deny` beats `ask` beats `allow`, so a rule can only tighten what a marker
-	 * says: `required` asks unless a deny rule refuses it, and `not_required` allows only with an allow rule or trusted
-	 * markers.
-	 */
-	readonly policy?: ConnectorPolicy;
-}
-
-/** The three rule lists, all of them optional: an absent list is no rule. */
-export interface ConnectorPolicy {
-	readonly allow?: readonly string[];
-	readonly ask?: readonly string[];
-	readonly deny?: readonly string[];
 }
 
 /** One issued connector credential, as `config.json` holds it. The credential itself exists only in the hand that got it. */
@@ -128,12 +103,22 @@ export function readConnectorGrant(
 		throw new Error(refusal(where, name, 'has a "connector" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
+	// The keys the approval apparatus owned. They were required once, so every file written before the cut carries one,
+	// and reading past them would leave an operator believing a rule still runs.
+	const retired = RETIRED_GRANT_KEYS.filter((key) => raw[key] !== undefined);
+	if (retired.length > 0) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				`has a retired "connector.${retired[0]}": there is no approval step and no state mirror any more, so the ` +
+					"grant is its faces and its commands. Delete that key by hand",
+			),
+		);
+	}
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
-	const state = readState(where, name, raw.state);
 	const commands = readCommands(where, name, raw.commands);
-	const trustMarkers = readBoolean(where, name, raw, "trustMarkers");
-	const policy = readPolicy(where, name, raw.policy);
 	const hasFace = user !== undefined || events !== undefined || hasToolsFace;
 	if (!hasFace) {
 		throw new Error(
@@ -148,10 +133,7 @@ export function readConnectorGrant(
 	return {
 		...(user === undefined ? {} : { user }),
 		...(events === undefined ? {} : { events }),
-		state,
 		...(commands === undefined ? {} : { commands }),
-		trustMarkers,
-		...(policy === undefined ? {} : { policy }),
 	};
 }
 
@@ -185,11 +167,17 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
 }
 
 /**
+ * The grant keys a removed mechanism owned — approval markers that waived the gateway, the policy rules it read, and the
+ * state scopes a connector mirrored. Two of them were required, so every file written before the cut carries one.
+ *
+ * Refused rather than ignored: a file that still says a rule runs is a file whose operator believes it runs.
+ */
+export const RETIRED_GRANT_KEYS = ["state", "trustMarkers", "policy"] as const;
+
+/**
  * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
  *
- * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
- * decides that, and the one sentence that moves it is the doctor's. Spelled once, because three readers depend on
- * agreeing: the boot's refusal, the panel's refusal and the migration that rewrites them.
+ * Refused for the same reason: a file that still says who may speak is a file whose reader believes it decides that.
  */
 export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
@@ -206,8 +194,7 @@ function readUser(where: string, name: string, value: unknown): ConnectorUserGra
 				where,
 				name,
 				`has a retired "connector.user.${retired[0]}": mason works for one person, so a user face names one ` +
-					'"owner" actor and no mapping, no unattributed switch and no approver. Run `npm run doctor -- migrate` ' +
-					"to rewrite it",
+					'"owner" actor and no mapping, no unattributed switch and no approver. Delete that key by hand',
 			),
 		);
 	}
@@ -254,7 +241,11 @@ function readConversations(where: string, name: string, value: unknown): Externa
 		if (title !== undefined && typeof title !== "string") {
 			throw new Error(refusal(where, name, `has a conversation "${id}" with a "title" that is not a string`));
 		}
-		return { externalConversationId: id, kind, ...(title === undefined ? {} : { title }) };
+		return {
+			externalConversationId: id,
+			kind,
+			...(title === undefined ? {} : { title }),
+		};
 	});
 }
 
@@ -308,74 +299,6 @@ function readEvents(where: string, name: string, value: unknown): ConnectorEvent
 	return { hooks };
 }
 
-function readState(where: string, name: string, value: unknown): StateScope[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "connector.state" that is not a list'));
-	}
-	const scopes: StateScope[] = [];
-	for (const entry of value) {
-		if (typeof entry !== "string" || !(STATE_SCOPES as readonly string[]).includes(entry)) {
-			throw new Error(
-				refusal(
-					where,
-					name,
-					`declares the state scope ${typeof entry === "string" ? `"${entry}"` : JSON.stringify(entry)}, which ` +
-						`mason does not have: the whole set is ${STATE_SCOPES.join(", ")}`,
-				),
-			);
-		}
-		scopes.push(entry as StateScope);
-	}
-	return scopes;
-}
-
-/**
- * The operator's ask/deny/allow rules. Each is a list of tool names; an empty list is no rule, and a name is kept as the
- * server spells it. An unknown key inside `policy` is not refused — like every entry in this file, a key mason does not
- * know survives a rewrite, so a newer build's rule is not deleted by an older one.
- */
-function readPolicy(where: string, name: string, value: unknown): ConnectorPolicy | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "connector.policy" that is not an object'));
-	}
-	const raw = value as Record<string, unknown>;
-	const allow = readRuleList(where, name, raw.allow, "allow");
-	const ask = readRuleList(where, name, raw.ask, "ask");
-	const deny = readRuleList(where, name, raw.deny, "deny");
-	if (allow === undefined && ask === undefined && deny === undefined) return undefined;
-	return {
-		...(allow === undefined ? {} : { allow }),
-		...(ask === undefined ? {} : { ask }),
-		...(deny === undefined ? {} : { deny }),
-	};
-}
-
-function readRuleList(where: string, name: string, value: unknown, key: string): readonly string[] | undefined {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value)) {
-		throw new Error(refusal(where, name, `has a "connector.policy.${key}" that is not a list of tool names`));
-	}
-	return value.map((entry, index) => {
-		if (typeof entry !== "string" || entry.trim() === "") {
-			throw new Error(
-				refusal(where, name, `has a "connector.policy.${key}" entry ${index} that is not a tool name`),
-			);
-		}
-		return entry.trim();
-	});
-}
-
-function readBoolean(where: string, name: string, raw: Record<string, unknown>, key: string): boolean {
-	const value = raw[key];
-	if (value === undefined) return false;
-	if (typeof value !== "boolean") {
-		throw new Error(refusal(where, name, `has a "${key}" that is not true or false`));
-	}
-	return value;
-}
-
 /** The enabled entry's grant, or `undefined` when the entry is absent, switched off or declares no connector. */
 export function connectorGrantFor(
 	integrations: Record<string, Integration>,
@@ -384,19 +307,6 @@ export function connectorGrantFor(
 	const integration = integrations[name];
 	if (integration === undefined || !integration.enabled || integration.connector === undefined) return undefined;
 	return { integration, grant: integration.connector };
-}
-
-/** Every enabled connector, in name order: what a boot iterates to check hooks and report health. */
-export function enabledConnectors(
-	integrations: Record<string, Integration>,
-): Array<{ readonly name: string; readonly integration: Integration; readonly grant: ConnectorGrant }> {
-	return Object.entries(integrations)
-		.flatMap(([name, integration]) =>
-			integration.enabled && integration.connector !== undefined
-				? [{ name, integration, grant: integration.connector }]
-				: [],
-		)
-		.sort((left, right) => (left.name < right.name ? -1 : 1));
 }
 
 /**
@@ -537,9 +447,15 @@ export async function authenticateConnector(
 	if (record === undefined) return { ok: false, reason: "credential" };
 	const integration = integrations[record.connector];
 	if (integration === undefined || !integration.enabled || integration.connector === undefined) {
-		return { ok: false, reason: "the connector entry is absent, switched off or declares no connector" };
+		return {
+			ok: false,
+			reason: "the connector entry is absent, switched off or declares no connector",
+		};
 	}
-	return { ok: true, identity: { name: record.connector, integration, record } };
+	return {
+		ok: true,
+		identity: { name: record.connector, integration, record },
+	};
 }
 
 /** The bearer credential of a request, and nothing else: no query string, no cookie, no second way in. */

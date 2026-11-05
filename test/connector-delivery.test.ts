@@ -325,15 +325,15 @@ describe("a streaming origin", () => {
 		}
 	});
 
-	it("reaches one destination: a mirror displays the reply, and a display causes no second send", async () => {
+	it("reaches one destination: a committed reply is one send, and the transcript is not a second one", async () => {
 		const served = await serveConnector({ steps: replyTurns(["seen by everyone"]) });
 		try {
-			const origin = await connectConnector(served, { state: ["projection"] });
+			const origin = await connectConnector(served);
 			try {
 				await say(origin, "hello");
 				await until(async () => (await acks(served)).length === 1, "the delivery to the origin");
-				// One reply, one destination: the number of sends equals the number of committed replies, whatever else
-				// subscribes to the transcript. A projection mirror reads the reply in state; it is never a delivery.
+				// One reply, one destination: the number of sends equals the number of committed replies. Reading the
+				// transcript is not a delivery.
 				const replies = await entries(served, REPLY_ENTRY_KIND);
 				assert.equal(origin.deliveries.length, replies.length);
 				const { projectTranscript } = await import("../src/server/projection.ts");
@@ -432,7 +432,7 @@ describe("a restart", () => {
 });
 
 describe("a reply nobody can reach", () => {
-	it("is recorded and reported, and the console still displays it", async () => {
+	it("is recorded and reported, and the transcript still holds it", async () => {
 		const served = await serveConnector({
 			steps: [
 				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "into the void" })], { stopReason: "toolUse" }),
@@ -453,7 +453,7 @@ describe("a reply nobody can reach", () => {
 				const view = await served.server.runtime.viewSnapshot(BACKGROUND_CONTEXT);
 				assert.ok(
 					projectTranscript(view).some((item) => item.kind === "delivered" && item.text === "into the void"),
-					"the console reads what was recorded",
+					"the transcript holds what was recorded",
 				);
 			} finally {
 				await connected.close();

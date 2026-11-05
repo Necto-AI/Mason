@@ -4,7 +4,7 @@
  * This module is the wire boundary, and the only place that decides what crosses it. Everything the model does —
  * reasoning, tool calls, tool arguments, tool output, usage, the raw entries — stays here, on the server. What leaves
  * is the conversation as a person reads it: their own words, the messages the agent chose to send (`reply`),
- * the widgets it built for them, the trigger that woke it, and a coarse notice when a run failed.
+ * and a coarse notice when a run failed.
  *
  * The rule is a whitelist, not a filter: a transcript item exists only because something here names it. A new entry
  * kind or a new tool cannot leak by default — it is invisible until this file says otherwise. The raw view stays
@@ -20,9 +20,7 @@ import {
 	REPLY_ENTRY_KIND,
 	REPLY_TOOL,
 	splitAuthor,
-	WIDGET_TOOL,
 } from "../shared/contract.ts";
-import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
 import { replyRecordOf, textOfBlocks } from "./replies.ts";
 
 /**
@@ -64,14 +62,8 @@ interface CallBlock {
 	arguments?: unknown;
 }
 
-/** The widget calls of one assistant message, in the order the model made them. */
 function callsOf(message: unknown): CallBlock[] {
 	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
-}
-
-/** Whether the call's result says it failed — an error result, or one interrupted by a restart. */
-function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean {
-	return outcomes.get(callId) === true;
 }
 
 /** What became of one delivery, as the entry records it. */
@@ -100,15 +92,14 @@ function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
 /**
  * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
- * A person's words are an input entry — `pi.user` from the console, `app.connector` through a connector, neither when an
- * event hook fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
- * message that carried the call contributes nothing, so a message appears once whether it was streamed, sent or read in
- * the console. A widget is the artifact, read off the call that built it. Tool results are read for failure alone,
- * never forwarded.
+ * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them, neither
+ * when a routine fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
+ * message that carried the call contributes nothing, so a message appears once whether it was streamed or committed.
+ * Tool results are read for failure alone, never forwarded.
  *
- * The round in flight contributes the same two shapes, streaming: a reply appears as the model writes it and a widget as
- * its markup arrives, exactly as they will stand once committed. A streaming reply whose entry has already landed is
- * skipped — the entry is the truth, and two copies of one message is the duplicate the outbox exists to prevent.
+ * The round in flight contributes the same shape, streaming: a reply appears as the model writes it, exactly as it will
+ * stand once committed. A streaming reply whose entry has already landed is skipped — the entry is the truth, and two
+ * copies of one message is the duplicate the outbox exists to prevent.
  *
  * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
  * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
@@ -142,7 +133,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND || entry.kind === CONNECTOR_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
 			// The delivery gate's reminder is a user entry the model reads, not one the reader sent — in either shape,
-			// the console's and the one a hooked turn gets.
+			// a local turn's and the one a fired turn gets.
 			const reminder = entry.kind !== CONNECTOR_ENTRY_KIND && isDeliveryReminder(spoken);
 			if (!reminder) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
@@ -186,21 +177,6 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 				});
 				spoke = true;
 			}
-			for (const call of callsOf(messageOf(entry))) {
-				if (typeof call.id !== "string") continue;
-				const args = (
-					typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}
-				) as Record<string, unknown>;
-				if (call.name === WIDGET_TOOL && !outcomeFailed(outcomes, call.id)) {
-					spoke = true;
-					items.push({
-						kind: "widget",
-						id: call.id,
-						streaming: false,
-						content: contentFromToolCall(args as never, true) satisfies OpenGenUIContent,
-					});
-				}
-			}
 			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
 			// not speech either: only the entries and calls this file forwards above count as having said something.
 			if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
@@ -223,7 +199,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
  * The calls of the in-flight round, projected the same way, marked streaming.
  *
  * A reply streams under the id its entry will carry — `reply:<callId>` — so the bubble a reader is watching becomes the
- * message without a second row appearing. A widget streams as its markup arrives.
+ * message without a second row appearing.
  */
 function streamingItems(
 	view: ConversationView | undefined,
@@ -250,15 +226,6 @@ function streamingItems(
 			// words twice.
 			if (replies.has(deliveryId)) continue;
 			items.push({ kind: "delivered", id: deliveryId, text, streaming: true });
-			continue;
-		}
-		if (call.name === WIDGET_TOOL) {
-			items.push({
-				kind: "widget",
-				id: call.id,
-				streaming: true,
-				content: contentFromToolCall(args as never, false) satisfies OpenGenUIContent,
-			});
 		}
 	}
 	return items;
@@ -303,16 +270,4 @@ function queuedText(item: { content?: unknown; entry?: { kind?: string; data?: u
 		return `hook: ${typeof data?.hookName === "string" ? data.hookName : "event"}`;
 	}
 	return "queued";
-}
-
-/** The names of the tools the running round has not finished. Names only — never arguments, never output. */
-export function runningToolNames(view: ConversationView | undefined): string[] {
-	const live = view?.docs["pi.live"] as LiveState | undefined;
-	const tools = live?.tools ?? [];
-	const names: string[] = [];
-	for (const tool of tools) {
-		if (tool.status === "done") continue;
-		if (!names.includes(tool.name)) names.push(tool.name);
-	}
-	return names;
 }

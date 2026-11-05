@@ -1,23 +1,21 @@
 /**
- * The shapes the panel and the server spell the same way: the reader's transcript, the queue, the agent's status, and
- * the entry kinds the projection is made of.
+ * The names the server and the client spell the same way, and the shapes the projection writes: the reader's
+ * transcript, the queue, the agent's status, and the entry kinds it is made of.
  *
- * There is no wire contract here any more (#103). The console's Chord service is gone with the console: a browser reads
- * `GET /api/admin/state` (`shared/admin.ts`), and a person speaks through a connector. This file stayed because every
- * shape below is still shared — the projection writes them, the panel renders them, the connector door mirrors them.
+ * There is no wire contract here: an interface is a connector and speaks `packages/protocol`. This file holds what is
+ * still shared in TypeScript — the entry kinds, the reply tool's name, the delivery reminder, and the shapes the
+ * projection builds. Nothing consumes the projection yet; apiary is where it crosses.
  */
-import { Type } from "typebox";
 
 /**
  * The names the server and the client have to spell the same way: the one tool whose call is a reply, and the entry
  * kinds the transcript is made of. Spelled once here, so a rename cannot land on one side of the wire only.
  *
  * `reply` is mason's own operation, not a vendor's: it targets the origin a turn came from — the connector that carried
- * the words — and the operator console when there is none. No prompt names a vendor tool, and the projection reads the
+ * the words — and the transcript itself when there is none. No prompt names a vendor tool, and the projection reads the
  * entry the reply commits rather than the call that made it.
  */
 export const REPLY_TOOL = "reply";
-export const WIDGET_TOOL = "generateSandboxedUi";
 /** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
 /** A person's words that arrived through a connector, carrying the origin a reply goes back to. */
@@ -57,15 +55,6 @@ function deliveryReminderOpening(tool: string): string {
 your notes, nothing at all.`;
 }
 
-export const HookSummarySchema = Type.Object({
-	id: Type.String(),
-	name: Type.String(),
-	description: Type.String(),
-	enabled: Type.Boolean(),
-	intervalMs: Type.Optional(Type.Number()),
-	lastFiredAt: Type.Optional(Type.String()),
-	fireCount: Type.Number(),
-});
 export type HookSummary = {
 	id: string;
 	name: string;
@@ -76,25 +65,8 @@ export type HookSummary = {
 	fireCount: number;
 };
 
-export const RunStatusSchema = Type.Union([
-	Type.Literal("idle"),
-	Type.Literal("generating"),
-	Type.Literal("running_tools"),
-	Type.Literal("retrying"),
-	Type.Literal("compacting"),
-]);
 export type RunStatus = "idle" | "generating" | "running_tools" | "retrying" | "compacting";
 
-export const AgentStatusSchema = Type.Object({
-	runStatus: RunStatusSchema,
-	busy: Type.Boolean(),
-	activeRunTaskId: Type.Optional(Type.String()),
-	/** The tools of the running round, by name. No arguments, no output: what runs is not what the reader reads. */
-	runningTools: Type.Array(Type.String()),
-	model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
-	cwd: Type.Optional(Type.String()),
-	hooks: Type.Array(HookSummarySchema),
-});
 export type AgentStatus = {
 	runStatus: RunStatus;
 	busy: boolean;
@@ -120,7 +92,7 @@ export const NAME_MAX = 40;
  * This is history, read-only. A home that predates the single-user cutover stored `[from Ilya] …` as the text of a
  * `pi.user` message, because a shared transcript needed an author the model could see. Mason works for one person now
  * and writes no prefix, and the messages it wrote before keep theirs: rewriting stored text at read time would change
- * what somebody actually said, which `ROOM-IDENTITY.md` refused on the record (#126). `splitAuthor` reads them back out
+ * what somebody actually said, which the room vocabulary refused on the record (#126). `splitAuthor` reads them back out
  * so an old transcript still shows the name it was written with; nothing writes one any more.
  */
 export const AUTHOR_PREFIX = new RegExp(`^\\[from ([^[\\]\\n]{1,${NAME_MAX}})\\] `);
@@ -136,48 +108,14 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`reply`), the widgets it built for them, and a coarse notice when a run failed. A trigger leaves no row of
- * its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
+ * (`reply`), and a coarse notice when a run failed. A trigger leaves no row of its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
  * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
  * a trace endpoint can expose them later, deliberately and separately.
  */
-export const TranscriptItemSchema = Type.Union([
-	Type.Object({
-		kind: Type.Literal("user"),
-		id: Type.String(),
-		text: Type.String(),
-		/** Who said it, when the message was written before the cutover and carries a `[from …]` prefix. */
-		author: Type.Optional(Type.String()),
-		at: Type.Optional(Type.Number()),
-	}),
-	Type.Object({
-		kind: Type.Literal("delivered"),
-		id: Type.String(),
-		text: Type.String(),
-		failed: Type.Optional(Type.Boolean()),
-		streaming: Type.Optional(Type.Boolean()),
-	}),
-	Type.Object({
-		kind: Type.Literal("widget"),
-		id: Type.String(),
-		streaming: Type.Boolean(),
-		content: Type.Unknown(),
-	}),
-	Type.Object({ kind: Type.Literal("notice"), id: Type.String(), text: Type.String() }),
-]);
 export type TranscriptItem =
 	| { kind: "user"; id: string; text: string; author?: string; at?: number }
 	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
-	| { kind: "widget"; id: string; streaming: boolean; content: unknown }
 	| { kind: "notice"; id: string; text: string };
 
 /** A submission the reader queued and can still withdraw, labelled for them rather than for the machine. */
-export const QueuedItemSchema = Type.Object({
-	id: Type.Number(),
-	mode: Type.String(),
-	text: Type.String(),
-	/** Whoever queued it, when the queued text carries a `[from …]` prefix written before the cutover. */
-	author: Type.Optional(Type.String()),
-	withdrawable: Type.Boolean(),
-});
 export type QueuedItem = { id: number; mode: string; text: string; author?: string; withdrawable: boolean };

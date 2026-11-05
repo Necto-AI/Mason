@@ -3,11 +3,11 @@
  *
  * Routing is mason's, not the model's. A turn knows its origin from the transcript — the `app.connector` or `app.hook`
  * entry that started it — and the tool addresses the reply there. There is no vendor tool to name and no prompt that
- * names one: a chat, a console and a schedule are the same call, and only the destination differs.
+ * names one: a chat, the transcript and a schedule are the same call, and only the destination differs.
  *
  * Three outcomes, and the result says which:
  *
- * - **delivered** — the console is the reader; the entry the call commits *is* the delivery.
+ * - **delivered** — the transcript is the reader; the entry the call commits *is* the delivery.
  * - **queued** — a connector is the reader; the entry is the durable outbox, and the socket sends it, resends it after a
  *   reconnect, and records the acknowledgement. Saying "delivered" here would be a promise this process cannot keep.
  * - **nobody reached** — a hooked turn with no origin that named no target. The work is recorded and the model is told
@@ -25,13 +25,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import {
-	DELIVERY_REMINDER,
-	isDeliveryReminder,
-	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
-	WIDGET_TOOL,
-} from "../../shared/contract.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_ENTRY_KIND, REPLY_TOOL } from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
 	type ReplyRecord,
@@ -97,7 +91,7 @@ function textOf(message: Message): string {
 export const replyTool = defineTool({
 	name: REPLY_TOOL,
 	description:
-		"Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A reply goes back where the turn came from — the connector that carried the words, or the operator console — so never try to reach a chat by another tool's name. When the turn came from an event hook with no conversation behind it, name the target with {to:{connector, conversation}}, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
+		"Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A reply goes back where the turn came from — the connector that carried the words, or the transcript itself — so never try to reach a chat by another tool's name. When the turn came from an event hook with no conversation behind it, name the target with {to:{connector, conversation}}, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
 	parameters: ReplyParams,
 	replay: "unsafe",
 	execute: async ({ message, to }, api, context) => {
@@ -111,9 +105,9 @@ export const replyTool = defineTool({
 			deliveryId: `reply:${api.callId}`,
 			blocks,
 			...(chosen.target === undefined ? {} : { target: chosen.target }),
-			...(origin.kind !== "console" && origin.origin !== undefined ? { origin: origin.origin } : {}),
+			...(origin.kind !== "local" && origin.origin !== undefined ? { origin: origin.origin } : {}),
 		};
-		// The commit is the delivery, and the commit is what makes it durable: a console reply is read out of this entry,
+		// The commit is the delivery, and the commit is what makes it durable: a local reply is read out of this entry,
 		// and a connector reply is sent from it by the outbox, which records the acknowledgement as its own entry.
 		await api.commit(
 			(tx) =>
@@ -158,8 +152,8 @@ export const replyTool = defineTool({
 function outcomeText(record: ReplyRecord): string {
 	if (record.target === undefined) {
 		return record.origin === undefined
-			? "delivered to the operator console"
-			: "delivered to the operator console: this turn's origin is a connector, but the reply was addressed here";
+			? "delivered to the transcript"
+			: "delivered to the transcript: this turn's origin is a connector, but the reply was addressed here";
 	}
 	return `queued for delivery to ${record.target.connector} "${record.target.externalConversationId}"`;
 }
@@ -182,7 +176,7 @@ function chooseTarget(
 	}
 	// A person's words through a connector and a fire that named its conversation are the same destination: both carry an
 	// origin, and the reply goes back to it.
-	const carried = origin.kind === "console" ? undefined : origin.origin;
+	const carried = origin.kind === "local" ? undefined : origin.origin;
 	if (carried !== undefined) {
 		const target = targetOfOrigin(carried);
 		const reachable = reachableTarget(currentIntegrations(), target);
@@ -190,7 +184,7 @@ function chooseTarget(
 		// fails with a sentence the model can act on rather than silently landing somewhere nobody reads.
 		return reachable.ok ? { target } : { reason: `cannot deliver: ${reachable.reason}` };
 	}
-	if (origin.kind === "console") return {};
+	if (origin.kind === "local") return {};
 	return { nobodyReached: true };
 }
 
@@ -207,10 +201,10 @@ const REMINDED = "delivery.reminded";
  * rather than nothing.
  *
  * "Delivered" is the same call `reply` makes: one operation, so the gate and the tool cannot disagree about what
- * reaching the reader means. A widget is a second thing a reader sees, and counts.
+ * reaching the reader means.
  */
 function turnDelivered(messages: readonly Message[]): boolean {
-	const delivering = new Set([REPLY_TOOL, WIDGET_TOOL]);
+	const delivering = new Set([REPLY_TOOL]);
 	for (const message of messages) {
 		if (message.role !== "assistant") continue;
 		const content = (message as { content?: unknown }).content;

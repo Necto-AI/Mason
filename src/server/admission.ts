@@ -12,7 +12,7 @@ import type { InputEntry, JsonObject } from "@earendil-works/pi-durable";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND } from "../shared/contract.ts";
 
 /**
- * Where an input came from. `user` is a person typing in the operator console; `external` is a person whose words
+ * Where an input came from. `user` is a message mason wrote itself; `external` is a person whose words
  * arrived through a connector, carrying the origin a reply goes back to; `hook` is an event hook firing.
  */
 export type Origin = "user" | "external" | "hook";
@@ -51,12 +51,4 @@ export function entryFor(origin: Origin, data?: JsonObject): InputEntry | undefi
 export function whenBusyFor(origin: Origin, requested?: WhenBusy): WhenBusy | undefined {
 	if (origin === "hook") return requested === undefined || requested === "steer" ? "steer" : "followUp";
 	return requested;
-}
-
-/**
- * Whether the origin is a person: the console, or a connector carrying someone's words. A person's message is admitted
- * as ordinary conversation; a fire steers, and never becomes one.
- */
-export function isHumanOrigin(origin: Origin): boolean {
-	return origin === "user" || origin === "external";
 }

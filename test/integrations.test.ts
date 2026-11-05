@@ -17,18 +17,15 @@ import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { RETIRED_GRANT_KEYS } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
 	type Integration,
-	migrateIntegrationTriggers,
 	readIntegrations,
 	removeIntegration,
 	setIntegrationEnabled,
 	writeIntegration,
 } from "../src/server/integrations.ts";
-import { startServer } from "../src/server/main.ts";
-import type { McpTransportFactory } from "../src/server/mcp.ts";
-import { fakeServer, ISSUE_TOOL, SEARCH_TOOL } from "./support/mcp.ts";
 
 const run = promisify(execFile);
 
@@ -187,7 +184,7 @@ describe("the integration list on disk", () => {
 		assert.match(await refusal(paths), /needs "enabled": true or "enabled": false/);
 	});
 
-	it("refuses a file that still names the signed event door, and points at the migration", async () => {
+	it("refuses a file that still names the signed event door, and says what to delete", async () => {
 		const paths = await temporaryHome();
 		// The door is gone (#104). Reading past a secret nothing checks would leave a sender that looks configured and
 		// receives nothing, so the boot refuses and says which command removes it.
@@ -200,14 +197,14 @@ describe("the integration list on disk", () => {
 		const trigger = await refusal(paths);
 		assert.ok(trigger.includes(paths.integrations), `the refusal names the file: ${trigger}`);
 		assert.match(trigger, /"trigger"/);
-		assert.match(trigger, /npm run doctor -- migrate/);
+		assert.match(trigger, /Delete the key by hand/);
 		assert.match(trigger, /npm run connector -- add github/);
 
 		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, commands: ["stop"] } } }));
 		const commands = await refusal(paths);
 		assert.match(commands, /"commands"/);
 		assert.match(commands, /connector\.commands/);
-		assert.match(commands, /npm run doctor -- migrate/);
+		assert.match(commands, /Delete the key by hand/);
 	});
 
 	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
@@ -218,7 +215,7 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "8811", conversations: [] }, state: [], trustMarkers: false },
+						connector: { user: { owner: "8811", conversations: [] } },
 					},
 				},
 			}),
@@ -227,7 +224,7 @@ describe("the integration list on disk", () => {
 		assert.equal(booted?.owner, "8811");
 
 		// Each retired key is a file whose reader believes it still decides who may speak (#126). The refusal names the key
-		// and the one command that rewrites it, rather than reading past a setting that no longer exists.
+		// rather than reading past a setting that no longer exists.
 		for (const [key, retired] of [
 			["actors", { "8811": "Denis" }],
 			["unattributed", true],
@@ -239,18 +236,33 @@ describe("the integration list on disk", () => {
 					integrations: {
 						telegram: {
 							enabled: true,
-							connector: {
-								user: { owner: "8811", conversations: [], [key]: retired },
-								state: [],
-								trustMarkers: false,
-							},
+							connector: { user: { owner: "8811", conversations: [], [key]: retired } },
 						},
 					},
 				}),
 			);
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
-			assert.match(refused, /npm run doctor -- migrate/, key);
+			assert.match(refused, /by hand/, key);
+		}
+
+		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries
+		// one. Reading past them would leave an operator believing a rule still runs.
+		for (const key of RETIRED_GRANT_KEYS) {
+			await writeRaw(
+				paths,
+				JSON.stringify({
+					integrations: {
+						telegram: {
+							enabled: true,
+							connector: { user: { owner: "8811", conversations: [] }, [key]: [] },
+						},
+					},
+				}),
+			);
+			const refused = await refusal(paths);
+			assert.match(refused, new RegExp(`connector\\.${key}`), key);
+			assert.match(refused, /by hand/, key);
 		}
 
 		// An owner that is not an actor id is refused as well: an empty string is nobody, spelled as if it were somebody.
@@ -260,70 +272,12 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "  ", conversations: [] }, state: [], trustMarkers: false },
+						connector: { user: { owner: "  ", conversations: [] } },
 					},
 				},
 			}),
 		);
 		assert.match(await refusal(paths), /"connector\.user\.owner" that is not an actor id/);
-	});
-
-	it("migrates both old keys away, once, and carries a granted vocabulary onto the grant", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					github: {
-						...github,
-						note: "a key mason has never heard of",
-						trigger: { hook: "github-activity", secret: "s".repeat(32) },
-						commands: ["stop"],
-					},
-					docs: { enabled: false, description: "The docs", tools: { url: "http://mason-docs:8080/mcp" } },
-				},
-			}),
-		);
-
-		assert.deepEqual(await migrateIntegrationTriggers(paths), [{ name: "github", moved: [], stranded: ["stop"] }]);
-		const migrated = (await readIntegrations(paths)).integrations;
-		assert.equal(migrated.github?.trigger, undefined);
-		assert.equal(migrated.github?.commands, undefined);
-		assert.equal((migrated.github as Record<string, unknown>).note, "a key mason has never heard of");
-		assert.deepEqual(migrated.github?.tools, github.tools, "the tools face survives the migration");
-		assert.deepEqual(migrated.docs?.tools, { url: "http://mason-docs:8080/mcp" });
-
-		// Idempotent: a second run finds nothing to do and does not rewrite the file.
-		const before = await readFile(paths.integrations, "utf8");
-		assert.deepEqual(await migrateIntegrationTriggers(paths), []);
-		assert.equal(await readFile(paths.integrations, "utf8"), before);
-	});
-
-	it("moves the old command list onto the grant rather than dropping a permission a person granted", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					telegram: {
-						enabled: true,
-						trigger: { hook: "team-chat", secret: "s".repeat(32) },
-						commands: ["stop", "status"],
-						connector: { events: { hooks: {} }, state: ["status"], trustMarkers: false },
-					},
-					// No connector block: there is nothing to hold the words, and doctor says so rather than inventing one.
-					bare: { enabled: true, commands: ["compact"] },
-				},
-			}),
-		);
-
-		assert.deepEqual(await migrateIntegrationTriggers(paths), [
-			{ name: "telegram", moved: ["stop", "status"], stranded: [] },
-			{ name: "bare", moved: [], stranded: ["compact"] },
-		]);
-		const migrated = (await readIntegrations(paths)).integrations;
-		assert.deepEqual(migrated.telegram?.connector?.commands, ["stop", "status"]);
-		assert.deepEqual(migrated.telegram?.connector?.state, ["status"], "the rest of the grant is untouched");
 	});
 
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {
@@ -413,7 +367,7 @@ describe("the integration command", () => {
 						enabled: false,
 						description: "The old endpoint",
 						tools: { url: "http://mason-github:8082/mcp", required: true },
-						connector: { state: [], trustMarkers: true },
+						connector: { commands: ["stop"] },
 					},
 				},
 			}),
@@ -438,7 +392,6 @@ describe("the integration command", () => {
 		const stored = (await readIntegrations(paths)).integrations.github;
 		assert.equal(stored?.description, "New");
 		assert.deepEqual(stored?.tools, { url: "http://new:8082/mcp", required: true });
-		assert.equal(stored?.connector?.trustMarkers, true);
 	});
 
 	it("lists a connector by the faces it grants, and names no credential", async () => {
@@ -449,11 +402,7 @@ describe("the integration command", () => {
 				integrations: {
 					github: {
 						...github,
-						connector: {
-							user: { owner: "8811", conversations: [] },
-							state: ["status"],
-							trustMarkers: false,
-						},
+						connector: { user: { owner: "8811", conversations: [] } },
 					},
 				},
 			}),
@@ -470,221 +419,5 @@ describe("the integration command", () => {
 		assert.match(usage.stdout, new RegExp(`home: ${paths.home}`));
 		assert.ok(usage.stdout.includes(paths.integrations), "the block names the file, not just the home");
 		assert.match(usage.stdout, /--replace/);
-	});
-});
-
-/**
- * A running server over `paths`, booted with the transport its connections use. The route is the subject of these
- * tests, so nothing here reaches into the module's registry: a server is started, and the answer is what it says.
- */
-async function serve(
-	paths: HousePaths,
-	transport: McpTransportFactory,
-	token?: string,
-): Promise<{ url: string; token: string; close: () => Promise<void> }> {
-	const directory = dirname(paths.home);
-	const server = await startServer({
-		port: 0,
-		hostname: "127.0.0.1",
-		storage: "memory",
-		dataDir: join(directory, "data"),
-		workspaceDir: join(directory, "workspace"),
-		houseHome: paths.home,
-		faux: true,
-		onReport: () => {},
-		mcpTransport: transport,
-	});
-	// A fresh home mints one token, and a second boot over the same home does not: the token outlives the process, so a
-	// caller that has it, has it.
-	const paired = token ?? server.pairingToken;
-	assert.ok(paired, "a fresh home mints one token, which is what pairs this test");
-	return {
-		url: `http://127.0.0.1:${server.port}/api/integrations`,
-		token: paired,
-		close: () => server.close(),
-	};
-}
-
-/** What the route answers, as a client reads it. */
-async function reported(url: string, token: string): Promise<Record<string, unknown>[]> {
-	const answer = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-	assert.equal(answer.status, 200);
-	const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
-	return body.integrations;
-}
-
-/** Every server down: the shape of a boot nobody's containers have come up for. */
-function downAll(): never {
-	throw new Error("no container in a test");
-}
-
-describe("the integrations route", () => {
-	it("answers nothing at the signed event door, because there is no door any more", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(paths, JSON.stringify({ integrations: {} }));
-		const server = await serve(paths, downAll);
-		const base = server.url.slice(0, -"/api/integrations".length);
-		try {
-			// The path used to be the one door outside the owner's gate, authenticated by a sender's HMAC. It is not a
-			// door now, so it is not outside the gate either: no token is refused like any other `/api` path, and a token
-			// reaches the same `404` a path nobody serves gets.
-			for (const path of ["/api/events/telegram", "/api/events/", "/api/events/telegram/more"]) {
-				const anonymous = await fetch(`${base}${path}`, {
-					method: "POST",
-					headers: { "content-type": "application/json", "x-mason-signature": `sha256=${"0".repeat(64)}` },
-					body: JSON.stringify({ v: 1, id: "1", kind: "chat.message", payload: "hello" }),
-				});
-				assert.equal(anonymous.status, 401, `${path} is not a door`);
-
-				const owned = await fetch(`${base}${path}`, {
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${server.token}`,
-						"content-type": "application/json",
-						"x-mason-signature": `sha256=${"0".repeat(64)}`,
-					},
-					body: JSON.stringify({ v: 1, id: "1", kind: "chat.message", payload: "hello" }),
-				});
-				assert.equal(owned.status, 404, `${path} has no route behind the gate either`);
-			}
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("answers this boot's list, sorted, and refuses a request without a token", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					github,
-					docs: {
-						enabled: false,
-						description: "The internal documentation server",
-						tools: { url: "http://mason-docs:8080/mcp" },
-					},
-				},
-			}),
-		);
-		// A boot with a tools face reaches for it, so the test hands it a transport that is down instead of a port.
-		const server = await serve(paths, downAll);
-		try {
-			assert.equal((await fetch(server.url)).status, 401, "the route is the owner's, like the rest of the API");
-
-			const integrations = await reported(server.url, server.token);
-			assert.deepEqual(
-				integrations.map((entry) => entry.name),
-				["docs", "github"],
-				"sorted by name",
-			);
-			assert.deepEqual(integrations[1], {
-				name: "github",
-				enabled: true,
-				hasTools: true,
-				connected: false,
-				tools: 0,
-				error: 'MCP integration "github" at http://mason-github:8082/mcp: no container in a test',
-			});
-			// A disabled integration is not attempted at all, so it has no health to report: the route says what is, not what
-			// would be if the switch were flipped.
-			assert.deepEqual(integrations[0], {
-				name: "docs",
-				enabled: false,
-				hasTools: true,
-				connected: false,
-				tools: 0,
-				error: null,
-			});
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("reports a server it reached, with the tools it offered", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(
-			paths,
-			JSON.stringify({
-				integrations: {
-					github,
-					docs: {
-						enabled: true,
-						description: "The internal documentation server",
-						tools: { url: "http://mason-docs:8080/mcp" },
-					},
-				},
-			}),
-		);
-		const reachable = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
-		// The container that came up and the one that did not, told apart by the url the boot asks for.
-		const server = await serve(paths, (url) => (url.includes("mason-github") ? reachable.transport : downAll()));
-		try {
-			assert.deepEqual(await reported(server.url, server.token), [
-				{
-					name: "docs",
-					enabled: true,
-					hasTools: true,
-					connected: false,
-					tools: 0,
-					error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no container in a test',
-				},
-				{
-					name: "github",
-					enabled: true,
-					hasTools: true,
-					connected: true,
-					tools: 2,
-					error: null,
-				},
-			]);
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("does not report a connection the boot before this one made", async () => {
-		const paths = await temporaryHome();
-		await writeRaw(paths, JSON.stringify({ integrations: { github } }));
-		const reachable = await fakeServer([ISSUE_TOOL, SEARCH_TOOL], () => ({ content: [] }));
-		const first = await serve(paths, () => reachable.transport);
-		try {
-			assert.deepEqual((await reported(first.url, first.token))[0]?.connected, true, "the first boot reached it");
-		} finally {
-			await first.close();
-		}
-
-		// The same home, the same process, and this time nothing answers: what the route says is this boot's finding,
-		// because a status left over from a connection that has since died is worse than no status at all.
-		const second = await serve(paths, downAll, first.token);
-		try {
-			const [github] = await reported(second.url, second.token);
-			assert.equal(github?.connected, false, "the previous boot's connection is not news");
-			assert.match(String(github?.error), /no container in a test/);
-			assert.equal(github?.tools, 0);
-		} finally {
-			await second.close();
-		}
-	});
-
-	it("refuses to boot on an integration list it cannot read", async () => {
-		const paths = await temporaryHome();
-		const directory = dirname(paths.home);
-		await writeRaw(paths, '{"integrations": {');
-		await assert.rejects(
-			() =>
-				startServer({
-					port: 0,
-					hostname: "127.0.0.1",
-					storage: "memory",
-					dataDir: join(directory, "data"),
-					workspaceDir: join(directory, "workspace"),
-					houseHome: paths.home,
-					faux: true,
-					onReport: () => {},
-				}),
-			(error: Error) => error.message.includes(paths.integrations),
-			"a server that booted with an empty set would be missing tools nobody knows it lost",
-		);
 	});
 });
