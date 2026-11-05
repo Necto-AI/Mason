@@ -33,7 +33,7 @@ import {
 	type StateSnapshotParams,
 	type StateSubscribeResult,
 	type SubmitParams,
-} from "@mason/protocol";
+} from "mason-protocol";
 import type { Fetcher } from "../attachments.ts";
 import { protocolFailure } from "../jsonrpc.ts";
 import { type Link, type LinkFactory, linkPair } from "../link.ts";

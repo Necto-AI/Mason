@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import type { ControlOp } from "@mason/protocol";
+import type { ControlOp } from "mason-protocol";
 import type { IntegrationSummary } from "../src/server/integration-status.ts";
 import { type CommandTarget, runCommand } from "../src/server/main.ts";
 import { statusLine } from "../src/server/status.ts";

@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { ERROR_CODE, type InteractionRequestParams } from "@mason/protocol";
+import { ERROR_CODE, type InteractionRequestParams } from "mason-protocol";
 import { PERMISSION_ANSWER_ENTRY_KIND, PERMISSION_ENTRY_KIND } from "../src/server/permissions.ts";
 import { REPLY_TOOL } from "../src/shared/contract.ts";
 import { connectConnector, connectorHome, entriesOf, rawConnect, serveConnector, until } from "./support/connector.ts";

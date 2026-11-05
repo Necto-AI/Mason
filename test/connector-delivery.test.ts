@@ -10,9 +10,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { createConnector, nodeWebSocketLink } from "@mason/connector";
-import { MemoryStore } from "@mason/connector/store/memory";
-import type { DeliveryAck, DeliveryFinalParams } from "@mason/protocol";
+import { createConnector, nodeWebSocketLink } from "mason-connector";
+import { MemoryStore } from "mason-connector/store/memory";
+import type { DeliveryAck, DeliveryFinalParams } from "mason-protocol";
 import WebSocket from "ws";
 import { CONNECTOR_ENTRY_KIND, DELIVERY_ENTRY_KIND, REPLY_ENTRY_KIND, REPLY_TOOL } from "../src/shared/contract.ts";
 import {

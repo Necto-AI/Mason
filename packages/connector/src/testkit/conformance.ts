@@ -23,7 +23,7 @@ import type {
 	StateDeltaParams,
 	StateScope,
 	StateSnapshotParams,
-} from "@mason/protocol";
+} from "mason-protocol";
 import { AttachmentError } from "../attachments.ts";
 import {
 	type Connector,

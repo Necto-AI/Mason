@@ -63,7 +63,7 @@ export interface PanelPerson {
 	readonly addedAt: string;
 }
 
-/** A room a connector's user face may carry words in (`@mason/protocol`'s `ExternalConversation`). */
+/** A room a connector's user face may carry words in (`mason-protocol`'s `ExternalConversation`). */
 export interface PanelConversationGrant {
 	readonly externalConversationId: string;
 	readonly kind: "person" | "room";

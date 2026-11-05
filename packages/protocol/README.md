@@ -1,4 +1,4 @@
-# `@mason/protocol`
+# `mason-protocol`
 
 The mason connector protocol, major 1: the normative wire contract between mason and an external connector.
 
@@ -13,13 +13,13 @@ Where the three disagree, the schema wins and the others are bugs. A test assert
 TypeScript and in the schema are the same set, so the drift cannot happen quietly.
 
 ```ts
-import { METHOD, PROTOCOL_MAJOR, ERROR_CODE, APPROVAL_META_KEY } from "@mason/protocol";
-import schema from "@mason/protocol/schema" with { type: "json" };
+import { METHOD, PROTOCOL_MAJOR, ERROR_CODE, APPROVAL_META_KEY } from "mason-protocol";
+import schema from "mason-protocol/schema" with { type: "json" };
 ```
 
 Installing this package is optional. A connector that only needs the schema can copy the JSON file and ignore npm
 entirely; the values in it are the contract, not the version of a dependency.
 
-The SDK is separate: [`@mason/connector`](../connector) adds the socket, the journal, the dedup ledger, attachments, and
+The SDK is separate: [`mason-connector`](../connector) adds the socket, the journal, the dedup ledger, attachments, and
 the conformance suite. Pinning `protocol.major` and pinning the SDK version are two different decisions, and the two move
 independently.

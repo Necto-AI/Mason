@@ -27,7 +27,7 @@
 
 import type { Context } from "@earendil-works/chord";
 import type { ConversationId, Cursor, EntryRecord, Tx } from "@earendil-works/pi-durable";
-import type { ContentBlock, Origin } from "@mason/protocol";
+import type { ContentBlock, Origin } from "mason-protocol";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder } from "../shared/contract.ts";
 import type { Integration } from "./integrations.ts";
 

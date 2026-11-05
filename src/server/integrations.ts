@@ -25,7 +25,7 @@
  * between two turns of one build.
  */
 import { readFile } from "node:fs/promises";
-import { CONTROL_OPS, type ControlOp } from "@mason/protocol";
+import { CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { writeFileAtomic } from "./atomic.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";

@@ -20,7 +20,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { CAPABILITIES, CONTROL_OPS, STATE_SCOPES } from "@mason/protocol";
+import { CAPABILITIES, CONTROL_OPS, STATE_SCOPES } from "mason-protocol";
 import type {
 	ConnectorGrantInput,
 	ConnectorPatch,
