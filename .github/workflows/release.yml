@@ -1,0 +1,74 @@
+name: release
+
+# A `v*` tag is the whole release: the checks `ci` runs gate it, then the three packages go out of one commit,
+# protocol first because that is the order `build:packages` enforces, with npm provenance and no secret. npm's
+# direct-publish tokens stop working in January 2027; this holds nothing but the trusted-publisher entries on
+# npmjs.com, configured once per package (package settings, Trusted Publisher: this repository and this workflow
+# name). The first smoke tag, and the revocation of the granular `mason-publish` token after it, are human steps on
+# the issue's checklist, not steps here.
+on:
+  push:
+    tags:
+      - "v*"
+
+# A repushed tag queues behind the run it replaces instead of cancelling a publish mid-flight: half of a release
+# is not a release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # `id-token` mints the provenance statement npm verifies server-side, `contents` writes the GitHub release
+      # the tarballs attach to. No secret is configured.
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The same recipe a fresh clone runs: the root install, then the two workspace packages the tests and the
+      # runtime import from `dist`.
+      - run: bash scripts/setup.sh
+
+      # The verify half, verbatim from `ci.yml`: a tag releases only a tree the usual checks pass on.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run gen:surface:check
+      - run: npm run check:docs
+      - run: npm run check:code
+      - run: npm test
+      - run: npm run test:packages
+      # The packed artifact, installed into an empty project outside the tree: a release that only runs from
+      # source is not a release.
+      - run: npm run prove:connector
+
+      # The consumer's tarball ships `dist`, which nothing above builds (the dev path stays source-from-types and
+      # `ci` rightly never builds it, so a tag is where the compile has to happen). The two workspace packages pack
+      # beside it, protocol first, in the same order the publish below keeps.
+      - run: npm run build
+      - run: npm pack --workspace mason-protocol --workspace mason-connector --pack-destination dist/
+      - run: npm pack --workspaces=false --pack-destination dist/
+
+      # Publishing is gated on the tag event, so a run on any other ref stops here: verification without a release.
+      - name: publish the packages, protocol first
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          npm publish --workspace mason-protocol --provenance
+          npm publish --workspace mason-connector --provenance
+          npm publish --workspaces=false --provenance
+
+      - name: attach the tarballs to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/mason-agent-*.tgz dist/mason-protocol-*.tgz dist/mason-connector-*.tgz
