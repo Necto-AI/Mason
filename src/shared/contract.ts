@@ -119,7 +119,7 @@ export const NAME_MAX = 40;
  * This is history, read-only. A home that predates the single-user cutover stored `[from Ilya] …` as the text of a
  * `pi.user` message, because a shared transcript needed an author the model could see. Mason works for one person now
  * and writes no prefix, and the messages it wrote before keep theirs: rewriting stored text at read time would change
- * what somebody actually said, which `ROOM-IDENTITY.md` refused on the record (#126). `splitAuthor` reads them back out
+ * what somebody actually said, which the room vocabulary refused on the record (#126). `splitAuthor` reads them back out
  * so an old transcript still shows the name it was written with; nothing writes one any more.
  */
 export const AUTHOR_PREFIX = new RegExp(`^\\[from ([^[\\]\\n]{1,${NAME_MAX}})\\] `);

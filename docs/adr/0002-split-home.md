@@ -2,10 +2,10 @@
 
 **Status:** Accepted
 
-The bot's files must be editable with ordinary tools — `read`, `write`, `bash`, and later its own skills and
-extensions — which means they have to live on the machine those tools run on, not in the process that thinks. But the
-same directory today also holds the pairing-token hashes, the integration secrets, the SQLite database, the SSH key and a
-copy of the provider credential, so moving the home wholesale would hand the bot its own door and its own model key.
+The bot's files must be editable with ordinary tools — `read`, `write`, `bash`, and its own skills — which means they
+have to live on the machine those tools run on, not in the process that thinks. But the same directory also holds the
+connector credential hashes, the integration secrets, the SQLite database, the SSH key and a copy of the provider
+credential, so moving the home wholesale would hand the bot its own door and its own model key.
 The home is therefore split into `agent/` (mounted into the tool machine, read and written by the bot) and `service/`
 (never mounted, never a path inside the tool machine), and the split is a volume boundary rather than a permission
 mode because `bash` can talk its way around a mode.
@@ -20,10 +20,6 @@ mode because `bash` can talk its way around a mode.
   turn's prompt; the next turn reads the file again.
 - **`soul.md` is service-owned and simply not readable by the bot.** No read-only copy, no mode bit; the file is not
   in the bot's world at all.
-- **The layout change is a one-time, re-runnable migration** (`npm run doctor -- migrate`). The repository that
-  existed before the split is not moved: it stays at the home root, on the server, where it may hold whatever it held,
-  and it is frozen there — both halves leave its index and enter its `.gitignore` — so the agent's writes are not dirt
-  in it forever. The agent's own repository is created fresh in `agent/`, and its history begins at the migration; the
-  pre-split history stays in the repository at the home root, which is never a path inside the tool machine. Booting a
-  home from before the split refuses and names the command, because writing the new layout beside the old files would
-  lose the soul to `DEFAULT_SOUL` and make every entry ambiguous.
+- **A pre-split home is refused, not migrated.** `refuseLegacyHome` names the entries it found and says to move them
+  into `agent/` or `service/` by hand. A server that rewrote an operator's home on boot would be a server that edits
+  files he did not ask it to touch, and one migration engine is a programme of its own.

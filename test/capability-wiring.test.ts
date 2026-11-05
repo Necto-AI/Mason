@@ -1,7 +1,7 @@
 /**
  * A capability the repository says it ships has to be somewhere a test can find it.
  *
- * `docs/CAPABILITY-PLAN.md` states the done-criterion for every capability it adds: one test in this repository fails if
+ * Each capability mason claims has its own done-criterion: one test in this repository fails if
  * it disappears. Nothing in a running stack proves that — an operator's host can have a volume, an image and an env var
  * that this checkout never mentions, and the next `up` from a fresh clone would be a bot that cannot read a page or hear a
  * voice note, silently. So these read the files that wire each capability in and pin the parts a person would have to

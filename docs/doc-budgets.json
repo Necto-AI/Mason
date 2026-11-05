@@ -3,21 +3,11 @@
 		"docs/SURFACE.md"
 	],
 	"ceilings": {
-		"AGENTS.md": 2074,
-		"GLOSSARY.md": 2235,
-		"docs/AGENTS.md": 950,
-		"docs/APIARY-PLAN.md": 1700,
-		"docs/APPLICATION-PLAN.md": 1550,
-		"docs/ARCHITECTURE.md": 1307,
-		"docs/BACKEND-PLAN.md": 2350,
-		"docs/CAPABILITY-PLAN.md": 2050,
-		"docs/CONNECTOR-PROTOCOL.md": 550,
-		"docs/ENV-PLAN.md": 2750,
-		"docs/EXECUTION-TARGETS.md": 1750,
-		"docs/FLEET-PLAN.md": 1400,
-		"docs/MVP-PLAN.md": 1500,
-		"docs/ROOM-IDENTITY.md": 2500,
-		"docs/SPEC.md": 12243,
-		"docs/UI-PLAN.md": 4050
+		"AGENTS.md": 2071,
+		"GLOSSARY.md": 1544,
+		"docs/AGENTS.md": 912,
+		"docs/ARCHITECTURE.md": 1301,
+		"docs/CONNECTOR-PROTOCOL.md": 431,
+		"docs/SPEC.md": 8257
 	}
 }

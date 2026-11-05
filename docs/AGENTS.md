@@ -7,11 +7,10 @@ which is current. This page is the map of which tier a sentence belongs to, and 
 |---|---|---|
 | `AGENTS.md` (root) | Standing orders an agent needs in every session: the rules, the commands, the paths. One to three lines each, linking the home for the rest | A tutorial, a file tree, or the detail of one subsystem — the file is read on every turn, so a paragraph here is one every session pays for |
 | [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) | How mason is assembled today, and where new behaviour goes: one row per goal, naming the file that owns it, the mechanism, and the test that pins it | The product goal, the milestones, the reasoning behind a decision, or anything that describes a version of the code that no longer exists |
-| [`docs/SURFACE.md`](SURFACE.md) | Generated: the routes and their grants, the extensions, the budgets | Anything hand-written. Edit the code and run `npm run gen:surface`; the check fails on a hand edit |
+| [`docs/SURFACE.md`](SURFACE.md) | Generated: the four doors, the extensions, the budgets | Anything hand-written. Edit the code and run `npm run gen:surface`; the check fails on a hand edit |
 | [`docs/SPEC.md`](SPEC.md) | The product goal, the milestone specifications, and how each is verified — what is being built and what "done" means | The current-state map. A specification is a contract with a milestone; a map moves with the code |
 | `docs/adr/NNNN-*.md` | One decision: the context that forced it, what was decided, what it cost, and where it stands | A plan, a how-to, or a description of the code as it happens to be written |
 | `docs/research/` | Evidence: what other projects do, with sources and the date they were read | Guidance. A research note answers "what is out there", never "what we must do" |
-| `docs/*-PLAN.md` | A plan that has not been built, with the done-criterion that retires it | A record of what was built — that is an ADR, or the map |
 | [`GLOSSARY.md`](../GLOSSARY.md) | The vocabulary: what a word means here, and which word it replaces | A file list, or a summary of the architecture |
 | `src/**` comments | The local contract: why this function is written this way, what a caller must not assume | A summary of another file, a decision record, or a changelog |
 | `test/**` | The pin: the assertion that fails when the mechanism is removed | A demonstration of the API, or a copy of the implementation in a different shape |
@@ -20,14 +19,15 @@ which is current. This page is the map of which tier a sentence belongs to, and 
 ## Writing rules
 
 - **Current state only.** A document describing how the code works says how the code works. Why it changed, and what it
-  cost, is an ADR; what has not been built is a plan. A history inside a map is a map with two tenses.
+  cost, is an ADR. What has not been built is an issue, not a document: a plan kept in the tree is a plan that describes
+  code nobody wrote.
 - **No hand-restated catalogs.** If a script can read it out of the code, the script writes it (`docs/SURFACE.md`, the
   ceilings below). A table kept by hand is a table that is right until the next change, and nobody can tell the
   difference from reading it.
 - **One paragraph, one block.** Hard-wrapped at about 115 columns, a blank line above and below, never a line break
   inside an inline `code span`: a break there renders as a space, which reads as a typo.
-- **Name the mechanism, not just the file**, when the file may move: "the permission gateway" survives a rename,
-  `src/server/permissions.ts` does not. Give the path once, then the name.
+- **Name the mechanism, not just the file**, when the file may move: "the outbox" survives a rename,
+  `src/server/replies.ts` does not. Give the path once, then the name.
 - **Link, do not restate.** A second copy of a rule is a rule that will disagree with the first.
 - **Plain sentences.** No marketing, and an em dash is punctuation, not a tic.
 

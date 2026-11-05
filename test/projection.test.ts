@@ -286,7 +286,7 @@ describe("who said it", () => {
 
 	it("keeps a stored prefix as an author row, because the message was written with one", () => {
 		// mason writes no prefix any more. A home from before the cutover has messages that do, and rewriting their text
-		// at read time would change what somebody actually said (docs/ROOM-IDENTITY.md, #126). It is read, and left alone.
+		// at read time would change what somebody actually said (#126). It is read, and left alone.
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "[from Ilya] ship it" }]),

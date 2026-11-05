@@ -52,21 +52,21 @@ this table says so rather than implying a test exists.
 A change that breaks one of these is not a trade-off to weigh, it is the wrong change.
 
 1. **Every way in is authenticated.** One credential class: the connector's own, on its socket and its attachment
-   paths (`src/server/connectors.ts`), read on every request so a revoke lands immediately; `/api/health` outside it, by
+   paths (`src/server/connectors.ts`), read on every connection so a revoke lands immediately; `/api/health` outside it, by
    decision. Pinned by `test/connector.test.ts` and `npm run gen:surface:check`.
 2. **Nothing reaches a reader before the projection.** `src/server/projection.ts` derives `transcript`, `queued` and
    `agentStatus` from the committed view, and reasoning, tool calls, arguments and output are in none of them. Pinned by
    `test/projection.test.ts`.
 4. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
    that arrived mid-conversation would re-price every later turn, which is why a service's tools are a catalog
-   ([ADR 0010](adr/0010-tools-are-live-and-every-call-is-gated.md)). Pinned by `test/prompt.test.ts` (a section renders
-   byte-identically twice) and `test/mcp.test.ts` (the tool list does not move when a server connects).
+   (`docs/SPEC.md` §4.1e). Pinned by `test/prompt.test.ts` (a section renders byte-identically twice) and
+   `test/mcp.test.ts` (the tool list does not move when a server connects).
 
 ## What can be generated, is generated
 
-`docs/SURFACE.md` holds the tables a hand cannot keep honest — every HTTP route and the grant that guards it, the
-extensions a boot installs with their tools and prompt sections, and every exported budget in `src/server/limits.ts`. It
-is rendered by `scripts/gen-surface.ts`, written by `npm run gen:surface`, and checked in CI by
+`docs/SURFACE.md` holds the tables a hand cannot keep honest — the four doors, the extensions a boot installs with
+their tools and prompt sections, and every exported budget in `src/server/limits.ts`. It
+is rendered by `scripts/surface.ts`, written by `npm run gen:surface`, and checked in CI by
 `npm run gen:surface:check`. Hand-editing it is a failing check, which is the point: the diff that adds a route without a
 grant is the diff that says so. The word budgets in `docs/doc-budgets.json`, and which document owns which kind of fact,
 are in [`docs/AGENTS.md`](AGENTS.md).
