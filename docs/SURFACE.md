@@ -70,9 +70,7 @@ which is why the connector's two paths are here although they are constant-built
 |---|---|---|---|
 | `coding-tools` | `read`, `write`, `edit`, `bash` | -- | -- |
 | `prompt` | -- | `preamble`, `tone`, `cwd`, `skills`, `profile`, `integrations`, `codemode`, `delivery` | -- |
-| `memory` | `remember` | -- | -- |
 | `delivery` | `reply` | -- | `pi.generation` |
-| `tool-search` | `tool_search` | -- | -- |
 
 Built per boot rather than declared in the array, so they are listed from their own definitions: the MCP tools are
 `MCP_TOOL` in `src/server/mcp.ts` and are the only way a service's tools are reached; the code-mode tool is the one

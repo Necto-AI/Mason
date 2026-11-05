@@ -44,8 +44,6 @@ import { chmod, cp, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } fro
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Context } from "@earendil-works/chord";
-import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
 
 const run = promisify(execFile);
@@ -126,19 +124,9 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 	};
 }
 
-/** The file a fact is appended to today: one file per day, so a log grows at the speed of reading. */
-export function logPathFor(paths: HousePaths, at = new Date()): string {
-	const day = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
-	return join(paths.logDir, `${day}.md`);
-}
-
 /** The home the prompt is rendered against: whatever this process configured, else the default resolution. */
 export function currentHouse(): HousePaths {
 	return configured ?? housePaths();
-}
-
-function pad(value: number): string {
-	return String(value).padStart(2, "0");
 }
 
 /** The directories of a layout, both halves, deepest first: what a fresh install creates and a migration ensures. */
@@ -339,75 +327,6 @@ export function capText(text: string, maxChars: number): string {
 	const cut = text.slice(0, maxChars);
 	const line = cut.lastIndexOf("\n");
 	return `${line > 0 ? cut.slice(0, line) : cut}\n\n(truncated at ${maxChars} characters)`;
-}
-
-/**
- * Append one dated fact to today's log, and commit it, through the execution environment.
- *
- * Both halves of the job happen where the files are: the append and the `git` commit run on the tool machine, over the
- * same `agent/` volume the server and the agent both see. A commit that depended on a second process in another
- * container would be a history that stops at the first crash.
- *
- * The commit is best-effort: a memory write that lands but does not commit is still a memory, and losing the fact
- * because git was busy would be the worse failure.
- */
-export async function appendFact(
-	env: ExecutionEnv,
-	paths: HousePaths,
-	fact: string,
-	context: Context,
-	at = new Date(),
-): Promise<string> {
-	const path = logPathFor(paths, at);
-	const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
-	const line = `- ${time} — ${fact.replace(/\s+/g, " ").trim()}\n`;
-	const append = await env.exec(
-		[
-			"sh",
-			"-c",
-			// `mkdir -p` the day's directory, create the heading only if it is not there yet, then append the line. The
-			// heading uses `noclobber`, so the create is atomic: two `remember` calls in one turn run concurrently, and
-			// a read-modify-write of the whole file would let the later writer drop the earlier fact.
-			// biome-ignore lint/suspicious/noTemplateCurlyInString: shell parameter expansion, not a template
-			'f=$1; mkdir -p "${f%/*}" && { set -o noclobber; printf "# %s\\n\\n" "$2" > "$f"; } 2>/dev/null; printf "%s" "$3" >> "$f"',
-			"mason-log",
-			path,
-			basename(path, ".md"),
-			line,
-		],
-		undefined,
-		context,
-	);
-	if (!append.ok) throw new Error(`cannot append to ${path}: ${append.error.message}`);
-	if (append.value.exitCode !== 0) throw new Error(`cannot append to ${path}: sh exited ${append.value.exitCode}`);
-	await commitMemory(env, paths, `memory: ${fact.slice(0, 60)}`, path, context);
-	return path;
-}
-
-/** Commit the one file a memory write touched, in the home's repository, on the machine the file is on. */
-async function commitMemory(
-	env: ExecutionEnv,
-	paths: HousePaths,
-	message: string,
-	path: string,
-	context: Context,
-): Promise<void> {
-	const commit = await env.exec(
-		[
-			"sh",
-			"-c",
-			// Only the file this call wrote: a directory-wide `add` would commit Denis's half-written profile edit under a
-			// memory message. No repository, an identical fact or no git identity all exit non-zero and are ignored.
-			'git -C "$1" add -- "$2" && git -C "$1" -c user.name=mason -c user.email=mason@localhost commit --quiet -m "$3"',
-			"mason-commit",
-			paths.agentDir,
-			path,
-			message,
-		],
-		undefined,
-		context,
-	);
-	if (!commit.ok) return;
 }
 
 /**

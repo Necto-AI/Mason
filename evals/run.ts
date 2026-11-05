@@ -65,11 +65,11 @@ let passes = 0;
 let total = 0;
 for (const scenario of scenarios) {
 	for (let attempt = 1; attempt <= args.repeat; attempt += 1) {
-		const { trace, logText } = await runScenario(scenario, {
+		const { trace, writtenText } = await runScenario(scenario, {
 			model: args.model,
 			onProgress: (line) => console.log(line),
 		});
-		const checks = check(trace, scenario.expect, logText);
+		const checks = check(trace, scenario.expect, writtenText);
 		const failed = checks.filter((entry) => !entry.pass);
 		const pass = failed.length === 0;
 		total += 1;

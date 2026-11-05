@@ -19,13 +19,11 @@ import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-e
 import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import {
-	appendFact,
 	capText,
 	ensureHouse,
 	ensureRepository,
 	HOUSE_ENTRIES,
 	housePaths,
-	logPathFor,
 	migrateHouse,
 	readHouseFile,
 	seedShippedSkills,
@@ -87,14 +85,6 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 		if (previous === undefined) delete process.env.MASON_HOME;
 		else process.env.MASON_HOME = previous;
 	}
-});
-
-test("logPathFor() names the file by the local date, not UTC", async () => {
-	const paths = housePaths(await tempDir("mason-house-log-"));
-	// The hours are local components: an instant built at 23:59 local stays on that day, and month and day are padded.
-	assert.equal(logPathFor(paths, new Date(2026, 0, 5, 23, 59)), join(paths.logDir, "2026-01-05.md"));
-	assert.equal(logPathFor(paths, new Date(2026, 11, 31, 0, 0)), join(paths.logDir, "2026-12-31.md"));
-	assert.equal(logPathFor(paths, new Date(2026, 0, 6, 0, 0)), join(paths.logDir, "2026-01-06.md"));
 });
 
 test("a leading ~ in MASON_HOME is a home directory, not a directory named ~", () => {
@@ -168,81 +158,6 @@ test("capText() leaves short text alone and truncates long text on a line bounda
 	// The cut lands on the newline after line 1 rather than in the middle of line 2, so the prompt stays readable.
 	assert.equal(capped, "line 1 of the profile\n\n(truncated at 40 characters)");
 	assert.ok(capped.length < long.length);
-});
-
-test("appendFact() writes one dated line and reuses the day's heading", async () => {
-	const home = await tempDir("mason-house-facts-");
-	const paths = housePaths(home);
-	const env = toolMachine(home);
-	const at = new Date(2026, 0, 5, 9, 7);
-
-	const first = await appendFact(env, paths, "Denis prefers short answers.", BACKGROUND_CONTEXT, at);
-	assert.equal(first, logPathFor(paths, at), "the fact lands in today's file, in the agent's half");
-	assert.ok(first.startsWith(paths.agentDir), "the log is a file the tool machine can see");
-	assert.equal(await readFile(first, "utf8"), "# 2026-01-05\n\n- 09:07 — Denis prefers short answers.\n");
-
-	// Whitespace in a fact collapses to one line: the log is one fact per line, or it is not greppable.
-	const second = await appendFact(
-		env,
-		paths,
-		"Standup\nmoved\tto  nine.",
-		BACKGROUND_CONTEXT,
-		new Date(2026, 0, 5, 18, 2),
-	);
-	assert.equal(second, first, "a second fact the same day reuses the file");
-	const text = await readFile(second, "utf8");
-	assert.equal((text.match(/^# /gm) ?? []).length, 1, "the heading is not duplicated");
-	assert.equal((text.match(/^- /gm) ?? []).length, 2, "one line per fact");
-	assert.match(text, /^- 09:07 — Denis prefers short answers\.$/m);
-	assert.match(text, /^- 18:02 — Standup moved to nine\.$/m);
-});
-
-test("a remembered fact is committed, and only the log file is staged", async (t) => {
-	if (!(await gitAvailable())) {
-		t.skip("git is not installed");
-		return;
-	}
-	const home = await tempDir("mason-house-commit-");
-	const paths = housePaths(home);
-	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
-	// The repository the agent commits in: the one on its own half, which is the volume the tool machine mounts.
-	await ensureRepository(paths.agentDir);
-	const env = toolMachine(home);
-
-	// Something else pending in the agent's half, as the agent's own edit would be: it must not ride along in a memory
-	// commit, which is about one fact and nothing else.
-	await writeFile(join(paths.agentDir, "profile.md"), "Denis's draft profile.\n", "utf8");
-
-	const path = await appendFact(
-		env,
-		paths,
-		"Budgets are reviewed on Fridays.",
-		BACKGROUND_CONTEXT,
-		new Date(2026, 0, 5, 9, 7),
-	);
-	// The repository arrives with one commit in it (the home's first files); the fact is the one after that.
-	const log = await run("git", ["log", "--oneline"], { cwd: paths.agentDir });
-	assert.equal(log.stdout.trim().split("\n").length, 2, "one commit per fact");
-	assert.match(log.stdout.split("\n")[0] ?? "", /memory: Budgets are reviewed on Fridays/);
-	const stat = await run("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: paths.agentDir });
-	assert.equal(stat.stdout.trim(), path.slice(paths.agentDir.length + 1), "only the day's log is in the commit");
-	const status = await run("git", ["status", "--porcelain"], { cwd: paths.agentDir });
-	assert.match(status.stdout, /profile\.md/, "an unrelated edit stays pending");
-});
-
-test("two facts remembered at once both land", async () => {
-	const home = await tempDir("mason-house-race-");
-	const paths = housePaths(home);
-	const env = toolMachine(home);
-	// Tool calls in one turn run concurrently: a read-modify-write of the day's file would drop one of these.
-	await Promise.all([
-		appendFact(env, paths, "first fact", BACKGROUND_CONTEXT),
-		appendFact(env, paths, "second fact", BACKGROUND_CONTEXT),
-	]);
-	const text = await readFile(logPathFor(paths), "utf8");
-	assert.match(text, /first fact/);
-	assert.match(text, /second fact/);
-	assert.equal((text.match(/^# /gm) ?? []).length, 1, "one heading, even when both create the file");
 });
 
 test("ensureRepository() initialises the agent's half as a git repository, with the first commit made", async (t) => {

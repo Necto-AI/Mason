@@ -36,8 +36,8 @@ export interface Expected {
 	readonly text?: readonly string[];
 	/** Substrings the delivered messages must not contain, case-insensitive — filler, permission-asking. */
 	readonly absentText?: readonly string[];
-	/** Regexes today's log file must match: "it wrote the fact down". */
-	readonly log?: readonly string[];
+	/** Regexes some file the agent wrote must match: "it wrote the fact down, somewhere it lives". */
+	readonly written?: readonly string[];
 	/** Bounds how often the delivery gate had to rescue a turn, so a model that stops delivering is visible. */
 	readonly reminders?: { readonly min?: number; readonly max?: number };
 	/** The run must not send more prompt tokens than this. */
@@ -70,7 +70,7 @@ export interface Trace {
 	readonly error?: string;
 }
 
-export function check(trace: Trace, expected: Expected, logText: string): Check[] {
+export function check(trace: Trace, expected: Expected, writtenText: string): Check[] {
 	const checks: Check[] = [];
 	const add = (name: string, pass: boolean, detail = ""): void => {
 		checks.push({ name, pass, detail });
@@ -113,8 +113,8 @@ export function check(trace: Trace, expected: Expected, logText: string): Check[
 	for (const needle of expected.absentText ?? []) {
 		add(`absentText.${needle}`, !delivered.includes(needle.toLowerCase()));
 	}
-	for (const pattern of expected.log ?? []) {
-		add(`log.${pattern}`, new RegExp(pattern, "im").test(logText));
+	for (const pattern of expected.written ?? []) {
+		add(`written.${pattern}`, new RegExp(pattern, "im").test(writtenText));
 	}
 	if (expected.maxTools !== undefined) {
 		const work = trace.toolCalls.filter((call) => call.name !== "reply").length;

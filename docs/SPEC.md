@@ -83,7 +83,6 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   ├── status.ts                  # Pure AgentStatus derivation from the committed view, and the cache report
 │   │   ├── extensions/
 │   │   │   ├── skills.ts              # The skills index: one root, agent/skills/ (seeded at boot), walked by discoverSkills
-│   │   │   ├── memory.ts              # The `remember` tool: one dated fact in agent/log/
 │   │   │   └── delivery.ts            # The reply tool and the gate: one operation, targeted at the turn's origin
 │   │   ├── hooks.ts                   # Proactive event hooks (timers, a connector's fire, proactive submit)
 │   │   ├── projection.ts              # The wire boundary: what the reader sees, derived from the conversation
@@ -259,7 +258,7 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `memory`, `delivery`, `tool-search` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `tool-search` is inert while nothing is deferred; `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, `codemode`, always, and `permissions`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the delivery tool and the gate that decides which call a turn's reader sees, so no conversation may be without it. `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. `permissions` is the gateway in front of every call, installed because a conversation without it is one whose tool calls all execute unasked. The per-boot three belong to the boot because each owns something that dies with the runtime — a client socket per integration, a QuickJS sandbox that is permanent once closed, and the book of pending questions.
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode`, then `permissions` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it (see `docs/EXECUTION-TARGETS.md` for the microVM path this is the first step of).
@@ -274,7 +273,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 ~/.mason/
 ├── agent/                  # Mounted into the tool machine at this same absolute path (ADR 0002)
 │   ├── profile.md          # Who Denis is: agent-managed, resident, capped, read through the execution environment
-│   ├── log/2026-10-20.md   # Dated facts, one per line, appended and committed by `remember` on the tool machine
+│   ├── log/2026-10-20.md   # Dated facts, one per line, written with `write` on the tool machine
 │   ├── journal/            # Where the daily journal will be written
 │   ├── skills/<name>/SKILL.md  # Denis's own skills, and the shipped ones seeded here on first boot
 │   ├── agents/             # Worker definitions, beside skills so `write` can edit them
@@ -357,12 +356,11 @@ then write the answers, under a page at a time, rewriting as it learns. The head
 quote text the agent did not write, so it is declared data about the user, and what he asks in a conversation always
 wins over it.
 
-**The `remember` tool and the log.** `agent/log/YYYY-MM-DD.md` holds facts, one per line, appended as
-`- HH:MM — <fact>` under a `# YYYY-MM-DD` heading. `agent/` is a git repository, so each append is committed —
-best-effort: a fact that lands but does not commit is still a memory. `remember(fact)` is the only tool that appends to the log
-(and the only one that grows memory), and it only accumulates, one sentence per call; it is replay-unsafe, because the same fact recorded twice is
-noise in a file a person reads. Nothing is recalled through a search tool: the agent reads the log with `read` when it
-needs history, which is the reason it is plain markdown.
+**The log, and why it is a file.** `agent/log/YYYY-MM-DD.md` holds facts the agent chose to keep, one per line, as
+`- HH:MM — <fact>` under a `# YYYY-MM-DD` heading, and `write` is what puts them there: there is no memory tool to learn
+and no store to query. `agent/` is a git repository, so a fact is a change the person can read and revert, and the
+agent reads its own history with `read` when it needs it. That is the whole memory: markdown in the half of the home the
+tool machine mounts.
 
 **The cache policy.** The harness sets `stream.cacheRetention: "long"`, because an always-on agent idles past the
 provider's five-minute window constantly and would otherwise re-pay for the whole prefix on every wake-up. What makes
@@ -643,8 +641,7 @@ Two mechanisms, one seam: a script asks what a service can do *now*, and every c
 before it runs. `src/server/mcp.ts` owns the first, `src/server/permissions.ts` the second.
 
 **The catalog is live, and it is not a tool list.** `mcp` registers three tools, `mcp_search`, `mcp_describe` and
-`mcp_call`, and they are `callers: ["tools"]`: a script reaches them, the model is never offered them, and `tool_search`
-has nothing of MCP's to promote. Nothing a server says enters the registry, so the `codemode` section, the declared tool
+`mcp_call`, and they are `callers: ["tools"]`: a script reaches them and the model is never offered them. Nothing a server says enters the registry, so the `codemode` section, the declared tool
 list and the deferred list are the same bytes on every turn of one build — a redeploy, a reconnect or a changed schema
 moves nothing the prompt is built from. `mcp_search` matches words against names and descriptions (an empty query lists
 one integration); `mcp_describe` answers `{integration, tool, description, approval, version, inputSchema}`;

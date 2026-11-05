@@ -24,12 +24,10 @@ import {
 	type Storage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
-import { Memory } from "./extensions/memory.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
 import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
@@ -46,15 +44,12 @@ import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
  * the process's use of it.
  */
 export const BASE_EXTENSIONS: readonly Extension[] = [
+	// The four the model works with: read, write, edit, bash, through the tool machine.
 	CodingTools,
 	// The one extension with sections: every section of the prompt is declared in `prompt.ts`, in order.
 	Prompt,
-	Memory,
+	// reply, and the gate that makes a turn say something.
 	Delivery,
-	// Also always on, and inert while nothing is deferred: with no MCP tools loaded and no other deferred tool, it has
-	// nothing to find. Installed rather than added when something arrives, so the tool list does not grow a second time
-	// when an integration connects.
-	createToolSearchExtension(),
 ];
 
 /**
@@ -244,8 +239,8 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		...(options.mcpTransport === undefined ? {} : { openTransport: options.mcpTransport }),
 	});
 	// Code mode, per boot rather than in BASE_EXTENSIONS: its sandbox is permanent once closed, so one instance shared
-	// across boots would refuse the next runtime in the same process. It is the other way the model reaches a tool it
-	// was not offered (`tool_search` is the first), and the one that can read a whole result.
+	// across boots would refuse the next runtime in the same process. It is the way the model reaches a tool it was not
+	// offered, and the one that can read a whole result.
 	const codemode = createCodemode();
 	// The permission gateway, per boot: one `beforeTool` hook in front of every direct and nested call, a book of pending
 	// questions, and the catalog it reads `dev.mason/approval` from. It is bound to the root conversation below, before
@@ -260,8 +255,8 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	const opened: Array<() => Promise<void>> = [() => mcp.close(), () => codemode.close()];
 	const reportClose = options.onReport ?? ((error: unknown) => console.error("[runtime] a close failed", error));
 	try {
-		// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so `remember`
-		// commits there from the same machine the log is written on.
+		// The history lives with the files it is about, in `agent/`: that is the half the tool machine mounts, so a fact
+		// the agent writes there is on the same disk as the repository that records it.
 		await ensureRepository(house.agentDir);
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;

@@ -12,13 +12,14 @@ statement about the prompt and the harness, which is what these files exist to p
 ## What is real and what is stubbed
 
 Real: the production prompt registry (`src/server/prompt.ts`), the harness (`openAgentRuntime`), the extension set a
-scenario runs with (prompt, `remember`, `reply`), the projection that decides what a reader
+scenario runs with (prompt, `reply`), the projection that decides what a reader
 sees (`src/server/projection.ts`), and the model. Every turn is a real model call, plus the calls its tool steps need.
 
 Stubbed: `bash`, `read`, `write` and `edit` keep their production names, descriptions and parameters, and answer from
-the scenario instead of from a machine (`lib/stubs.ts`). No `pi-env` daemon runs. `write` and `edit` report success and
-change nothing, so a file the agent "writes" is not there afterwards. `read` serves the scenario's entries and also
-reads the real files inside the temp home and workspace, which is how a `remember`ed line can be read back.
+the scenario instead of from a machine (`lib/stubs.ts`). No `pi-env` daemon runs. `edit` reports success and changes
+nothing; `write` writes a real file inside the temp home, so a fact the agent writes down is there afterwards. `read`
+serves the scenario's entries and also reads the real files inside the temp home and workspace, which is how a written
+line is read back on the next turn.
 
 Throwaway: each run gets a fresh temp home and workspace (`mkdtemp`, removed in `finally`), seeded with the scenario's
 `home` files and using in-memory storage. Nothing reads or writes `~/.mason`, and nothing in the repo is touched.
@@ -149,7 +150,9 @@ passed 15.
 | verify-first | 3/3 | `read` before the claim, exact count |
 | remember | **0/3** | a recalled preference is delivered on the next turn |
 
-`remember` first failed on `turn.2.delivered`: the turn that answers the recall question ended without `reply`,
+The scenario writes the fact down with `write` rather than `remember`, which the six-tool cut removed; the numbers in
+the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the recall
+question ended without `reply`,
 so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
 four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
 silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
