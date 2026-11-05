@@ -215,6 +215,15 @@ describe("who may answer", () => {
 		assert.match(none.ok ? "" : none.reason, /names no owner/);
 	});
 
+	it("refuses a question that arrived through no conversation at all", () => {
+		// A console turn or an originless hook writes a question with no origin: there is no chat to answer in, and the
+		// panel is the only surface it can be settled from. An owner actor is not a master key.
+		const { origin: _origin, ...originless } = request;
+		const refused = mayAnswer(originless, grant, { externalActorId: "8811" });
+		assert.equal(refused.ok, false);
+		assert.match(refused.ok ? "" : refused.reason, /came from no conversation/);
+	});
+
 	it("refuses a question that came through another connector, even for the same person", () => {
 		// Two connectors are two seats, not one: a request that came through one is not settled through the other.
 		const elsewhere = mayAnswer(request, { ...grant, connector: "slack" }, { externalActorId: "8811" });

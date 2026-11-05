@@ -47,7 +47,7 @@ When you receive one, you were woken by a schedule or an external trigger, not b
 - If nothing needs attention, say so in one line; do not pad a check-in into a report.
 ${UNTRUSTED_RULE}`;
 
-/** Who is speaking, when the transcript has more than one voice in it. Short: it is paid for in every turn. */
+/** Who is speaking, and what an author prefix from before the cutover still means. Short: it is paid for in every turn. */
 export const TEAM_GUIDELINES = `You work for one person, and this conversation is theirs.
 An older message may start with "[from <name>] ": that was written when a bot carried a room, and the name is history
 rather than a second participant. Every message written now is theirs, whatever the medium called it.

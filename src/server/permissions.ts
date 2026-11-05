@@ -250,7 +250,12 @@ export function mayAnswer(
 	if (grant.owner === undefined) {
 		return { ok: false, reason: "this connector names no owner, so nobody on it may answer" };
 	}
-	if (request.origin !== undefined && request.origin.connector !== grant.connector) {
+	if (request.origin === undefined) {
+		// A question asked outside any conversation — a console turn, or a hook with no origin — has no chat to answer in,
+		// so it stays the panel's. Without this line the owner actor could settle it from a socket it never arrived on.
+		return { ok: false, reason: "this request came from no conversation, so only a device may answer it" };
+	}
+	if (request.origin.connector !== grant.connector) {
 		return { ok: false, reason: `this request came through ${request.origin.connector}, not through this connector` };
 	}
 	const actor = by.externalActorId;

@@ -150,6 +150,15 @@ describe("the single-user cutover", () => {
 		});
 	});
 
+	it("finishes off a roster a pre-split home still has at its root", async () => {
+		// `roster.json` left `HOUSE_ENTRIES`, so the split migration no longer carries it. A root copy is exactly the file
+		// this command exists to remove, and reading only `service/` would leave it behind.
+		const paths = await home({ integrations: {} });
+		await writeFile(join(paths.home, "roster.json"), JSON.stringify(ROOM), { mode: 0o600 });
+		assert.deepEqual(await cutOverSingleUser(paths), { integrations: [], roster: ["Denis", "Ilya"] });
+		await assert.rejects(() => readFile(join(paths.home, "roster.json"), "utf8"), /ENOENT/);
+	});
+
 	it("deletes a roster it cannot parse, and reports no names", async () => {
 		// Nothing reads the file, so a corrupt one is not a reason to keep it: the answer is still "gone".
 		const paths = await home({ integrations: {} });

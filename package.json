@@ -23,7 +23,6 @@
 		"eval": "node --experimental-strip-types evals/run.ts",
 		"eval:judge": "node --experimental-strip-types evals/judge.ts",
 		"token": "node --experimental-strip-types scripts/token.ts",
-		"team": "node --experimental-strip-types scripts/team.ts",
 		"integration": "node --experimental-strip-types scripts/integration.ts",
 		"connector": "node --experimental-strip-types scripts/connector.ts",
 		"doctor": "node --experimental-strip-types scripts/doctor.ts",
