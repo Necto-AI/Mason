@@ -322,23 +322,6 @@ export function formatPrompt(
 }
 
 /**
- * Whether an event hook started this turn.
- *
- * The input's first line is the whole of the test: only `fire()` writes it, so a person typing `[EVENT HOOK: …` into the
- * console is the only way a turn of their own can be read as a hook's. What the turn's reply then targets is decided by
- * the origin the fire carried — not by prose in the template, and not by a vendor tool's name.
- *
- * A hook whose fire carried no origin has no chat behind it — a schedule, a repository event — and its reply is recorded
- * with nobody reached, which `reply` says in its result. A retry is the one fire that inherits an origin: it resumes a
- * turn that had one.
- */
-/** Whether an event hook started this turn. The one question, spelled once. */
-export function isHookTurn(input: string | undefined): boolean {
-	if (input === undefined) return false;
-	return input.startsWith(HOOK_INPUT_PREFIX);
-}
-
-/**
  * `team-chat`: a message arrived in the chat the owner speaks to this bot in.
  *
  * The reply is `reply`, and it goes back to the chat the message arrived in because mason keeps the origin — the

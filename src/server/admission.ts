@@ -52,11 +52,3 @@ export function whenBusyFor(origin: Origin, requested?: WhenBusy): WhenBusy | un
 	if (origin === "hook") return requested === undefined || requested === "steer" ? "steer" : "followUp";
 	return requested;
 }
-
-/**
- * Whether the origin is a person: the console, or a connector carrying someone's words. A person's message is admitted
- * as ordinary conversation; a fire steers, and never becomes one.
- */
-export function isHumanOrigin(origin: Origin): boolean {
-	return origin === "user" || origin === "external";
-}

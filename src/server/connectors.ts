@@ -386,19 +386,6 @@ export function connectorGrantFor(
 	return { integration, grant: integration.connector };
 }
 
-/** Every enabled connector, in name order: what a boot iterates to check hooks and report health. */
-export function enabledConnectors(
-	integrations: Record<string, Integration>,
-): Array<{ readonly name: string; readonly integration: Integration; readonly grant: ConnectorGrant }> {
-	return Object.entries(integrations)
-		.flatMap(([name, integration]) =>
-			integration.enabled && integration.connector !== undefined
-				? [{ name, integration, grant: integration.connector }]
-				: [],
-		)
-		.sort((left, right) => (left.name < right.name ? -1 : 1));
-}
-
 /**
  * The one actor the handshake answers with: the advertised actor whose id is the grant's `owner`, as the connector
  * advertised it, or nothing.

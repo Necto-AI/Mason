@@ -20,11 +20,6 @@ export function isBusy(view: ConversationView | undefined): boolean {
 	return liveOf(view)?.run !== undefined;
 }
 
-export function countTools(view: ConversationView | undefined): { running: number; total: number } {
-	const tools = liveOf(view)?.tools ?? [];
-	return { running: tools.filter((tool) => tool.status !== "done").length, total: tools.length };
-}
-
 /** The names of the tools the running round has not finished. Names only — never arguments, never output. */
 export function runningToolNames(view: ConversationView | undefined): string[] {
 	const names: string[] = [];

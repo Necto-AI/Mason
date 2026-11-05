@@ -21,7 +21,7 @@
  * an expired one answers `410`, and one over the cap is refused before it is stored.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** The protocol's default cap: enough for a phone video, far below what a sender may buffer into a socket. */
@@ -182,14 +182,4 @@ function isMeta(value: unknown): value is AttachmentMeta {
 		typeof meta.expiresAt === "number" &&
 		(meta.name === undefined || typeof meta.name === "string")
 	);
-}
-
-/** Whether a bytes-shaped entry is old enough to be swept, for a caller that sweeps by age rather than by parsing. */
-export async function fileAgeMs(path: string, now = Date.now()): Promise<number> {
-	try {
-		const info = await stat(path);
-		return now - info.mtimeMs;
-	} catch {
-		return 0;
-	}
 }

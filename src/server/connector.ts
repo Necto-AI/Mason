@@ -182,7 +182,6 @@ export interface ConnectorDoor {
 	/** Send what a connector is owed now — after a connect, and after every view change. */
 	flush(): Promise<void>;
 	/** The live session for a connector, if it has one: what #102's permission gateway asks for a surface. */
-	session(name: string): ConnectorSession | undefined;
 	close(): Promise<void>;
 }
 
@@ -194,7 +193,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	const door: ConnectorDoor = {
 		attach,
 		flush,
-		session: (name) => sessions.get(name),
 		close: async () => {
 			await watch.dispose();
 			for (const session of [...sessions.values()]) session.close("mason is shutting down");
