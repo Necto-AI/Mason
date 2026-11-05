@@ -111,6 +111,8 @@ export interface RuntimeEnvManager {
 - **SSH / Container mode (when `PI_ENV_SSH_HOST` is set):**
   - Uses `sshConnection(target)` and returns `new RemoteExecutionEnv({ connection: lazy.connection, id: `pi-env:${target.host}`, cwd })`.
 
+The execution target is the seam that resolves a conversation to a machine: an `app.target` document per conversation, `{kind: "local", cwd}`, written the first time the conversation builds its environment and read at every later open, so a restart does not forget which machine held the workspace. The machine it names belongs to the deployment, not the conversation, and a fork's conversations point at the same connection. Firecracker, sharing, and snapshots are a later work package (ADR 0009, ENV-PLAN).
+
 ### 3.2 `src/server/prompt.ts` — The Whole System Prompt
 
 `prompt.ts` is the single registry: every section the model receives is declared there, in order, by key and by source.

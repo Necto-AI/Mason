@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv } from "./env.ts";
+import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { builtinHooks, HooksManager } from "./hooks.ts";
@@ -285,14 +285,6 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const registry: Registry = createRegistry();
 		for (const extension of extensionList) registry.install(extension);
 
-		const envManager =
-			options.env ??
-			createRuntimeEnvManager({
-				workspaceDir,
-				...(sshTargetFromEnv() === undefined ? {} : { ssh: sshTargetFromEnv() }),
-			});
-		opened.push(() => envManager.close());
-
 		const settings: HarnessSettings = {
 			...options.settings,
 			// Admission: a steer is placed at the next boundary, from either origin, and queued follow-ups drain as one
@@ -329,6 +321,18 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// past an open harness, and leaving it to the process's exit would keep its storage and its timers for the life of a
 		// process that never served.
 		opened.push(() => harness.close(BACKGROUND_CONTEXT));
+
+		// The execution-target seam reads and writes its `app.target` document through the opened harness, so the manager
+		// is built here, after the open. The `env` closure above reaches it at the first turn only: no environment is
+		// built while the harness opens, so the manager and its connection exist before anything resolves one.
+		const envManager: RuntimeEnvManager =
+			options.env ??
+			createRuntimeEnvManager({
+				workspaceDir,
+				...(sshTargetFromEnv() === undefined ? {} : { ssh: sshTargetFromEnv() }),
+				targets: targetDocChannel(harness),
+			});
+		opened.push(() => envManager.close());
 
 		const root = await harness.root(context, {
 			agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
