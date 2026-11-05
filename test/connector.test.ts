@@ -331,14 +331,13 @@ describe("the handshake", () => {
 					user: {
 						actors: [{ externalActorId: "8811" }],
 						conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-						capabilities: ["text", "markdown", "widgets"],
+						capabilities: ["text", "markdown"],
 					},
 				}),
 			});
 			try {
-				// The entry grants text, markdown, files, approvals and streaming; the connector claims text, markdown and
-				// widgets. The answer is what is in both, which is how a medium that cannot render a widget is never sent
-				// one and a connector is never sent a file it did not claim it can hold.
+				// The entry grants text, markdown, files, approvals and streaming; the connector claims text and markdown.
+				// The answer is what is in both, which is how a connector is never sent a file it did not claim.
 				assert.deepEqual(connected.connector.status().session?.capabilities, ["text", "markdown"]);
 			} finally {
 				await connected.close();

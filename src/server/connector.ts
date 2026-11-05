@@ -818,7 +818,6 @@ export class ConnectorSession {
 				text.push(`[file: ${path} — ${type}, ${read.attachment.meta.size} bytes]`);
 				continue;
 			}
-			if (block.type === "widget") text.push("[a widget arrived with this message]");
 		}
 		const body = text.join("\n");
 		if (images.length === 0) return body;

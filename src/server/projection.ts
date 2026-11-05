@@ -4,7 +4,7 @@
  * This module is the wire boundary, and the only place that decides what crosses it. Everything the model does —
  * reasoning, tool calls, tool arguments, tool output, usage, the raw entries — stays here, on the server. What leaves
  * is the conversation as a person reads it: their own words, the messages the agent chose to send (`reply`),
- * the widgets it built for them, the trigger that woke it, and a coarse notice when a run failed.
+ * and a coarse notice when a run failed.
  *
  * The rule is a whitelist, not a filter: a transcript item exists only because something here names it. A new entry
  * kind or a new tool cannot leak by default — it is invisible until this file says otherwise. The raw view stays
@@ -20,9 +20,7 @@ import {
 	REPLY_ENTRY_KIND,
 	REPLY_TOOL,
 	splitAuthor,
-	WIDGET_TOOL,
 } from "../shared/contract.ts";
-import { contentFromToolCall, type OpenGenUIContent } from "../shared/genui-content.ts";
 import { replyRecordOf, textOfBlocks } from "./replies.ts";
 
 /**
@@ -64,7 +62,6 @@ interface CallBlock {
 	arguments?: unknown;
 }
 
-/** The widget calls of one assistant message, in the order the model made them. */
 function callsOf(message: unknown): CallBlock[] {
 	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
 }
@@ -186,21 +183,6 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 				});
 				spoke = true;
 			}
-			for (const call of callsOf(messageOf(entry))) {
-				if (typeof call.id !== "string") continue;
-				const args = (
-					typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}
-				) as Record<string, unknown>;
-				if (call.name === WIDGET_TOOL && !outcomeFailed(outcomes, call.id)) {
-					spoke = true;
-					items.push({
-						kind: "widget",
-						id: call.id,
-						streaming: false,
-						content: contentFromToolCall(args as never, true) satisfies OpenGenUIContent,
-					});
-				}
-			}
 			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
 			// not speech either: only the entries and calls this file forwards above count as having said something.
 			if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
@@ -251,14 +233,6 @@ function streamingItems(
 			if (replies.has(deliveryId)) continue;
 			items.push({ kind: "delivered", id: deliveryId, text, streaming: true });
 			continue;
-		}
-		if (call.name === WIDGET_TOOL) {
-			items.push({
-				kind: "widget",
-				id: call.id,
-				streaming: true,
-				content: contentFromToolCall(args as never, false) satisfies OpenGenUIContent,
-			});
 		}
 	}
 	return items;

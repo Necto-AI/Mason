@@ -32,7 +32,7 @@
 		"capability": {
 			"type": "string",
 			"description": "A content or delivery capability, negotiated independently of any privilege grant. An origin is only ever sent what it claims.",
-			"enum": ["text", "markdown", "files", "approvals", "widgets", "streaming"]
+			"enum": ["text", "markdown", "files", "approvals", "streaming"]
 		},
 		"face": {
 			"type": "string",

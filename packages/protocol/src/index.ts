@@ -86,9 +86,9 @@ export function isApprovalMarker(value: unknown): value is ApprovalMarker {
 	return value === APPROVAL.required || value === APPROVAL.notRequired;
 }
 
-export type Capability = "text" | "markdown" | "files" | "approvals" | "widgets" | "streaming";
+export type Capability = "text" | "markdown" | "files" | "approvals" | "streaming";
 
-export const CAPABILITIES: readonly Capability[] = ["text", "markdown", "files", "approvals", "widgets", "streaming"];
+export const CAPABILITIES: readonly Capability[] = ["text", "markdown", "files", "approvals", "streaming"];
 
 export type FaceName = "user" | "tools" | "events";
 
@@ -132,7 +132,6 @@ export type ContentBlock =
 			readonly size?: number;
 			readonly caption?: string;
 	  }
-	| { readonly type: "widget"; readonly content: unknown }
 	| { readonly type: "notice"; readonly text: string };
 
 export interface Limits {

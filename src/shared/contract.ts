@@ -17,7 +17,6 @@ import { Type } from "typebox";
  * entry the reply commits rather than the call that made it.
  */
 export const REPLY_TOOL = "reply";
-export const WIDGET_TOOL = "generateSandboxedUi";
 /** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
 /** A person's words that arrived through a connector, carrying the origin a reply goes back to. */
@@ -136,8 +135,7 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`reply`), the widgets it built for them, and a coarse notice when a run failed. A trigger leaves no row of
- * its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
+ * (`reply`), and a coarse notice when a run failed. A trigger leaves no row of its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
  * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
  * a trace endpoint can expose them later, deliberately and separately.
  */
@@ -157,18 +155,11 @@ export const TranscriptItemSchema = Type.Union([
 		failed: Type.Optional(Type.Boolean()),
 		streaming: Type.Optional(Type.Boolean()),
 	}),
-	Type.Object({
-		kind: Type.Literal("widget"),
-		id: Type.String(),
-		streaming: Type.Boolean(),
-		content: Type.Unknown(),
-	}),
 	Type.Object({ kind: Type.Literal("notice"), id: Type.String(), text: Type.String() }),
 ]);
 export type TranscriptItem =
 	| { kind: "user"; id: string; text: string; author?: string; at?: number }
 	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
-	| { kind: "widget"; id: string; streaming: boolean; content: unknown }
 	| { kind: "notice"; id: string; text: string };
 
 /** A submission the reader queued and can still withdraw, labelled for them rather than for the machine. */

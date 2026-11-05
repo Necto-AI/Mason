@@ -154,7 +154,7 @@ export function replyRecordOf(entry: EntryRecord): ReplyRecord | undefined {
 function isContentBlock(value: unknown): value is ContentBlock {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
-	return type === "text" || type === "markdown" || type === "file" || type === "widget" || type === "notice";
+	return type === "text" || type === "markdown" || type === "file" || type === "notice";
 }
 
 /** The text of a reply: text and markdown blocks joined, which is what a console bubble shows. */

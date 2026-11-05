@@ -30,7 +30,6 @@ import {
 	isDeliveryReminder,
 	REPLY_ENTRY_KIND,
 	REPLY_TOOL,
-	WIDGET_TOOL,
 } from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
@@ -207,10 +206,10 @@ const REMINDED = "delivery.reminded";
  * rather than nothing.
  *
  * "Delivered" is the same call `reply` makes: one operation, so the gate and the tool cannot disagree about what
- * reaching the reader means. A widget is a second thing a reader sees, and counts.
+ * reaching the reader means.
  */
 function turnDelivered(messages: readonly Message[]): boolean {
-	const delivering = new Set([REPLY_TOOL, WIDGET_TOOL]);
+	const delivering = new Set([REPLY_TOOL]);
 	for (const message of messages) {
 		if (message.role !== "assistant") continue;
 		const content = (message as { content?: unknown }).content;

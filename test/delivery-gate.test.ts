@@ -32,8 +32,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { projectTranscript } from "../src/server/projection.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL } from "../src/shared/contract.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL, WIDGET_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -196,16 +196,12 @@ type NestedAnswer = { isError: boolean; text: string };
 function scriptedDelivery(answers: NestedAnswer[]): Extension {
 	const tool = defineTool({
 		name: "deliverFromScript",
-		description: "Send a message or build a widget from inside a script.",
+		description: "Send a message from inside a script.",
 		parameters: Type.Object({
 			message: Type.Optional(Type.String()),
-			widget: Type.Optional(Type.Boolean()),
 		}),
-		execute: async ({ message, widget }, api, context) => {
-			const nested =
-				widget === true
-					? await api.executeTool(WIDGET_TOOL, { css: "body { color: red }", html: ["<p>hi</p>"] }, context)
-					: await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
+		execute: async ({ message }, api, context) => {
+			const nested = await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
 			answers.push({
 				isError: nested.isError,
 				text: typeof nested.structuredOutput === "string" ? nested.structuredOutput : "",
