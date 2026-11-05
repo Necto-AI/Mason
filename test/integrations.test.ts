@@ -26,9 +26,6 @@ import {
 	setIntegrationEnabled,
 	writeIntegration,
 } from "../src/server/integrations.ts";
-import { startServer } from "../src/server/main.ts";
-import type { McpTransportFactory } from "../src/server/mcp.ts";
-import { fakeServer, ISSUE_TOOL, SEARCH_TOOL } from "./support/mcp.ts";
 
 const run = promisify(execFile);
 

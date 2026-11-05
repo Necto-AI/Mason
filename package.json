@@ -26,7 +26,6 @@
 		"token": "node --experimental-strip-types scripts/token.ts",
 		"integration": "node --experimental-strip-types scripts/integration.ts",
 		"connector": "node --experimental-strip-types scripts/connector.ts",
-		"doctor": "node --experimental-strip-types scripts/doctor.ts",
 		"test:asr": "asr/run.sh asr/.venv/bin/python -m unittest discover -s asr/tests -v",
 		"pretest": "npm run build:packages",
 		"predev": "npm run build:packages",
