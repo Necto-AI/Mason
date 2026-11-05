@@ -32,7 +32,7 @@ that: seeded under the wrong half, a scenario's soul is a file nothing reads and
 
 ```bash
 npm run eval                                      # all scenarios, opencode-go/deepseek-v4.1-flash
-npm run eval -- --model=llama-server/Qwen3.8-27B  # any provider/model pi knows
+npm run eval -- --model=ollama/bonsai-2:27b       # any provider/model pi knows
 npm run eval -- --only=hook                       # scenario id regex; `*` becomes `.*`, so this runs both hooks
 npm run eval -- --repeat=3                        # three runs per scenario, which is how a flaky check shows up
 npm run eval -- --out=.data/evals/run-1           # write somewhere other than the default directory
@@ -49,7 +49,7 @@ failed checks) and a final `N/M passed`. The exit code is 0 when every check pas
 ## Cost
 
 A full run costs about 30k input and 10k output tokens in total, 2k to 9k input per scenario, because every model step
-re-sends the prompt. On `opencode-go/deepseek-v4.1-flash` that is about a cent. A local `llama-server` costs nothing
+re-sends the prompt. On `opencode-go/deepseek-v4.1-flash` that is about a cent. A local `ollama` model costs nothing
 but time. OpenCode's free tier is not reachable from here: every non-OpenCode client gets `FreeTierError`, observed
 with the API key, the client headers and pi's own catalog.
 
@@ -83,8 +83,8 @@ npm run eval:judge -- .data/evals/<run> --judge-model=opencode-go/deepseek-v4.1-
 ```
 
 It reads every `*.json` in the directory except `summary.json`, writes `<scenario>.judge.json` next to each trace, and
-prints a table with the total. The default judge is the local `llama-server/Qwen3.8-27B`, so it needs that server
-running; a judge on the same model the run used is not a judge, and the scores are a reading aid rather than a gate.
+prints a table with the total. The default judge is the local `ollama/bonsai-2:27b`, so it needs that model served
+locally; a judge on the same model the run used is not a judge, and the scores are a reading aid rather than a gate.
 
 ## Adding a scenario
 
