@@ -130,7 +130,7 @@ describe("the team command", () => {
 	const script = fileURLToPath(new URL("../scripts/team.ts", import.meta.url));
 
 	function team(home: string, ...args: string[]): Promise<{ stdout: string; stderr: string }> {
-		return run(process.execPath, ["--conditions=source", "--experimental-strip-types", script, ...args], {
+		return run(process.execPath, ["--experimental-strip-types", script, ...args], {
 			env: { ...process.env, MASON_HOME: home },
 		});
 	}

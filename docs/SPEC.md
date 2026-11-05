@@ -58,14 +58,10 @@ does not add them. It fixes the product direction the plans and issues execute.
 ├── AGENTS.md
 ├── docs/
 │   └── SPEC.md                        # This specification
-├── vendor/
-│   ├── pi/                            # Local clone of upstream earendil-works/pi (v1.2.0, built)
-│   └── open-intelligent-ui/           # Local clone of CopilotKit/OpenIntelligentUI
 ├── packages/
 │   ├── protocol/                      # @mason/protocol: the connector wire contract, v1 (schema + prose)
 │   └── connector/                     # @mason/connector: the connector SDK + the fake-mason conformance suite
 ├── scripts/
-│   ├── link-vendor.mjs                # Symlinks vendor packages into node_modules/
 │   ├── build-web.mjs                  # esbuild bundler for src/web -> dist/web
 │   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
 │   └── token.ts                       # `npm run token -- add|list|revoke`: the credentials that may connect
@@ -118,7 +114,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │       │   ├── Transcript.tsx         # The projected rows, then the queue
 │       │   ├── MessageRow.tsx         # User, hook banner, delivered message, failed-run notice
 │       │   ├── WidgetCard.tsx         # Places a `generateSandboxedUi` card at its call's position (bare)
-│       │   ├── SandboxedUiCard.tsx    # Adapted from vendor/open-intelligent-ui renderer.tsx
+│       │   ├── SandboxedUiCard.tsx    # Adapted from CopilotKit/OpenIntelligentUI renderer.tsx
 │       │   ├── QueuedRows.tsx         # Queued steers/follow-ups: faded bubbles, mode tag, withdraw
 │       │   ├── JumpPill.tsx           # Jump-to-latest pill, shown only while scrolled away from the end
 │       │   └── Composer.tsx           # Pill that grows/caps; Send when idle, Steer + Follow-up when busy
@@ -159,7 +155,7 @@ export interface RuntimeEnvManager {
 ```
 
 - **Local mode (default):**
-  - Spawns `new Connection({ command: [localDaemon()] })` using `vendor/pi/packages/env/bin/pi-env-linux-x64/pi-env`.
+  - Spawns `new Connection({ command: [localDaemon()] })` using the daemon `@earendil-works/pi-env` ships for this platform.
   - Returns `new RemoteExecutionEnv({ connection, id: "pi-env:local", cwd: input.cwd ?? defaultWorkspaceDir })`.
   - Note: Using `RemoteExecutionEnv` over `Connection({ command: [localDaemon()] })` runs every `read`, `write`, `edit`, `bash`, and `listFiles` call through the framed `pi-env` Rust daemon protocol on stdin/stdout — exercising the exact remote boundary we will use in containers.
 - **SSH / Container mode (when `PI_ENV_SSH_HOST` is set):**
@@ -181,13 +177,13 @@ you everything the agent is told. A test fails if another base extension grows a
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
 | `generative_ui` | `<generative_ui>` | plain text: a pointer to the `generative-ui` skill |
 | `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
-| `codemode` | `<codemode>` | the vendor's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
+| `codemode` | `<codemode>` | pi-durable's renderer of the tool catalog: the tools a script can call, as declarations, within pi-durable's 3000-token inline budget (`DEFAULT_CODEMODE_INLINE_BUDGET`); the rest are found with `searchTools()` |
 
 Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
 `profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the guidelines, the
 delivery invariant, the widget pointer), or a **rendering of something the prompt does not own** — the **boot
 configuration** (`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one
-file are the same bytes) and the **vendor-rendered `codemode` section**, whose text is pi-durable's composition and
+file are the same bytes) and the **`codemode` section pi-durable renders**, whose text is its own composition and
 whose position alone is mason's.
 
 There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
@@ -572,7 +568,7 @@ environment is one `echo $NAME` away from the transcript and the provider: an AP
 `DATABASE_URL`, a `MASON_*` switch. The `pi-env` daemon is therefore started through `env -i` with an allowlist —
 `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_ALL`, `TZ`, `TMPDIR` — and defaults for `PATH`, `HOME` and
 `LANG` when the server has none (`daemonCommand`/`daemonEnv`). `Connection` spawns with the parent's environment and has
-no option to change that, and `vendor/pi` is read-only here, so `env -i` is the mechanism rather than a vendor patch.
+no option to change that, so `env -i` is the mechanism rather than a patch to the package.
 `PI_ENV_*` is deliberately not passed: the parent consumes it to decide *where* to run, and a tool has no business
 knowing the host or the identity file.
 

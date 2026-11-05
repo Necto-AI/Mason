@@ -614,7 +614,6 @@ describe("a restart while a call waits", () => {
 		const child = spawn(
 			process.execPath,
 			[
-				"--conditions=source",
 				"--experimental-strip-types",
 				join(fileURLToPath(new URL(".", import.meta.url)), "support", "restart-child.ts"),
 				directory,
