@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { RETIRED_GRANT_KEYS } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
 	type Integration,
@@ -223,7 +224,7 @@ describe("the integration list on disk", () => {
 		assert.equal(booted?.owner, "8811");
 
 		// Each retired key is a file whose reader believes it still decides who may speak (#126). The refusal names the key
-		// and the one command that rewrites it, rather than reading past a setting that no longer exists.
+		// rather than reading past a setting that no longer exists.
 		for (const [key, retired] of [
 			["actors", { "8811": "Denis" }],
 			["unattributed", true],
@@ -242,6 +243,25 @@ describe("the integration list on disk", () => {
 			);
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
+			assert.match(refused, /by hand/, key);
+		}
+
+		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries
+		// one. Reading past them would leave an operator believing a rule still runs.
+		for (const key of RETIRED_GRANT_KEYS) {
+			await writeRaw(
+				paths,
+				JSON.stringify({
+					integrations: {
+						telegram: {
+							enabled: true,
+							connector: { user: { owner: "8811", conversations: [] }, [key]: [] },
+						},
+					},
+				}),
+			);
+			const refused = await refusal(paths);
+			assert.match(refused, new RegExp(`connector\\.${key}`), key);
 			assert.match(refused, /by hand/, key);
 		}
 

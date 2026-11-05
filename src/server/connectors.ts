@@ -167,14 +167,18 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
 }
 
 /**
- * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
+ * The grant keys a removed mechanism owned — approval markers that waived the gateway, the policy rules it read, and the
+ * state scopes a connector mirrored. Two of them were required, so every file written before the cut carries one.
  *
- * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
- * decides that. Spelled once, because the refusal and what a command prints must agree.
+ * Refused rather than ignored: a file that still says a rule runs is a file whose operator believes it runs.
  */
-/** The grant keys a removed mechanism owned, refused by name. */
 export const RETIRED_GRANT_KEYS = ["state", "trustMarkers", "policy"] as const;
 
+/**
+ * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
+ *
+ * Refused for the same reason: a file that still says who may speak is a file whose reader believes it decides that.
+ */
 export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {
