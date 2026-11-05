@@ -38,7 +38,7 @@ if (directory === undefined) {
 	console.error("usage: npm run eval:judge -- <results-dir> [--judge-model=provider/model]");
 	process.exit(1);
 }
-const judgeModel = arg("judge-model", "llama-server/Qwen3.8-27B");
+const judgeModel = arg("judge-model", "ollama/bonsai-2:27b");
 const slash = judgeModel.indexOf("/");
 if (slash === -1) throw new Error("--judge-model expects provider/model");
 
