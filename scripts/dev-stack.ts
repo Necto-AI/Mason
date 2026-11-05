@@ -142,31 +142,27 @@ if (existing.people.length === 0 && names.length === 0) {
 	console.log(`[dev]   MASON_HOME=${home} npm run team -- add "Ilya"`);
 }
 
-const server = spawn(
-	process.execPath,
-	["--conditions=source", "--experimental-strip-types", resolve(root, "src/server/main.ts")],
-	{
-		cwd: root,
-		stdio: "inherit",
-		env: {
-			...process.env,
-			MASON_HOME: home,
-			HOST: "127.0.0.1",
-			PORT: port,
-			...(fake ? { PI_FAUX_MODEL: "1" } : {}),
-			...(localEnv
-				? {}
-				: {
-						PI_ENV_SSH_HOST: "127.0.0.1",
-						PI_ENV_SSH_PORT: String(sshPort),
-						PI_ENV_SSH_USER: process.env.USER ?? "agent",
-						PI_ENV_SSH_IDENTITY: clientKey,
-						PI_ENV_SSH_KNOWN_HOSTS: knownHosts,
-						PI_ENV_SSH_ALIAS: hostKeyAlias,
-					}),
-		},
+const server = spawn(process.execPath, ["--experimental-strip-types", resolve(root, "src/server/main.ts")], {
+	cwd: root,
+	stdio: "inherit",
+	env: {
+		...process.env,
+		MASON_HOME: home,
+		HOST: "127.0.0.1",
+		PORT: port,
+		...(fake ? { PI_FAUX_MODEL: "1" } : {}),
+		...(localEnv
+			? {}
+			: {
+					PI_ENV_SSH_HOST: "127.0.0.1",
+					PI_ENV_SSH_PORT: String(sshPort),
+					PI_ENV_SSH_USER: process.env.USER ?? "agent",
+					PI_ENV_SSH_IDENTITY: clientKey,
+					PI_ENV_SSH_KNOWN_HOSTS: knownHosts,
+					PI_ENV_SSH_ALIAS: hostKeyAlias,
+				}),
 	},
-);
+});
 children.push(server);
 
 console.log(`[dev] home      ${home}`);

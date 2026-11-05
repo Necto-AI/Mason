@@ -626,11 +626,10 @@ test("migrateHouse() refuses a history that already holds the service half", asy
 	assert.equal(await readFile(join(paths.agentDir, "profile.md"), "utf8"), "Denis prefers short answers.\n");
 
 	// `doctor` is the command an operator actually runs on this home: a refusal has to be an exit code, not a sentence.
-	const doctor = await run(
-		process.execPath,
-		["--conditions=source", "--experimental-strip-types", "scripts/doctor.ts", "migrate"],
-		{ cwd: REPO_ROOT, env: { ...process.env, MASON_HOME: home } },
-	).then(
+	const doctor = await run(process.execPath, ["--experimental-strip-types", "scripts/doctor.ts", "migrate"], {
+		cwd: REPO_ROOT,
+		env: { ...process.env, MASON_HOME: home },
+	}).then(
 		(result) => ({ code: 0, stderr: result.stderr }),
 		(error: { code: number; stdout: string; stderr: string }) => error,
 	);
@@ -668,11 +667,10 @@ test("doctor -- migrate stamps grants on a credential that predates them, once",
 	);
 	const doctor = async () => {
 		try {
-			const result = await run(
-				process.execPath,
-				["--conditions=source", "--experimental-strip-types", "scripts/doctor.ts", "migrate"],
-				{ cwd: REPO_ROOT, env: { ...process.env, MASON_HOME: home } },
-			);
+			const result = await run(process.execPath, ["--experimental-strip-types", "scripts/doctor.ts", "migrate"], {
+				cwd: REPO_ROOT,
+				env: { ...process.env, MASON_HOME: home },
+			});
 			return { code: 0, stdout: result.stdout };
 		} catch (error) {
 			const failure = error as { code: number; stdout: string };

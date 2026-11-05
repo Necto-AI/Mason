@@ -55,13 +55,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
 
 ## Before the first `up`
 
-1. **The submodule.** The mason image is built from the repository root, and `vendor/pi` is part of what it is:
-
-   ```sh
-   git submodule update --init --recursive
-   ```
-
-2. **A `.env`** next to this file (`deploy/.env`, mode 0600 — it names a directory of credentials):
+1. **A `.env`** next to this file (`deploy/.env`, mode 0600 — it names a directory of credentials):
 
    ```sh
    MASON_PI_AGENT_DIR=/srv/mason/agent    # required: the host directory in the next step
@@ -113,7 +107,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    docker compose ps
    ```
 
-   The build is slow the first time (`npm install` repairs `vendor/pi`'s nested dependencies), and it re-runs whenever a
+   The build is slow the first time (`npm install` fetches the pi packages), and it re-runs whenever a
    file the root `.dockerignore` does not exclude changes: the checkout is the image.
 
 5. **On a rootless podman host instead of docker**, add the stack's own file to the command:
@@ -227,14 +221,12 @@ deploy/deploy.sh                 # main, on the host named by DEPLOY_HOST (defau
 DEPLOY_HOST=rpi deploy/deploy.sh v0.1.0
 ```
 
-It checks out the ref on the host, moves `vendor/pi` to the commit that ref pins, builds, brings the stack up, waits for
-`/api/health`, and then checks that the containers it is looking at were created after the build started. Two of those
-steps are there because their absence is invisible in the log.
+It checks out the ref on the host, builds, brings the stack up, waits for `/api/health`, and then checks that the
+containers it is looking at were created after the build started. The last check is there because its absence is
+invisible in the log.
 
-The submodule step (`deploy/submodules.sh`, streamed over ssh so an update uses the logic it is deploying rather than the
-copy already on the host) prints the `vendor/pi` commit next to the checkout's, repairs a checkout whose `vendor/pi/.git`
-is a gitfile pointing at a repository that is not there, and refuses when the working tree cannot be made to match the
-pin. Without it the image is built from the previous pi and carries today's tag (issue #84).
+The submodule step is gone with `vendor/pi` (#122): `@earendil-works/*` are pinned in `package.json`, so the commit that
+was checked out is the whole of what the image is built from.
 
 The last check is the point of the script. `podman compose up -d --build` has finished a build and left the old process
 running — an image that exists, a container that never restarted, and a failure that surfaces later as an integration

@@ -310,7 +310,7 @@ describe("the integration command", () => {
 	const script = fileURLToPath(new URL("../scripts/integration.ts", import.meta.url));
 
 	function integration(home: string, ...args: string[]): Promise<{ stdout: string; stderr: string }> {
-		return run(process.execPath, ["--conditions=source", "--experimental-strip-types", script, ...args], {
+		return run(process.execPath, ["--experimental-strip-types", script, ...args], {
 			env: { ...process.env, MASON_HOME: home },
 		});
 	}
