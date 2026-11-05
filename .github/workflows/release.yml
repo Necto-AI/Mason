@@ -52,10 +52,13 @@ jobs:
 
       # The consumer's tarball ships `dist`, which nothing above builds (the dev path stays source-from-types and
       # `ci` rightly never builds it, so a tag is where the compile has to happen). The two workspace packages pack
-      # beside it, protocol first, in the same order the publish below keeps.
+      # beside it, protocol first, in the same order the publish below keeps. The copies to attach land in
+      # `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in the next one packed.
       - run: npm run build
-      - run: npm pack --workspace mason-protocol --workspace mason-connector --pack-destination dist/
-      - run: npm pack --workspaces=false --pack-destination dist/
+      - run: |
+          mkdir .release
+          npm pack --workspace mason-protocol --workspace mason-connector --pack-destination .release/
+          npm pack --workspaces=false --pack-destination .release/
 
       # Provenance needs each package.json to name this repository (npm's documented prerequisite), which the three
       # files carry. `--access public` because a first publish of an unscoped package has no other default.
@@ -73,4 +76,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist/mason-agent-*.tgz dist/mason-protocol-*.tgz dist/mason-connector-*.tgz
+          gh release upload "$GITHUB_REF_NAME" .release/mason-*.tgz
