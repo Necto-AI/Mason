@@ -1,0 +1,13 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"declaration": false,
+		"sourceMap": false,
+		"outDir": "dist",
+		"rootDir": ".",
+		"rewriteRelativeImportExtensions": true,
+		"paths": {}
+	},
+	"include": ["bin/**/*", "scripts/**/*.ts", "evals/run.ts", "evals/lib/**/*.ts", "src/**/*"]
+}
