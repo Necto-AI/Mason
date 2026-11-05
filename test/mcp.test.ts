@@ -15,7 +15,8 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { housePaths } from "../src/server/house.ts";
-import { integrationStatus } from "../src/server/integration-status.ts";
+import { integrationStatus, integrationSummaries } from "../src/server/integration-status.ts";
+import { currentIntegrations } from "../src/server/integrations.ts";
 import { startServer } from "../src/server/main.ts";
 import { type McpTransportFactory, openMcpCatalog } from "../src/server/mcp.ts";
 import {
@@ -192,11 +193,8 @@ describe("a script asks the catalog", () => {
 			const script = outputOf((await scriptResults(runtime)).at(-1) ?? "");
 			assert.match(script, /is not offered any more/, "the call said the tool is gone");
 			assert.match(script, /mcp_describe/, "and named the rediscovery step");
-			// The gate's own shape, not the tool's: the refusal has to come from the decision (`denied` + `execute: not
-			// run`), because `mcp_call`'s own `unknown_tool` result reads the same and would pass this test on the code
-			// before the marker was resolved live.
-			assert.match(script, /"denied":true/, "the gateway refused it, not the tool's own lookup");
-			assert.match(script, /"execute":"not run"/);
+			// The rediscovery refusal is the catalog's own: with no gateway in front of the call, this sentence is the
+			// whole of what a stale name gets.
 			assert.deepEqual(server.calls, [], "nothing reached the server");
 		} finally {
 			await runtime.close();
@@ -484,13 +482,8 @@ describe("the integrations route", () => {
 			mcpTransport: () => server.transport,
 		});
 		try {
-			assert.ok(mason.pairingToken, "a fresh home mints one token, which is what pairs this test");
-			const answer = await fetch(`http://127.0.0.1:${mason.port}/api/integrations`, {
-				headers: { authorization: `Bearer ${mason.pairingToken}` },
-			});
-			assert.equal(answer.status, 200);
-			const body = (await answer.json()) as { integrations: Record<string, unknown>[] };
-			assert.deepEqual(body.integrations, [
+			// The boot's own answer, as a caller with no HTTP route reads it: the panel that served one is gone.
+			assert.deepEqual(integrationSummaries(currentIntegrations()), [
 				{
 					name: "github",
 					enabled: true,

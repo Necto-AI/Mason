@@ -21,5 +21,4 @@ export const chat: ConformanceFixture = {
 		tools: { url: "https://chat.internal/mcp" },
 		events: { "chat.message": "chat-message" },
 	},
-	state: ["status"],
 };

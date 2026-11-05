@@ -13,13 +13,12 @@ contract is how they start disagreeing.
 ## Where the decision lives
 
 - [`adr/0006-connectors-are-full-duplex-peers.md`](adr/0006-connectors-are-full-duplex-peers.md) — a connector is a
-  process and mason is the only thing in the middle. The reply router, the capability-scoped state subscription and the
-  credential follow from it.
+  process and mason is the only thing in the middle. The reply router, the capability ceiling and the credential follow
+  from it.
 - [`adr/0003-integrations-are-services.md`](adr/0003-integrations-are-services.md) — superseded where it says an
   integration has exactly two faces; a connector now has up to three, and `events` is one of them.
 - Issue #99 on this repository — the cutover that replaces the integration layer, of which the protocol and the SDK are
-  the first slice. The operator panel is the last: [`adr/0011-the-panel-is-a-control-plane.md`](adr/0011-the-panel-is-a-control-plane.md)
-  replaced the console with a control plane that cannot speak.
+  the first slice.
 
 ## What exists today
 
@@ -33,16 +32,12 @@ contract is how they start disagreeing.
 
 | | |
 |---|---|
-| Mason's server speaking this protocol | `src/server/connector.ts`: the socket, admission, the state mirrors, the reply outbox, attachments and budgets (`docs/SPEC.md` §4.1d) |
+| Mason's server speaking this protocol | `src/server/connector.ts`: the socket, admission, the reply outbox, streaming, attachments and budgets (`docs/SPEC.md` §4.1d) |
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add <name>` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` (`#104`) — text, files, replies, approvals, a tools face |
-| A minimal Slack as an external process on the SDK | `github.com/DenisSud/mason-slack` (`#104`) — text, replies, approvals; no files, widgets or streaming |
-| The permission gateway and the live tool catalog | `src/server/permissions.ts`, `src/server/mcp.ts`; `docs/SPEC.md` §4.1e |
-| The panel and the one-way migration | in (`#103`, ADR-0011) |
-| Removal of the HMAC event door and the in-repository Telegram relay | in (`#104`) — `POST /api/events/<name>`, the trigger face, the vendor delivery path |
+| A minimal Slack as an external process on the SDK | `github.com/DenisSud/mason-slack` (`#104`) — text, replies; no files or streaming |
+| The live tool catalog | `src/server/mcp.ts`; `docs/SPEC.md` §4.1e |
 
-A connector can connect, submit words, fire events, subscribe to the state its entry grants, receive replies, move files
-and answer permission requests. There is one way in: this socket. The signed event door is gone, an entry that still names
-a `trigger` refuses the boot and `npm run doctor -- migrate` removes the key, and nothing in this build speaks the old
-envelope.
+A connector can connect, submit words, fire events, receive replies and move files. There is one way in: this socket. The
+signed event door is gone, and nothing in this build speaks the old envelope.

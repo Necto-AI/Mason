@@ -1,9 +1,9 @@
 # Evals
 
-Six scenarios that answer one question: does the agent loop behave the way mason promises? A fired hook is acted on and
-reported once. A check-in with nothing to report stays short and invents nothing. A question the model already knows
+Five scenarios that answer one question: does the agent loop behave the way mason promises? A fired hook is acted on
+and reported once. A check-in with nothing to report stays short and invents nothing. A question the model already knows
 costs no tool call. A number only a file can answer is read before it is claimed. A preference told in one turn is
-written to the log and answered from it in the next. A chart request arrives as a widget.
+written to the log and answered from it in the next.
 
 This is not a model benchmark. The model is whatever `--model` names and the scenario is the constant, so the
 interesting result is a scenario that flips between runs or that fails for a model that is otherwise fine: that is a
@@ -12,13 +12,14 @@ statement about the prompt and the harness, which is what these files exist to p
 ## What is real and what is stubbed
 
 Real: the production prompt registry (`src/server/prompt.ts`), the harness (`openAgentRuntime`), the extension set a
-scenario runs with (prompt, `remember`, `reply`, the widget tool), the projection that decides what a reader
+scenario runs with (prompt, `reply`), the projection that decides what a reader
 sees (`src/server/projection.ts`), and the model. Every turn is a real model call, plus the calls its tool steps need.
 
 Stubbed: `bash`, `read`, `write` and `edit` keep their production names, descriptions and parameters, and answer from
-the scenario instead of from a machine (`lib/stubs.ts`). No `pi-env` daemon runs. `write` and `edit` report success and
-change nothing, so a file the agent "writes" is not there afterwards. `read` serves the scenario's entries and also
-reads the real files inside the temp home and workspace, which is how a `remember`ed line can be read back.
+the scenario instead of from a machine (`lib/stubs.ts`). No `pi-env` daemon runs. `edit` reports success and changes
+nothing; `write` writes a real file inside the temp home, so a fact the agent writes down is there afterwards. `read`
+serves the scenario's entries and also reads the real files inside the temp home and workspace, which is how a written
+line is read back on the next turn.
 
 Throwaway: each run gets a fresh temp home and workspace (`mkdtemp`, removed in `finally`), seeded with the scenario's
 `home` files and using in-memory storage. Nothing reads or writes `~/.mason`, and nothing in the repo is touched.
@@ -66,7 +67,6 @@ Each scenario file holds `about`, `checks` (every check, its pass/fail and a det
 | `delivered` | the reader's transcript, from the projection: what was scored |
 | `notices` | failed-run notices the reader saw |
 | `toolCalls` | every call the model made, in order, from the committed entries |
-| `widgets`, `widgetArguments` | how many widgets reached the reader, and the first widget call's arguments |
 | `inputTokens`, `outputTokens` | summed over the run's model calls |
 | `reminders` | how often the delivery gate had to remind the model that nothing had been sent |
 | `turns` | per turn: how many messages the reader got, and how the turn settled |
@@ -128,7 +128,6 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
   be called. `expect.before` is a pair `{ tool, then }`: `tool` must be called, and before `then`.
 - `expect.text` and `expect.absentText` are substrings the delivered transcript must and must not contain,
   case-insensitive. `expect.log` is regexes today's log file must match.
-- `expect.widget` requires a widget to reach the reader, built with `css` before `html` in the call's arguments.
 - `expect.maxTools` bounds work calls: everything except `reply`, which is the delivery channel rather than
   effort. `expect.maxInputTokens` bounds the run's summed input tokens. `expect.reminders` bounds how often the delivery
   gate had to rescue a turn, which is how a model that stops answering in `reply` shows up even though the
@@ -150,9 +149,10 @@ passed 15.
 | cheap-first | 3/3 | a known answer costs zero work calls |
 | verify-first | 3/3 | `read` before the claim, exact count |
 | remember | **0/3** | a recalled preference is delivered on the next turn |
-| widget | 3/3 | a widget reaches the reader, `css` before `html` |
 
-`remember` first failed on `turn.2.delivered`: the turn that answers the recall question ended without `reply`,
+The scenario writes the fact down with `write` rather than `remember`, which the six-tool cut removed; the numbers in
+the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the recall
+question ended without `reply`,
 so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
 four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
 silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written

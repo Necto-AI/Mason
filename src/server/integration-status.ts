@@ -1,10 +1,10 @@
 /**
- * What the boot's connections came to, and the one route that reports it.
+ * What the boot's connections came to, and the report that carries it.
  *
  * The config file and this registry change for different reasons. `integrations.ts` changes when an integration is
  * something else — another face, another rule a file must satisfy, another key the operator can write; this file
- * changes when "connected" means something else, or when the route should say something new about it. The client that
- * connects (`mcp.ts`) writes here; `/api/integrations` reads. Nothing else does, and nothing here is ever rendered into
+ * changes when "connected" means something else, or when the report should say something new about it. The client that
+ * connects (`mcp.ts`) writes here; the boot report reads. Nothing else does, and nothing here is ever rendered into
  * a prompt: health varies between turns, and the resident prefix must be byte-identical between two turns of one build.
  *
  * It is a registry rather than a return value because the boot that connects and the request that reports happen in
@@ -19,7 +19,7 @@ export interface IntegrationHealth {
 	readonly error: string | null;
 }
 
-/** One integration as `/api/integrations` answers it. Server state: the prompt never carries any of this. */
+/** One integration as the report lists it. Server state: the prompt never carries any of this. */
 export interface IntegrationSummary {
 	readonly name: string;
 	readonly enabled: boolean;
@@ -42,7 +42,7 @@ export function clearIntegrationStatus(): void {
 }
 
 /**
- * The booted set with its health, sorted by name: what `/api/integrations` answers. The set is the caller's, taken from
+ * The booted set with its health, sorted by name: what the report lists. The set is the caller's, taken from
  * the boot's snapshot — this file owns what happened to an integration, `integrations.ts` owns what it is.
  */
 export function integrationSummaries(integrations: Record<string, Integration>): IntegrationSummary[] {

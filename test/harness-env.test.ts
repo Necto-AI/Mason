@@ -3,7 +3,6 @@
  * agent speak first, and a run interrupted by a restart picks up where it stopped.
  */
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +13,7 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineExtension, section, ToolResultEntry } from "@earendil-works/pi-durable";
-import { currentHouse, logPathFor } from "../src/server/house.ts";
+import { currentHouse } from "../src/server/house.ts";
 import { projectTranscript } from "../src/server/projection.ts";
 import {
 	type AgentRuntime,
@@ -146,13 +145,11 @@ describe("durable harness + pi-env", () => {
 		}
 	});
 
-	it("remembers through the tool machine, and the next turn's prompt carries what was written there", async () => {
+	it("writes through the tool machine, and the next turn's prompt carries what was written there", async () => {
 		const directory = await tempDir("pda-split-home-");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
-			// Both writes land on the agent's half, through the daemon: the log by `remember`, the profile by `write`.
-			toolCall("remember", { fact: "Budgets are reviewed on Fridays." }, "r"),
-			// The agent's half of the home `openFor` opens: the profile is written where the prompt will read it.
+			// The write lands on the agent's half, through the daemon: the profile is written where the prompt reads it.
 			toolCall(
 				"write",
 				{ path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" },
@@ -170,18 +167,19 @@ describe("durable harness + pi-env", () => {
 			assert.equal(
 				(
 					await (
-						await conversation.submit({ type: "input", content: "Remember the review day." }, BACKGROUND_CONTEXT)
+						await conversation.submit(
+							{ type: "input", content: "My answers should stay short." },
+							BACKGROUND_CONTEXT,
+						)
 					).wait(BACKGROUND_CONTEXT)
 				).status,
 				"done",
 			);
-			const remembered = await readFile(logPathFor(currentHouse()), "utf8");
 			assert.match(
-				remembered,
-				/^- \d\d:\d\d — Budgets are reviewed on Fridays\.$/m,
-				"the log is the one the tool machine wrote",
+				await readFile(join(currentHouse().agentDir, "profile.md"), "utf8"),
+				/Denis prefers short answers\./,
+				"the profile is the one the tool machine wrote",
 			);
-			assert.ok(existsSync(join(currentHouse().agentDir, ".git")), "and the commit happened where the files are");
 
 			assert.equal(
 				(

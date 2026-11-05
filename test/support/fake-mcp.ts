@@ -2,9 +2,7 @@
  * The parts of the MCP test scaffolding that are not tests: a fake server on an in-memory transport, the fixtures, the
  * scripts, and a boot of the real runtime over a directory.
  *
- * It lives apart from `mcp.ts` so a *program* can use it too — `restart-child.ts` boots the real runtime in another
- * process and dies there, which is the only honest way to prove what survives a crash. `mcp.ts` adds the temporary
- * directory the test files share and re-exports the rest, so a test imports one module either way.
+ * `mcp.ts` adds the temporary directory the test files share and re-exports the rest, so a test imports one module.
  */
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -51,7 +49,7 @@ export const GITHUB: Integration = {
 	enabled: true,
 	description: "Issues and pull requests for the team's repositories",
 	tools: { url: "http://mason-github:8082/mcp" },
-	connector: { state: [], trustMarkers: true },
+	connector: {},
 };
 
 /** The same server, marked as the one the team cannot work without. */
@@ -266,14 +264,6 @@ const result = await tools.mcp_call({
   version: full.version,
 });
 return result.content[0].text;`;
-
-/**
- * A read, then an effect the server says needs a person. The read is the effect a crash must not repeat; the second call
- * is what an answer lets through. Shared with `restart-child.ts`, so the two processes run the same script.
- */
-export const TWO_CALLS = `const a = await tools.mcp_call({ integration: "github", tool: "issues.search", arguments: { query: "bug" } });
-const b = await tools.mcp_call({ integration: "github", tool: "issues.create", arguments: { title: "Pager" } });
-return [a.content[0].text, b.content[0].text];`;
 
 /** Runs the scripted turn to its end. */
 export async function turn(runtime: AgentRuntime, content = "Anything new?"): Promise<void> {

@@ -29,10 +29,6 @@ export type {
 	Limits,
 	Origin,
 	ProtocolErrorData,
-	StateDeltaParams,
-	StateScope,
-	StateSnapshotParams,
-	StateSubscribeResult,
 	SubmissionMode,
 	SubmitParams,
 } from "mason-protocol";
@@ -43,12 +39,10 @@ export {
 	METHOD,
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
-	STATE_SCOPES,
 } from "mason-protocol";
 export {
 	type AttachmentClient,
 	type AttachmentClientOptions,
-	type AttachmentDownload,
 	AttachmentError,
 	createAttachmentClient,
 	type Fetcher,

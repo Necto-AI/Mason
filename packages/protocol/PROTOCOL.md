@@ -104,10 +104,10 @@ The result is a durable claim, and `submissionId` is the identity mason deduplic
 - `actor` must be the one actor the entry names as its owner. Any other is refused (`mason.actor_unknown`), and so is
   any actor when the entry names no owner. A submission with **no** actor is accepted: it is a message nobody signed.
 - `origin.externalConversationId` must be in the granted list (`mason.conversation_not_permitted` otherwise).
-- `approver` is accepted for compatibility and has no effect. Approval authority is the connector's owner actor, and the
-  operator's `approve` grant on a device; there is no per-actor approver to claim.
+- `approver` is accepted for compatibility and has no effect: there is no approval step in this build, so there is no
+  per-actor approver to claim.
 - Content is typed blocks. A `file` block names a `contentId` obtained from the transfer endpoint; never a path, never
-  base64.
+  base64. The transfer is one way: mason reads the bytes itself and never asks a connector for them back.
 
 ### `mason/fire` — an unsolicited service event
 
@@ -182,8 +182,6 @@ proactive target, and it is sent as **one logical delivery** with one `deliveryI
 
 - `start`/`delta` are only sent to an origin that claimed `streaming`. Everybody else receives `final` alone, under the
   same `deliveryId` a streaming origin would have seen. Delivery identity never changes with capability.
-- A projection mirror is **not** a delivery. A connector with the `projection` state scope displays a reply because it
-  appears in the whitelisted transcript; it receives no send.
 - v1 has no delivery fan-out.
 
 The answer to `delivery.final` is a `deliveryAck`:
@@ -209,70 +207,10 @@ received, and a person who was never told anything is the worst outcome the whol
 
 ## Interactions
 
-A permission request is a correlated question about one paused tool call. It is not chat, and its answer does not start
-a turn.
-
-```json
-{"jsonrpc":"2.0","id":"p1","method":"connector/interaction.request","params":{
-  "permissionId":"perm-9",
-  "tool":{"name":"send_message","connector":"telegram"},
-  "arguments":{"chat_id":"-1009999","text":"standup in 10"},
-  "reason":"sending outside the conversation that asked",
-  "answers":["allow","deny"],
-  "origin":{"connector":"telegram","externalConversationId":"-1001234"}}}
-```
-
-The answer to that call only says whether a surface that can answer it was reached:
-
-```json
-{"jsonrpc":"2.0","id":"p1","result":{"delivered":true,"surface":"telegram"}}
-```
-
-`delivered: false` leaves the approval **visibly pending**. It never denies it.
-
-A surface is asked only if it negotiated the `approvals` capability at the handshake — the handshake is a ceiling, and a
-client that did not ask for approvals has nowhere to put one. The question is not lost by it: it stays pending for the
-owner's route and for the next socket that did ask.
-
-The answer arrives as its own call, from whoever is authorized, and applies **once**:
-
-```json
-{"jsonrpc":"2.0","id":"a1","method":"mason/interaction.answer","params":{
-  "permissionId":"perm-9","answer":"allow","by":{"externalActorId":"8811"}}}
-```
-
-```json
-{"jsonrpc":"2.0","id":"a1","result":{"settled":true}}
-```
-
-- `settled: false` for a late answer, an actor without approval authority, or a request that was already settled.
-  There is no "always allow": standing policy is an administrative act, not a chat button.
-- A denial becomes a structured tool result for the paused call.
-- A pending approval survives a restart. The operation resumes with only the approved call, and the side effects that ran
-  before it are not repeated.
-
-## State
-
-State is what the connector was granted, and nothing more. Reasoning, tool arguments, tool output, and the raw
-conversation are in none of the four scopes.
-
-| Scope | Yields |
-|---|---|
-| `status` | run status, busy, queued count, hook names |
-| `presence` | "this chat is being worked on", start/stop |
-| `projection` | the whitelisted transcript, entry by entry |
-| `tools` | the names of the tools a turn is running |
-
-```json
-{"jsonrpc":"2.0","id":"sub1","method":"mason/state.subscribe","params":{"scopes":["status","projection"],"since":41}}
-{"jsonrpc":"2.0","id":"sub1","result":{"scopes":["status","projection"],"seq":57,"resumed":true}}
-```
-
-Frames are `connector/state.snapshot` (a full set, with `scopes`) and `connector/state.delta` (`{seq, scope, op, path?,
-value?}`, where `op` is `set`, `push` or `reset`). Sequence numbers are monotonic per socket. A gap means **resync**:
-reconnect with `since` and accept a snapshot. A connector never patches a hole.
-
-A scope the entry did not grant is refused (`mason.scope_not_granted`), not silently dropped.
+The approval half of v1 is **inert in this build**. `connector/interaction.request` and `mason/interaction.answer` are
+still reserved method names, so a connector that implements them compiles and runs, but no version of mason sends or
+answers one: what a service may do is the credential it holds, and there is no paused-call question to answer. A
+connector may advertise the `approvals` capability; nothing acts on it.
 
 ## Attachments
 
@@ -282,11 +220,11 @@ inline binary does not belong in a JSON-RPC frame.
 | | |
 |---|---|
 | `POST /api/connector/attachments` | raw body, `content-type` and `x-mason-filename` headers → `{contentId, size, expiresAt}` |
-| `GET /api/connector/attachments/<contentId>` | bytes back, same credential |
 | Cap | `limits.attachmentBytes`, `413` above it |
-| Expiry | `limits.attachmentTtlMs`; an expired id is `410`, a foreign id is `404` |
+| Expiry | `limits.attachmentTtlMs`; the submission that names a stale id says the file is gone |
 
-A content id is scoped to the connector that uploaded it. Mason never serves a connector another connector's bytes.
+The transfer is one way. A content id is scoped to the connector that uploaded it, and mason reads the bytes itself when a
+submission names one: nothing serves them back to a connector, and no connector ever needs a download.
 
 ## Errors
 
@@ -301,7 +239,6 @@ A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence,
 |---|---|---|
 | `mason.protocol_mismatch` | no | the majors differ |
 | `mason.face_not_granted` | no | a call uses a face the entry does not grant |
-| `mason.scope_not_granted` | no | a state scope the entry does not grant |
 | `mason.actor_unknown` | no | an actor that is not the entry's owner, or any actor when it names none |
 | `mason.conversation_not_permitted` | no | an origin outside the granted list |
 | `mason.kind_not_permitted` | no | a fire `kind` the entry does not map |
@@ -342,9 +279,7 @@ message that never arrived, and pretending otherwise is how a person gets the sa
 ## Budgets
 
 Every class is budgeted separately per connector, so a flood in one cannot starve the others: submissions, fires,
-controls, attachments. `stop` and `cancel` have their own budget beside the rest, and `mason/interaction.answer` is a
-control: it is the same kind of thing (one word that settles one thing), and it spends the control class rather than
-carrying a field of its own. A refusal is `mason.rate_limited` with
+controls, attachments. `stop` has its own budget beside the controls. A refusal is `mason.rate_limited` with
 `retryAfterMs`, and the connector waits that long, capped at a minute so one wrong number cannot park a message for an
 hour — a wait, not a verdict.
 

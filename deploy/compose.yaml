@@ -1,7 +1,7 @@
 # mason, two containers: the server, and the machine its tools run on.
 #
-# `mason` is the repo, the built web client, the agent's home on a volume, the Chord socket and the web UI on 8787,
-# published on the host's loopback only. `mason-env` is ubuntu 24.04 and an sshd: the agent's tools were never meant to
+# `mason` is the repo, the agent's home on a volume, and the connector socket on 8787, published on the host's loopback
+# only. `mason-env` is ubuntu 24.04 and an sshd: the agent's tools were never meant to
 # run in the process that thinks, and this is where they run instead. The two are joined by SSH, not by a shared
 # process, and mason hands the env container its key on first boot (deploy/mason-entrypoint.sh).
 #
@@ -9,9 +9,8 @@
 # commented template at the end of `services:` is what a person copies, and service/integrations.json is what tells mason
 # where each one is. An integration is not a mason container: another project's image, another project's release cycle.
 #
-# Build contexts: the mason image is built from the REPOSITORY ROOT (`context: ..`), because the image is the repo —
-# its TypeScript run from source, its `vendor/pi` submodule, its built web client. Check the submodule out before
-# building: `git submodule update --init --recursive`. The env image is built from this directory alone.
+# Build contexts: the mason image is built from the REPOSITORY ROOT (`context: ..`), because the image is the repo — its
+# TypeScript run from source. The env image is built from this directory alone.
 #
 # Nothing here terminates TLS. The server is published on 127.0.0.1 and a reverse proxy in front of it is the deployer's
 # business; see deploy/README.md for the two headers such a proxy has to preserve.

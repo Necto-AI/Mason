@@ -331,14 +331,13 @@ describe("the handshake", () => {
 					user: {
 						actors: [{ externalActorId: "8811" }],
 						conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-						capabilities: ["text", "markdown", "widgets"],
+						capabilities: ["text", "markdown"],
 					},
 				}),
 			});
 			try {
-				// The entry grants text, markdown, files, approvals and streaming; the connector claims text, markdown and
-				// widgets. The answer is what is in both, which is how a medium that cannot render a widget is never sent
-				// one and a connector is never sent a file it did not claim it can hold.
+				// The entry grants text, markdown, files, approvals and streaming; the connector claims text and markdown.
+				// The answer is what is in both, which is how a connector is never sent a file it did not claim.
 				assert.deepEqual(connected.connector.status().session?.capabilities, ["text", "markdown"]);
 			} finally {
 				await connected.close();
@@ -497,68 +496,6 @@ describe("the socket's door", () => {
 	});
 });
 
-describe("state", () => {
-	it("answers a snapshot on subscribe, deltas after it, and refuses a scope the entry does not grant", async () => {
-		const served = await serveConnector({ home: await connectorHome(), steps: replyTurns(["done"]) });
-		try {
-			const frames: Array<Record<string, unknown>> = [];
-			const connected = await connectConnector(served, {
-				state: ["status", "projection"],
-				handlers: {
-					onState: (frame) => {
-						frames.push(frame as unknown as Record<string, unknown>);
-					},
-				},
-			});
-			try {
-				await until(() => frames.some((frame) => frame.scopes !== undefined), "the snapshot");
-				const snapshot = frames.find((frame) => frame.scopes !== undefined) as {
-					scopes: string[];
-					status?: unknown;
-					projection?: { items: unknown[] };
-				};
-				assert.deepEqual(snapshot.scopes, ["status", "projection"]);
-				assert.ok(snapshot.status !== undefined && snapshot.projection !== undefined);
-
-				await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811" },
-					content: [{ type: "text", text: "hello" }],
-				});
-				await until(
-					() =>
-						frames.some(
-							(frame) =>
-								frame.scope === "projection" &&
-								JSON.stringify((frame as { value?: unknown }).value).includes('"delivered"'),
-						),
-					"a projection delta carrying the reply",
-				);
-				const projection = frames.filter((frame) => frame.scope === "projection").at(-1) as {
-					op: string;
-					value: { items: Array<{ kind: string; text?: string }> };
-				};
-				assert.equal(projection.op, "set");
-				assert.deepEqual(
-					projection.value.items.map((item) => [item.kind, item.text]),
-					[
-						["user", "hello"],
-						["delivered", "done"],
-					],
-				);
-				// The whitelist, not the conversation: no entry ids beyond the reader's rows, no reasoning, no tool output.
-				assert.doesNotMatch(JSON.stringify(frames), /pi\.assistant|toolCall|reasoning/);
-
-				await assert.rejects(connected.connector.subscribe(["status", "tools"]));
-			} finally {
-				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-});
-
 describe("control", () => {
 	it("runs a declared command once per request id, and an undeclared word spends nothing", async () => {
 		const served = await serveConnector();
@@ -629,30 +566,6 @@ describe("control", () => {
 				assert.equal((stop.result as { reply?: string }).reply, "stopped");
 			} finally {
 				session.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("answers an unknown permission with mason.unknown_permission, and settles nothing", async () => {
-		const served = await serveConnector();
-		try {
-			const session = await rawConnect(served);
-			try {
-				const answer = await session.call("mason/interaction.answer", { permissionId: "perm-1", answer: "allow" });
-				assert.equal(answer.error?.data?.code, "mason.unknown_permission");
-			} finally {
-				session.close();
-			}
-			const connected = await connectConnector(served);
-			try {
-				// What the SDK makes of the same refusal: not settled, with mason's sentence as the reason.
-				const result = await connected.connector.answer({ permissionId: "perm-1", answer: "deny" });
-				assert.equal(result.settled, false);
-				assert.match(result.reason ?? "", /not pending/);
-			} finally {
-				await connected.close();
 			}
 		} finally {
 			await served.close();

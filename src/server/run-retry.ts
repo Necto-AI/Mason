@@ -74,7 +74,7 @@ export function planRunRetry(input: RunRetryInput): RunRetryPlan {
 	};
 }
 
-/** A person's own words, as the transcript places them: the console's default kind, or one a connector carried. */
+/** A person's own words, as the transcript places them: a `pi.user` entry, or one a connector carried. */
 function isPersonInput(entry: EntryRecord): boolean {
 	return (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) && isInputEntry(entry);
 }

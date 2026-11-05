@@ -1,10 +1,8 @@
-# mason — the server: the repository, the built web client, the durable home, and the two sockets it serves.
+# mason — the server: the repository, the durable home, and the one socket it serves.
 #
 # The build context is the REPOSITORY ROOT, not this directory (compose.yaml: `context: ..`, `dockerfile:
-# deploy/mason.Dockerfile`). That is not a convention to be tidied later: the TypeScript is run from source, the
-# `@earendil-works/*` packages are symlinked out of the `vendor/pi` submodule by `npm install`'s postinstall, and the
-# web client is esbuild's output from `src/web`. Check the submodule out first:
-#   git submodule update --init --recursive
+# deploy/mason.Dockerfile`). That is not a convention to be tidied later: the TypeScript is run from source, and the
+# `@earendil-works/*` packages come from npm like every other dependency.
 # Fully qualified on purpose: a host whose podman defines no `unqualified-search-registries` (NixOS ships none) refuses
 # a bare `node:22-bookworm-slim` at build time — `short-name "node:22-bookworm-slim" did not resolve to an alias` — and
 # the deploy is meant to build on such a host.
@@ -41,13 +39,8 @@ WORKDIR /app
 # vendor symlinks are absolute paths from the host), .data (an older home), dist (rebuilt below), and the git directory.
 COPY . /app
 
-# `npm install` runs the repo's postinstall: it symlinks `@earendil-works/*` into node_modules from `vendor/pi` and
-# repairs the submodule's nested dependencies, which a root install prunes (scripts/link-vendor.mjs,
-# scripts/verify-vendor.mjs). It needs the network.
+# `npm install` needs the network: the packages are published, there is no submodule to link.
 RUN npm install
-
-# `src/web/main.tsx` -> `dist/web/`, which is what the server serves and what the pairing link lands on.
-RUN npm run build:web
 
 # The daemon that runs on the far side of the tool machine is a binary from the checkout, not from this image's package
 # manager: `bin/pi-env-linux-<arch>/pi-env` is built by `npm run build:daemon` on whichever machine owns the submodule, and

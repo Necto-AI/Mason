@@ -46,7 +46,7 @@ replaced rather than kept:
 - **What a service does instead.** It opens `/api/connector` with a credential mason issued for that entry, and fires
   `mason/fire` over its own socket, spending the event kinds its grant names. No route accepts work from the network on
   an integration's behalf; `/api/events/<name>` and its trigger secret are gone, and an entry that still names a
-  `trigger` refuses the boot until `npm run doctor -- migrate` removes it.
+  `trigger` refuses the boot.
 - **"`connector` retires as a noun" is reversed.** Connector is the noun again, and an integration entry may carry a
   `connector` grant beside its MCP endpoint (`src/server/connectors.ts`). This ADR's third bullet is history, not policy.
 - **What survives, unchanged.** An integration is still a separate process; tools are still MCP over Streamable HTTP with

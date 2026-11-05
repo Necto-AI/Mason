@@ -11,9 +11,9 @@
  * 2. **The handshake is a ceiling.** The answer is what the operator granted, narrowed by what the connector advertised.
  *    A face the entry does not grant is named in `inactive` rather than dropped, and a scope, an actor, a room, a kind or
  *    a command outside the grant is a refusal.
- * 3. **State.** Four scopes, and only those: `status`, `presence`, the whitelisted `projection`, and the *names* of the
- *    tools a turn is running. Snapshot on subscribe; deltas after it; a gap means resync, so this side keeps no history
- *    and says `resumed: false` rather than pretending.
+ * 3. **No state is pushed.** A connector renders what it is sent: a reply, streamed and then final, and a control's
+ *    answer. There is no snapshot, no delta and no subscription; the projection is mason's own reading of the
+ *    transcript, not a second copy for a surface that already has one.
  * 4. **Delivery.** A reply committed as an `app.reply` entry is owed to the connector it targets. The outbox sends it,
  *    records the acknowledgement as an `app.delivery` entry, resends what was never acknowledged, and never retries an
  *    `uncertain` answer — a person who received the same message twice is the failure this arrangement exists to avoid.
@@ -40,20 +40,12 @@ import {
 	type ErrorCode,
 	type HelloRequest,
 	type HelloResult,
-	type InteractionAck,
-	type InteractionAnswerParams,
-	type InteractionAnswerResult,
-	type InteractionRequestParams,
 	type Limits,
 	METHOD,
 	type Origin,
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	type ProtocolErrorData,
-	type StateDeltaParams,
-	type StateScope,
-	type StateSnapshotParams,
-	type StateSubscribeResult,
 	type SubmitParams,
 	versionsCompatible,
 } from "mason-protocol";
@@ -70,20 +62,9 @@ import {
 	CONNECTOR_SUBMISSION_LIMIT,
 	type FireLimiter,
 } from "./limits.ts";
-import {
-	answerOf,
-	keepEarliest,
-	mayAnswer,
-	type PermissionAnswer,
-	type PermissionBook,
-	type PermissionRequest,
-	requestOf,
-	surfaceFor,
-} from "./permissions.ts";
-import { projectQueued, projectTranscript } from "./projection.ts";
 import { type ReplyRecord, replyRecordOf, targetOfOrigin, turnOriginOf } from "./replies.ts";
 import type { AgentRuntime } from "./runtime.ts";
-import { deriveRunStatus, isBusy, queuedSubmissions, runningToolNames } from "./status.ts";
+import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
 
 /** The path a connector opens. Beside the Chord socket rather than inside it: one door, one contract. */
 export const CONNECTOR_PATH = "/api/connector";
@@ -165,8 +146,6 @@ export interface ConnectorDoorOptions {
 	readonly attachments: AttachmentStore;
 	/** One limiter for the process, shared with the attachment routes: a class budget is the connector's, not a socket's. */
 	readonly limiter: FireLimiter;
-	/** The pending permission questions: what this door sends back to the conversation they came from, and settles. */
-	readonly permissions: PermissionBook;
 	readonly log?: (line: string) => void;
 	readonly now?: () => number;
 	/** How the door picks the config a socket is authenticated against. A test reads the home it booted. */
@@ -181,8 +160,6 @@ export interface ConnectorDoor {
 	attach(socket: WebSocket, request: IncomingMessage): Promise<void>;
 	/** Send what a connector is owed now — after a connect, and after every view change. */
 	flush(): Promise<void>;
-	/** The live session for a connector, if it has one: what #102's permission gateway asks for a surface. */
-	session(name: string): ConnectorSession | undefined;
 	close(): Promise<void>;
 }
 
@@ -194,7 +171,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	const door: ConnectorDoor = {
 		attach,
 		flush,
-		session: (name) => sessions.get(name),
 		close: async () => {
 			await watch.dispose();
 			for (const session of [...sessions.values()]) session.close("mason is shutting down");
@@ -207,12 +183,12 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	let dirty = false;
 	const closed = false;
 
-	// One watch for the whole door: every connector's state mirror, and the outbox, read the same revision. A per-socket
+	// One watch for the whole door: every connector's streaming reply, and the outbox, read the same revision. A per-socket
 	// watch would be one listener per connector on a log that already fans out to every browser.
 	const watch = await options.runtime.viewState(BACKGROUND_CONTEXT);
 	const unsubscribe = watch.subscribe((view) => {
 		latest = view;
-		for (const session of sessions.values()) session.stateChanged(view);
+		for (const session of sessions.values()) session.streamChanged(view);
 		void flush();
 	});
 	// The acquisition revision is delivered by `subscribe` itself; nothing to seed.
@@ -264,7 +240,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			workspaceDir: options.workspaceDir,
 			attachments: options.attachments,
 			limiter: options.limiter,
-			permissions: options.permissions,
 			log,
 			now: options.now ?? Date.now,
 			view: () => latest,
@@ -313,15 +288,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 						}
 					}
 				}
-				// The questions, after the replies: a person who was asked to approve something should have seen the message
-				// that explains what for. Nothing is recorded per question — it is owed while it is pending, which is the
-				// transcript's own answer.
-				for (const [session, requests] of owedQuestions(view, sessions)) {
-					for (const request of requests) {
-						if (session.closed) break;
-						await sendQuestion(session, request);
-					}
-				}
 			} while (dirty);
 		})().finally(() => {
 			flushing = undefined;
@@ -358,59 +324,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			owed.push([session, records]);
 		}
 		return owed;
-	}
-
-	/**
-	 * The committed questions each open session still owes: pending, routed to it, unanswered.
-	 *
-	 * The route is derived here from the file the boot read, not from anything the request recorded, so a conversation the
-	 * operator took away since the question was written is followed without the pending request being rewritten.
-	 */
-	function owedQuestions(
-		view: ConversationView,
-		open: ReadonlyMap<string, ConnectorSession>,
-	): Array<[ConnectorSession, PermissionRequest[]]> {
-		const folded = foldQuestions((view.entries ?? []) as readonly EntryRecord[]);
-		const integrations = currentIntegrations();
-		const byConnector = new Map<string, PermissionRequest[]>();
-		for (const request of folded.requests.values()) {
-			if (folded.answers.has(request.permissionId)) continue;
-			const surface = surfaceFor(request, integrations);
-			if (surface === undefined) continue;
-			const list = byConnector.get(surface.connector) ?? [];
-			list.push(request);
-			byConnector.set(surface.connector, list);
-		}
-		const owed: Array<[ConnectorSession, PermissionRequest[]]> = [];
-		for (const [name, requests] of byConnector) {
-			const session = open.get(name);
-			if (session === undefined || session.closed || !session.ready) continue;
-			owed.push([session, requests]);
-		}
-		return owed;
-	}
-
-	/** One `connector/interaction.request`. An undelivered one stays owed: the next pass asks again. */
-	async function sendQuestion(session: ConnectorSession, request: PermissionRequest): Promise<void> {
-		const origin = request.origin;
-		if (origin === undefined) return;
-		const params: InteractionRequestParams = {
-			permissionId: request.permissionId,
-			tool: request.tool,
-			arguments: request.arguments,
-			reason: request.reason,
-			answers: request.answers,
-			origin,
-			blocks: [{ type: "text", text: questionText(request) }],
-		};
-		const ack = await session.requestInteraction(params);
-		if (ack === undefined) {
-			log(`[connector] ${session.name}: the question ${request.permissionId} was not acknowledged; it stays owed`);
-			return;
-		}
-		log(
-			`[connector] ${session.name}: the question ${request.permissionId} ${ack.delivered ? "reached the conversation" : `was not shown (${ack.detail ?? "no surface"})`}`,
-		);
 	}
 
 	/** One `connector/delivery.final`, and its acknowledgement written down — whatever it says, including `uncertain`. */
@@ -453,7 +366,6 @@ interface SessionOptions {
 	readonly workspaceDir: string;
 	readonly attachments: AttachmentStore;
 	readonly limiter: FireLimiter;
-	readonly permissions: PermissionBook;
 	readonly log: (line: string) => void;
 	readonly now: () => number;
 	readonly view: () => ConversationView | undefined;
@@ -489,7 +401,6 @@ export class ConnectorSession {
 	readonly #workspaceDir: string;
 	readonly #attachments: AttachmentStore;
 	readonly #limiter: FireLimiter;
-	readonly #permissions: PermissionBook;
 	readonly #log: (line: string) => void;
 	readonly #now: () => number;
 	readonly #view: () => ConversationView | undefined;
@@ -497,13 +408,9 @@ export class ConnectorSession {
 	readonly #pending = new Map<string, Pending>();
 	#idle: ReturnType<typeof setTimeout>;
 	readonly #delivering = new Set<string>();
-	/** The questions this socket already handed over: a reconnect is a new socket and asks what nobody answered again. */
-	readonly #asked = new Set<string>();
 	readonly #streaming = new Map<string, { readonly callId: string; readonly text: string }>();
-	#scopes: readonly StateScope[] = [];
 	#capabilities: readonly Capability[] = [];
 	#seq: Seq = 0;
-	#lastState = new Map<StateScope, string>();
 	#version = "0.0.0";
 
 	constructor(options: SessionOptions) {
@@ -516,7 +423,6 @@ export class ConnectorSession {
 		this.#workspaceDir = options.workspaceDir;
 		this.#attachments = options.attachments;
 		this.#limiter = options.limiter;
-		this.#permissions = options.permissions;
 		this.#log = options.log;
 		this.#now = options.now;
 		this.#view = options.view;
@@ -628,10 +534,6 @@ export class ConnectorSession {
 				);
 			case METHOD.control:
 				return this.#control(params as ControlParams);
-			case METHOD.interactionAnswer:
-				return this.#answer(params as InteractionAnswerParams);
-			case METHOD.stateSubscribe:
-				return this.#subscribe(params as { scopes?: unknown; since?: unknown });
 			case METHOD.ping:
 				return { at: this.#now() };
 			default:
@@ -914,9 +816,7 @@ export class ConnectorSession {
 					images.push({ type: "image", data: read.attachment.bytes.toString("base64"), mimeType: type });
 				}
 				text.push(`[file: ${path} — ${type}, ${read.attachment.meta.size} bytes]`);
-				continue;
 			}
-			if (block.type === "widget") text.push("[a widget arrived with this message]");
 		}
 		const body = text.join("\n");
 		if (images.length === 0) return body;
@@ -1076,121 +976,48 @@ export class ConnectorSession {
 		};
 	}
 
+	/* ------------------------------------------------------------------------------------------------------------ */
+	/* Delivery                                                                                                     */
+	/* ------------------------------------------------------------------------------------------------------------ */
+
 	/**
-	 * One person's answer to one pending permission request.
+	 * One `connector/delivery.final`, answered by the connector's ack.
 	 *
-	 * Three outcomes, and the difference between them is the whole of the authority model. An id nobody is waiting on is
-	 * `mason.unknown_permission`, because a typo and a stale id are the same mistake from the connector's side. An answer
-	 * that arrives after the request settled is `settled: false` — there is no "always allow", and a late answer changes
-	 * nothing. And an actor who is not the entry's `owner`, or an answer sent through a connector the question did not
-	 * come through, is `settled: false` with the reason, not an error: they may have been shown the question, and "this is
-	 * not yours to answer" is information.
+	 * A second flush that reaches the same delivery while the first is in flight must not send it twice on one socket:
+	 * the outbox's ack has not been written yet, and two identical requests would be two vendor sends. The in-flight set
+	 * is what holds that door shut; a reconnect is a new socket with an empty set and the connector's own ledger is what
+	 * deduplicates there.
 	 */
-	async #answer(params: InteractionAnswerParams): Promise<InteractionAnswerResult> {
-		// Budgeted with the other state-mutating methods: an answer folds the transcript twice (the find, then the commit's
-		// own read), which is bounded work per frame, not free work. `stop` reuses this same class without a field of its
-		// own, and so does this: the door's classes are the ones the handshake advertises.
-		this.#spend("control", CONNECTOR_CONTROL_LIMIT);
-		const permissionId = params?.permissionId;
-		if (typeof permissionId !== "string" || permissionId === "") {
-			throw refused(ERROR_CODE.invalidRequest, "mason/interaction.answer needs a permissionId", {
-				field: "permissionId",
-			});
-		}
-		if (params.answer !== "allow" && params.answer !== "deny") {
-			throw refused(ERROR_CODE.invalidRequest, `${String(params.answer)} is not an answer`, { field: "answer" });
-		}
-		const grant = this.#grant.user;
-		if (grant === undefined) throw refused(ERROR_CODE.faceNotGranted, "this connector holds no user face");
-		const found = await this.#permissions.find(permissionId);
-		if (found.request === undefined) {
-			// A request this build never wrote, or one that has already been answered and pruned by a compaction: both are
-			// "not pending", and neither is worth a `settled: false` that reads like a live question.
-			throw refused(ERROR_CODE.unknownPermission, `${permissionId} is not pending`);
-		}
-		if (found.answer !== undefined) {
-			return {
-				settled: false,
-				reason:
-					found.answer.answer === "cancelled"
-						? "the call was cancelled before it was answered"
-						: `already answered${found.answer.by === undefined ? "" : ` by ${found.answer.by}`}`,
-			};
-		}
-		const authority = mayAnswer(
-			found.request,
-			{ ...grant, connector: this.name },
-			{
-				...(params.by?.externalActorId === undefined ? {} : { externalActorId: params.by.externalActorId }),
-			},
-		);
-		if (!authority.ok) return { settled: false, reason: authority.reason };
-		const settled = await this.#permissions.answer(permissionId, params.answer, authority.by);
-		this.#log(
-			`[connector] ${this.name}: ${permissionId} ${settled.settled ? params.answer : "not settled"} ` +
-				`by actor ${String(params.by?.externalActorId)}`,
-		);
-		return settled;
-	}
-
-	/* ------------------------------------------------------------------------------------------------------------ */
-	/* State                                                                                                        */
-	/* ------------------------------------------------------------------------------------------------------------ */
-
-	#subscribe(params: { scopes?: unknown; since?: unknown }): StateSubscribeResult {
-		const asked = params?.scopes;
-		if (!Array.isArray(asked) || asked.length === 0) {
-			throw refused(ERROR_CODE.invalidRequest, "mason/state.subscribe needs a non-empty scopes list", {
-				field: "scopes",
-			});
-		}
-		for (const scope of asked) {
-			if (typeof scope !== "string" || !this.#grant.state.includes(scope as StateScope)) {
-				throw refused(ERROR_CODE.scopeNotGranted, `${String(scope)} is not a scope this entry grants`);
-			}
-		}
-		this.#scopes = asked as StateScope[];
-		this.#lastState.clear();
-		const view = this.#view();
-		// Always a snapshot: this side keeps no delta history across sockets, so a `since` it cannot replay is answered with
-		// the whole state and `resumed: false` rather than a gap the connector would patch into a hole.
-		this.#sendSnapshot(view);
-		return { scopes: this.#scopes, seq: this.#seq, resumed: false };
-	}
-
-	/** One full set of the subscribed scopes. Sent on subscribe, and the baseline every delta is compared against. */
-	#sendSnapshot(view: ConversationView | undefined): void {
-		const frame: StateSnapshotParams = { seq: this.nextSeq(), scopes: this.#scopes };
-		for (const scope of this.#scopes) {
-			const value = stateValue(scope, view, this.#runtime);
-			if (value === undefined) continue;
-			(frame as unknown as Record<string, unknown>)[scope] = value;
-			this.#lastState.set(scope, JSON.stringify(value));
-		}
-		this.#sendNotification(METHOD.stateSnapshot, frame);
-	}
-
-	/** Called by the door on every committed revision: what changed, as deltas, and the streaming reply if one is in flight. */
-	stateChanged(view: ConversationView): void {
+	async requestDelivery(params: DeliveryFinalParams): Promise<DeliveryAck | undefined> {
+		if (this.closed || !this.ready) return undefined;
+		if (this.#delivering.has(params.deliveryId)) return undefined;
+		this.#delivering.add(params.deliveryId);
 		try {
-			this.#stateChanged(view);
+			const answer = await this.#request(METHOD.deliveryFinal, params, DELIVERY_TIMEOUT_MS);
+			if (!isAck(answer)) {
+				return {
+					status: "uncertain",
+					detail: "the connector answered the delivery with something that is not an acknowledgement",
+				};
+			}
+			return answer;
 		} catch (error) {
-			this.#log(`[connector] ${this.name}: state delivery failed: ${errorText(error)}`);
+			// A timeout, or a socket that died mid-request: the connector may or may not have sent it, so the reply stays owed
+			// and the connector's own ledger answers `duplicate` or `uncertain` when it is resent.
+			this.#log(`[connector] ${this.name}: delivery ${params.deliveryId} unanswered (${errorText(error)})`);
+			return undefined;
+		} finally {
+			this.#delivering.delete(params.deliveryId);
 		}
 	}
 
-	#stateChanged(view: ConversationView): void {
-		if (!this.ready || this.closed) return;
-		for (const scope of this.#scopes) {
-			const value = stateValue(scope, view, this.#runtime);
-			if (value === undefined) continue;
-			const encoded = JSON.stringify(value);
-			if (this.#lastState.get(scope) === encoded) continue;
-			this.#lastState.set(scope, encoded);
-			const delta: StateDeltaParams = { seq: this.nextSeq(), scope, op: "set", value };
-			this.#sendNotification(METHOD.stateDelta, delta);
+	/** Called by the door on every committed revision: the streaming reply, if one is in flight. */
+	streamChanged(view: ConversationView): void {
+		try {
+			this.#streamReply(view);
+		} catch (error) {
+			this.#log(`[connector] ${this.name}: streaming failed: ${errorText(error)}`);
 		}
-		this.#streamReply(view);
 	}
 
 	/**
@@ -1266,70 +1093,6 @@ export class ConnectorSession {
 	}
 
 	/* ------------------------------------------------------------------------------------------------------------ */
-	/* Delivery                                                                                                     */
-	/* ------------------------------------------------------------------------------------------------------------ */
-
-	/**
-	 * One `connector/delivery.final`, answered by the connector's ack.
-	 *
-	 * A second flush that reaches the same delivery while the first is in flight must not send it twice on one socket:
-	 * the outbox's ack has not been written yet, and two identical requests would be two vendor sends. The in-flight set
-	 * is what holds that door shut; a reconnect is a new socket with an empty set and the connector's own ledger is what
-	 * deduplicates there.
-	 */
-	async requestDelivery(params: DeliveryFinalParams): Promise<DeliveryAck | undefined> {
-		if (this.closed || !this.ready) return undefined;
-		if (this.#delivering.has(params.deliveryId)) return undefined;
-		this.#delivering.add(params.deliveryId);
-		try {
-			const answer = await this.#request(METHOD.deliveryFinal, params, DELIVERY_TIMEOUT_MS);
-			if (!isAck(answer)) {
-				return {
-					status: "uncertain",
-					detail: "the connector answered the delivery with something that is not an acknowledgement",
-				};
-			}
-			return answer;
-		} catch (error) {
-			// A timeout, or a socket that died mid-request: the connector may or may not have sent it, so the reply stays owed
-			// and the connector's own ledger answers `duplicate` or `uncertain` when it is resent.
-			this.#log(`[connector] ${this.name}: delivery ${params.deliveryId} unanswered (${errorText(error)})`);
-			return undefined;
-		} finally {
-			this.#delivering.delete(params.deliveryId);
-		}
-	}
-
-	/**
-	 * One `connector/interaction.request`, answered by whether the surface took it.
-	 *
-	 * Nothing is written down for it: a question is owed while it is pending, and the pending set is the transcript's. A
-	 * socket that already handed this one over does not repeat it — a flush runs on every commit — and a reconnect is a
-	 * new socket, so a question the last one never got an answer for is asked again.
-	 */
-	async requestInteraction(params: InteractionRequestParams): Promise<InteractionAck | undefined> {
-		if (this.closed || !this.ready) return undefined;
-		// The handshake is a ceiling (SPEC §4.1d): a surface that did not ask for approvals is not asked for them. The
-		// question stays owed, so nothing is lost — the owner's route and a later socket can still settle it.
-		if (!this.#capabilities.includes("approvals")) return undefined;
-		if (this.#asked.has(params.permissionId)) return undefined;
-		try {
-			const answer = await this.#request(METHOD.interactionRequest, params, DELIVERY_TIMEOUT_MS);
-			if (!isInteractionAck(answer)) {
-				return {
-					delivered: false,
-					detail: "the connector answered the question with something that is not an acknowledgement",
-				};
-			}
-			if (answer.delivered) this.#asked.add(params.permissionId);
-			return answer;
-		} catch (error) {
-			this.#log(`[connector] ${this.name}: the question ${params.permissionId} unanswered (${errorText(error)})`);
-			return undefined;
-		}
-	}
-
-	/* ------------------------------------------------------------------------------------------------------------ */
 	/* Budget, framing                                                                                              */
 	/* ------------------------------------------------------------------------------------------------------------ */
 
@@ -1385,43 +1148,6 @@ export class ConnectorSession {
 	}
 }
 
-/**
- * Every question and the first answer to it, in the order the transcript holds them. The door reads this to know what it
- * still owes, and the same fold is what the gateway's book answers a restart with.
- */
-function foldQuestions(entries: readonly EntryRecord[]): {
-	readonly requests: Map<string, PermissionRequest>;
-	readonly answers: Map<string, PermissionAnswer>;
-} {
-	const requests = new Map<string, PermissionRequest>();
-	const answers = new Map<string, PermissionAnswer>();
-	for (const entry of entries) {
-		const request = requestOf(entry);
-		if (request !== undefined) requests.set(request.permissionId, request);
-		const answer = answerOf(entry);
-		// The same rule the book reads by — earliest `at` wins — so the two folds cannot disagree about a double answer.
-		if (answer !== undefined) keepEarliest(answers, answer);
-	}
-	return { requests, answers };
-}
-
-/** The sentence a person reads beside the question, in the words of the thing they are approving. */
-function questionText(request: PermissionRequest): string {
-	const what =
-		request.tool.connector === undefined || request.tool.tool === undefined
-			? request.tool.name
-			: `${request.tool.connector}: ${request.tool.tool}`;
-	return `Approve ${what}? ${request.reason}. Answer allow or deny — this answer covers this call only.`;
-}
-
-function isInteractionAck(value: unknown): value is InteractionAck {
-	if (typeof value !== "object" || value === null) return false;
-	const ack = value as Record<string, unknown>;
-	if (typeof ack.delivered !== "boolean") return false;
-	if (ack.surface !== undefined && typeof ack.surface !== "string") return false;
-	return ack.detail === undefined || typeof ack.detail === "string";
-}
-
 /** Write one acknowledgement down as its own entry: the outbox's record that this delivery is no longer owed. */
 async function recordDelivery(conversation: Conversation, deliveryId: string, ack: DeliveryAck): Promise<void> {
 	await conversation.commit(
@@ -1440,32 +1166,6 @@ async function recordDelivery(conversation: Conversation, deliveryId: string, ac
 
 /** Outbound request ids: only unique within one socket, which is all a JSON-RPC id has to be. */
 let outbound = 0;
-
-/** The state one scope yields. `undefined` for a scope this build does not know, which a grant check already refused. */
-function stateValue(
-	scope: StateScope,
-	view: ConversationView | undefined,
-	runtime: AgentRuntime,
-): Record<string, unknown> | undefined {
-	switch (scope) {
-		case "status":
-			return {
-				runStatus: deriveRunStatus(view),
-				busy: isBusy(view),
-				queued: queuedSubmissions(view),
-				hooks: runtime.hooks.list().map((hook) => hook.id),
-			};
-		case "presence":
-			return { working: isBusy(view) };
-		case "projection":
-			return { items: projectTranscript(view), queued: projectQueued(view) };
-		case "tools":
-			// Names only. Arguments, output and the conversation itself are not a scope any connector is granted.
-			return { running: runningToolNames(view) };
-		default:
-			return undefined;
-	}
-}
 
 /** Capabilities the connector advertised, narrowed to the operator's list when one was configured. */
 function negotiateCapabilities(grant: ConnectorGrant, advertised: readonly Capability[] | undefined): Capability[] {

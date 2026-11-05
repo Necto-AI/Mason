@@ -1,61 +1,32 @@
 /**
- * HTTP + WebSocket server: the operator panel and its API, the connector door, and the built web client.
+ * HTTP + WebSocket server: the connector door, a liveness probe, and the attachment endpoints.
  *
- * There is no conversational socket any more (#103): a person speaks to mason through a connector, and the panel is a
- * control plane that reads the projected conversation and administers the deployment. What used to be a Chord service
- * with a state per browser is now `/api/admin/state` (`admin.ts`), and the browser's grant decides which keys it holds.
+ * There is no conversational socket and no browser application. A person speaks to mason through a connector, and the
+ * only credential on this surface is the connector's own. A panel is sibling's to build, not mason's.
  */
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { WebSocketServer } from "ws";
-import { handleOperatorRequest } from "./admin.ts";
 import { ATTACHMENT_LIMIT, AttachmentStore } from "./attachments.ts";
-import {
-	authenticate,
-	createTokenStore,
-	ensureToken,
-	grantsOf,
-	hasGrant,
-	pairingFromRequest,
-	pairingUrls,
-	type TokenRecord,
-	type TokenStore,
-} from "./auth.ts";
 import { CONNECTOR_PATH, type ConnectorDoor, createConnectorDoor } from "./connector.ts";
 import { authenticateConnector } from "./connectors.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
 import { installEnvHttpProxy } from "./http-proxy.ts";
-import { integrationSummaries } from "./integration-status.ts";
 import { currentIntegrations } from "./integrations.ts";
 import { createFireLimiter, type FireLimiter, readRawBodyCapped } from "./limits.ts";
 import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
 import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
-import { createCacheReporter, deriveAgentStatus } from "./status.ts";
+import { createCacheReporter } from "./status.ts";
 
 export { type CommandTarget, commandTarget, runCommand } from "./commands.ts";
-
-const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
-
-const CONTENT_TYPES: Record<string, string> = {
-	".html": "text/html; charset=utf-8",
-	".js": "text/javascript; charset=utf-8",
-	".css": "text/css; charset=utf-8",
-	".json": "application/json; charset=utf-8",
-	".svg": "image/svg+xml",
-	".map": "application/json; charset=utf-8",
-	".woff2": "font/woff2",
-};
 
 export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly port?: number;
 	readonly hostname?: string;
-	/** Directory holding the built panel (`index.html`, `admin.js`, `admin.css`). */
-	readonly webDir?: string;
 	/**
 	 * The attachment store's bounds. Defaults are the protocol's (25 MiB, a day); a test that has to cross the cap or wait
 	 * for an expiry sets them small rather than writing 25 MB or sleeping a day.
@@ -67,11 +38,6 @@ export interface StartServerOptions extends OpenAgentRuntimeOptions {
 export interface RunningServer {
 	readonly port: number;
 	readonly runtime: AgentRuntime;
-	/**
-	 * The token this process minted for a home that had none, so a test (or the log line) can pair without reading a
-	 * hash. Absent on a restart: the plaintext is shown once and never stored.
-	 */
-	readonly pairingToken: string | undefined;
 	/** The connector door, for a test that reads its live sessions rather than driving a socket. */
 	readonly connectors: ConnectorDoor;
 	close(): Promise<void>;
@@ -83,7 +49,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// direct route to its provider.
 	installEnvHttpProxy();
 	const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, options);
-	const webDir = options.webDir ?? resolve(repositoryRoot, "dist/web");
 
 	// The supervisor re-arms a run that a provider outage killed; it reads the committed view only. One for the server,
 	// not one per object: it is a policy over the one shared conversation, and a copy per person would each fire its own
@@ -126,11 +91,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		supervisor.observe(call.value);
 	});
 
-	// One owner, a few credentials, and a session key for the browser's cookie. The store is the config file, read per
-	// request: a revoke lands on the next request rather than on the next restart, which is the moment it matters.
 	const house = currentHouse();
-	const store = createTokenStore(house.home);
-	const { token: pairingToken } = await ensureToken(house.home);
 	// One limiter for the process: its budget is what this process may spend, so it is shared across requests. The
 	// connector classes beside it are keyed per connector, so one sender's minute is never another's.
 	const fires = createFireLimiter();
@@ -141,27 +102,26 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
 		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
 	});
-	// The connector door: one JSON-RPC socket per connector, the state mirrors and the reply outbox. Opened before the
+	// The connector door: one JSON-RPC socket per connector, the reply outbox. Opened before the
 	// listener so a delivery cannot be owed before there is anything to send it with.
 	const connectors = await createConnectorDoor({
 		runtime,
 		workspaceDir: runtime.workspaceDir,
 		attachments,
 		limiter: fires,
-		permissions: runtime.permissions,
 		home: house.home,
 	});
 
 	const server = createServer((request, response) => {
-		handleRequest(request, response, runtime, webDir, store, fires, house, attachments).catch((error: unknown) => {
+		handleRequest(request, response, runtime, fires, house, attachments).catch((error: unknown) => {
 			console.error("[http]", error);
 			if (!response.headersSent) response.writeHead(500, { "content-type": "text/plain" });
 			response.end("internal error");
 		});
 	});
-	// One socket server behind the listener: a connector's JSON-RPC door. There is no browser socket any more — the
-	// panel polls `/api/admin/state`, and nothing else in a browser speaks to mason. `noServer` because the path in the
-	// upgrade request decides whether there is a door at all, and a path that is not the connector's opens none.
+	// One socket server behind the listener: a connector's JSON-RPC door, and nothing else in a browser speaks to mason.
+	// `noServer` because the path in the upgrade request decides whether there is a door at all, and a path that is not
+	// the connector's opens none.
 	const connectorSockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 	server.on("upgrade", (request, socket, head) => {
 		const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -200,37 +160,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	) {
 		console.warn(`[data] ignoring ./.data (an older home): move it with \`mv .data ${runtime.dataDir}\``);
 	}
-	if (pairingToken !== undefined) {
-		console.log(`[auth] minted a token for this home; open one of these once, per browser or device:`);
-		for (const url of pairingUrls(hostname, boundPort, pairingToken)) console.log(`[auth]   ${url}`);
-		console.log(
-			`[auth] the link sets a cookie and redirects to the bare page; the token stays out of the address bar`,
-		);
-	} else {
-		const known = (await store.records()).length;
-		// A credential written before grants existed opens the door and sees nothing: the boot says why, once, next to
-		// the command that fixes it. The fix is not done here — a server that rewrote the operator's files on start would
-		// be a server that edits his home.
-		const ungranted = (await store.records()).filter((record) => !Array.isArray(record.grants));
-		if (ungranted.length > 0) {
-			console.warn(
-				`[auth] ${ungranted.length} credential(s) predate grants and can see nothing of the panel: ` +
-					"run `npm run doctor -- migrate` once (the tokens keep what the console could do, and never trace)",
-			);
-		}
-		console.log(
-			`[auth] ${known} token(s); add one with: npm run token -- add --label phone (a revoke is live). ` +
-				"The panel is /admin; the server log names the tokens and their grants.",
-		);
-	}
-	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
-		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);
-	}
-
 	return {
 		port: boundPort,
 		runtime,
-		pairingToken,
 		connectors,
 		async close() {
 			// Nothing the supervisor still owes is worth a fire into a closed runtime: a shutdown is the last thing that
@@ -258,119 +190,34 @@ async function handleRequest(
 	request: IncomingMessage,
 	response: ServerResponse,
 	runtime: AgentRuntime,
-	webDir: string,
-	store: TokenStore,
 	fires: FireLimiter,
 	house: HousePaths,
 	attachments: AttachmentStore,
 ): Promise<void> {
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-	// Every response carries these, refusals and static files alike: the shell has no inline script of its own, and a
-	// paired browser is never framed by someone else's page.
-	applySecurityHeaders(response, request.headers.host);
-
-	// A pairing link is the one time a token travels in a URL. Spend it into a cookie and send the browser to the same
-	// page without it: the token leaves the address bar before a single element renders.
-	if ((request.method ?? "GET") === "GET" && isShellPath(url.pathname)) {
-		const pairing = await pairingFromRequest(request, url, store);
-		if (pairing !== undefined) {
-			console.log(`[auth] paired ${pairing.tokenId} in this browser`);
-			response.writeHead(302, { location: withoutToken(url), "set-cookie": pairing.cookie });
-			response.end();
-			return;
-		}
-	}
+	applySecurityHeaders(response);
 
 	// The connector's own door: its socket's upgrade is routed elsewhere, but the attachment endpoints are HTTP and are
-	// authenticated by the connector's credential rather than the owner's token. Handled before the gate below, because
-	// an owner token is not a connector credential and a connector credential is not a token.
+	// authenticated by the connector's credential. Nothing on this surface is the owner's, because no owner speaks HTTP.
 	if (await handleConnectorRequest(request, response, url, attachments, fires, house)) return;
 
-	// Everything under `/api` is the owner's, except one door that cannot present a token: the liveness probe. The static
-	// shell is public on purpose: it is a bundle with no secrets in it, and the page is where a reader is told that this
-	// browser is not paired.
-	let device: TokenRecord | undefined;
-	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
-		const auth = await authenticate(request, store);
-		if (!auth.ok) {
-			console.warn(`[auth] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
-			response.writeHead(401, {
-				"content-type": "application/json; charset=utf-8",
-				"www-authenticate": 'Bearer realm="mason"',
-			});
-			response.end(JSON.stringify({ error: "unauthorized" }));
-			return;
-		}
-		device = auth.token;
-	}
+	// The one path that answers without a credential, and it answers one word: a probe that needed a token is a probe
+	// that cannot tell a dead process from a refused one.
+	if (url.pathname === "/api/health") return json(response, 200, { status: "ok", root: String(runtime.rootId) });
 
-	// Who this device is, and what it may do in the panel. Behind the gate above, and the only route the panel calls
-	// before it knows what to draw: `grants` is the answer, and every area of the state it polls is absent unless one of
-	// them covers it (`admin.ts`).
-	if (url.pathname === "/api/session") {
-		return json(response, 200, {
-			device: { id: device?.id, label: device?.label },
-			grants: device === undefined ? [] : grantsOf(device),
-		});
-	}
-
-	// The operator's control plane: the state the granted areas of the panel read, the configuration it writes, and the
-	// two approval routes. `admin.ts` owns the grant checks; this file only routes to it, and a path it does not know is
-	// a `404` rather than a request nobody ever answers.
-	if (
-		url.pathname.startsWith("/api/admin/") ||
-		url.pathname === "/api/admin" ||
-		url.pathname === "/api/permissions" ||
-		url.pathname.startsWith("/api/permissions/")
-	) {
-		if (device === undefined) return json(response, 401, { error: "unauthorized" });
-		const handled = await handleOperatorRequest(request, response, url, {
-			runtime,
-			house,
-			store,
-			device,
-		});
-		if (!handled) notFound(response);
-		return;
-	}
-
-	// Status and health are areas of the panel's state (§4.2), served here for a script that asks one question: the
-	// same grant covers them, so a device with no grants cannot read what its state would not carry.
-	if (url.pathname === "/api/status") {
-		if (device === undefined || !hasGrant(grantsOf(device), "conversation")) {
-			return json(response, 403, { error: 'this device has no "conversation" grant' });
-		}
-		const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
-		const status = deriveAgentStatus(view, {
-			hooks: runtime.hooks.list(),
-			model: runtime.model,
-			cwd: runtime.workspaceDir,
-		});
-		return json(response, 200, status);
-	}
-
-	// What this boot's integration list is, and whether its servers answered. Administrative, like the panel's own
-	// health table: it names services and why they are unreachable.
-	if (url.pathname === "/api/integrations") {
-		if (device === undefined || !hasGrant(grantsOf(device), "admin")) {
-			return json(response, 403, { error: 'this device has no "admin" grant' });
-		}
-		return json(response, 200, { integrations: integrationSummaries(currentIntegrations()) });
-	}
-
-	const health: string = "ok";
-	if (url.pathname === "/api/health") return json(response, 200, { status: health, root: String(runtime.rootId) });
-
-	return serveStatic(response, webDir, url.pathname);
+	notFound(response);
 }
 
 /**
- * The connector's HTTP endpoints: `POST /api/connector/attachments` and `GET /api/connector/attachments/<contentId>`.
+ * The connector's one HTTP endpoint: `POST /api/connector/attachments`.
+ *
+ * The store is write-only for a connector: an upload answers the content id, and the agent reads the bytes itself when a
+ * message carrying one arrives. A connector therefore never needs a download, and the route that served one went with
+ * the panel.
  *
  * Authenticated as the connector (`authenticateConnector`), never as the owner, and answered with the protocol's own
- * statuses: `413` over the cap, `410` for an id that expired, `404` for one this connector did not upload — which is the
- * same answer a malformed id gets, because whether another connector's id exists is not a sender's business. The budget
- * is the connector's attachment class, separate from its submissions, fires and controls.
+ * statuses: `413` over the cap, `405` for a verb that is not a POST, and `404` for any other path. The budget is the
+ * connector's attachment class, separate from its submissions, fires and controls.
  */
 async function handleConnectorRequest(
 	request: IncomingMessage,
@@ -397,15 +244,14 @@ async function handleConnectorRequest(
 		return true;
 	}
 	const name = auth.identity.name;
-	// Which of the two endpoints, and whether this request is one mason will act on — settled before the budget is
-	// charged, so a wrong verb or an unknown path costs the connector nothing.
+	// Whether this request is the one endpoint mason serves here — settled before the budget is charged, so a wrong
+	// verb or an unknown path costs the connector nothing.
 	const base = `${CONNECTOR_PATH}/attachments`;
-	const uploading = url.pathname === base;
-	if (!uploading && !url.pathname.startsWith(`${base}/`)) {
+	if (url.pathname !== base) {
 		notFound(response);
 		return true;
 	}
-	if (request.method !== (uploading ? "POST" : "GET")) {
+	if (request.method !== "POST") {
 		json(response, 405, { error: "method not allowed" });
 		return true;
 	}
@@ -425,61 +271,30 @@ async function handleConnectorRequest(
 		);
 		return true;
 	}
-	if (uploading) {
-		const raw = await readRawBodyCapped(request, attachments.maxBytes);
-		if (raw === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(
-				JSON.stringify({
-					code: "mason.invalid_request",
-					message: `that upload is over ${attachments.maxBytes} bytes`,
-				}),
-			);
-			return true;
-		}
-		const filename = headerValue(request, "x-mason-filename");
-		const meta = await attachments.save(name, raw, {
-			mimeType: headerValue(request, "content-type"),
-			...(filename === undefined ? {} : { name: safeFilename(filename) }),
-		});
-		if (meta === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ code: "mason.invalid_request", message: "that upload is over the cap" }));
-			return true;
-		}
-		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
+	const raw = await readRawBodyCapped(request, attachments.maxBytes);
+	if (raw === undefined) {
+		response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+		response.end(
+			JSON.stringify({
+				code: "mason.invalid_request",
+				message: `that upload is over ${attachments.maxBytes} bytes`,
+			}),
+		);
 		return true;
 	}
-	// A malformed escape is a content id nobody uploaded, which is the same answer as one this connector did not upload.
-	let contentId: string;
-	try {
-		contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
-	} catch {
-		notFound(response);
-		return true;
-	}
-	const read = await attachments.read(name, contentId);
-	if (read.status === "expired") {
-		response.writeHead(410, { "content-type": "application/json; charset=utf-8" });
-		response.end(JSON.stringify({ code: "mason.invalid_request", message: "that content id expired" }));
-		return true;
-	}
-	if (read.status === "missing") {
-		notFound(response);
-		return true;
-	}
-	response.writeHead(200, {
-		"content-type": read.attachment.meta.mimeType,
-		"content-length": String(read.attachment.meta.size),
-		"cache-control": "no-store",
-		...(read.attachment.meta.name === undefined
-			? {}
-			: { "x-mason-filename": encodeURIComponent(read.attachment.meta.name) }),
+	const filename = headerValue(request, "x-mason-filename");
+	const meta = await attachments.save(name, raw, {
+		mimeType: headerValue(request, "content-type"),
+		...(filename === undefined ? {} : { name: safeFilename(filename) }),
 	});
-	response.end(read.attachment.bytes);
+	if (meta === undefined) {
+		response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+		response.end(JSON.stringify({ code: "mason.invalid_request", message: "that upload is over the cap" }));
+		return true;
+	}
+	json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
 	return true;
 }
-
 /** A filename from a header, decoded and reduced to a name: it is shown and written, never used as a path. */
 function safeFilename(value: string): string | undefined {
 	let decoded: string;
@@ -495,80 +310,17 @@ function safeFilename(value: string): string | undefined {
 	return name === "" ? undefined : name;
 }
 
-/**
- * Headers every response carries. The shell has no inline script of its own, and a paired browser must not be framed
- * by someone else's page: clickjacking a cookie-authenticated UI is the one attack the Origin gate cannot see, because
- * the framed page really is ours.
- */
-function applySecurityHeaders(response: ServerResponse, host: string | undefined): void {
+/** Headers every response carries: no referrer, no sniffing, and nothing may frame this origin. */
+function applySecurityHeaders(response: ServerResponse): void {
 	response.setHeader("referrer-policy", "no-referrer");
 	response.setHeader("x-content-type-options", "nosniff");
 	response.setHeader("x-frame-options", "DENY");
-	response.setHeader("content-security-policy", contentSecurityPolicy(host));
+	response.setHeader("content-security-policy", contentSecurityPolicy());
 }
 
-/**
- * The shell's policy, which the widget frames inherit: a `srcdoc` iframe gets the embedder's CSP, so this has to be a
- * superset of what a widget needs (`src/web/lib/frame-content.ts` carries the same list as a `<meta>`).
- *
- * `'unsafe-inline'` is the cost of running a widget's own script at all; what remains enforced is what an injected
- * script would otherwise be free to do — frame this origin, retarget every relative URL through `<base>`, post a form
- * to another host, or reach anything but this origin and the CDN the widget imports from. There is no browser socket
- * to allow: the panel polls `/api/admin/state` on this origin, and `connect-src 'self'` is the whole of it.
- */
-function contentSecurityPolicy(_host: string | undefined): string {
-	const cdn = "https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com";
-	return [
-		"default-src 'self'",
-		`script-src 'self' 'unsafe-inline' 'unsafe-eval' ${cdn}`,
-		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data: blob: https://basemap.nationalmap.gov https://upload.wikimedia.org https://thumb.wikimedia.org",
-		"font-src 'self' data:",
-		`connect-src 'self' ${cdn}`,
-		"media-src 'self' data: blob:",
-		"frame-src 'self'",
-		"object-src 'none'",
-		"base-uri 'none'",
-		"form-action 'self'",
-		"frame-ancestors 'none'",
-	].join("; ");
-}
-
-/** The pages a pairing link may land on: the panel, and the panel's two spellings. */
-function isShellPath(pathname: string): boolean {
-	return pathname === "/" || pathname === "/index.html" || pathname === "/admin" || pathname === "/admin/";
-}
-
-/** The page a pairing link redirects to: the same URL with the token spent and dropped. */
-function withoutToken(url: URL): string {
-	const params = new URLSearchParams(url.search);
-	params.delete("token");
-	const search = params.toString();
-	return `${url.pathname}${search === "" ? "" : `?${search}`}`;
-}
-
-async function serveStatic(response: ServerResponse, webDir: string, pathname: string): Promise<void> {
-	// `/admin` is a door into the same shell, not a second page: the bundle draws the panel from the session it finds,
-	// and a pairing link may land on this path as easily as on the root.
-	if (pathname === "/" || pathname === "/admin" || pathname === "/admin/") pathname = "/";
-	const relativePath = normalize(pathname === "/" ? "index.html" : pathname.replace(/^\/+/, ""));
-	if (relativePath.startsWith("..")) return notFound(response);
-	const path = resolve(webDir, relativePath);
-	if (!path.startsWith(resolve(webDir))) return notFound(response);
-	try {
-		const info = await stat(path);
-		if (!info.isFile()) return notFound(response);
-	} catch {
-		return notFound(response);
-	}
-	const body = await readFile(path);
-	// Never cached: an upgraded mason serves a new bundle under the same name, and an operator's browser running the
-	// previous one is a panel that lies about the deployment it is looking at.
-	response.writeHead(200, {
-		"content-type": CONTENT_TYPES[extname(path)] ?? "application/octet-stream",
-		"cache-control": "no-store",
-	});
-	response.end(body);
+/** Nothing on this surface is a page, so the policy refuses everything but the JSON it answers with. */
+function contentSecurityPolicy(): string {
+	return ["default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'"].join("; ");
 }
 
 /**

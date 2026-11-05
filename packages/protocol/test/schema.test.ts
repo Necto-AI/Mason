@@ -14,7 +14,6 @@ import {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	SCHEMA_ID,
-	STATE_SCOPES,
 	versionsCompatible,
 } from "../src/index.ts";
 
@@ -78,14 +77,18 @@ test("the protocol is major 1 and the enums agree with the schema", () => {
 	const defs = schema.$defs as Record<string, Record<string, unknown>>;
 	const capability = (defs.capability as { enum: string[] }).enum;
 	assert.deepEqual([...CAPABILITIES].sort(), [...capability].sort());
-	const scope = (defs.stateScope as { enum: string[] }).enum;
-	assert.deepEqual([...STATE_SCOPES].sort(), [...scope].sort());
 
 	const control = defs.controlParams.properties as Record<string, { enum: string[] }>;
 	assert.deepEqual([...CONTROL_OPS].sort(), [...control.op.enum].sort());
 
 	const ack = defs.deliveryAck.properties as Record<string, { enum: string[] }>;
 	assert.deepEqual(ack.status.enum, ["delivered", "duplicate", "uncertain", "rejected"]);
+
+	// The content union, by its tags: a variant deleted from the type and left in the schema is a consumer validating
+	// against this file accepting a block mason can never send.
+	const blocks = (defs.block as { oneOf: { properties?: { type?: { const?: string } } }[] }).oneOf;
+	const tags = blocks.map((block) => block.properties?.type?.const);
+	assert.deepEqual(tags, ["text", "markdown", "file", "notice"]);
 });
 
 test("the approval marker is namespaced and has exactly two values", () => {

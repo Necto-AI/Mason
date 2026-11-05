@@ -32,12 +32,7 @@
 		"capability": {
 			"type": "string",
 			"description": "A content or delivery capability, negotiated independently of any privilege grant. An origin is only ever sent what it claims.",
-			"enum": ["text", "markdown", "files", "approvals", "widgets", "streaming"]
-		},
-		"stateScope": {
-			"type": "string",
-			"description": "A slice of mason's state a connector may mirror. Reasoning, tool arguments, tool output and the raw conversation are in none of them.",
-			"enum": ["status", "presence", "projection", "tools"]
+			"enum": ["text", "markdown", "files", "approvals", "streaming"]
 		},
 		"face": {
 			"type": "string",
@@ -160,17 +155,6 @@
 						"caption": {
 							"type": "string"
 						}
-					}
-				},
-				{
-					"type": "object",
-					"additionalProperties": false,
-					"required": ["type", "content"],
-					"properties": {
-						"type": {
-							"const": "widget"
-						},
-						"content": {}
 					}
 				},
 				{
@@ -569,45 +553,6 @@
 				}
 			}
 		},
-		"stateSubscribeParams": {
-			"type": "object",
-			"description": "`mason/state.subscribe`: what this socket mirrors. A scope the connector was not granted is refused, not narrowed silently.",
-			"additionalProperties": false,
-			"required": ["scopes"],
-			"properties": {
-				"scopes": {
-					"type": "array",
-					"items": {
-						"$ref": "#/$defs/stateScope"
-					}
-				},
-				"since": {
-					"type": "integer",
-					"minimum": 0,
-					"description": "The last sequence a client applied. Mason resumes after it, or sends a full snapshot when it cannot."
-				}
-			}
-		},
-		"stateSubscribeResult": {
-			"type": "object",
-			"additionalProperties": false,
-			"required": ["scopes", "seq"],
-			"properties": {
-				"scopes": {
-					"type": "array",
-					"items": {
-						"$ref": "#/$defs/stateScope"
-					}
-				},
-				"seq": {
-					"type": "integer",
-					"minimum": 0
-				},
-				"resumed": {
-					"type": "boolean"
-				}
-			}
-		},
 		"deliveryStartParams": {
 			"type": "object",
 			"description": "`connector/delivery.start`: the first notification of a streaming reply. Same `deliveryId` as its deltas and its final, so a connector never treats one reply as two sends.",
@@ -767,89 +712,6 @@
 					"type": "string"
 				},
 				"detail": {
-					"type": "string"
-				}
-			}
-		},
-		"stateSnapshotParams": {
-			"type": "object",
-			"description": "`connector/state.snapshot`: everything the connector mirrors, from a sequence it can trust. A projection frame is the whitelisted transcript and nothing else.",
-			"additionalProperties": false,
-			"required": ["seq", "scopes"],
-			"properties": {
-				"seq": {
-					"type": "integer",
-					"minimum": 0
-				},
-				"scopes": {
-					"type": "array",
-					"items": {
-						"$ref": "#/$defs/stateScope"
-					}
-				},
-				"status": {
-					"type": "object",
-					"additionalProperties": true
-				},
-				"presence": {
-					"type": "object",
-					"additionalProperties": true
-				},
-				"projection": {
-					"type": "object",
-					"additionalProperties": false,
-					"required": ["items"],
-					"properties": {
-						"items": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"additionalProperties": true
-							}
-						},
-						"queued": {
-							"type": "array",
-							"items": {
-								"type": "object",
-								"additionalProperties": true
-							}
-						}
-					}
-				},
-				"tools": {
-					"type": "object",
-					"additionalProperties": false,
-					"required": ["running"],
-					"properties": {
-						"running": {
-							"type": "array",
-							"items": {
-								"type": "string"
-							}
-						}
-					}
-				}
-			}
-		},
-		"stateDeltaParams": {
-			"type": "object",
-			"description": "`connector/state.delta`: one monotonic step. A gap in `seq` is a full resync, never a guess.",
-			"additionalProperties": false,
-			"required": ["seq", "scope", "op"],
-			"properties": {
-				"seq": {
-					"type": "integer",
-					"minimum": 0
-				},
-				"scope": {
-					"$ref": "#/$defs/stateScope"
-				},
-				"op": {
-					"type": "string",
-					"enum": ["set", "push", "reset"]
-				},
-				"value": {},
-				"path": {
 					"type": "string"
 				}
 			}

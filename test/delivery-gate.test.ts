@@ -33,7 +33,7 @@ import {
 import { Type } from "typebox";
 import { projectTranscript } from "../src/server/projection.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL, WIDGET_TOOL } from "../src/shared/contract.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -123,7 +123,7 @@ async function runTurn(
 	}
 }
 
-/** A turn a person started in the console: the only case where `reply` is the reader. */
+/** A turn nothing outside mason started: the only case where `reply` is the reader. */
 function runScripted(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -196,16 +196,12 @@ type NestedAnswer = { isError: boolean; text: string };
 function scriptedDelivery(answers: NestedAnswer[]): Extension {
 	const tool = defineTool({
 		name: "deliverFromScript",
-		description: "Send a message or build a widget from inside a script.",
+		description: "Send a message from inside a script.",
 		parameters: Type.Object({
 			message: Type.Optional(Type.String()),
-			widget: Type.Optional(Type.Boolean()),
 		}),
-		execute: async ({ message, widget }, api, context) => {
-			const nested =
-				widget === true
-					? await api.executeTool(WIDGET_TOOL, { css: "body { color: red }", html: ["<p>hi</p>"] }, context)
-					: await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
+		execute: async ({ message }, api, context) => {
+			const nested = await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
 			answers.push({
 				isError: nested.isError,
 				text: typeof nested.structuredOutput === "string" ? nested.structuredOutput : "",
@@ -334,34 +330,6 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 	);
 });
 
-test("a widget built from inside a script is refused the same way", async () => {
-	const directory = await temporary();
-	const answers: NestedAnswer[] = [];
-	const script = recorder([
-		call("deliverFromScript", { widget: true }, "run"),
-		deliver("Here is the chart."),
-		said("Done."),
-	]);
-	const { settled, transcript, requests } = await runScripted(directory, script, "Anything new?", [
-		scriptedDelivery(answers),
-	]);
-
-	assert.equal(settled.status, "done");
-	assert.equal(answers[0]?.isError, true, "the nested widget was refused, not rendered");
-	assert.match(answers[0]?.text ?? "", /cannot render from inside a script/, "the refusal says what went wrong");
-	assert.match(answers[0]?.text ?? "", /Call generateSandboxedUi directly/, "and what to do instead");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "widget"),
-		[],
-		"nothing a script built reaches the reader",
-	);
-	assert.equal(reminded(requests), false, "the model's own message spoke for the turn");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["Here is the chart."],
-	);
-});
-
 /**
  * The other reader: a turn an event hook started.
  *
@@ -382,7 +350,7 @@ test("a hooked turn answers with reply, and the gate counts the call", async () 
 	assert.deepEqual(
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Привет!"],
-		"the console still reads what the turn recorded",
+		"the transcript still holds what the turn recorded",
 	);
 });
 
@@ -396,8 +364,6 @@ test("a fire that named its conversation routes the reply back to it", async () 
 				owner: "8811",
 				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
 			},
-			state: [],
-			trustMarkers: false,
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -442,15 +408,15 @@ test("a hooked turn that says nothing is reminded, and the reminder names reply"
 	assert.match(String(reminder?.content), /`reply`/);
 });
 
-test("a console turn still delivers with reply while a chat-facing hook exists", async () => {
+test("a local turn still delivers with reply while a chat-facing routine exists", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
 	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?");
 
 	assert.equal(settled.status, "done");
-	assert.equal(answerTo(entries, "sent").isError, false, "the console turn's delivery is not refused");
-	assert.equal(answerTo(entries, "sent").text, "delivered to the operator console");
-	assert.equal(requests.length, 2, "no reminder: the console is this turn's reader");
+	assert.equal(answerTo(entries, "sent").isError, false, "the local turn's delivery is not refused");
+	assert.equal(answerTo(entries, "sent").text, "delivered to the transcript");
+	assert.equal(requests.length, 2, "no reminder: the transcript is this turn's reader");
 	assert.deepEqual(
 		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
 		["Standup moved to nine."],
