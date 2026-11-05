@@ -29,9 +29,6 @@ import {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	type ProtocolErrorData,
-	type StateDeltaParams,
-	type StateSnapshotParams,
-	type StateSubscribeResult,
 	type SubmitParams,
 } from "mason-protocol";
 import type { Fetcher } from "../attachments.ts";
@@ -83,8 +80,6 @@ export interface FakeMasonGrants {
 	readonly tools?: { readonly url: string };
 	/** `kind` → hook id. A kind absent from this map is refused. */
 	readonly events?: Readonly<Record<string, string>>;
-	/** The state scopes this connector mirrors. A scope absent from here is refused, not narrowed. */
-	readonly state?: readonly string[];
 }
 
 export interface FakeMasonOptions {
@@ -135,8 +130,6 @@ export interface FakeMason {
 		readonly seq?: number;
 	}): void;
 	requestInteraction(params: InteractionRequestParams): Promise<InteractionAck | undefined>;
-	snapshot(params: Omit<StateSnapshotParams, "seq"> & { readonly seq?: number }): void;
-	delta(params: Omit<StateDeltaParams, "seq"> & { readonly seq?: number }): void;
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -220,8 +213,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		startDelivery,
 		deltaDelivery,
 		requestInteraction,
-		snapshot,
-		delta,
 	};
 	return mason;
 
@@ -283,8 +274,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 				return control(params as ControlParams);
 			case METHOD.interactionAnswer:
 				return answer(params as InteractionAnswerParams);
-			case METHOD.stateSubscribe:
-				return subscribe(params as { scopes: string[]; since?: number });
 			case METHOD.ping:
 				answeredPings += 1;
 				return { at: now() };
@@ -425,19 +414,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		return { settled: true };
 	}
 
-	function subscribe(params: { scopes: string[]; since?: number }): StateSubscribeResult {
-		const allowed = options.granted?.state ?? [];
-		const refused = params.scopes.filter((scope) => !allowed.includes(scope));
-		if (refused.length > 0) {
-			throw refusal(ERROR_CODE.scopeNotGranted, `${refused.join(", ")} is not a scope this entry grants`);
-		}
-		return {
-			scopes: params.scopes as StateSubscribeResult["scopes"],
-			seq: params.since ?? 0,
-			...(params.since === undefined ? {} : { resumed: true }),
-		};
-	}
-
 	function spend(budget: string, perMinute: number): void {
 		if (spent.has(budget)) {
 			spent.delete(budget);
@@ -541,18 +517,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		}
 	}
 
-	function snapshot(params: Omit<StateSnapshotParams, "seq"> & { readonly seq?: number }): void {
-		const seqNow = params.seq ?? nextSeq();
-		log.push({ at: now(), direction: "out", method: METHOD.stateSnapshot, params: { ...params, seq: seqNow } });
-		peer?.notify(METHOD.stateSnapshot, { ...params, seq: seqNow });
-	}
-
-	function delta(params: Omit<StateDeltaParams, "seq"> & { readonly seq?: number }): void {
-		const seqNow = params.seq ?? nextSeq();
-		log.push({ at: now(), direction: "out", method: METHOD.stateDelta, params: { ...params, seq: seqNow } });
-		peer?.notify(METHOD.stateDelta, { ...params, seq: seqNow });
-	}
-
 	/** The transfer endpoint, served in memory: the same headers and statuses mason's route answers with. */
 	async function fetch(input: string, init: RequestInit = {}): Promise<Response> {
 		const url = new URL(input);
@@ -620,7 +584,6 @@ function mutableGrants(input: FakeMasonGrants | undefined): {
 	};
 	tools?: { url: string };
 	events?: Record<string, string>;
-	state?: readonly string[];
 } {
 	if (input === undefined) return {};
 	return {
@@ -635,7 +598,6 @@ function mutableGrants(input: FakeMasonGrants | undefined): {
 				}),
 		...(input.tools === undefined ? {} : { tools: { url: input.tools.url } }),
 		...(input.events === undefined ? {} : { events: { ...input.events } }),
-		...(input.state === undefined ? {} : { state: input.state }),
 	};
 }
 

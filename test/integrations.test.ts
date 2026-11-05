@@ -323,7 +323,6 @@ describe("the integration list on disk", () => {
 		]);
 		const migrated = (await readIntegrations(paths)).integrations;
 		assert.deepEqual(migrated.telegram?.connector?.commands, ["stop", "status"]);
-		assert.deepEqual(migrated.telegram?.connector?.state, ["status"], "the rest of the grant is untouched");
 	});
 
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {

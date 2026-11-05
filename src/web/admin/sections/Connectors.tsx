@@ -2,7 +2,7 @@
  * Connectors: the entries, their grants, their policies and their credentials.
  *
  * An integration's `connector` block is a ceiling, never a wish (`src/server/connectors.ts`): the one actor that speaks
- * for the owner, the rooms it may speak in, the event kinds it may fire, the state it may mirror and the tools it may run
+ * for the owner, the rooms it may speak in, the event kinds it may fire, and the tools it may run
  * without asking. This page edits that ceiling. Nothing here decides a tool call — the gateway does, from this file — so
  * the policy lists are the operator's rules spelled as the server reads them, and the page says which way they tighten:
  * `deny` beats `ask` beats `allow`, and no marker widens a rule.
@@ -60,7 +60,6 @@ interface Draft {
 		readonly conversations: readonly ConversationRow[];
 	};
 	readonly events: null | { readonly hooks: readonly HookRow[] };
-	readonly state: readonly string[];
 	readonly trustMarkers: boolean;
 	readonly policy: { readonly allow: string; readonly ask: string; readonly deny: string };
 }
@@ -93,7 +92,6 @@ function draftOf(connector: PanelConnector): Draft {
 				: {
 						hooks: Object.entries(grant.events.hooks).map(([kind, hook]) => ({ key: rowKey(), kind, hook })),
 					},
-		state: grant?.state ?? [],
 		trustMarkers: grant?.trustMarkers ?? false,
 		policy: {
 			allow: (grant?.policy?.allow ?? []).join("\n"),
@@ -147,7 +145,6 @@ function patchOf(draft: Draft): ConnectorPatch {
 											.map((row) => [row.kind.trim(), row.hook]),
 									),
 								},
-					state: draft.state,
 					commands: draft.commands,
 					trustMarkers: draft.trustMarkers,
 					policy: {
@@ -508,22 +505,7 @@ function ConnectorCard({
 					)}
 
 					<div className="subcard">
-						<h4>State, policy and commands</h4>
-						<h5>State scopes</h5>
-						<div className="check-row">
-							{config.stateScopes.map((scope) => (
-								<Checkbox
-									key={scope}
-									checked={draft.state.includes(scope)}
-									label={scope}
-									onChange={(next) =>
-										update({
-											state: next ? [...draft.state, scope] : draft.state.filter((entry) => entry !== scope),
-										})
-									}
-								/>
-							))}
-						</div>
+						<h4>Policy and commands</h4>
 						<div className="check-row">
 							<Checkbox
 								checked={draft.trustMarkers}

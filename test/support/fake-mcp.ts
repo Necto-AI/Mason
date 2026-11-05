@@ -51,7 +51,7 @@ export const GITHUB: Integration = {
 	enabled: true,
 	description: "Issues and pull requests for the team's repositories",
 	tools: { url: "http://mason-github:8082/mcp" },
-	connector: { state: [], trustMarkers: true },
+	connector: { trustMarkers: true },
 };
 
 /** The same server, marked as the one the team cannot work without. */

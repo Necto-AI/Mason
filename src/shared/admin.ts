@@ -85,7 +85,6 @@ export interface PanelConnectorGrant {
 	readonly user?: PanelUserGrant;
 	/** The operator's `kind` → hook map for the events face. */
 	readonly events?: { readonly hooks: Readonly<Record<string, string>> };
-	readonly state: readonly string[];
 	/** The controls this connector may spend on `mason/control`, out of the protocol's closed set. */
 	readonly commands?: readonly string[];
 	readonly trustMarkers: boolean;
@@ -105,7 +104,6 @@ export interface ConnectorGrantInput {
 		readonly capabilities?: readonly string[] | null;
 	} | null;
 	readonly events?: { readonly hooks?: Readonly<Record<string, string>> } | null;
-	readonly state?: readonly string[];
 	/** `[]` takes the vocabulary away again; the names are the protocol's closed set. */
 	readonly commands?: readonly string[];
 	readonly trustMarkers?: boolean;
@@ -197,7 +195,6 @@ export interface PanelState {
 		readonly hooks: readonly HookSummary[];
 		readonly commands: readonly string[];
 		readonly capabilities: readonly string[];
-		readonly stateScopes: readonly string[];
 		/** The file differs from what this process booted with: the change lands on the next start. */
 		readonly restartRequired: boolean;
 		readonly grants: readonly OperatorGrant[];

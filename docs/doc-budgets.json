@@ -1,8 +1,10 @@
 {
-	"generated": ["docs/SURFACE.md"],
+	"generated": [
+		"docs/SURFACE.md"
+	],
 	"ceilings": {
-		"AGENTS.md": 2600,
-		"GLOSSARY.md": 2550,
+		"AGENTS.md": 2597,
+		"GLOSSARY.md": 2513,
 		"docs/AGENTS.md": 950,
 		"docs/APIARY-PLAN.md": 1700,
 		"docs/APPLICATION-PLAN.md": 1550,
@@ -15,7 +17,7 @@
 		"docs/FLEET-PLAN.md": 1400,
 		"docs/MVP-PLAN.md": 1500,
 		"docs/ROOM-IDENTITY.md": 2500,
-		"docs/SPEC.md": 12400,
+		"docs/SPEC.md": 12243,
 		"docs/UI-PLAN.md": 4050
 	}
 }

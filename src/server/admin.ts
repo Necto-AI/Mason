@@ -19,7 +19,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { CAPABILITIES, CONTROL_OPS, STATE_SCOPES } from "mason-protocol";
+import { CAPABILITIES, CONTROL_OPS } from "mason-protocol";
 import type {
 	ConnectorGrantInput,
 	ConnectorPatch,
@@ -282,7 +282,6 @@ async function panelConfig(deps: OperatorDeps): Promise<NonNullable<PanelState["
 		hooks: deps.runtime.hooks.list(),
 		commands: [...CONTROL_OPS],
 		capabilities: [...CAPABILITIES],
-		stateScopes: [...STATE_SCOPES],
 		restartRequired: JSON.stringify(file) !== JSON.stringify(booted),
 		grants: OPERATOR_GRANTS,
 	};
@@ -328,7 +327,6 @@ function grantWire(grant: ConnectorGrant): NonNullable<PanelConnector["connector
 					},
 				}),
 		...(grant.events === undefined ? {} : { events: { hooks: grant.events.hooks } }),
-		state: grant.state,
 		...(grant.commands === undefined ? {} : { commands: grant.commands }),
 		trustMarkers: grant.trustMarkers,
 		...(grant.policy === undefined ? {} : { policy: grant.policy }),
@@ -430,7 +428,6 @@ function grantFromInput(input: ConnectorGrantInput, existing: ConnectorGrant | u
 			next.events = events;
 		}
 	}
-	if (input.state !== undefined) next.state = input.state;
 	if (input.commands !== undefined) next.commands = input.commands;
 	if (input.trustMarkers !== undefined) next.trustMarkers = input.trustMarkers;
 	if (input.policy !== undefined) {

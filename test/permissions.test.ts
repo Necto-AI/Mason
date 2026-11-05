@@ -49,18 +49,18 @@ import {
 } from "./support/mcp.ts";
 
 /** A connector whose markers are not trusted: the default, and the reason a `not_required` tool still asks. */
-const UNTRUSTED: Integration = { ...GITHUB, connector: { state: [], trustMarkers: false } };
+const UNTRUSTED: Integration = { ...GITHUB, connector: { trustMarkers: false } };
 
 /** The same server behind an operator who allowed one tool by name, without trusting the rest. */
 const ALLOWS_SEARCH: Integration = {
 	...GITHUB,
-	connector: { state: [], trustMarkers: false, policy: { allow: ["issues.search"] } },
+	connector: { trustMarkers: false, policy: { allow: ["issues.search"] } },
 };
 
 /** The same, for the effect tool the decision table's default arguments name. */
 const ALLOWS_CREATE: Integration = {
 	...GITHUB,
-	connector: { state: [], trustMarkers: false, policy: { allow: ["issues.create"] } },
+	connector: { trustMarkers: false, policy: { allow: ["issues.create"] } },
 };
 
 /**
@@ -108,7 +108,7 @@ describe("the decision", () => {
 		assert.equal(decide(inputs({ marker: "required" })).kind, "ask");
 		const allowed: Integration = {
 			...GITHUB,
-			connector: { state: [], trustMarkers: false, policy: { allow: ["issues.create"] } },
+			connector: { trustMarkers: false, policy: { allow: ["issues.create"] } },
 		};
 		assert.equal(
 			decide(inputs({ integration: allowed, marker: "required" })).kind,
@@ -126,17 +126,17 @@ describe("the decision", () => {
 	it("tightens with ask and deny, which beat a trusted marker and a wider rule", () => {
 		const askRule: Integration = {
 			...GITHUB,
-			connector: { state: [], trustMarkers: true, policy: { ask: ["issues.create"] } },
+			connector: { trustMarkers: true, policy: { ask: ["issues.create"] } },
 		};
 		assert.equal(decide(inputs({ integration: askRule, marker: "not_required" })).kind, "ask");
 		const denyRule: Integration = {
 			...GITHUB,
-			connector: { state: [], trustMarkers: true, policy: { deny: ["issues.create"], allow: ["issues.create"] } },
+			connector: { trustMarkers: true, policy: { deny: ["issues.create"], allow: ["issues.create"] } },
 		};
 		assert.equal(decide(inputs({ integration: denyRule, marker: "not_required" })).kind, "deny");
 		const everything: Integration = {
 			...GITHUB,
-			connector: { state: [], trustMarkers: true, policy: { deny: ["*"] } },
+			connector: { trustMarkers: true, policy: { deny: ["*"] } },
 		};
 		assert.equal(decide(inputs({ integration: everything, marker: "required" })).kind, "deny", "`*` is every tool");
 	});
@@ -561,7 +561,7 @@ describe("the gateway at runtime", () => {
 		const deniedDirectory = await temporaryDirectory();
 		const closed = await boot(deniedDirectory, {
 			integrations: {
-				github: { ...GITHUB, connector: { state: [], trustMarkers: true, policy: { deny: ["issues.search"] } } },
+				github: { ...GITHUB, connector: { trustMarkers: true, policy: { deny: ["issues.search"] } } },
 			},
 			transport: () => denied.transport,
 			steps: scriptThenSpeak(SEARCH_SCRIPT),

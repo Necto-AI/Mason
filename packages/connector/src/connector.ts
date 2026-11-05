@@ -40,10 +40,6 @@ import {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	type ProtocolErrorData,
-	type StateDeltaParams,
-	type StateScope,
-	type StateSnapshotParams,
-	type StateSubscribeResult,
 	type SubmitParams,
 } from "mason-protocol";
 import { type AttachmentClient, createAttachmentClient, type Fetcher } from "./attachments.ts";
@@ -70,7 +66,6 @@ export interface ConnectorHandlers {
 	onDeliveryCancel?(deliveryId: string, reason: string): Promise<void> | void;
 	/** One paused tool call, put to a person. `delivered: false` leaves it visibly pending. */
 	onInteraction?(params: InteractionRequestParams): Promise<InteractionAck> | InteractionAck;
-	onState?(frame: StateSnapshotParams | StateDeltaParams): Promise<void> | void;
 	/** The handshake is done, the journal is replayed. Called once per connection. */
 	onSession?(session: Session): Promise<void> | void;
 	/** The socket is gone and a reconnect is scheduled. */
@@ -90,8 +85,6 @@ export interface ConnectorConfig {
 	readonly now?: () => number;
 	/** Substitute the socket: the conformance suite uses two ends of `linkPair()`. */
 	readonly link?: LinkFactory;
-	/** The state scopes this connector mirrors, re-subscribed on every reconnect. */
-	readonly state?: readonly StateScope[];
 	readonly reconnect?: { readonly initialMs?: number; readonly maxMs?: number; readonly factor?: number };
 	readonly requestTimeoutMs?: number;
 	/** How often the connector pings mason on an idle socket. 0 disables it; the protocol's number is 20 s. */
@@ -148,7 +141,6 @@ export interface Connector {
 	control(input: ControlParams): Promise<ControlResult>;
 	/** Report one person's answer to one pending permission request. Applies once, and the SDK enforces the once. */
 	answer(input: InteractionAnswerParams): Promise<InteractionAnswerResult>;
-	subscribe(scopes: readonly StateScope[], since?: number): Promise<StateSubscribeResult>;
 	/** Replay the journal now, on a socket that is already open. */
 	flush(): Promise<void>;
 	readonly attachments: AttachmentClient;
@@ -229,7 +221,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	let flushTimer: ReturnType<typeof setTimeout> | undefined;
 	let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-	let scopes: readonly StateScope[] = config.state ?? [];
 	let flushing: Promise<void> | undefined;
 	/** Seeded from the store on first use, then monotonic in memory: a read-modify-write per call hands two calls one seq. */
 	let nextSeq: number | undefined;
@@ -246,7 +237,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		fire,
 		control,
 		answer,
-		subscribe,
 		flush: flushOutbox,
 		attachments,
 		drop,
@@ -323,14 +313,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		attachmentCap = answer.limits.attachmentBytes;
 		startHeartbeat();
 
-		if (scopes.length > 0) {
-			try {
-				await subscribe(scopes, await config.store.read<number>(NAMESPACE.state, "seq"));
-			} catch (error) {
-				logger.warn("the state subscription was refused", { error: describe(error) });
-			}
-		}
-
 		await flushOutbox();
 		try {
 			await handlers.onSession?.(session);
@@ -400,13 +382,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 			case METHOD.deliveryCancel: {
 				const record = asParams<{ deliveryId?: unknown; reason?: unknown }>(params);
 				await handlers.onDeliveryCancel?.(String(record.deliveryId), String(record.reason ?? "cancelled"));
-				return;
-			}
-			case METHOD.stateSnapshot:
-			case METHOD.stateDelta: {
-				const frame = asParams<StateSnapshotParams | StateDeltaParams>(params);
-				await noteSeq(frame);
-				await handlers.onState?.(frame);
 				return;
 			}
 			default:
@@ -516,22 +491,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		}, wait);
 		timer.unref?.();
 		flushTimer = timer;
-	}
-
-	async function noteSeq(frame: StateSnapshotParams | StateDeltaParams): Promise<void> {
-		const current = await config.store.read<number>(NAMESPACE.state, "seq");
-		if (current !== undefined && frame.seq <= current) return;
-		await config.store.write(NAMESPACE.state, "seq", frame.seq);
-	}
-
-	async function subscribe(next: readonly StateScope[], since?: number): Promise<StateSubscribeResult> {
-		if (peer === undefined) throw new Error("there is no socket to subscribe on");
-		const params = since === undefined ? { scopes: next } : { scopes: next, since };
-		const result = (await peer.call(METHOD.stateSubscribe, params)) as StateSubscribeResult;
-		// Only now: a refused scope must not become the set every later reconnect asks for, which would leave the
-		// connector mirroring nothing at all and saying nothing about it.
-		scopes = next;
-		return result;
 	}
 
 	function submit(
@@ -737,5 +696,5 @@ export function helloRequest(config: {
 	};
 }
 
-export type { Capability, ErrorCode, ExternalActor, FacesDeclaration, Limits, Origin, ProtocolErrorData, StateScope };
+export type { Capability, ErrorCode, ExternalActor, FacesDeclaration, Limits, Origin, ProtocolErrorData };
 export { protocolFailure, isProtocolErrorData };

@@ -182,8 +182,6 @@ proactive target, and it is sent as **one logical delivery** with one `deliveryI
 
 - `start`/`delta` are only sent to an origin that claimed `streaming`. Everybody else receives `final` alone, under the
   same `deliveryId` a streaming origin would have seen. Delivery identity never changes with capability.
-- A projection mirror is **not** a delivery. A connector with the `projection` state scope displays a reply because it
-  appears in the whitelisted transcript; it receives no send.
 - v1 has no delivery fan-out.
 
 The answer to `delivery.final` is a `deliveryAck`:
@@ -251,29 +249,6 @@ The answer arrives as its own call, from whoever is authorized, and applies **on
 - A pending approval survives a restart. The operation resumes with only the approved call, and the side effects that ran
   before it are not repeated.
 
-## State
-
-State is what the connector was granted, and nothing more. Reasoning, tool arguments, tool output, and the raw
-conversation are in none of the four scopes.
-
-| Scope | Yields |
-|---|---|
-| `status` | run status, busy, queued count, hook names |
-| `presence` | "this chat is being worked on", start/stop |
-| `projection` | the whitelisted transcript, entry by entry |
-| `tools` | the names of the tools a turn is running |
-
-```json
-{"jsonrpc":"2.0","id":"sub1","method":"mason/state.subscribe","params":{"scopes":["status","projection"],"since":41}}
-{"jsonrpc":"2.0","id":"sub1","result":{"scopes":["status","projection"],"seq":57,"resumed":true}}
-```
-
-Frames are `connector/state.snapshot` (a full set, with `scopes`) and `connector/state.delta` (`{seq, scope, op, path?,
-value?}`, where `op` is `set`, `push` or `reset`). Sequence numbers are monotonic per socket. A gap means **resync**:
-reconnect with `since` and accept a snapshot. A connector never patches a hole.
-
-A scope the entry did not grant is refused (`mason.scope_not_granted`), not silently dropped.
-
 ## Attachments
 
 Bytes cross through authenticated HTTP, referenced by content id. A shared filesystem path is not a remote protocol, and
@@ -301,7 +276,6 @@ A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence,
 |---|---|---|
 | `mason.protocol_mismatch` | no | the majors differ |
 | `mason.face_not_granted` | no | a call uses a face the entry does not grant |
-| `mason.scope_not_granted` | no | a state scope the entry does not grant |
 | `mason.actor_unknown` | no | an actor that is not the entry's owner, or any actor when it names none |
 | `mason.conversation_not_permitted` | no | an origin outside the granted list |
 | `mason.kind_not_permitted` | no | a fire `kind` the entry does not map |

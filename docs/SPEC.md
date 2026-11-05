@@ -76,7 +76,7 @@ does not add them. It fixes the product direction the plans and issues execute.
 │   │   ├── admin.ts                   # The panel's routes: a state per grant, the writes, and the approval answers
 │   │   ├── auth.ts                    # Who may talk to the server: token file, grants, bearer/query, Origin gate
 │   │   ├── commands.ts                # The four controls, the claim that makes a control id an identity, and the target
-│   │   ├── connector.ts               # The connector socket: handshake, admission, state mirrors, the reply outbox
+│   │   ├── connector.ts               # The connector socket: handshake, admission, streaming replies, the outbox
 │   │   ├── connectors.ts              # A connector's grants and the credential it opens its socket with
 │   │   ├── house.ts                   # The agent's home: agent/ and service/ paths, soul/profile reads, log, git
 │   │   ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
@@ -597,15 +597,8 @@ sends `connector/delivery.final` for every committed reply whose target has no `
 The acknowledgement is written down whatever it says: `delivered` and `duplicate` settle it, `uncertain` is recorded and
 never retried, `rejected` is recorded with its reason. A send that was never acknowledged stays owed and is resent after
 a reconnect under the same id, where the connector's own ledger answers `duplicate` or `uncertain`. A reply is never
-fanned out: one target, and a connector subscribed to `projection` displays it in state without receiving a send. A
-streaming origin receives `start` and `delta` frames while the call is being written and the same `final` as everyone
+fanned out: one target, and a connector receives no second copy of it by any other path. A streaming origin receives `start` and `delta` frames while the call is being written and the same `final` as everyone
 else; a call withdrawn before it was final is `delivery.cancel`.
-
-**State.** `mason/state.subscribe` answers with a snapshot of the granted scopes — `status`, `presence`, the whitelisted
-`projection`, and the *names* of the running tools — and deltas after it, under one monotonic `seq` per socket. A scope
-the entry does not grant is `mason.scope_not_granted`. This side keeps no delta history across sockets, so a reconnect
-is always a full snapshot and the answer says `resumed: false`: a gap is resynced, never patched. Reasoning, tool
-arguments, tool output and the raw conversation are in none of the scopes.
 
 **Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a
 content id and answers `{contentId, size, expiresAt}`; `GET /api/connector/attachments/<contentId>` returns them. The
@@ -740,8 +733,8 @@ origin and delivery live (§4.1d).
 Conversation (the projected transcript across every connector, plus the queue behind the running turn), Trace (the raw
 entries, filterable by kind, with model messages, tool arguments and results, payloads and context changes), Approvals
 (the pending questions, answered allow-once or deny), Connectors (faces, description, tools endpoint and credential,
-the grant: the owner actor, external rooms, event kinds → hooks, state scopes, marker trust, policy rules, and the
-commands the grant may spend; plus its credentials and an audit of file-versus-boot), Access (devices with their grants,
+the grant: the owner actor, external rooms, event kinds → routines, marker trust, policy rules, and the commands
+the grant may spend; plus its credentials and an audit of file-versus-boot), Access (devices with their grants,
 and every connector credential), and Hooks (the switches and the fire button — a routine is a hook with an interval).
 
 **Grants are the panel's powers, and they are separate.** `conversation` reads the projected conversation; `trace` reads

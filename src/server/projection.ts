@@ -304,15 +304,3 @@ function queuedText(item: { content?: unknown; entry?: { kind?: string; data?: u
 	}
 	return "queued";
 }
-
-/** The names of the tools the running round has not finished. Names only — never arguments, never output. */
-export function runningToolNames(view: ConversationView | undefined): string[] {
-	const live = view?.docs["pi.live"] as LiveState | undefined;
-	const tools = live?.tools ?? [];
-	const names: string[] = [];
-	for (const tool of tools) {
-		if (tool.status === "done") continue;
-		if (!names.includes(tool.name)) names.push(tool.name);
-	}
-	return names;
-}

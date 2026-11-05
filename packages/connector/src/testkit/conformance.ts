@@ -20,9 +20,6 @@ import type {
 	FacesDeclaration,
 	InteractionAck,
 	InteractionRequestParams,
-	StateDeltaParams,
-	StateScope,
-	StateSnapshotParams,
 } from "mason-protocol";
 import { AttachmentError } from "../attachments.ts";
 import {
@@ -56,7 +53,6 @@ export interface ConformanceFixture {
 	/** The medium's behaviour. The suite wraps each hook, so what a case needs to see, it sees. */
 	readonly handlers?: Partial<ConnectorHandlers>;
 	readonly store?: ConnectorStore;
-	readonly state?: readonly StateScope[];
 	/** How often to ping while idle. The suite leaves it at the protocol's 20 s unless a case needs to see one. */
 	readonly heartbeatMs?: number;
 }
@@ -68,7 +64,6 @@ export interface Observed {
 	readonly deltas: DeliveryDeltaParams[];
 	readonly cancels: string[];
 	readonly interactions: InteractionRequestParams[];
-	readonly state: Array<StateSnapshotParams | StateDeltaParams>;
 	readonly sessions: Session[];
 }
 
@@ -172,7 +167,6 @@ export async function open(fixture: ConformanceFixture): Promise<ConformanceCont
 		deltas: [],
 		cancels: [],
 		interactions: [],
-		state: [],
 		sessions: [],
 	};
 	const handler: Partial<ConnectorHandlers> = { ...(fixture.handlers ?? {}) };
@@ -200,10 +194,6 @@ export async function open(fixture: ConformanceFixture): Promise<ConformanceCont
 			if (handler.onInteraction === undefined) return { delivered: true, surface: fixture.name };
 			return handler.onInteraction(params);
 		},
-		onState(frame) {
-			observed.state.push(frame);
-			return handler.onState?.(frame);
-		},
 		onSession(session) {
 			observed.sessions.push(session);
 			return handler.onSession?.(session);
@@ -223,7 +213,6 @@ export async function open(fixture: ConformanceFixture): Promise<ConformanceCont
 		requestTimeoutMs: 2_000,
 		reconnect: { initialMs: 1, maxMs: 10, factor: 2 },
 		...(fixture.heartbeatMs === undefined ? {} : { heartbeatMs: fixture.heartbeatMs }),
-		...(fixture.state === undefined ? {} : { state: fixture.state }),
 	};
 	const connector = createConnector(config);
 	await connector.start();
@@ -268,7 +257,6 @@ function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 		user?: FakeMasonGrants["user"];
 		tools?: { url: string };
 		events?: Readonly<Record<string, string>>;
-		state?: readonly string[];
 	} = {};
 	if (fixture.faces.user !== undefined) {
 		// The advertised list is the wire and does not change; the grant names one of those ids as the owner, which is
@@ -279,9 +267,6 @@ function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 			conversations: fixture.faces.user.conversations ?? [],
 			capabilities: fixture.faces.user.capabilities ?? ["text"],
 		};
-		// A user face may mirror the cheap scopes; `projection` and `tools` are granted separately, and the suite keeps
-		// them ungranted so the refusal case has something to refuse.
-		grants.state = ["status", "presence"];
 	}
 	if (fixture.faces.tools !== undefined) grants.tools = { url: fixture.faces.tools.url };
 	if (fixture.faces.events !== undefined) grants.events = fixture.faces.events;
@@ -729,32 +714,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				await connector.answer({ permissionId: "p-2", answer: "deny" });
 				const again: InteractionAck | undefined = await mason.requestInteraction(params);
 				equal(again?.delivered, false, "a request after it was settled");
-			},
-		},
-		{
-			name: "state/a snapshot then a delta keeps one monotonic number",
-			needs: ["user"],
-			async run({ mason, observed, fixture, connector }) {
-				await connector.subscribe(["status"]);
-				mason.snapshot({ scopes: ["status"], status: { runStatus: "idle" } });
-				mason.delta({ scope: "status", op: "set", path: "runStatus", value: "generating" });
-				await waitFor(() => observed.state.length >= 2, "both state frames arrived");
-				const [first, second] = observed.state;
-				if (first === undefined || second === undefined) fail("state", "frames missing");
-				if (second.seq <= first.seq) fail("state", `${second.seq} did not follow ${first.seq}`);
-				void fixture;
-			},
-		},
-		{
-			name: "state/a scope the entry did not grant is refused",
-			needs: ["user"],
-			async run({ connector }) {
-				const slept = await connector.subscribe(["projection"]).then(
-					() => undefined,
-					(error: unknown) => error,
-				);
-				if (slept === undefined) fail("state", "a scope outside the grant was accepted");
-				void slept;
 			},
 		},
 		{

@@ -14,7 +14,6 @@ import {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	SCHEMA_ID,
-	STATE_SCOPES,
 	versionsCompatible,
 } from "../src/index.ts";
 
@@ -78,8 +77,6 @@ test("the protocol is major 1 and the enums agree with the schema", () => {
 	const defs = schema.$defs as Record<string, Record<string, unknown>>;
 	const capability = (defs.capability as { enum: string[] }).enum;
 	assert.deepEqual([...CAPABILITIES].sort(), [...capability].sort());
-	const scope = (defs.stateScope as { enum: string[] }).enum;
-	assert.deepEqual([...STATE_SCOPES].sort(), [...scope].sort());
 
 	const control = defs.controlParams.properties as Record<string, { enum: string[] }>;
 	assert.deepEqual([...CONTROL_OPS].sort(), [...control.op.enum].sort());

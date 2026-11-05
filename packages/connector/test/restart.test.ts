@@ -36,7 +36,6 @@ async function withFixture(
 			},
 			tools: { url: "https://chat.internal/mcp" },
 			events: { "chat.message": "chat-message" },
-			state: ["status"],
 		},
 		capabilities: chat.faces.user?.capabilities ?? ["text"],
 	});

@@ -4,12 +4,12 @@
  * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
  * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
  * `connector` block is what the operator grants it: which external actor is the owner's, which external conversations may
- * be spoken in, which event kinds fire which hook, which state scopes it may mirror, which controls it may spend on
- * `mason/control`, and whether its approval markers may waive approval.
+ * be spoken in, which event kinds fire which routine, which controls it may spend on `mason/control`, and whether its
+ * approval markers may waive approval.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
  * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
- * a kind that maps to no hook is refused, a scope that is not granted is refused. A face the entry does not grant is
+ * a kind that maps to no routine is refused. A face the entry does not grant is
  * named in `inactive` with a reason rather than dropped, because a connector silently missing half its behaviour is the
  * bug nobody finds.
  *
@@ -34,8 +34,6 @@ import {
 	type ControlOp,
 	type ExternalActor,
 	type ExternalConversation,
-	STATE_SCOPES,
-	type StateScope,
 } from "mason-protocol";
 import { originAllowed, readConfig, writeConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
@@ -66,8 +64,6 @@ export interface ConnectorEventGrant {
 export interface ConnectorGrant {
 	readonly user?: ConnectorUserGrant;
 	readonly events?: ConnectorEventGrant;
-	/** The state scopes this connector may subscribe to. A scope absent from here is refused, not narrowed. */
-	readonly state: readonly StateScope[];
 	/**
 	 * The controls this connector's socket may spend on `mason/control`, out of the protocol's closed vocabulary. Absent
 	 * or empty is no vocabulary at all: a chat that was never granted `stop` is a chat that cannot interrupt a turn, and
@@ -130,7 +126,6 @@ export function readConnectorGrant(
 	const raw = value as Record<string, unknown>;
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
-	const state = readState(where, name, raw.state);
 	const commands = readCommands(where, name, raw.commands);
 	const trustMarkers = readBoolean(where, name, raw, "trustMarkers");
 	const policy = readPolicy(where, name, raw.policy);
@@ -148,7 +143,6 @@ export function readConnectorGrant(
 	return {
 		...(user === undefined ? {} : { user }),
 		...(events === undefined ? {} : { events }),
-		state,
 		...(commands === undefined ? {} : { commands }),
 		trustMarkers,
 		...(policy === undefined ? {} : { policy }),
@@ -306,28 +300,6 @@ function readEvents(where: string, name: string, value: unknown): ConnectorEvent
 		hooks[kind] = hook.trim();
 	}
 	return { hooks };
-}
-
-function readState(where: string, name: string, value: unknown): StateScope[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "connector.state" that is not a list'));
-	}
-	const scopes: StateScope[] = [];
-	for (const entry of value) {
-		if (typeof entry !== "string" || !(STATE_SCOPES as readonly string[]).includes(entry)) {
-			throw new Error(
-				refusal(
-					where,
-					name,
-					`declares the state scope ${typeof entry === "string" ? `"${entry}"` : JSON.stringify(entry)}, which ` +
-						`mason does not have: the whole set is ${STATE_SCOPES.join(", ")}`,
-				),
-			);
-		}
-		scopes.push(entry as StateScope);
-	}
-	return scopes;
 }
 
 /**

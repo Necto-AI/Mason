@@ -855,7 +855,6 @@ describe("the configuration the panel writes", () => {
 						conversations: [{ externalConversationId: "-1001234", kind: "room", title: "Team" }],
 					},
 					events: { hooks: { "issue-opened": "github-activity" } },
-					state: ["status", "projection"],
 					commands: ["stop", "status"],
 					trustMarkers: true,
 					policy: { allow: ["issues.list"], deny: ["issues.delete"] },
@@ -866,7 +865,6 @@ describe("the configuration the panel writes", () => {
 			const entry = config?.connectors.find((connector) => connector.name === "github");
 			assert.equal(entry?.connector?.user?.owner, "8811");
 			assert.equal(entry?.connector?.user?.conversations[0]?.title, "Team");
-			assert.deepEqual(entry?.connector?.state, ["status", "projection"]);
 			assert.equal(entry?.connector?.trustMarkers, true);
 			assert.deepEqual(entry?.connector?.policy?.deny, ["issues.delete"]);
 			assert.deepEqual(entry?.connector?.commands, ["stop", "status"]);
@@ -875,7 +873,6 @@ describe("the configuration the panel writes", () => {
 			const file = JSON.parse(await readFile(housePaths(panel.home).integrations, "utf8")) as {
 				integrations: { github: Record<string, unknown> };
 			};
-			assert.deepEqual((file.integrations.github.connector as { state: string[] }).state, ["status", "projection"]);
 			assert.deepEqual((file.integrations.github.connector as { commands: string[] }).commands, ["stop", "status"]);
 			assert.deepEqual(file.integrations.github.tools, { url: "http://mason-github:8082/mcp" });
 
@@ -883,7 +880,6 @@ describe("the configuration the panel writes", () => {
 			const retired = await panel.call("PUT", "/api/admin/connectors/github", {
 				connector: {
 					user: { owner: "8811", conversations: [], actors: { "8811": "Ilya" } } as never,
-					state: ["status"],
 					trustMarkers: false,
 				},
 			});
@@ -893,7 +889,7 @@ describe("the configuration the panel writes", () => {
 
 			// A control the protocol does not have is refused before it is written, naming the whole set.
 			const refused = await panel.call("PUT", "/api/admin/connectors/github", {
-				connector: { state: ["status"], commands: ["stopp"], trustMarkers: false },
+				connector: { commands: ["stopp"], trustMarkers: false },
 			});
 			assert.equal(refused.status, 400, JSON.stringify(refused.body));
 			assert.match(refused.body.error, /"stopp"/);

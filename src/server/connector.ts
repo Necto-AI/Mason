@@ -50,10 +50,6 @@ import {
 	PROTOCOL_MAJOR,
 	PROTOCOL_MINOR,
 	type ProtocolErrorData,
-	type StateDeltaParams,
-	type StateScope,
-	type StateSnapshotParams,
-	type StateSubscribeResult,
 	type SubmitParams,
 	versionsCompatible,
 } from "mason-protocol";
@@ -80,10 +76,9 @@ import {
 	requestOf,
 	surfaceFor,
 } from "./permissions.ts";
-import { projectQueued, projectTranscript } from "./projection.ts";
 import { type ReplyRecord, replyRecordOf, targetOfOrigin, turnOriginOf } from "./replies.ts";
 import type { AgentRuntime } from "./runtime.ts";
-import { deriveRunStatus, isBusy, queuedSubmissions, runningToolNames } from "./status.ts";
+import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
 
 /** The path a connector opens. Beside the Chord socket rather than inside it: one door, one contract. */
 export const CONNECTOR_PATH = "/api/connector";
@@ -205,12 +200,12 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	let dirty = false;
 	const closed = false;
 
-	// One watch for the whole door: every connector's state mirror, and the outbox, read the same revision. A per-socket
+	// One watch for the whole door: every connector's streaming reply, and the outbox, read the same revision. A per-socket
 	// watch would be one listener per connector on a log that already fans out to every browser.
 	const watch = await options.runtime.viewState(BACKGROUND_CONTEXT);
 	const unsubscribe = watch.subscribe((view) => {
 		latest = view;
-		for (const session of sessions.values()) session.stateChanged(view);
+		for (const session of sessions.values()) session.streamChanged(view);
 		void flush();
 	});
 	// The acquisition revision is delivered by `subscribe` itself; nothing to seed.
@@ -498,10 +493,8 @@ export class ConnectorSession {
 	/** The questions this socket already handed over: a reconnect is a new socket and asks what nobody answered again. */
 	readonly #asked = new Set<string>();
 	readonly #streaming = new Map<string, { readonly callId: string; readonly text: string }>();
-	#scopes: readonly StateScope[] = [];
 	#capabilities: readonly Capability[] = [];
 	#seq: Seq = 0;
-	#lastState = new Map<StateScope, string>();
 	#version = "0.0.0";
 
 	constructor(options: SessionOptions) {
@@ -628,8 +621,6 @@ export class ConnectorSession {
 				return this.#control(params as ControlParams);
 			case METHOD.interactionAnswer:
 				return this.#answer(params as InteractionAnswerParams);
-			case METHOD.stateSubscribe:
-				return this.#subscribe(params as { scopes?: unknown; since?: unknown });
 			case METHOD.ping:
 				return { at: this.#now() };
 			default:
@@ -1131,64 +1122,13 @@ export class ConnectorSession {
 		return settled;
 	}
 
-	/* ------------------------------------------------------------------------------------------------------------ */
-	/* State                                                                                                        */
-	/* ------------------------------------------------------------------------------------------------------------ */
-
-	#subscribe(params: { scopes?: unknown; since?: unknown }): StateSubscribeResult {
-		const asked = params?.scopes;
-		if (!Array.isArray(asked) || asked.length === 0) {
-			throw refused(ERROR_CODE.invalidRequest, "mason/state.subscribe needs a non-empty scopes list", {
-				field: "scopes",
-			});
-		}
-		for (const scope of asked) {
-			if (typeof scope !== "string" || !this.#grant.state.includes(scope as StateScope)) {
-				throw refused(ERROR_CODE.scopeNotGranted, `${String(scope)} is not a scope this entry grants`);
-			}
-		}
-		this.#scopes = asked as StateScope[];
-		this.#lastState.clear();
-		const view = this.#view();
-		// Always a snapshot: this side keeps no delta history across sockets, so a `since` it cannot replay is answered with
-		// the whole state and `resumed: false` rather than a gap the connector would patch into a hole.
-		this.#sendSnapshot(view);
-		return { scopes: this.#scopes, seq: this.#seq, resumed: false };
-	}
-
-	/** One full set of the subscribed scopes. Sent on subscribe, and the baseline every delta is compared against. */
-	#sendSnapshot(view: ConversationView | undefined): void {
-		const frame: StateSnapshotParams = { seq: this.nextSeq(), scopes: this.#scopes };
-		for (const scope of this.#scopes) {
-			const value = stateValue(scope, view, this.#runtime);
-			if (value === undefined) continue;
-			(frame as unknown as Record<string, unknown>)[scope] = value;
-			this.#lastState.set(scope, JSON.stringify(value));
-		}
-		this.#sendNotification(METHOD.stateSnapshot, frame);
-	}
-
-	/** Called by the door on every committed revision: what changed, as deltas, and the streaming reply if one is in flight. */
-	stateChanged(view: ConversationView): void {
+	/** Called by the door on every committed revision: the streaming reply, if one is in flight. */
+	streamChanged(view: ConversationView): void {
 		try {
-			this.#stateChanged(view);
+			this.#streamReply(view);
 		} catch (error) {
-			this.#log(`[connector] ${this.name}: state delivery failed: ${errorText(error)}`);
+			this.#log(`[connector] ${this.name}: streaming failed: ${errorText(error)}`);
 		}
-	}
-
-	#stateChanged(view: ConversationView): void {
-		if (!this.ready || this.closed) return;
-		for (const scope of this.#scopes) {
-			const value = stateValue(scope, view, this.#runtime);
-			if (value === undefined) continue;
-			const encoded = JSON.stringify(value);
-			if (this.#lastState.get(scope) === encoded) continue;
-			this.#lastState.set(scope, encoded);
-			const delta: StateDeltaParams = { seq: this.nextSeq(), scope, op: "set", value };
-			this.#sendNotification(METHOD.stateDelta, delta);
-		}
-		this.#streamReply(view);
 	}
 
 	/**
@@ -1438,32 +1378,6 @@ async function recordDelivery(conversation: Conversation, deliveryId: string, ac
 
 /** Outbound request ids: only unique within one socket, which is all a JSON-RPC id has to be. */
 let outbound = 0;
-
-/** The state one scope yields. `undefined` for a scope this build does not know, which a grant check already refused. */
-function stateValue(
-	scope: StateScope,
-	view: ConversationView | undefined,
-	runtime: AgentRuntime,
-): Record<string, unknown> | undefined {
-	switch (scope) {
-		case "status":
-			return {
-				runStatus: deriveRunStatus(view),
-				busy: isBusy(view),
-				queued: queuedSubmissions(view),
-				hooks: runtime.hooks.list().map((hook) => hook.id),
-			};
-		case "presence":
-			return { working: isBusy(view) };
-		case "projection":
-			return { items: projectTranscript(view), queued: projectQueued(view) };
-		case "tools":
-			// Names only. Arguments, output and the conversation itself are not a scope any connector is granted.
-			return { running: runningToolNames(view) };
-		default:
-			return undefined;
-	}
-}
 
 /** Capabilities the connector advertised, narrowed to the operator's list when one was configured. */
 function negotiateCapabilities(grant: ConnectorGrant, advertised: readonly Capability[] | undefined): Capability[] {

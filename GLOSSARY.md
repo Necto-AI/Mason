@@ -233,11 +233,6 @@ The name of one uploaded file, `cnt_<hex>`. Bytes cross the transfer endpoint by
 never a shared path, and an id is served only to the connector that uploaded it.
 _Avoid_: attachment id, file token
 
-**state scope**:
-One of the four things a connector may mirror — `status`, `presence`, `projection`, `tools` — granted per entry. A scope
-yields a shape from the whitelist; nothing yields the conversation.
-_Avoid_: subscription, channel
-
 **tool catalog**:
 What one service offers *now*: each tool's own name, description, JSON Schema and approval marker, read from the server
 and never registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never
