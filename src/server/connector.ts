@@ -816,7 +816,6 @@ export class ConnectorSession {
 					images.push({ type: "image", data: read.attachment.bytes.toString("base64"), mimeType: type });
 				}
 				text.push(`[file: ${path} — ${type}, ${read.attachment.meta.size} bytes]`);
-				continue;
 			}
 		}
 		const body = text.join("\n");

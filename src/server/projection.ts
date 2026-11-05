@@ -66,11 +66,6 @@ function callsOf(message: unknown): CallBlock[] {
 	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
 }
 
-/** Whether the call's result says it failed — an error result, or one interrupted by a restart. */
-function outcomeFailed(outcomes: Map<string, boolean>, callId: string): boolean {
-	return outcomes.get(callId) === true;
-}
-
 /** What became of one delivery, as the entry records it. */
 interface DeliveryRecord {
 	readonly deliveryId: string;
@@ -232,7 +227,6 @@ function streamingItems(
 			// words twice.
 			if (replies.has(deliveryId)) continue;
 			items.push({ kind: "delivered", id: deliveryId, text, streaming: true });
-			continue;
 		}
 	}
 	return items;

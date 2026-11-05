@@ -25,12 +25,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import {
-	DELIVERY_REMINDER,
-	isDeliveryReminder,
-	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
-} from "../../shared/contract.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_ENTRY_KIND, REPLY_TOOL } from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
 	type ReplyRecord,

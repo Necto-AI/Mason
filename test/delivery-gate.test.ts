@@ -32,8 +32,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { projectTranscript } from "../src/server/projection.ts";
-import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL } from "../src/shared/contract.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
