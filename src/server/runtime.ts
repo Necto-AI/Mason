@@ -163,6 +163,30 @@ export interface OpenAgentRuntimeOptions {
 
 const FAUX_MODEL: AgentModelRef = { provider: "faux", modelId: "faux-1" };
 
+/**
+ * Where auto-compaction starts: how much of the window a conversation may fill before the harness summarizes its old
+ * part. A goalpost in tokens rather than at the window's edge, because a turn re-reads the whole prefix and the last
+ * hundred thousand tokens of a long conversation buy less than another turn costs.
+ */
+export const COMPACTION_GOALPOST_TOKENS = 300_000;
+
+/**
+ * The room kept free when a model's window cannot hold the goalpost plus an answer: pi's own default, which is the
+ * only answer left for a 128k local model — it compacts at the window's edge and says nothing.
+ */
+const COMPACTION_RESERVE_FLOOR_TOKENS = 16_384;
+
+/**
+ * The `reserveTokens` that puts the blocking threshold at `COMPACTION_GOALPOST_TOKENS` for `ref`'s window.
+ *
+ * An unresolvable model (the faux provider in a test that never set a window) counts as a window of zero, so it gets
+ * the floor rather than a threshold it could cross on its first message.
+ */
+export function compactionReserve(models: Models, ref: AgentModelRef): number {
+	const window = models.getModel(ref.provider, ref.modelId)?.contextWindow ?? 0;
+	return Math.max(window - COMPACTION_GOALPOST_TOKENS, COMPACTION_RESERVE_FLOOR_TOKENS);
+}
+
 /** `settings.json`'s `defaultProvider` / `defaultModel`, as pi's own CLI reads them. */
 function storedDefaultModel(): AgentModelRef | undefined {
 	try {
@@ -294,6 +318,13 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			// reader typed.
 			followUpMode: options.settings?.followUpMode ?? "all",
 			steeringMode: options.settings?.steeringMode ?? "one-at-a-time",
+			// The goalpost, per model: an always-on agent's conversation grows for weeks, and a summary written at the
+			// window's edge arrives too late to leave room for the turn that asked for it. A test that hands in its own
+			// `reserveTokens` still wins, field by field.
+			compaction: {
+				...options.settings?.compaction,
+				reserveTokens: options.settings?.compaction?.reserveTokens ?? compactionReserve(models, ref),
+			},
 			// An always-on agent idles past the provider's five-minute window constantly; the long retention is what stops
 			// every wake-up from re-paying for the whole prefix.
 			stream: { ...options.settings?.stream, cacheRetention: options.settings?.stream?.cacheRetention ?? "long" },
