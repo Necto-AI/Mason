@@ -59,8 +59,8 @@ does not add them. It fixes the product direction the plans and issues execute.
 ├── docs/
 │   └── SPEC.md                        # This specification
 ├── packages/
-│   ├── protocol/                      # @mason/protocol: the connector wire contract, v1 (schema + prose)
-│   └── connector/                     # @mason/connector: the connector SDK + the fake-mason conformance suite
+│   ├── protocol/                      # mason-protocol: the connector wire contract, v1 (schema + prose)
+│   └── connector/                     # mason-connector: the connector SDK + the fake-mason conformance suite
 ├── scripts/
 │   ├── build-web.mjs                  # esbuild bundler for src/web -> dist/web
 │   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there

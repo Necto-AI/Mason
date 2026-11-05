@@ -56,7 +56,7 @@ import {
 	type StateSubscribeResult,
 	type SubmitParams,
 	versionsCompatible,
-} from "@mason/protocol";
+} from "mason-protocol";
 import type { WebSocket } from "ws";
 import {
 	CONNECTOR_ENTRY_KIND,

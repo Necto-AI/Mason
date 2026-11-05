@@ -1,12 +1,12 @@
-# `@mason/connector`
+# `mason-connector`
 
 The TypeScript SDK for one external mason connector. It owns the parts that are the same for every connector and wrong in
 the same way when each connector writes them itself: the socket, the handshake, the durable journal, the dedup ledger,
 attachments, and the approval marker. It does not own vendor behaviour, and it makes no policy decision.
 
 ```ts
-import { createConnector, nodeWebSocketLink } from "@mason/connector";
-import { openSqliteStore } from "@mason/connector/store/sqlite";
+import { createConnector, nodeWebSocketLink } from "mason-connector";
+import { openSqliteStore } from "mason-connector/store/sqlite";
 import WebSocket from "ws";
 
 const connector = createConnector({
@@ -68,8 +68,8 @@ const outcome = await connector.submit({
 
 | Import | Store | Use |
 |---|---|---|
-| `@mason/connector/store/sqlite` | `openSqliteStore({ path })` | the reference production store: one SQLite file |
-| `@mason/connector/store/memory` | `new MemoryStore()` | **test-only** — forgets the journal and the ledger on restart |
+| `mason-connector/store/sqlite` | `openSqliteStore({ path })` | the reference production store: one SQLite file |
+| `mason-connector/store/memory` | `new MemoryStore()` | **test-only** — forgets the journal and the ledger on restart |
 
 `node:sqlite` needs `--experimental-sqlite` on Node 22 and nothing on Node 24. A connector with its own persistence
 implements `ConnectorStore` — five methods — and passes it in.
@@ -79,7 +79,7 @@ implements `ConnectorStore` — five methods — and passes it in.
 The SDK does not ship an MCP server. It ships the one thing the contract fixes: the approval marker.
 
 ```ts
-import { declareTool } from "@mason/connector/mcp";
+import { declareTool } from "mason-connector/mcp";
 
 const sendMessage = declareTool({
 	name: "send_message",
@@ -95,7 +95,7 @@ authority: the marker is the connector author's statement, and trusting it is an
 ## The conformance suite
 
 ```ts
-import { runConformance } from "@mason/connector/testkit";
+import { runConformance } from "mason-connector/testkit";
 
 const result = await runConformance({
 	name: "telegram",

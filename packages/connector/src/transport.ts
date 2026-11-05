@@ -7,7 +7,7 @@
  * never retries anything on its own.
  */
 
-import { ERROR_CODE, type ProtocolErrorData, RPC_ERROR } from "@mason/protocol";
+import { ERROR_CODE, type ProtocolErrorData, RPC_ERROR } from "mason-protocol";
 import {
 	failure,
 	isFailure,

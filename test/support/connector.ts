@@ -19,9 +19,9 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { type Connector, type ConnectorHandlers, createConnector, nodeWebSocketLink } from "@mason/connector";
-import { MemoryStore } from "@mason/connector/store/memory";
-import type { FacesDeclaration, ProtocolErrorData, StateScope } from "@mason/protocol";
+import { type Connector, type ConnectorHandlers, createConnector, nodeWebSocketLink } from "mason-connector";
+import { MemoryStore } from "mason-connector/store/memory";
+import type { FacesDeclaration, ProtocolErrorData, StateScope } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../../src/server/house.ts";

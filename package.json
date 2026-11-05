@@ -1,5 +1,5 @@
 {
-	"name": "mason",
+	"name": "mason-agent",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
@@ -16,7 +16,7 @@
 		"gen:surface": "node --experimental-strip-types scripts/gen-surface.ts",
 		"gen:surface:check": "node --experimental-strip-types scripts/gen-surface.ts --check",
 		"check:docs": "node --experimental-strip-types scripts/doc-budget.ts --check",
-		"build:packages": "npm run build --workspace @mason/protocol && npm run build --workspace @mason/connector",
+		"build:packages": "npm run build --workspace mason-protocol && npm run build --workspace mason-connector",
 		"prove:connector": "node --experimental-strip-types scripts/prove-connector-sdk.ts",
 		"lint": "node scripts/biome.mjs check .",
 		"lint:write": "node scripts/biome.mjs check --write .",

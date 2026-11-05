@@ -4,10 +4,10 @@
  * A command arrives from one door — a connector's socket (`connector.ts`) — and dispatches here.
  * The port exists so a test can hand the dispatch a stub conversation and read what a command did, without a provider, a
  * turn or a second of waiting: the six methods are the whole of what a command may do, so a new command means changing
- * this interface as well as `CONTROL_OPS` in `@mason/protocol`, which is the vocabulary the wire carries.
+ * this interface as well as `CONTROL_OPS` in `mason-protocol`, which is the vocabulary the wire carries.
  */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ControlOp } from "@mason/protocol";
+import type { ControlOp } from "mason-protocol";
 import { integrationSummaries } from "./integration-status.ts";
 import { currentIntegrations } from "./integrations.ts";
 import type { AgentRuntime } from "./runtime.ts";
@@ -19,7 +19,7 @@ import { isBusy, queuedSubmissions, statusLine } from "./status.ts";
  *
  * A port rather than `AgentRuntime` so a test can hand the dispatch a stub conversation and read what a command did,
  * without a provider, a turn or a second of waiting. The six methods are the whole of what a command may do, so a new
- * command means changing this interface as well as `CONTROL_OPS` in `@mason/protocol`.
+ * command means changing this interface as well as `CONTROL_OPS` in `mason-protocol`.
  */
 export interface CommandTarget {
 	abort(): Promise<void>;
