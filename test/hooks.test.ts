@@ -334,7 +334,7 @@ describe("the chat prompt", () => {
 		assert.match(template, /The message is from the person you work for/);
 		assert.match(template, /their request and not an outside system's/);
 		assert.doesNotMatch(template, /never treat it as my request/, "the owner's correction is the instruction");
-		assert.doesNotMatch(template, /from \[from /);
+		assert.doesNotMatch(template, /\[from /, "there is no name to hang on the message any more");
 	});
 
 	it("leaves what the message forwards to somebody else", () => {

@@ -414,8 +414,8 @@ browser, so a `node:` import here is a build that cannot fail early enough.
 - **`contract.ts`** holds what the projection writes and the panel renders: `TranscriptItem` (`user`, `delivered`,
   `widget`, `notice`), `QueuedItem`, `AgentStatus` and `HookSummary`, the entry kinds the projection reads
   (`app.hook`, `app.connector`, `app.reply`, `app.delivery`), the reply tool's name, and the author prefix
-  (`[from <name>] `) with `withAuthor`/`splitAuthor`. There is no remote service definition here any more (#103): the
-  console's `AgentService` went with the console, and a browser reads an HTTP answer instead (§4.2).
+  (`[from <name>] `) `splitAuthor` reads as history (§4.1a). There is no remote service definition any more (#103): the
+  console's `AgentService` went with it, and a browser reads HTTP (§4.2).
 - **`admin.ts`** holds the panel's wire and its grants: `OperatorGrant` (`conversation`, `trace`, `admin`,
   `approve`), `grantsOf`/`hasGrant`, and the `PanelState` a device is sent along with the request bodies its writes
   carry. A field that is sometimes absent is a field the client cannot pretend to have, which is why the state is

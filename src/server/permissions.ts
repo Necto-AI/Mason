@@ -233,10 +233,11 @@ export function surfaceFor(
 /**
  * Whether an actor a connector names may answer this request. The owner's own route never asks this.
  *
- * Three refusals, and each is a different wrong answer. A question that came through another connector is not this
- * connector's to settle, because two connectors are two seats. A connector with no `owner` has nobody to answer through
- * it, so the panel is the only way. And a submission actor that is not the owner is a stranger: having spoken buys no
- * authority to approve. What an answer records is the connector itself, which is what the transcript can hold.
+ * Every refusal here is a different wrong answer. A question with no origin has no chat to be answered in, so it stays
+ * the panel's. A question that came through another connector is not this connector's to settle, because two connectors
+ * are two seats. A connector with no `owner` has nobody to answer through it. An answer that names no actor, and an actor
+ * that is not the owner, are both strangers: having spoken buys no authority to approve. What an answer records is the
+ * connector itself, which is what the transcript can hold.
  */
 export function mayAnswer(
 	request: PermissionRequest,

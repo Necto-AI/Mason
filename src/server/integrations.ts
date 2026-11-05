@@ -60,7 +60,7 @@ export interface Integration {
 	readonly description?: string;
 	readonly tools?: IntegrationTools;
 	/**
-	 * What this service is granted as a connector: which actors map to which people, which kinds fire which hook, which
+	 * What this service is granted as a connector: the one `owner` actor, which kinds fire which hook, which
 	 * state scopes it may mirror, which controls it may spend, whether its approval markers are trusted. Absent for an
 	 * integration that only lends tools.
 	 */

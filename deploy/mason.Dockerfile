@@ -81,6 +81,6 @@ ENV MASON_HOME=/home/mason/.mason
 USER mason
 
 STOPSIGNAL SIGTERM
-# The entrypoint prepares the home (key, host key, roster, provider credential) and then `exec`s the server, so node is
+# The entrypoint prepares the home (key, host key, provider credential) and then `exec`s the server, so node is
 # the process that receives this signal and the one that closes the database on the way out.
 ENTRYPOINT ["/app/deploy/mason-entrypoint.sh"]

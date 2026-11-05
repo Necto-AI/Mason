@@ -19,7 +19,7 @@ fi
 
 # The agent's half of the home exists here only because mason mounts it; the directory it mounts over is created by the
 # image (env.Dockerfile). Nothing of the server's half is created, mounted or readable in this container, which is the
-# boundary: a tool can read and write the agent's files, and cannot reach the soul, the roster, the credentials, the
+# boundary: a tool can read and write the agent's files, and cannot reach the soul, the credentials, the
 # database or the SSH key that opens this very machine.
 install -d -m 0700 /home/mason/.mason/agent
 

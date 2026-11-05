@@ -82,8 +82,8 @@ for (const entry of cutover.integrations) {
 }
 if (cutover.roster !== undefined) {
 	console.log(
-		`[doctor] deleted service/roster.json: it held ${cutover.roster.length === 0 ? "no names" : cutover.roster.join(", ")}` +
-			". Who this bot works for is agent/profile.md",
+		`[doctor] deleted roster.json: it held ${cutover.roster.length === 0 ? "no names" : cutover.roster.join(", ")}. ` +
+			"Who this bot works for is agent/profile.md",
 	);
 }
 const granted = await migrateTokenGrants(house.home);
