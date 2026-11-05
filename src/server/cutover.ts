@@ -42,7 +42,7 @@ export interface UserGrantCutover {
 /** What one run of the cutover came to. */
 export interface CutoverOutcome {
 	readonly integrations: readonly UserGrantCutover[];
-	/** The names `service/roster.json` held, when there was one to remove. */
+	/** The names `roster.json` held — in `service/` or at the home root — when there was one to remove. */
 	readonly roster: readonly string[] | undefined;
 }
 

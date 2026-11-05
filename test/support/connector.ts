@@ -195,7 +195,7 @@ export async function serveConnector(
 	};
 }
 
-/** The faces a full connector advertises: all three, with the actors and rooms the entry maps. */
+/** The faces a full connector advertises: all three, with the actor the entry owns and the room it carries. */
 export function fullFaces(overrides: Partial<FacesDeclaration> = {}): FacesDeclaration {
 	return {
 		user: {

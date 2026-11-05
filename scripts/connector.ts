@@ -5,7 +5,7 @@
  * else. The credential is minted here, printed once, and stored as a SHA-256 hash in `service/config.json` beside the
  * tokens — the file is read on every upgrade, so a revoke lands on the next connection rather than the next restart.
  *
- * The grant itself is not minted here: faces, actors, conversations, event kinds, state scopes and commands are the
+ * The grant itself is not minted here: faces, the owner actor, conversations, event kinds, state scopes and commands are the
  * operator's configuration in `service/integrations.json`, and a credential is only the proof that a process is the
  * connector that entry describes. `npm run integration -- list` shows what an entry grants.
  */

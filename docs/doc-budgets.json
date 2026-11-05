@@ -1,7 +1,7 @@
 {
 	"generated": ["docs/SURFACE.md"],
 	"ceilings": {
-		"AGENTS.md": 2750,
+		"AGENTS.md": 2600,
 		"GLOSSARY.md": 2550,
 		"docs/AGENTS.md": 950,
 		"docs/SIBLING-PLAN.md": 1700,

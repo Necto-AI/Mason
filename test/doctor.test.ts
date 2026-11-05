@@ -1,8 +1,8 @@
 /**
  * The single-user cutover (`cutover.ts`), as `npm run doctor -- migrate` runs it.
  *
- * Three pieces of configuration a room needed are no longer read: an actor map on a connector's user face, the
- * `unattributed` posture, a named `approver`, and `service/roster.json`. The migration is what moves a home forward, so
+ * Four pieces of configuration a room needed are no longer read: an actor map and an `unattributed` posture and a named
+ * `approver` on a connector's user face, and `roster.json`. The migration is what moves a home forward, so
  * what is pinned here is the shape of the move rather than the boot: one mapped actor becomes the one `owner`, several
  * are a refusal that names them, and the roster is printed before it is deleted rather than left as a file whose owner
  * believes it still decides who may speak.
