@@ -4,6 +4,9 @@
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import type { JsonValue } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { type ConversationId, defineDoc, type Harness } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { Connection, localDaemon, RemoteExecutionEnv, type SshTarget, sshConnection } from "@earendil-works/pi-env";
 
@@ -12,12 +15,66 @@ export interface RuntimeEnvManager {
 	close(): Promise<void>;
 }
 
+/**
+ * What an execution target says a conversation works on: the machine's kind and the directory inside it. `local` is
+ * the only kind this build runs; the field is stored as written, so a later kind needs no migration and nothing reads
+ * one this build does not run.
+ */
+export interface ExecutionTargetState {
+	[key: string]: JsonValue;
+	kind: string;
+	cwd: string;
+}
+
+/** The durable conversation document naming the machine a conversation resolves its environment on. */
+export const TargetDoc = defineDoc<ExecutionTargetState>({
+	kind: "app.target",
+	version: 1,
+	scope: "conversation",
+	history: "latest",
+	fork: "current",
+	// Written whole, never in deltas: a change is always a complete target.
+	checkpointWhen: () => true,
+	// Never read back as such: an empty cwd is the reserve value a fork copies when the source had resolved nothing
+	// yet, and `ExecutionTargets` treats it as absent and resolves the target again.
+	initial: () => ({ kind: "local", cwd: "" }),
+});
+
+/**
+ * The durable half of the target, served by the opened harness: the conversation's `app.target` document, read at
+ * every resolve and written once, on first use, so a restart does not forget which machine held the workspace.
+ */
+export interface ExecutionTargetDocChannel {
+	read(conversationId: string): Promise<ExecutionTargetState | undefined>;
+	write(conversationId: string, target: ExecutionTargetState): Promise<void>;
+}
+
+/** Builds the document channel over the opened harness, which owns the conversation storage the target lives in. */
+export function targetDocChannel(session: Harness): ExecutionTargetDocChannel {
+	// The manager's conversation ids are round-trips of a `ConversationId` (the harness's env callback stringifies
+	// them), so the channel restores the numeric brand at this one decode point.
+	const asId = (conversationId: string): ConversationId => Number(conversationId) as unknown as ConversationId;
+	return {
+		read: async (conversationId) =>
+			(await session.snapshot(TargetDoc, asId(conversationId), BACKGROUND_CONTEXT)) ?? undefined,
+		write: async (conversationId, target) => {
+			await session.commit(async (tx) => {
+				const doc = await tx.doc(TargetDoc, asId(conversationId));
+				doc.kind = target.kind;
+				doc.cwd = target.cwd;
+			}, BACKGROUND_CONTEXT);
+		},
+	};
+}
+
 export interface RuntimeEnvManagerOptions {
 	/** Default working directory when a conversation has no `cwd` of its own. */
 	workspaceDir: string;
 	/** When set, every tool call runs on this SSH target instead of locally. */
 	ssh?: SshTarget;
 	onLog?(text: string): void;
+	/** The `app.target` document channel; absent (a boot without it) targets resolve but are not persisted. */
+	targets?: ExecutionTargetDocChannel;
 }
 
 /**
@@ -89,42 +146,113 @@ export function sshTargetFromEnv(env: NodeJS.ProcessEnv = process.env): SshTarge
 	};
 }
 
+/** One conversation's resolved target: the machine it runs on (`ExecutionTargetState`) and the connection to it. */
+export interface ExecutionTarget {
+	readonly state: ExecutionTargetState;
+	readonly connection: Connection;
+}
+
+/** A target with no machine this build runs. A target written by a later build, read by this one, is that. */
+function unknownTargetKind(kind: string): Error {
+	return new Error(`execution target kind "${kind}" names no machine this build runs`);
+}
+
+/**
+ * The execution-target seam around the environment factory: one machine for the deployment, a conversation bound to
+ * it through its durable `app.target` document, and the connections it names held until shutdown.
+ *
+ * The memoization is twofold. `ensure()` gives one `ExecutionTarget` per conversation, so a second turn of the same
+ * conversation reuses both the document it read and the connection it resolved; `envFor()` keeps one
+ * `RemoteExecutionEnv` per conversation and working directory, as before, whichever machine the target named. The
+ * resources leave in `stop()`, at process shutdown.
+ */
+class ExecutionTargets implements ExecutionTargetManager {
+	readonly #options: RuntimeEnvManagerOptions;
+	readonly #environments = new Map<string, RemoteExecutionEnv>();
+	readonly #targets = new Map<string, ExecutionTarget>();
+	#connection: Connection | undefined;
+
+	constructor(options: RuntimeEnvManagerOptions) {
+		this.#options = options;
+	}
+
+	#connectionFor(): Connection {
+		if (this.#connection !== undefined) return this.#connection;
+		const onLog = this.#options.onLog;
+		this.#connection =
+			this.#options.ssh === undefined
+				? new Connection({
+						command: daemonCommand(localDaemon()),
+						...(onLog === undefined ? {} : { onLog }),
+					})
+				: sshConnection({ ...this.#options.ssh, ...(onLog === undefined ? {} : { onLog }) }).connection;
+		return this.#connection;
+	}
+
+	/** The stored target, or the fresh one written through the channel when the conversation had none. */
+	async #resolveState(conversationId: string, cwd?: string): Promise<ExecutionTargetState> {
+		const channel = this.#options.targets;
+		if (channel === undefined) return { kind: "local", cwd: cwd ?? this.#options.workspaceDir };
+		const stored = await channel.read(conversationId);
+		if (stored !== undefined && stored.cwd !== "") {
+			if (stored.kind !== "local") throw unknownTargetKind(stored.kind);
+			return stored;
+		}
+		const fresh: ExecutionTargetState = { kind: "local", cwd: cwd ?? this.#options.workspaceDir };
+		await channel.write(conversationId, fresh);
+		return fresh;
+	}
+
+	async ensure(conversationId: string, cwd?: string): Promise<ExecutionTarget> {
+		const state = await this.#resolveState(conversationId, cwd);
+		const held = this.#targets.get(conversationId);
+		if (held !== undefined && held.state.kind === state.kind && held.state.cwd === state.cwd) {
+			return held;
+		}
+		const target: ExecutionTarget = { state, connection: this.#connectionFor() };
+		this.#targets.set(conversationId, target);
+		return target;
+	}
+
+	async envFor(input: { conversationId: string; cwd?: string }) {
+		const target = await this.ensure(input.conversationId, input.cwd);
+		const key = `${input.conversationId}\u0000${target.state.cwd}`;
+		const existing = this.#environments.get(key);
+		if (existing !== undefined) return existing;
+		const id = this.#options.ssh === undefined ? "pi-env:local" : `pi-env:${this.#options.ssh.host}`;
+		const env = new RemoteExecutionEnv({ connection: target.connection, id, cwd: target.state.cwd });
+		this.#environments.set(key, env);
+		return env;
+	}
+
+	async stop() {
+		this.#environments.clear();
+		this.#targets.clear();
+		const current = this.#connection;
+		this.#connection = undefined;
+		current?.close();
+	}
+
+	async close() {
+		await this.stop();
+	}
+}
+
+export interface ExecutionTargetManager extends RuntimeEnvManager {
+	/**
+	 * Resolve one conversation to its target: its durable `app.target` document when the channel is wired (written on
+	 * first use, with the resolved working directory), and the machine connection it names.
+	 */
+	ensure(conversationId: string, cwd?: string): Promise<ExecutionTarget>;
+	/** Release the environments and connections held. */
+	stop(): Promise<void>;
+}
+
 /**
  * One `Connection` (the framed daemon protocol on a pipe) shared by every conversation, with one
  * `RemoteExecutionEnv` per conversation and working directory: the boundary a container or SSH target
  * would replace, exercised over the local daemon by default.
  */
-export function createRuntimeEnvManager(options: RuntimeEnvManagerOptions): RuntimeEnvManager {
-	const environments = new Map<string, RemoteExecutionEnv>();
-	let connection: Connection | undefined;
-
-	const connectionFor = (): Connection => {
-		if (connection !== undefined) return connection;
-		const onLog = options.onLog;
-		connection =
-			options.ssh === undefined
-				? new Connection({ command: daemonCommand(localDaemon()), ...(onLog === undefined ? {} : { onLog }) })
-				: sshConnection({ ...options.ssh, ...(onLog === undefined ? {} : { onLog }) }).connection;
-		return connection;
-	};
-
-	return {
-		async envFor(input) {
-			const cwd = input.cwd ?? options.workspaceDir;
-			const key = `${input.conversationId}\u0000${cwd}`;
-			const existing = environments.get(key);
-			if (existing !== undefined) return existing;
-			const shared = connectionFor();
-			const id = options.ssh === undefined ? "pi-env:local" : `pi-env:${options.ssh.host}`;
-			const env = new RemoteExecutionEnv({ connection: shared, id, cwd });
-			environments.set(key, env);
-			return env;
-		},
-		async close() {
-			environments.clear();
-			const current = connection;
-			connection = undefined;
-			current?.close();
-		},
-	};
+export function createRuntimeEnvManager(options: RuntimeEnvManagerOptions): ExecutionTargetManager {
+	return new ExecutionTargets(options);
 }
