@@ -33,7 +33,6 @@ import { installEnvHttpProxy } from "./http-proxy.ts";
 import { integrationSummaries } from "./integration-status.ts";
 import { currentIntegrations } from "./integrations.ts";
 import { createFireLimiter, type FireLimiter, readRawBodyCapped } from "./limits.ts";
-import { claimedPerson, readRoster } from "./roster.ts";
 import { RETRY_HOOK_ID, RunRetrySupervisor } from "./run-retry.ts";
 import { type AgentRuntime, type OpenAgentRuntimeOptions, openAgentRuntime } from "./runtime.ts";
 import { createCacheReporter, deriveAgentStatus } from "./status.ts";
@@ -224,13 +223,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 				"The panel is /admin; the server log names the tokens and their grants.",
 		);
 	}
-	// A roster nobody filled in is the team feature nobody can use: the shell sends a paired browser to a picker with no
-	// names on it, and this line is what tells the deployer why, and what to type.
-	if ((await readRoster(house)).people.length === 0) {
-		console.warn(
-			`[team] the roster is empty: add the first person with: npm run team -- add "Ilya" (a removal is live)`,
-		);
-	}
 	if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
 		console.log(`[auth] ${hostname} is not loopback: the token crosses the network in clear text until TLS lands`);
 	}
@@ -298,7 +290,6 @@ async function handleRequest(
 	// shell is public on purpose: it is a bundle with no secrets in it, and the page is where a reader is told that this
 	// browser is not paired.
 	let device: TokenRecord | undefined;
-	let claimed: string | undefined;
 	if (url.pathname.startsWith("/api/") && url.pathname !== "/api/health") {
 		const auth = await authenticate(request, store);
 		if (!auth.ok) {
@@ -311,17 +302,6 @@ async function handleRequest(
 			return;
 		}
 		device = auth.token;
-		claimed = auth.person;
-	}
-
-	// A name is a place in the room, not a permanent badge: removing a person from the roster ends their access on the
-	// next request, while their cookie — signed, and still valid — waits for them to be added back.
-	const person = await claimedPerson(house, claimed);
-	if (claimed !== undefined && person === undefined) {
-		console.warn(`[auth] refused ${url.pathname} for ${claimed}: not on the roster`);
-		response.writeHead(401, { "content-type": "application/json; charset=utf-8" });
-		response.end(JSON.stringify({ error: "not on the roster" }));
-		return;
 	}
 
 	// Who this device is, and what it may do in the panel. Behind the gate above, and the only route the panel calls
@@ -330,11 +310,7 @@ async function handleRequest(
 	if (url.pathname === "/api/session") {
 		return json(response, 200, {
 			device: { id: device?.id, label: device?.label },
-			...(person === undefined ? {} : { person: { name: person.name } }),
 			grants: device === undefined ? [] : grantsOf(device),
-			// The join screen is gone with the console, but a cookie signed before today still names a person, and a
-			// device that has none is told so rather than shown an empty name.
-			joined: person !== undefined,
 		});
 	}
 
@@ -353,7 +329,6 @@ async function handleRequest(
 			house,
 			store,
 			device,
-			...(person === undefined ? {} : { person: person.name }),
 		});
 		if (!handled) notFound(response);
 		return;

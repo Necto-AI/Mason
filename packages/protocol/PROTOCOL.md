@@ -69,7 +69,8 @@ Rules that make the handshake a ceiling rather than a wish:
 3. **The control vocabulary is part of the answer.** `commands` is what the operator granted on `mason/control`: absent
    is none, and a word outside it is `mason.invalid_request` — which is how a connector tells a missing permission from a
    typo without spending a call to find out.
-4. **A granted face is narrowed to what the operator configured.** `faces.user.actors` is the mapping mason will accept,
+4. **A granted face is narrowed to what the operator configured.** `faces.user.actors` comes back holding the one
+   advertised actor whose id the entry names as its owner — or empty, when the connector advertised no such id — and
    `faces.events.hooks` is the `kind`→hook map that will fire. Both may be shorter than what the connector advertised.
 5. **Capabilities are negotiated separately from grants.** They say what content this connector can render. A grant says
    what it may do. A connector may be granted `user` and still receive no files, because it never claimed `files`.
@@ -100,10 +101,11 @@ The result is a durable claim, and `submissionId` is the identity mason deduplic
 
 - A resend of a claimed `submissionId` answers `{"accepted":true,"id":"tg-8811-42","duplicate":true}` and creates no
   second operation. The connector may retry freely until it has an answer; it may not invent a new id for the same act.
-- `actor` is mapped to a roster name. An actor mason does not know is refused (`mason.actor_unknown`) unless the entry
-  explicitly permits unattributed participants, in which case the words are attributed to nobody.
+- `actor` must be the one actor the entry names as its owner. Any other is refused (`mason.actor_unknown`), and so is
+  any actor when the entry names no owner. A submission with **no** actor is accepted: it is a message nobody signed.
 - `origin.externalConversationId` must be in the granted list (`mason.conversation_not_permitted` otherwise).
-- `approver` is a **claim**, not a grant. Mason drops a claim the roster does not back.
+- `approver` is accepted for compatibility and has no effect. Approval authority is the connector's owner actor, and the
+  operator's `approve` grant on a device; there is no per-actor approver to claim.
 - Content is typed blocks. A `file` block names a `contentId` obtained from the transfer endpoint; never a path, never
   base64.
 
@@ -300,7 +302,7 @@ A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence,
 | `mason.protocol_mismatch` | no | the majors differ |
 | `mason.face_not_granted` | no | a call uses a face the entry does not grant |
 | `mason.scope_not_granted` | no | a state scope the entry does not grant |
-| `mason.actor_unknown` | no | an actor mason does not map to a roster name |
+| `mason.actor_unknown` | no | an actor that is not the entry's owner, or any actor when it names none |
 | `mason.conversation_not_permitted` | no | an origin outside the granted list |
 | `mason.kind_not_permitted` | no | a fire `kind` the entry does not map |
 | `mason.rate_limited` | yes, after `retryAfterMs` | the class budget is spent |

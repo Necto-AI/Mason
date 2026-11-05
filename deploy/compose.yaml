@@ -148,9 +148,6 @@ services:
       MASON_ENV_ALIAS: ${MASON_ENV_ALIAS:-pi-env-mason-env}
       # How long the entrypoint waits for the env host before giving up: attempts × (5 s keyscan + 2 s sleep).
       MASON_ENV_WAIT_ATTEMPTS: ${MASON_ENV_WAIT_ATTEMPTS:-30}
-      # Who is in the room, comma-separated, used only when the home has no roster yet: seeding runs the repo's own
-      # `npm run team -- add`, so the CLI is the only thing that ever writes a name.
-      TEAM: ${TEAM:-}
       # The dated memory log is `agent/log/YYYY-MM-DD.md` in the server's local time, so the container's zone is the reader's.
       TZ: ${TZ:-UTC}
       # Model egress through the proxy sidecar, empty by default: a host that reaches its provider directly needs none of

@@ -9,12 +9,11 @@
  *    trace never implies writing anything: the keys an ungranted device does not have are absent from the response,
  *    not filtered by the browser.
  * 2. **An answer still goes through the gateway.** Nothing here decides a tool call. The approvals route answers a
- *    question the gateway asked (`permissions.ts`), with the same first-answer-wins rule, and records the person the
- *    device speaks for — or `owner`, because the credential is the identity when a browser never joined as a name.
+ *    question the gateway asked (`permissions.ts`), with the same first-answer-wins rule, and records `owner` as the
+ *    answerer: the credential is the identity, because there is no name to join as.
  *
  * The file writes are the commands' writers, not a second implementation: `writeIntegration`, `removeIntegration`,
- * `mintConnectorCredential`, `mintToken` and `addPerson` are what `npm run integration`, `connector`, `token` and
- * `team` already call. `/api/*` is the owner's per request (`auth.ts`), so an edit is live where the file is read per
+ * `mintConnectorCredential` and `mintToken` are what `npm run integration`, `connector` and `token` already call. `/api/*` is the owner's per request (`auth.ts`), so an edit is live where the file is read per
  * request and "restart to apply" where the boot froze it: `integrations.json` is the boot's, and the state says so
  * with `restartRequired` rather than pretending a saved change is a running one.
  */
@@ -28,7 +27,6 @@ import type {
 	PanelConnector,
 	PanelHealth,
 	PanelPermission,
-	PanelPerson,
 	PanelState,
 	PanelToken,
 } from "../shared/admin.ts";
@@ -51,7 +49,6 @@ import {
 } from "./integrations.ts";
 import { JSON_BODY_MAX_BYTES, parseJsonObject, readBodyCapped } from "./limits.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
-import { addPerson, readRoster, removePerson } from "./roster.ts";
 import { RETRY_HOOK_ID, retryOrigin } from "./run-retry.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveAgentStatus } from "./status.ts";
@@ -72,8 +69,6 @@ export interface OperatorDeps {
 	readonly store: TokenStore;
 	/** The credential the request presented. Grants are read from it per request, so a narrowing lands immediately. */
 	readonly device: TokenRecord;
-	/** The roster name the browser joined as, when it did. The approval answer is recorded under it. */
-	readonly person?: string;
 }
 
 /** The request methods the panel uses. `PUT` for a connector (the whole editable surface) and `PATCH` for one field set. */
@@ -204,32 +199,6 @@ async function handleAdmin(
 		throw new PanelError(405, "PATCH a token's grants or DELETE it");
 	}
 
-	if (area === "roster") {
-		requireGrant(grants, "admin");
-		if (name === undefined && method === "POST") {
-			const body = await bodyOf(request);
-			if (typeof body.name !== "string") throw new PanelError(400, 'the body is {"name":"Ilya"}');
-			const added = await addPerson(deps.house, body.name);
-			if (!added.ok) {
-				throw new PanelError(
-					added.reason === "duplicate" ? 409 : 400,
-					added.reason === "duplicate"
-						? `${body.name} is already on the roster`
-						: `${body.name} is not a name the roster can carry`,
-				);
-			}
-			json(response, 200, { name: added.person.name, addedAt: added.person.addedAt });
-			return;
-		}
-		if (name === undefined) throw new PanelError(405, "POST a name to add a person");
-		if (method === "DELETE") {
-			if (!(await removePerson(deps.house, name))) throw new PanelError(404, `${name} is not on the roster`);
-			json(response, 200, { removed: name });
-			return;
-		}
-		throw new PanelError(405, "DELETE a person to remove them");
-	}
-
 	if (area === "hooks" && name !== undefined) {
 		requireGrant(grants, "admin");
 		if (action === "fire" && method === "POST") {
@@ -269,7 +238,6 @@ async function panelState(deps: OperatorDeps, grants: readonly OperatorGrant[]):
 	const view = await deps.runtime.viewSnapshot(BACKGROUND_CONTEXT);
 	const session = {
 		device: { id: deps.device.id, label: deps.device.label },
-		...(deps.person === undefined ? {} : { person: deps.person }),
 		grants,
 	};
 	return {
@@ -299,13 +267,11 @@ async function panelState(deps: OperatorDeps, grants: readonly OperatorGrant[]):
 async function panelConfig(deps: OperatorDeps): Promise<NonNullable<PanelState["config"]>> {
 	const file = (await readIntegrations(deps.house)).integrations;
 	const booted = currentIntegrations();
-	const roster = await readRoster(deps.house);
 	return {
 		connectors: Object.keys(file)
 			.sort()
 			.map((name) => connectorWire(name, file[name])),
 		health: integrationSummaries(booted) as PanelHealth[],
-		roster: roster.people.map((person): PanelPerson => ({ name: person.name, addedAt: person.addedAt })),
 		tokens: (await deps.store.records()).map(tokenWire),
 		credentials: (await listConnectorCredentials(deps.house.home)).map((record) => ({
 			id: record.id,
@@ -355,11 +321,9 @@ function grantWire(grant: ConnectorGrant): NonNullable<PanelConnector["connector
 			? {}
 			: {
 					user: {
-						actors: grant.user.actors,
+						...(grant.user.owner === undefined ? {} : { owner: grant.user.owner }),
 						conversations: grant.user.conversations,
 						...(grant.user.capabilities === undefined ? {} : { capabilities: grant.user.capabilities }),
-						unattributed: grant.user.unattributed,
-						...(grant.user.approver === undefined ? {} : { approver: grant.user.approver }),
 					},
 				}),
 		...(grant.events === undefined ? {} : { events: { hooks: grant.events.hooks } }),
@@ -436,15 +400,25 @@ function grantFromInput(input: ConnectorGrantInput, existing: ConnectorGrant | u
 		if (input.user === null) {
 			delete next.user;
 		} else {
+			// A client that still sends the room's keys is told so rather than quietly losing them: a merge that dropped
+			// `actors` would answer 200 to an edit that did nothing.
+			const retired = ["actors", "unattributed", "approver"].filter(
+				(key) => (input.user as Record<string, unknown>)[key] !== undefined,
+			);
+			if (retired.length > 0) {
+				throw new PanelError(
+					400,
+					`"connector.user.${retired[0]}" is not a field any more: one bot works for one person, so the user face ` +
+						'names one "owner" actor. A home that still carries it is rewritten by `npm run doctor -- migrate`',
+				);
+			}
 			const user = { ...((previous.user ?? {}) as Record<string, unknown>) };
 			const patch = input.user;
-			if (patch.actors !== undefined) user.actors = patch.actors;
 			if (patch.conversations !== undefined) user.conversations = patch.conversations;
-			if (patch.unattributed !== undefined) user.unattributed = patch.unattributed;
 			if (patch.capabilities === null) delete user.capabilities;
 			else if (patch.capabilities !== undefined) user.capabilities = patch.capabilities;
-			if (patch.approver === null) delete user.approver;
-			else if (patch.approver !== undefined) user.approver = patch.approver;
+			if (patch.owner === null) delete user.owner;
+			else if (patch.owner !== undefined) user.owner = patch.owner;
 			next.user = user;
 		}
 	}
@@ -574,9 +548,9 @@ async function handlePermissions(
 	}
 	const found = await deps.runtime.permissions.find(permissionId);
 	if (found.request === undefined) throw new PanelError(404, "no such request");
-	// The credential is the identity: a device that joined as a name is recorded under it, and one that never joined
-	// answers as `owner`. The gateway, not this route, decides whether the answer is in time.
-	const settled = await deps.runtime.permissions.answer(permissionId, body.answer, deps.person ?? "owner");
+	// The credential is the identity: a device answers as `owner`, because there is no name to answer as. The gateway,
+	// not this route, decides whether the answer is in time.
+	const settled = await deps.runtime.permissions.answer(permissionId, body.answer, "owner");
 	json(response, settled.settled ? 200 : 409, settled);
 }
 
@@ -588,7 +562,6 @@ async function pendingPermissions(runtime: AgentRuntime): Promise<PanelPermissio
 		arguments: request.arguments ?? null,
 		reason: request.reason,
 		answers: request.answers,
-		approver: request.approver ?? null,
 		origin: request.origin ?? null,
 		askedAt: request.askedAt === 0 ? null : new Date(request.askedAt).toISOString(),
 	}));

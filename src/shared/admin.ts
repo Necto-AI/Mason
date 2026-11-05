@@ -57,12 +57,6 @@ export interface PanelCredential {
 	readonly createdAt: string;
 }
 
-/** One person on the roster: the name the agent attributes words to. */
-export interface PanelPerson {
-	readonly name: string;
-	readonly addedAt: string;
-}
-
 /** A room a connector's user face may carry words in (`mason-protocol`'s `ExternalConversation`). */
 export interface PanelConversationGrant {
 	readonly externalConversationId: string;
@@ -72,14 +66,11 @@ export interface PanelConversationGrant {
 
 /** The user face's grant, as the connector page edits it. */
 export interface PanelUserGrant {
-	/** External actor id → roster name. This mapping is the whole of who a connector's actors are. */
-	readonly actors: Readonly<Record<string, string>>;
+	/** The external actor id that speaks for the person this bot works for. Absent: no actor may speak through it. */
+	readonly owner?: string;
 	readonly conversations: readonly PanelConversationGrant[];
 	/** The content the connector may claim it renders, when the operator narrowed it. */
 	readonly capabilities?: readonly string[];
-	readonly unattributed: boolean;
-	/** The roster name that may answer this connector's permission requests, when one was chosen. */
-	readonly approver?: string;
 }
 
 /** The operator's ask/allow/deny rules for a connector's tools. `deny` beats `ask` beats `allow`. */
@@ -107,13 +98,11 @@ export interface PanelConnectorGrant {
  */
 export interface ConnectorGrantInput {
 	readonly user?: {
-		readonly actors?: Readonly<Record<string, string>>;
+		/** The one actor whose words are the owner's. `null` clears it, and every actor submission is then refused. */
+		readonly owner?: string | null;
 		readonly conversations?: readonly PanelConversationGrant[];
 		/** `null` puts the connector's own claim back in charge. */
 		readonly capabilities?: readonly string[] | null;
-		readonly unattributed?: boolean;
-		/** `null` clears the approver: no one at this connector may answer a question through it. */
-		readonly approver?: string | null;
 	} | null;
 	readonly events?: { readonly hooks?: Readonly<Record<string, string>> } | null;
 	readonly state?: readonly string[];
@@ -157,7 +146,6 @@ export interface PanelPermission {
 	readonly arguments: unknown;
 	readonly reason: string;
 	readonly answers: readonly ("allow" | "deny")[];
-	readonly approver: string | null;
 	readonly origin: unknown;
 	readonly askedAt: string | null;
 }
@@ -192,7 +180,6 @@ export interface PanelState {
 	readonly now: string;
 	readonly session: {
 		readonly device: { readonly id: string; readonly label: string };
-		readonly person?: string;
 		readonly grants: readonly OperatorGrant[];
 	};
 	readonly conversation?: {
@@ -205,7 +192,6 @@ export interface PanelState {
 	readonly config?: {
 		readonly connectors: readonly PanelConnector[];
 		readonly health: readonly PanelHealth[];
-		readonly roster: readonly PanelPerson[];
 		readonly tokens: readonly PanelToken[];
 		readonly credentials: readonly PanelCredential[];
 		readonly hooks: readonly HookSummary[];

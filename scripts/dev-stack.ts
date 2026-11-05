@@ -14,8 +14,6 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, resolve } from "node:path";
-import { housePaths } from "../src/server/house.ts";
-import { addPerson, readRoster } from "../src/server/roster.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const stateDir = resolve(root, ".dev");
@@ -27,9 +25,6 @@ const option = (name: string, fallback: string): string => {
 };
 
 const port = option("--port", "8787");
-const names = args.flatMap((arg, index) =>
-	arg === "--add" && args[index + 1] !== undefined ? [args[index + 1] as string] : [],
-);
 /** `--fake` plays the model offline: the whole path plus the screens, at no token cost. Real is the default. */
 const fake = flag("--fake");
 /** `--no-env-ssh` runs tools through the local daemon instead, for a machine where sshd is not available. */
@@ -127,19 +122,6 @@ if (!localEnv) {
 	const scanned = await waitForScan(sshPort);
 	await writeFile(knownHosts, scanned, { mode: 0o600 });
 	envUrl = `ssh://${process.env.USER ?? "agent"}@127.0.0.1:${sshPort}`;
-}
-
-// The roster: seeds only what was asked for, because a name nobody chose is worse than an empty picker.
-const existing = await readRoster(housePaths(home));
-for (const name of names) {
-	const added = await addPerson(housePaths(home), name);
-	// A second start with the same `--add` is the normal case; saying nothing is the right answer to it.
-	if (added.ok) console.log(`[dev] added ${added.person.name}`);
-	else if (added.reason === "invalid") console.error(`[dev] "${name}" is not a name the roster can carry: skipped`);
-}
-if (existing.people.length === 0 && names.length === 0) {
-	console.log(`[dev] the roster is empty: the picker will say so. Add people with --add "Ilya", or later with`);
-	console.log(`[dev]   MASON_HOME=${home} npm run team -- add "Ilya"`);
 }
 
 const server = spawn(process.execPath, ["--experimental-strip-types", resolve(root, "src/server/main.ts")], {

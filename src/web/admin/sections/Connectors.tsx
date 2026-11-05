@@ -1,11 +1,11 @@
 /**
  * Connectors: the entries, their grants, their policies and their credentials.
  *
- * An integration's `connector` block is a ceiling, never a wish (`src/server/connectors.ts`): the actors it maps, the
- * rooms it may speak in, the event kinds it may fire, the state it may mirror, the tools it may run without asking and
- * the one person allowed to answer its questions. This page edits that ceiling. Nothing here decides a tool call — the
- * gateway does, from this file — so the policy lists are the operator's rules spelled as the server reads them, and the
- * page says which way they tighten: `deny` beats `ask` beats `allow`, and no marker widens a rule.
+ * An integration's `connector` block is a ceiling, never a wish (`src/server/connectors.ts`): the one actor that speaks
+ * for the owner, the rooms it may speak in, the event kinds it may fire, the state it may mirror and the tools it may run
+ * without asking. This page edits that ceiling. Nothing here decides a tool call — the gateway does, from this file — so
+ * the policy lists are the operator's rules spelled as the server reads them, and the page says which way they tighten:
+ * `deny` beats `ask` beats `allow`, and no marker widens a rule.
  *
  * `integrations.json` is read once at boot, so every save here says "restart to apply". The credentials are the
  * exception: they are read per upgrade, and a revoke lands on the next connection.
@@ -34,12 +34,6 @@ function rowKey(): string {
 	return `row-${nextRow}`;
 }
 
-interface ActorRow {
-	readonly key: string;
-	readonly id: string;
-	readonly person: string;
-}
-
 interface ConversationRow {
 	readonly key: string;
 	readonly externalConversationId: string;
@@ -62,10 +56,8 @@ interface Draft {
 	readonly commands: readonly string[];
 	readonly hasConnector: boolean;
 	readonly user: null | {
-		readonly actors: readonly ActorRow[];
+		readonly owner: string;
 		readonly conversations: readonly ConversationRow[];
-		readonly unattributed: boolean;
-		readonly approver: string;
 	};
 	readonly events: null | { readonly hooks: readonly HookRow[] };
 	readonly state: readonly string[];
@@ -87,15 +79,13 @@ function draftOf(connector: PanelConnector): Draft {
 			grant?.user === undefined
 				? null
 				: {
-						actors: Object.entries(grant.user.actors).map(([id, person]) => ({ key: rowKey(), id, person })),
+						owner: grant.user.owner ?? "",
 						conversations: (grant.user.conversations ?? []).map((room) => ({
 							key: rowKey(),
 							externalConversationId: room.externalConversationId,
 							kind: room.kind,
 							title: room.title ?? "",
 						})),
-						unattributed: grant.user.unattributed,
-						approver: grant.user.approver ?? "",
 					},
 		events:
 			grant?.events === undefined
@@ -138,11 +128,7 @@ function patchOf(draft: Draft): ConnectorPatch {
 						draft.user === null
 							? null
 							: {
-									actors: Object.fromEntries(
-										draft.user.actors
-											.filter((row) => row.id.trim() !== "")
-											.map((row) => [row.id.trim(), row.person.trim()]),
-									),
+									owner: draft.user.owner.trim() === "" ? null : draft.user.owner.trim(),
 									conversations: draft.user.conversations
 										.filter((room) => room.externalConversationId.trim() !== "")
 										.map((room) => ({
@@ -150,8 +136,6 @@ function patchOf(draft: Draft): ConnectorPatch {
 											kind: room.kind,
 											...(room.title.trim() === "" ? {} : { title: room.title.trim() }),
 										})),
-									unattributed: draft.user.unattributed,
-									approver: draft.user.approver === "" ? null : draft.user.approver,
 								},
 					events:
 						draft.events === null
@@ -329,9 +313,7 @@ function ConnectorCard({
 						<button
 							type="button"
 							className="button ghost"
-							onClick={() =>
-								update({ user: { actors: [], conversations: [], unattributed: false, approver: "" } })
-							}
+							onClick={() => update({ user: { owner: "", conversations: [] } })}
 						>
 							Add a user face
 						</button>
@@ -343,106 +325,20 @@ function ConnectorCard({
 									Remove the user face
 								</button>
 							</header>
-							<h5>Actors</h5>
-							<p className="hint">
-								External actor id to roster name. A name here is attribution, never approval authority — that is
-								the approver below.
-							</p>
-							{draft.user.actors.map((row, index) => (
-								<div className="row-pair" key={row.key}>
-									<input
-										value={row.id}
-										placeholder="external id"
-										className="mono"
-										onChange={(event) => {
-											const actors = draft.user?.actors.map((entry, at) =>
-												at === index ? { ...entry, id: event.currentTarget.value } : entry,
-											);
-											if (actors !== undefined && draft.user !== null)
-												update({ user: { ...draft.user, actors } });
-										}}
-									/>
-									<select
-										value={row.person}
-										onChange={(event) => {
-											const actors = draft.user?.actors.map((entry, at) =>
-												at === index ? { ...entry, person: event.currentTarget.value } : entry,
-											);
-											if (actors !== undefined && draft.user !== null)
-												update({ user: { ...draft.user, actors } });
-										}}
-									>
-										<option value="">— pick a person —</option>
-										{config.roster.map((person) => (
-											<option key={person.name} value={person.name}>
-												{person.name}
-											</option>
-										))}
-									</select>
-									<button
-										type="button"
-										className="button ghost"
-										onClick={() =>
-											draft.user === null
-												? undefined
-												: update({
-														user: {
-															...draft.user,
-															actors: draft.user.actors.filter((_, at) => at !== index),
-														},
-													})
-										}
-									>
-										remove
-									</button>
-								</div>
-							))}
-							<button
-								type="button"
-								className="button ghost"
-								onClick={() =>
-									draft.user === null
-										? undefined
-										: update({
-												user: {
-													...draft.user,
-													actors: [...draft.user.actors, { key: rowKey(), id: "", person: "" }],
-												},
-											})
-								}
-							>
-								Add an actor
-							</button>
-							<div className="check-row">
-								<Checkbox
-									checked={draft.user.unattributed}
-									label="allow an unmapped actor, attributed to nobody"
-									onChange={(next) =>
-										draft.user === null ? undefined : update({ user: { ...draft.user, unattributed: next } })
-									}
-								/>
-							</div>
 							<Field
-								label="approver"
-								hint="The actor that may answer this connector's permission questions. None: only the panel can."
+								label="owner"
+								hint="The external actor id whose words are yours. Every other actor is refused; none means this face carries only unattributed notices, and nobody may answer through it."
 							>
-								<select
-									value={draft.user.approver}
+								<input
+									value={draft.user.owner}
+									placeholder="external actor id"
+									className="mono"
 									onChange={(event) =>
 										draft.user === null
 											? undefined
-											: update({ user: { ...draft.user, approver: event.currentTarget.value } })
+											: update({ user: { ...draft.user, owner: event.currentTarget.value } })
 									}
-								>
-									<option value="">— none —</option>
-									{draft.user.actors
-										.filter((row) => row.id.trim() !== "")
-										.map((row) => (
-											<option key={row.id} value={row.id}>
-												{row.id} ({row.person || "unmapped"})
-											</option>
-										))}
-								</select>
+								/>
 							</Field>
 							<h5>Rooms</h5>
 							<p className="hint">An external conversation this face may carry words in. Absent: none.</p>

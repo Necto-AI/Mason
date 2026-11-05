@@ -44,16 +44,11 @@ export async function temporaryDirectory(): Promise<string> {
 
 export const TELEGRAM_SECRET = "0f".repeat(32);
 
-/** The roster: two people, one of whom the connector maps. */
-export const ROSTER = { people: [{ name: "Denis", addedAt: "2026-11-01T00:00:00.000Z" }] };
-
 /**
  * One connector with all three faces, and one entry with only tools, so a test can prove a face the operator did not
  * grant is named `inactive` rather than silently missing.
  */
-export function integrationsFile(
-	options: { readonly unattributed?: boolean; readonly second?: boolean } = {},
-): unknown {
+export function integrationsFile(options: { readonly noOwner?: boolean; readonly second?: boolean } = {}): unknown {
 	return {
 		integrations: {
 			telegram: {
@@ -64,7 +59,9 @@ export function integrationsFile(
 					// The controls this socket may spend: the protocol's whole closed set, granted by the operator.
 					commands: ["stop", "compact", "clear", "status"],
 					user: {
-						actors: { "8811": "Denis" },
+						// The one actor whose words are the owner's. `noOwner` is the case the refusal is about: a face
+						// with no id to admit, which still connects and still accepts an actorless submission.
+						...(options.noOwner === true ? {} : { owner: "8811" }),
 						conversations: [
 							{ externalConversationId: "-1001234", kind: "room", title: "team" },
 							{ externalConversationId: "8811", kind: "person" },
@@ -72,10 +69,6 @@ export function integrationsFile(
 						// The operator's ceiling on what this connector may claim it renders, and the one narrowing the
 						// handshake applies to the connector's own list.
 						capabilities: ["text", "markdown", "files", "approvals", "streaming"],
-						// Who answers this connector's permission requests: the person its mapped actor speaks for, so a
-						// question goes back to the surface it came from. The ceiling is the operator's, not the medium's.
-						approver: "Denis",
-						...(options.unattributed === true ? { unattributed: true } : {}),
 					},
 					events: { hooks: { "chat.message": "team-chat" } },
 					state: ["status", "presence", "projection"],
@@ -89,7 +82,7 @@ export function integrationsFile(
 							enabled: true,
 							connector: {
 								user: {
-									actors: { "777": "Denis" },
+									owner: "777",
 									conversations: [{ externalConversationId: "777", kind: "person" }],
 								},
 								state: ["status"],
@@ -106,10 +99,8 @@ export function integrationsFile(
 	};
 }
 
-/** A home laid out for a connector: roster, integrations and a minted credential. */
-export async function connectorHome(
-	options: { readonly unattributed?: boolean; readonly second?: boolean } = {},
-): Promise<{
+/** A home laid out for a connector: its integrations and a minted credential. */
+export async function connectorHome(options: { readonly noOwner?: boolean; readonly second?: boolean } = {}): Promise<{
 	readonly paths: HousePaths;
 	readonly directory: string;
 	readonly credential: string;
@@ -119,7 +110,6 @@ export async function connectorHome(
 	const directory = await temporaryDirectory();
 	const paths = housePaths(join(directory, "house"));
 	await mkdir(paths.serviceDir, { recursive: true, mode: 0o700 });
-	await writeFile(paths.roster, JSON.stringify(ROSTER), { mode: 0o600 });
 	await writeFile(paths.integrations, JSON.stringify(integrationsFile(options)), { mode: 0o600 });
 	const { credential } = await mintConnectorCredential(paths.home, "telegram");
 	if (options.second !== true) return { paths, directory, credential };

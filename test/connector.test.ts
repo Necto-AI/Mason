@@ -54,17 +54,17 @@ describe("a connector's words", () => {
 				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
 				assert.equal(submitted.length, 1);
 				// The origin is the durable record the reply is routed from: a restart cannot lose where the words came from.
+				// Nothing else is in it: the actor was admitted, so there is no name to write down or to prefix the words with.
 				assert.deepEqual(submitted[0]?.data, {
 					origin: {
 						connector: "telegram",
 						externalConversationId: "-1001234",
 						externalMessageId: "m1",
 					},
-					person: "Denis",
 				});
-				// The name on the message is the server's claim: the roster mapping decided it, not the display name.
 				const text = JSON.stringify(submitted[0]?.model);
-				assert.match(text, /\[from Denis\] what is on my calendar/);
+				assert.match(text, /what is on my calendar/);
+				assert.doesNotMatch(text, /\[from /, "one person's words carry no author label");
 				// The reply is an entry of its own, addressed at the origin.
 				const reply = await entries(served, REPLY_ENTRY_KIND);
 				assert.deepEqual(reply[0]?.data, {
@@ -117,7 +117,7 @@ describe("a connector's words", () => {
 		}
 	});
 
-	it("are refused for an actor the entry does not map and for a room it does not permit", async () => {
+	it("are refused for an actor that is not the owner and for a room the entry does not permit", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
@@ -138,13 +138,13 @@ describe("a connector's words", () => {
 				assert.equal(room.status, "refused");
 				assert.equal(room.status === "refused" ? room.error.code : undefined, "mason.conversation_not_permitted");
 
+				// An absent actor is not a refusal: a face with an `owner` still carries what nobody signed.
 				const noActor = await connected.connector.submit({
 					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					content: [{ type: "text", text: "who said this" }],
+					content: [{ type: "text", text: "a notice nobody signed" }],
 				});
-				assert.equal(noActor.status, "refused");
-				assert.equal(noActor.status === "refused" ? noActor.error.code : undefined, "mason.actor_unknown");
-				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "a refusal writes nothing");
+				assert.equal(noActor.status, "accepted");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 1, "the refusals wrote nothing");
 			} finally {
 				await connected.close();
 			}
@@ -153,11 +153,24 @@ describe("a connector's words", () => {
 		}
 	});
 
-	it("may be attributed to nobody when the entry says so, and carry no name at all", async () => {
-		const served = await serveConnector({ home: await connectorHome({ unattributed: true }) });
+	it("admit an actorless submission, and refuse every actor when the entry names no owner", async () => {
+		const served = await serveConnector({ home: await connectorHome({ noOwner: true }) });
 		try {
 			const connected = await connectConnector(served);
 			try {
+				// The handshake still answers a user face, and its actor list is empty: the connector advertised 8811 and the
+				// entry has no id to admit, so there is nobody to name.
+				const session = connected.connector.status().session;
+				assert.deepEqual(session?.faces.user?.actors, []);
+				const named = await connected.connector.submit({
+					origin: { connector: "telegram", externalConversationId: "-1001234" },
+					actor: { externalActorId: "8811", displayName: "Denis" },
+					content: [{ type: "text", text: "let me in" }],
+				});
+				assert.equal(named.status, "refused");
+				assert.equal(named.status === "refused" ? named.error.code : undefined, "mason.actor_unknown");
+
+				// No actor is not a stranger: it is a notice, and it is accepted with nothing attributed to it.
 				const outcome = await connected.connector.submit({
 					origin: { connector: "telegram", externalConversationId: "-1001234" },
 					content: [{ type: "text", text: "from a guest" }],
@@ -327,6 +340,34 @@ describe("the handshake", () => {
 				// widgets. The answer is what is in both, which is how a medium that cannot render a widget is never sent
 				// one and a connector is never sent a file it did not claim it can hold.
 				assert.deepEqual(connected.connector.status().session?.capabilities, ["text", "markdown"]);
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
+	it("answers the one actor the entry owns, as the connector advertised it", async () => {
+		const served = await serveConnector();
+		try {
+			// Two advertised actors and one owner: the answer keeps the advertised record — id and display name — and
+			// drops the actor nobody granted, so a connector can tell an owned medium from an owned-and-shared one.
+			const connected = await connectConnector(served, {
+				faces: fullFaces({
+					user: {
+						actors: [
+							{ externalActorId: "9999", displayName: "Somebody" },
+							{ externalActorId: "8811", displayName: "Denis" },
+						],
+						conversations: [{ externalConversationId: "-1001234", kind: "room" }],
+					},
+				}),
+			});
+			try {
+				assert.deepEqual(connected.connector.status().session?.faces.user?.actors, [
+					{ externalActorId: "8811", displayName: "Denis" },
+				]);
 			} finally {
 				await connected.close();
 			}

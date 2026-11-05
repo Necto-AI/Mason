@@ -49,9 +49,7 @@ function argument(name: string): string | undefined {
 const configPath = argument("--config");
 const scriptPath = argument("--script");
 if (configPath === undefined || scriptPath === undefined) {
-	console.error(
-		"usage: e2e-mason.ts --config <integrations.json> --script <turns.json> [--home <dir>] [--roster <names,comma>]",
-	);
+	console.error("usage: e2e-mason.ts --config <integrations.json> --script <turns.json> [--home <dir>]");
 	process.exit(1);
 }
 
@@ -81,13 +79,6 @@ const integrations = JSON.parse(await readFile(configPath, "utf8")) as {
 	integrations: Record<string, { connector?: unknown }>;
 };
 await writeFile(paths.integrations, JSON.stringify(integrations), { mode: 0o600 });
-
-const names = (argument("--roster") ?? "Denis").split(",").map((name) => name.trim());
-await writeFile(
-	paths.roster,
-	JSON.stringify({ people: names.map((name) => ({ name, addedAt: "2026-11-01T00:00:00.000Z" })) }),
-	{ mode: 0o600, flag: "w" },
-);
 
 const turns = JSON.parse(await readFile(scriptPath, "utf8")) as Turn[];
 const dataDir = join(runDir, "data");

@@ -18,8 +18,8 @@ export function Overview({ state }: { readonly state: PanelState }) {
 				<Card title="Restart to apply" className="warn-card">
 					<p>
 						<code>integrations.json</code> differs from what this process booted with. Connectors, their grants,
-						their commands and the tool catalog are the boot's, so the change lands on the next start. Tokens,
-						roster names and connector credentials are read per request and are already live.
+						their commands and the tool catalog are the boot's, so the change lands on the next start. Tokens and
+						connector credentials are read per request and are already live.
 					</p>
 				</Card>
 			) : null}
@@ -55,7 +55,6 @@ export function Overview({ state }: { readonly state: PanelState }) {
 					<div className="facts">
 						<Fact label="credential" value={<span className="mono">{state.session.device.id}</span>} />
 						<Fact label="label" value={state.session.device.label} />
-						<Fact label="speaks as" value={state.session.person ?? "unnamed (the credential is the identity)"} />
 						<Fact
 							label="grants"
 							value={

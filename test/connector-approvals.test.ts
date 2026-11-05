@@ -79,14 +79,15 @@ describe("a question the gateway asks", () => {
 				await until(async () => connected.deliveries.length === 1, "the approved delivery");
 				assert.equal(connected.deliveries[0]?.text, "the numbers are in");
 
-				// Both halves are in the log: the question, and the answer with who gave it.
+				// Both halves are in the log: the question, and the answer with who gave it — the connector it came through,
+				// because one bot has one person and a name would be a second statement of who that is.
 				const stored = await entriesOf(served.server);
 				assert.equal(stored.filter((entry) => entry.kind === PERMISSION_ENTRY_KIND).length, 1);
 				const answer = stored.find((entry) => entry.kind === PERMISSION_ANSWER_ENTRY_KIND);
 				assert.deepEqual(answer?.data, {
 					permissionId: question.permissionId,
 					answer: "allow",
-					by: "Denis",
+					by: "telegram",
 					at: (answer?.data as { at: number }).at,
 				});
 			} finally {
@@ -97,9 +98,9 @@ describe("a question the gateway asks", () => {
 		}
 	});
 
-	it("refuses an answer from anyone but the approver, and says why without settling", async () => {
+	it("refuses an answer from anyone but the owner actor, and says why without settling", async () => {
 		const asked: InteractionRequestParams[] = [];
-		// A connector whose actor maps to somebody else: the operator named Denis the approver, and this is not Denis.
+		// The entry's owner is actor 8811, and this answer names somebody else: having spoken buys no authority.
 		const home = await connectorHome();
 		const served = await serveConnector({ home, steps: elsewhereTurns("hello") });
 		try {
@@ -120,10 +121,10 @@ describe("a question the gateway asks", () => {
 					by: { externalActorId: "9999" },
 				});
 				assert.equal(refusedAnswer.settled, false);
-				assert.match(refusedAnswer.reason ?? "", /not the approver/);
+				assert.match(refusedAnswer.reason ?? "", /not the owner/);
 				assert.equal(connected.deliveries.length, 0, "an answer from nobody does not send anything");
 
-				// The approver's own answer still settles it: a wrongly answered question is not a lost one.
+				// The owner's own answer still settles it: a wrongly answered question is not a lost one.
 				const settled = await connected.connector.answer({
 					permissionId: asked[0]!.permissionId,
 					answer: "deny",
@@ -146,8 +147,8 @@ describe("a question the gateway asks", () => {
 	});
 
 	it("lets the owner answer through the HTTP route when no connector surface can", async () => {
-		// The owner's own door: the admin panel's route without the panel (#103). It is how a question is settled when the
-		// approver is not on a connector at all, and the answer has to have the same effect as one from a socket.
+		// The owner's own door: the admin panel's route without the panel (#103). It is how a question is settled by a device
+		// holding `approve`, and the answer has to have the same effect as one from a socket.
 		const asked: InteractionRequestParams[] = [];
 		const served = await serveConnector({ steps: elsewhereTurns("the numbers are in") });
 		const base = `http://127.0.0.1:${served.server.port}/api/permissions`;

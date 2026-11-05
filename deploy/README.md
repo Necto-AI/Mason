@@ -29,7 +29,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 | Half | What is in it | Where it is mounted |
 |---|---|---|
 | `agent/` | `profile.md`, `log/`, `journal/`, `skills/`, `agents/` (worker definitions), `workspace/`, and `.git` — the agent's memory and its history | both containers, at `/home/mason/.mason/agent`; one directory of it, `workspace/inbox`, is a third mount (see below) |
-| `service/` | `soul.md`, `roster.json`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
+| `service/` | `soul.md`, `config.json` (token hashes), `integrations.json` (the services mason reaches), `data/` (the transcript, the hooks, the seeded-skills record), `ssh/` (the env key), `pi/` (the copied provider credential) | the mason container only |
 
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
@@ -39,8 +39,8 @@ it was hired to do, which is what lets sibling hand several bots different souls
 **The home's repository is the memory repo, and it lives at `agent/.git`.** `remember` appends a fact to
 `agent/log/YYYY-MM-DD.md` and commits it *on the tool machine*, in that repository, in one call — the log and its
 history share a filesystem, so a memory is never written without its commit because a second process in another
-container was down. `service/` is deliberately **unversioned** from the split onwards: the soul, the roster, the
-credentials and the database are not in the history.
+container was down. `service/` is deliberately **unversioned** from the split onwards: the soul, the credentials
+and the database are not in the history.
 
 A home migrated from before the split (`npm run doctor -- migrate`) is the one place to be careful about `git`. The
 migration does not move the old repository into `agent/`: it stays at the home root, on the server, with the history it
@@ -60,7 +60,6 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    ```sh
    MASON_PI_AGENT_DIR=/srv/mason/agent    # required: the host directory in the next step
    MASON_PORT=8787                        # optional: the host loopback port
-   TEAM=Ilya,Denis                        # optional: the roster to seed on a fresh home
    MASON_UID=1000                         # optional: must match on both images (see below)
    MASON_GID=1000
    MASON_MODEL_REQUIRED=1                 # 0 starts a stack with no model at all
@@ -203,9 +202,6 @@ Before the server starts, the boot prints what it prepared:
 [deploy] published /home/mason/.mason/service/ssh/id_ed25519.pub to mason-env as /run/env-keys/authorized_keys
 [deploy] waiting for mason@mason-env:22
 [deploy] pinned 2 host key(s) for pi-env-mason-env from mason-env:22
-[deploy] added "Ilya" to the roster
-[deploy] added "Denis" to the roster
-[deploy] seeded 2 name(s) from TEAM into /home/mason/.mason/service/roster.json
 [deploy] tools run on mason@mason-env:22, in /home/mason/.mason/agent/workspace
 ```
 
@@ -239,27 +235,18 @@ checkout is left on the ref you asked for, so the way back is the previous tag a
 `DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_PORT` and `COMPOSE_CMD` override the defaults; the podman override file is always
 applied, and `COMPOSE_EXTRA_FILES` comes from `deploy/.env` on the host like every other setting.
 
-## A person, and a device
+## A device
 
-Two different things, and two different commands — a person is a name the transcript can carry, a device is something
-holding a token.
+One person, one bot. A device is something holding a token, and the credential is the identity: mason works for whoever
+holds one, and there is no name to join as.
 
 ```sh
-docker compose exec mason npm run team  -- add "Ilya"     # who may claim a name on /join
-docker compose exec mason npm run team  -- remove "Ilya"
-docker compose exec mason npm run team  -- list
-
 docker compose exec mason npm run token -- add --label phone   # prints a pairing link, once
 docker compose exec mason npm run token -- list
 docker compose exec mason npm run token -- revoke <id>
 ```
 
-Both files are read per request, so an add or a remove lands on the next request without a restart. The roster is an
-access list, not an authentication: any paired browser may claim any name on it. That is the deliberate trade for a room
-of five people (docs/ROOM-IDENTITY.md); it stops being acceptable when a stranger can hold the invite link.
-
-`TEAM` in `.env` only seeds a home that has no roster yet. Once `roster.json` exists, the CLI is the way in — editing
-`.env` and restarting changes nothing, on purpose.
+The file is read per request, so an add or a revoke lands on the next request without a restart.
 
 ## Provider credentials, and what the volume now holds
 
@@ -508,7 +495,7 @@ which the sweep deletes after a week anyway, and the model volume holds weights 
 transcription service"). `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the shipped
 ones seeded on first boot), `agents/`, `workspace/` and the git repository its memory is committed to — whose history
 begins at the migration if the home was migrated, since the pre-split history stays in the repository at the home
-root, which is not a volume. `mason-service` is the server: `soul.md`, `roster.json`, `config.json` (the token hashes
+root, which is not a volume. `mason-service` is the server: `soul.md`, `config.json` (the token hashes
 — no plaintext token lives here), `integrations.json` (the integrations mason reaches, and each one's connector grant),
 `data/agent.sqlite` (the transcript and the hooks), `data/seeded-skills.json` (which shipped skills this home was
 seeded with), `ssh/` (the env key and the pinned host key) and `pi/` (the copied provider credential).
@@ -526,7 +513,7 @@ for volume in mason-agent mason-service; do  # not mason-inbox: see above
 done
 ```
 
-Restore both into fresh volumes and the agent comes back with its memory, its roster and its paired devices; the env
+Restore both into fresh volumes and the agent comes back with its memory and its paired devices; the env
 keypair comes with `mason-service`, and the host key is re-pinned on the next boot.
 
 ## What is exposed, and what is not

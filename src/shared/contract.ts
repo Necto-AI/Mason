@@ -106,44 +106,24 @@ export type AgentStatus = {
 };
 
 /**
- * How long a name may be, as a speaker label and as something the transcript can carry. Long enough for "Александра
- * Петрова", short enough to read as `[from <name>]` in a prompt.
+ * How long a name in a stored prefix may be. Long enough for "Александра Петрова", short enough to read as
+ * `[from <name>]` in a prompt.
  *
- * It lives here because the prefix's own pattern is what enforces it as well: a name the roster accepts and a name the
- * parser reads back have to be the same length, so the two cannot drift into disagreeing about what a prefix is.
+ * It lives here because the prefix's own pattern is what enforces it: the name mason wrote into a message and the name
+ * the parser reads back have to be the same length, so the two cannot drift into disagreeing about what a prefix is.
  */
 export const NAME_MAX = 40;
 
 /**
- * How a message says who wrote it, in the text the model reads.
+ * How a message said who wrote it, in the text the model read.
  *
- * The durable entry is a `pi.user` message and nothing else, so the author has to live in the text or not exist. It
- * lives there as a prefix — `[from Ilya] …` — which is also what the model sees: a shared transcript where the model
- * has to know who decided what cannot afford an author it only sometimes notices. The server writes the prefix and
- * `projection.ts` parses it back out, so the wire keeps one source of truth and an old transcript written before the
- * roster existed still reads correctly. A prefix a client typed is not read back as an author: `withAuthor` drops it
- * for anyone without a name, so only a name the server wrote can reach a bubble.
+ * This is history, read-only. A home that predates the single-user cutover stored `[from Ilya] …` as the text of a
+ * `pi.user` message, because a shared transcript needed an author the model could see. Mason works for one person now
+ * and writes no prefix, and the messages it wrote before keep theirs: rewriting stored text at read time would change
+ * what somebody actually said, which `ROOM-IDENTITY.md` refused on the record (#126). `splitAuthor` reads them back out
+ * so an old transcript still shows the name it was written with; nothing writes one any more.
  */
 export const AUTHOR_PREFIX = new RegExp(`^\\[from ([^[\\]\\n]{1,${NAME_MAX}})\\] `);
-
-/**
- * The text the server stores for a submission: the prefix and the words when it knows who spoke, the words alone when
- * it does not.
- *
- * An unnamed device — or any token client — can type a prefix itself. Dropping it here is what keeps the name on a
- * message the server's claim: nothing stored can name an author the server did not write. It is deliberately not done
- * in `projection.ts`, which also reads history written before this rule, and rewriting that would change what somebody
- * actually typed.
- */
-export function withAuthor(text: string, author: string | undefined): string {
-	if (author !== undefined) return `[from ${author}] ${text}`;
-	// A leading space or newline is enough to stop the byte-exact pattern matching, and a raw client can send one. The
-	// prefix is dropped wherever the message *starts* with it, indentation included; text without one keeps every
-	// character it came with, which is the case that matters for what a person actually typed.
-	const lead = /^\s*/.exec(text)?.[0] ?? "";
-	const match = AUTHOR_PREFIX.exec(text.slice(lead.length));
-	return match === null ? text : text.slice(lead.length + match[0].length);
-}
 
 /** The author a stored message names, and the text without the prefix. A message with no prefix has no author. */
 export function splitAuthor(text: string): { readonly text: string; readonly author?: string } {
@@ -166,7 +146,7 @@ export const TranscriptItemSchema = Type.Union([
 		kind: Type.Literal("user"),
 		id: Type.String(),
 		text: Type.String(),
-		/** Who on the roster said it. Absent for an unnamed device, and for every message written before today. */
+		/** Who said it, when the message was written before the cutover and carries a `[from …]` prefix. */
 		author: Type.Optional(Type.String()),
 		at: Type.Optional(Type.Number()),
 	}),
@@ -196,7 +176,7 @@ export const QueuedItemSchema = Type.Object({
 	id: Type.Number(),
 	mode: Type.String(),
 	text: Type.String(),
-	/** Whoever queued it: on a shared transcript the queue belongs to a person, not to the server. */
+	/** Whoever queued it, when the queued text carries a `[from …]` prefix written before the cutover. */
 	author: Type.Optional(Type.String()),
 	withdrawable: Type.Boolean(),
 });

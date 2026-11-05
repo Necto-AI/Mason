@@ -4,10 +4,10 @@
  * The protocol is `packages/protocol` and its prose is `packages/protocol/PROTOCOL.md`; this file is mason's end of it.
  * Four things live here and they are deliberately in one module, because they are one object's lifetime:
  *
- * 1. **Admission.** `mason/submit` places ordinary human conversation, attributed through the operator's actor mapping;
- *    `mason/fire` fires a hook and never becomes conversation. Both are claimed durably before they are acknowledged, and
- *    the claim is deduplicated on the sender's id forever — the durable log never forgets a request id, so a resend
- *    after a restart is the same act.
+ * 1. **Admission.** `mason/submit` places ordinary human conversation, carried by the one actor the entry calls its
+ *    owner or by nobody at all; `mason/fire` fires a hook and never becomes conversation. Both are claimed durably before
+ *    they are acknowledged, and the claim is deduplicated on the sender's id forever — the durable log never forgets a
+ *    request id, so a resend after a restart is the same act.
  * 2. **The handshake is a ceiling.** The answer is what the operator granted, narrowed by what the connector advertised.
  *    A face the entry does not grant is named in `inactive` rather than dropped, and a scope, an actor, a room, a kind or
  *    a command outside the grant is a refusal.
@@ -58,13 +58,7 @@ import {
 	versionsCompatible,
 } from "mason-protocol";
 import type { WebSocket } from "ws";
-import {
-	CONNECTOR_ENTRY_KIND,
-	DELIVERY_ENTRY_KIND,
-	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
-	withAuthor,
-} from "../shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, DELIVERY_ENTRY_KIND, REPLY_ENTRY_KIND, REPLY_TOOL } from "../shared/contract.ts";
 import { ATTACHMENT_LIMIT, type AttachmentStore } from "./attachments.ts";
 import { commandTarget, runCommand } from "./commands.ts";
 import { authenticateConnector, type ConnectorGrant, connectorGrantFor, grantedActors } from "./connectors.ts";
@@ -88,7 +82,6 @@ import {
 } from "./permissions.ts";
 import { projectQueued, projectTranscript } from "./projection.ts";
 import { type ReplyRecord, replyRecordOf, targetOfOrigin, turnOriginOf } from "./replies.ts";
-import { findPerson, readRoster } from "./roster.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveRunStatus, isBusy, queuedSubmissions, runningToolNames } from "./status.ts";
 
@@ -370,8 +363,8 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	/**
 	 * The committed questions each open session still owes: pending, routed to it, unanswered.
 	 *
-	 * The route is derived here from the file the boot read, not from anything the request recorded, so a connector that
-	 * became the approver (or stopped being one) is followed without the pending request being rewritten.
+	 * The route is derived here from the file the boot read, not from anything the request recorded, so a conversation the
+	 * operator took away since the question was written is followed without the pending request being rewritten.
 	 */
 	function owedQuestions(
 		view: ConversationView,
@@ -710,8 +703,18 @@ export class ConnectorSession {
 			if (grant.user === undefined) {
 				inactive.push({ face: "user", reason: "the entry grants no user face" });
 			} else {
+				const actors = grantedActors(grant.user, request.faces.user.actors ?? []);
+				if (grant.user.owner !== undefined && actors.length === 0) {
+					// Once, at the handshake: the connector advertised no id matching the grant's `owner`, so it holds a user
+					// face that can carry words and no voice. Every actor submission will be refused, and this line is what a
+					// deployer reads to see why.
+					this.#log(
+						`[connector] ${this.name}: the entry's owner is actor ${grant.user.owner}, and the connector advertised ` +
+							"no actor with that id: every submission that names an actor will be refused",
+					);
+				}
 				faces.user = {
-					actors: grantedActors(grant.user),
+					actors,
 					conversations: grant.user.conversations.map((conversation) => ({ ...conversation })),
 					capabilities: this.#capabilities,
 				};
@@ -808,17 +811,10 @@ export class ConnectorSession {
 				`"${origin.externalConversationId}" is not a conversation this entry permits`,
 			);
 		}
-		const person = await this.#person(params.actor);
-		if (person === undefined && !user.unattributed) {
-			throw refused(
-				ERROR_CODE.actorUnknown,
-				params.actor === undefined
-					? "a submission needs an actor this entry maps"
-					: `"${params.actor.externalActorId}" is not an actor this entry maps`,
-			);
-		}
+		const refusalReason = this.#ownerRefusal(params.actor);
+		if (refusalReason !== undefined) throw refused(ERROR_CODE.actorUnknown, refusalReason);
 		this.#spend("submission", CONNECTOR_SUBMISSION_LIMIT);
-		const content = await this.#userInput(params, person);
+		const content = await this.#userInput(params);
 		const submission = await this.#submitInput({
 			type: "input",
 			requestId,
@@ -832,8 +828,6 @@ export class ConnectorSession {
 						...(origin.externalMessageId === undefined ? {} : { externalMessageId: origin.externalMessageId }),
 						...(origin.externalActorId === undefined ? {} : { externalActorId: origin.externalActorId }),
 					},
-					...(person === undefined ? {} : { person }),
-					...(params.approver === true && person !== undefined ? { approver: true } : {}),
 				},
 			},
 			...(params.mode === "steer" || params.mode === "followUp" || params.mode === "reject"
@@ -841,10 +835,7 @@ export class ConnectorSession {
 				: {}),
 		});
 		const record = await submission.status(BACKGROUND_CONTEXT);
-		this.#log(
-			`[connector] ${this.name}: submission ${submissionId} from ${person ?? "nobody"}` +
-				` in ${origin.externalConversationId}`,
-		);
+		this.#log(`[connector] ${this.name}: submission ${submissionId} in ${origin.externalConversationId}`);
 		return {
 			accepted: true,
 			id: submissionId,
@@ -873,25 +864,34 @@ export class ConnectorSession {
 		}
 	}
 
-	/** The roster name this actor maps to, or `undefined` when it maps to nobody the room still holds. */
-	async #person(actor: SubmitParams["actor"]): Promise<string | undefined> {
-		if (actor === undefined || typeof actor.externalActorId !== "string") return undefined;
-		const mapped = this.#grant.user?.actors[actor.externalActorId];
-		if (mapped === undefined) return undefined;
-		// The roster is read per submission: removing a person ends their voice on the next message, not the next restart.
-		const person = findPerson(await readRoster(currentHouse()), mapped);
-		return person?.name;
+	/**
+	 * Why this submission may not be placed, or `undefined` when it may.
+	 *
+	 * The whole of the admission rule, in one place: an actor that is the grant's `owner` is the person mason works for,
+	 * an absent actor is a message nobody attributed, and any other actor is a stranger — refused, because a bot with one
+	 * owner has no room for a second voice and silently accepting one would put a stranger's words in the owner's mouth.
+	 */
+	#ownerRefusal(actor: SubmitParams["actor"]): string | undefined {
+		if (actor === undefined) return undefined;
+		const owner = this.#grant.user?.owner;
+		if (owner === undefined) {
+			return `this entry names no owner, so an actor cannot speak through it (${String(actor.externalActorId)})`;
+		}
+		if (typeof actor.externalActorId !== "string" || actor.externalActorId !== owner) {
+			return `"${String(actor.externalActorId)}" is not the actor this entry calls its owner`;
+		}
+		return undefined;
 	}
 
 	/**
-	 * The person's words as the model reads them, plus the files they sent.
+	 * The words as the model reads them, plus the files they sent.
 	 *
-	 * Text and markdown blocks become the message, with the roster name written by the server — the protocol forbids a
-	 * display name granting identity, so a name only exists because the operator mapped it. A file block is fetched from
-	 * the attachment store and written into the agent's workspace, because a content id is not something a `read` can
-	 * open; an image also travels as an image block, so the model sees it without a tool call.
+	 * Text and markdown blocks become the message, unprefixed: the connector's credential already says who is speaking,
+	 * and one person's bot has nobody to tell apart. A file block is fetched from the attachment store and written into
+	 * the agent's workspace, because a content id is not something a `read` can open; an image also travels as an image
+	 * block, so the model sees it without a tool call.
 	 */
-	async #userInput(params: SubmitParams, person: string | undefined): Promise<UserInput> {
+	async #userInput(params: SubmitParams): Promise<UserInput> {
 		const text: string[] = [];
 		const images: UserInputImage[] = [];
 		for (const block of params.content) {
@@ -918,9 +918,9 @@ export class ConnectorSession {
 			}
 			if (block.type === "widget") text.push("[a widget arrived with this message]");
 		}
-		const attributed = withAuthor(text.join("\n"), person);
-		if (images.length === 0) return attributed;
-		return [{ type: "text", text: attributed }, ...images];
+		const body = text.join("\n");
+		if (images.length === 0) return body;
+		return [{ type: "text", text: body }, ...images];
 	}
 
 	/** Where one attachment is written for `read`: inside the workspace, its name kept but never its path. */
@@ -1082,8 +1082,9 @@ export class ConnectorSession {
 	 * Three outcomes, and the difference between them is the whole of the authority model. An id nobody is waiting on is
 	 * `mason.unknown_permission`, because a typo and a stale id are the same mistake from the connector's side. An answer
 	 * that arrives after the request settled is `settled: false` — there is no "always allow", and a late answer changes
-	 * nothing. And an actor who is not the approver this connector is configured with is `settled: false` with the reason,
-	 * not an error: they may have been shown the question, and "you are not the one who answers this" is information.
+	 * nothing. And an actor who is not the entry's `owner`, or an answer sent through a connector the question did not
+	 * come through, is `settled: false` with the reason, not an error: they may have been shown the question, and "this is
+	 * not yours to answer" is information.
 	 */
 	async #answer(params: InteractionAnswerParams): Promise<InteractionAnswerResult> {
 		// Budgeted with the other state-mutating methods: an answer folds the transcript twice (the find, then the commit's
@@ -1126,7 +1127,8 @@ export class ConnectorSession {
 		if (!authority.ok) return { settled: false, reason: authority.reason };
 		const settled = await this.#permissions.answer(permissionId, params.answer, authority.by);
 		this.#log(
-			`[connector] ${this.name}: ${permissionId} ${settled.settled ? params.answer : "not settled"} by ${authority.by}`,
+			`[connector] ${this.name}: ${permissionId} ${settled.settled ? params.answer : "not settled"} ` +
+				`by actor ${String(params.by?.externalActorId)}`,
 		);
 		return settled;
 	}

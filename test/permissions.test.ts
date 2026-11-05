@@ -20,7 +20,6 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/provid
 import type { SubmissionId } from "@earendil-works/pi-durable";
 import type { Integration } from "../src/server/integrations.ts";
 import {
-	approverFor,
 	decide,
 	type HookCommitter,
 	keepEarliest,
@@ -197,69 +196,68 @@ describe("who may answer", () => {
 		arguments: {},
 		reason: "because",
 		answers: ["allow", "deny"],
-		approver: "Denis",
-		askedBy: "Denis",
 		origin: { connector: "telegram", externalConversationId: "-1001234", externalActorId: "8811" },
 		askedAt: 0,
 	};
-	const grant = { approver: "Denis", actors: { "8811": "Denis", "9999": "Ilya" } };
+	const grant = { owner: "8811", connector: "telegram" };
 
-	it("accepts the approver the connector is configured with, and nobody else", () => {
-		assert.deepEqual(mayAnswer(request, grant, { externalActorId: "8811" }), { ok: true, by: "Denis" });
+	it("accepts the owner actor, and records the connector that answered", () => {
+		assert.deepEqual(mayAnswer(request, grant, { externalActorId: "8811" }), { ok: true, by: "telegram" });
 		const other = mayAnswer(request, grant, { externalActorId: "9999" });
 		assert.equal(other.ok, false);
-		assert.match(other.ok ? "" : other.reason, /not the approver/);
+		assert.match(other.ok ? "" : other.reason, /not the owner/);
 	});
 
-	it("refuses an answer with no actor, and a connector with no approver", () => {
+	it("refuses an answer with no actor, and a connector that names no owner", () => {
 		assert.equal(mayAnswer(request, grant, {}).ok, false);
-		const none = mayAnswer(request, { actors: { "8811": "Denis" } }, { externalActorId: "8811" });
+		const none = mayAnswer(request, { connector: "telegram" }, { externalActorId: "8811" });
 		assert.equal(none.ok, false);
+		assert.match(none.ok ? "" : none.reason, /names no owner/);
 	});
 
 	it("refuses a question that came through another connector, even for the same person", () => {
-		// Two connectors whose approver is the same roster name are two seats, not one: the glossary says "a request that
-		// came through it", and the id alone must not carry authority across connectors.
+		// Two connectors are two seats, not one: a request that came through one is not settled through the other.
 		const elsewhere = mayAnswer(request, { ...grant, connector: "slack" }, { externalActorId: "8811" });
 		assert.equal(elsewhere.ok, false);
 		assert.match(elsewhere.ok ? "" : elsewhere.reason, /came through/);
 		assert.equal(mayAnswer(request, { ...grant, connector: "telegram" }, { externalActorId: "8811" }).ok, true);
 	});
 
-	it("routes a question to the person who asked, and leaves it pending when that person is not the approver", () => {
+	it("routes a question to the conversation it came from, whoever asked", () => {
 		const integrations = {
 			telegram: {
 				enabled: true,
 				connector: {
-					user: { actors: { "8811": "Denis", "9999": "Ilya" }, conversations: [], approver: "Denis" },
+					user: { owner: "8811", conversations: [{ externalConversationId: "-1001234", kind: "room" }] },
 					state: [],
 					trustMarkers: false,
 				},
 			},
 		} as unknown as Record<string, Integration>;
 		assert.deepEqual(surfaceFor(request, integrations), { connector: "telegram", conversation: "-1001234" });
-		const askedByIlya = {
+		const fromAnotherActor = {
 			...request,
-			askedBy: "Ilya",
 			origin: { connector: "telegram", externalConversationId: "-1001234", externalActorId: "9999" },
 		};
-		assert.equal(surfaceFor(askedByIlya, integrations), undefined, "nobody's words are sent to a room for approval");
+		assert.deepEqual(
+			surfaceFor(fromAnotherActor, integrations),
+			{ connector: "telegram", conversation: "-1001234" },
+			"the question goes back to where it was asked, and the answer decides who may settle it",
+		);
 	});
 
-	it("names the approver the operator configured on the connector that carried the turn", () => {
+	it("leaves a question pending when the entry no longer grants its conversation", () => {
 		const integrations = {
 			telegram: {
 				enabled: true,
-				connector: { user: { actors: {}, conversations: [], approver: "Denis" }, state: [], trustMarkers: false },
+				connector: {
+					user: { owner: "8811", conversations: [{ externalConversationId: "8811", kind: "person" }] },
+					state: [],
+					trustMarkers: false,
+				},
 			},
 		} as unknown as Record<string, Integration>;
-		const carried = { kind: "connector" as const, origin: request.origin! };
-		assert.equal(approverFor(carried, integrations), "Denis");
-		assert.equal(
-			approverFor({ kind: "console" }, integrations),
-			undefined,
-			"a console turn has no connector to name one",
-		);
+		assert.equal(surfaceFor(request, integrations), undefined, "mason does not ask in a room it may not speak in");
 	});
 });
 

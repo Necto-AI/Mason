@@ -14,8 +14,7 @@
 #   4. the integrations — the operator's mounted file, copied into the service half, because the copy is what the server
 #      reads and what `npm run integration` writes;
 #   5. the bot's own files — `soul.md` and a starter `skills/` tree, installed once and never overwritten;
-#   6. the roster — the only step that runs the repo's own CLI, and the last thing before the server starts.
-#   7. the server, with the SSH target it reads from the environment.
+#   6. the server, with the SSH target it reads from the environment.
 set -euo pipefail
 
 : "${MASON_HOME:?mason-entrypoint: MASON_HOME is not set (deploy/compose.yaml sets it)}"
@@ -215,40 +214,7 @@ seed_skills() {
 }
 seed_skills
 
-# 6. The roster, from TEAM, only on a home that has none.
-#
-# Names are written by `npm run team -- add`, not by this script: the CLI owns validation and the file's mode, and a
-# second writer would be a second spelling of the rule.
-roster="$service_dir/roster.json"
-if [ -f "$roster" ]; then
-  echo "[deploy] roster present: not seeding from TEAM"
-else
-  names="${TEAM:-}"
-  if [ -z "$names" ]; then
-    echo "[deploy] TEAM is empty and there is no roster yet: nobody can claim a name. Add one with:"
-    echo "[deploy]   docker compose exec mason npm run team -- add \"Ilya\""
-  else
-    seeded=0
-    IFS=','
-    for name in $names; do
-      # Trim the spaces around a name: "Ilya, Denis" is how a person writes a list.
-      name="${name#"${name%%[![:space:]]*}"}"
-      name="${name%"${name##*[![:space:]]}"}"
-      [ -n "$name" ] || continue
-      # The CLI's own two lines of advice are for the person running it; the boot says what it did in one line.
-      if ! npm run --silent team -- add "$name" > /dev/null; then
-        echo "[deploy] TEAM lists a name the roster refused: \"$name\"" >&2
-        exit 1
-      fi
-      echo "[deploy] added \"$name\" to the roster"
-      seeded=$((seeded + 1))
-    done
-    unset IFS
-    echo "[deploy] seeded $seeded name(s) from TEAM into $roster"
-  fi
-fi
-
-# 7. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
+# 6. The server, with the SSH target it reads from the environment (src/server/env.ts, `sshTargetFromEnv`).
 export PI_ENV_SSH_HOST="$MASON_ENV_HOST"
 export PI_ENV_SSH_USER="$MASON_ENV_USER"
 export PI_ENV_SSH_PORT="$MASON_ENV_PORT"

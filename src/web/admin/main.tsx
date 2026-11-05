@@ -20,7 +20,6 @@ import { type ConnectorActions, Connectors } from "./sections/Connectors.tsx";
 import { Conversation } from "./sections/Conversation.tsx";
 import { Hooks } from "./sections/Hooks.tsx";
 import { Overview } from "./sections/Overview.tsx";
-import { Roster } from "./sections/Roster.tsx";
 import { TraceView } from "./sections/TraceView.tsx";
 import "../styles/tokens.css";
 import "../styles/widgets.css";
@@ -40,7 +39,6 @@ const SECTIONS: readonly Section[] = [
 	{ id: "approvals", label: "Approvals", available: (state) => state.permissions !== undefined },
 	{ id: "trace", label: "Trace", available: (state) => state.trace !== undefined },
 	{ id: "connectors", label: "Connectors", available: (state) => state.config !== undefined },
-	{ id: "roster", label: "Roster", available: (state) => state.config !== undefined },
 	{ id: "access", label: "Access", available: (state) => state.config !== undefined },
 	{ id: "hooks", label: "Hooks", available: (state) => state.config !== undefined },
 ];
@@ -157,8 +155,6 @@ function actions(then: () => Promise<void>) {
 		control: (action: "stop" | "compact") => call("POST", "/api/admin/control", { action }).then(then),
 		answer: (permissionId: string, answer: "allow" | "deny") =>
 			call("POST", `/api/permissions/${encodeURIComponent(permissionId)}`, { answer }).then(then),
-		addPerson: (name: string) => call("POST", "/api/admin/roster", { name }),
-		removePerson: (name: string) => call("DELETE", `/api/admin/roster/${encodeURIComponent(name)}`),
 		mintDevice: (label: string, grants: OperatorGrant[]) =>
 			call<{ token: string; id: string }>("POST", "/api/admin/tokens", { label, grants }),
 		setGrants: (id: string, grants: OperatorGrant[]) =>
@@ -201,12 +197,7 @@ function Shell({ live }: { readonly live: Live & { readonly refresh: () => Promi
 						</span>
 					)}
 					<LiveDot live={live} />
-					{state === undefined ? null : (
-						<span className="device">
-							{state.session.device.label}
-							{state.session.person === undefined ? "" : ` · ${state.session.person}`}
-						</span>
-					)}
+					{state === undefined ? null : <span className="device">{state.session.device.label}</span>}
 				</div>
 			</header>
 			<nav className="rail" aria-label="panel sections">
@@ -248,14 +239,6 @@ function Shell({ live }: { readonly live: Live & { readonly refresh: () => Promi
 								config={config}
 								credentials={config.credentials}
 								actions={write.connector}
-								refresh={live.refresh}
-							/>
-						) : null}
-						{current === "roster" && config !== undefined ? (
-							<Roster
-								people={config.roster}
-								onAdd={write.addPerson}
-								onRemove={write.removePerson}
 								refresh={live.refresh}
 							/>
 						) : null}

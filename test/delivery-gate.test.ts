@@ -393,9 +393,8 @@ test("a fire that named its conversation routes the reply back to it", async () 
 		enabled: true,
 		connector: {
 			user: {
-				actors: { "8811": "Denis" },
+				owner: "8811",
 				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-				unattributed: false,
 			},
 			state: [],
 			trustMarkers: false,

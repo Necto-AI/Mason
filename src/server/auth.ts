@@ -17,10 +17,9 @@
  *   in a URL and exchanged for a signed cookie, so the long-lived thing a page's scripts can reach holds no secret.
  *   The cookie names a token id, so revoking the token kills its sessions in the same breath.
  *
- * A cookie may also name a **person** from the roster (`roster.ts`). That is a claim, not an authentication: the join
- * screen lets anyone holding a token pick any name on the list, which is the trade a five-person team makes knowingly.
- * What the cookie buys is that the claim is the server's — signed, stable across reloads, and carried into every turn
- * as the author of what was said — rather than a string a client sends with each message.
+ * A cookie names a **device**, and nothing else. It used to be able to name a person from a roster; the roster is gone
+ * (#126), and a `v2` cookie signed before the cutover still opens — its person is read to check the signature and then
+ * dropped, because refusing it would log out every browser paired before the cutover for no gain.
  *
  * Tokens are read from the config on every request rather than cached at startup: `revoke` has to take effect while
  * the server is running, because a lost phone is exactly when nobody wants to restart. The file is a kilobyte.
@@ -78,7 +77,10 @@ const TOKEN_PREFIX = "mason_";
 /** The browser's cookie. `HttpOnly`, so a script on this origin cannot read it — which is the whole point of it. */
 export const SESSION_COOKIE = "mason_session";
 const SESSION_VERSION = "v1";
-/** A session that also names a person from the roster. `v1` cookies keep working: they are a device, just unnamed. */
+/**
+ * A session cookie that also carried a name, before there was one person. Read, and never written: `v1` and `v2` both
+ * open as a device.
+ */
 const SESSION_VERSION_PERSON = "v2";
 /** 30 days: a phone that re-pairs every morning is a phone nobody uses. Revoking the token ends it immediately. */
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
@@ -300,31 +302,24 @@ export function originAllowed(request: IncomingMessage): boolean {
 	}
 }
 
-/** What a session cookie names once it is opened: the device it was paired for, and the person it claims to be. */
+/** What a session cookie names once it is opened: the device it was paired for. */
 export interface SessionSubject {
 	readonly tokenId: string;
-	readonly person?: string;
 }
 
 /**
- * The session a pairing link is exchanged for: `<version>.<token id>.<person>.<HMAC>`.
+ * The session a pairing link is exchanged for: `<version>.<token id>.<HMAC>`.
  *
- * It carries no secret — the id names a record in the config, the person a name in the roster, and the HMAC keeps
- * either from being invented — so a stolen cookie is worth exactly one device's access, and it dies when that device's
- * token is revoked or that person is removed from the roster.
+ * It carries no secret — the id names a record in the config, and the HMAC keeps it from being invented — so a stolen
+ * cookie is worth exactly one device's access, and it dies when that device's token is revoked.
  *
- * The person is base64url so a name with a dot in it cannot be read as the signature.
+ * `openSession` still reads the `v2` shape, which put a name from the old roster inside the signed material. Nothing
+ * writes one any more; what is read is checked for its signature and then dropped.
  */
-export function sealSession(sessionKey: string, tokenId: string, person?: string): string {
-	if (person === undefined) {
-		const material = `${SESSION_VERSION}:${tokenId}`;
-		const signature = createHmac("sha256", sessionKey).update(material, "utf8").digest("base64url");
-		return `${SESSION_VERSION}.${tokenId}.${signature}`;
-	}
-	const encoded = Buffer.from(person, "utf8").toString("base64url");
-	const material = `${SESSION_VERSION_PERSON}:${tokenId}:${person}`;
+export function sealSession(sessionKey: string, tokenId: string): string {
+	const material = `${SESSION_VERSION}:${tokenId}`;
 	const signature = createHmac("sha256", sessionKey).update(material, "utf8").digest("base64url");
-	return `${SESSION_VERSION_PERSON}.${tokenId}.${encoded}.${signature}`;
+	return `${SESSION_VERSION}.${tokenId}.${signature}`;
 }
 
 /** What a session cookie names, or `undefined` for anything that is not one this home signed. */
@@ -337,10 +332,11 @@ export function openSession(sessionKey: string, value: string): SessionSubject |
 	}
 	if (parts[0] === SESSION_VERSION_PERSON && parts.length === 4) {
 		const [, tokenId, encoded, signature] = parts as [string, string, string, string];
-		const person = Buffer.from(encoded, "base64url").toString("utf8");
-		// The name is inside the signed material, so a cookie cannot be decoded into a different person.
-		if (!signatureMatches(sessionKey, `${SESSION_VERSION_PERSON}:${tokenId}:${person}`, signature)) return undefined;
-		return { tokenId, person };
+		// The name that shape carried is still inside its signed material, so it has to be decoded to check the signature.
+		const carried = Buffer.from(encoded, "base64url").toString("utf8");
+		if (!signatureMatches(sessionKey, `${SESSION_VERSION_PERSON}:${tokenId}:${carried}`, signature)) return undefined;
+		// Verified, then dropped: mason works for one person, and the device is the identity.
+		return { tokenId };
 	}
 	return undefined;
 }
@@ -370,12 +366,12 @@ export function cookieValue(header: string | undefined, name = SESSION_COOKIE): 
 }
 
 /** `Set-Cookie` for a paired browser. `Secure` only where the connection already is TLS, or the cookie is dropped. */
-export function sessionCookieValue(sessionKey: string, tokenId: string, secure: boolean, person?: string): string {
+export function sessionCookieValue(sessionKey: string, tokenId: string, secure: boolean): string {
 	const attributes = [
-		`${SESSION_COOKIE}=${sealSession(sessionKey, tokenId, person)}`,
+		`${SESSION_COOKIE}=${sealSession(sessionKey, tokenId)}`,
 		"Path=/",
 		// Opaque to scripts on purpose. The shell never reads it: it asks `/api/session`, and the server answers from the
-		// cookie it already parsed — so the join screen learns the name without the page holding a handle on it.
+		// cookie it already parsed — so the page never holds a handle on a credential.
 		"HttpOnly",
 		// Strict is the CSRF defence that does not depend on the Origin gate: a cross-site request never carries it.
 		"SameSite=Strict",
@@ -393,24 +389,19 @@ function requestIsSecure(request: IncomingMessage): boolean {
 }
 
 /** The device a request's session cookie names, if that cookie was signed here and its token still exists. */
-export function deviceFromCookie(
-	request: IncomingMessage,
-	config: MasonConfig,
-): { readonly token: TokenRecord; readonly person?: string } | undefined {
+export function deviceFromCookie(request: IncomingMessage, config: MasonConfig): TokenRecord | undefined {
 	const sessionKey = config.sessionKey;
 	if (sessionKey === undefined) return undefined;
 	const value = cookieValue(request.headers.cookie);
 	if (value === undefined) return undefined;
 	const subject = openSession(sessionKey, value);
 	if (subject === undefined) return undefined;
-	const token = readTokens(config).find((record) => record.id === subject.tokenId);
-	if (token === undefined) return undefined;
-	return subject.person === undefined ? { token } : { token, person: subject.person };
+	return readTokens(config).find((record) => record.id === subject.tokenId);
 }
 
 export type AuthFailure = "origin" | "token";
 
-type AuthSuccess = { readonly ok: true; readonly token: TokenRecord; readonly person?: string };
+type AuthSuccess = { readonly ok: true; readonly token: TokenRecord };
 
 export type AuthResult = AuthSuccess | { readonly ok: false; readonly reason: AuthFailure };
 
@@ -442,9 +433,7 @@ export async function authenticate(request: IncomingMessage, store: TokenStore):
 	if (direct !== undefined) return { ok: true, token: direct };
 	const paired = deviceFromCookie(request, config);
 	if (paired === undefined) return { ok: false, reason: "token" };
-	return paired.person === undefined
-		? { ok: true, token: paired.token }
-		: { ok: true, token: paired.token, person: paired.person };
+	return { ok: true, token: paired };
 }
 
 /**

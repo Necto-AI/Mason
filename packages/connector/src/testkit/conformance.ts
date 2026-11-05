@@ -271,8 +271,11 @@ function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 		state?: readonly string[];
 	} = {};
 	if (fixture.faces.user !== undefined) {
+		// The advertised list is the wire and does not change; the grant names one of those ids as the owner, which is
+		// what mason answers with and what its admission rule accepts.
+		const owner = fixture.faces.user.actors?.[0]?.externalActorId;
 		grants.user = {
-			actors: fixture.faces.user.actors ?? [],
+			...(owner === undefined ? {} : { owner }),
 			conversations: fixture.faces.user.conversations ?? [],
 			capabilities: fixture.faces.user.capabilities ?? ["text"],
 		};
@@ -289,7 +292,7 @@ function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 // The cases.
 // ---------------------------------------------------------------------------------------------------------------
 
-/** The conversation a user-face fixture speaks in, and the person who speaks. Both are the fixture's first of each. */
+/** The conversation a user-face fixture speaks in. It is the fixture's first: a face with no conversation speaks nowhere. */
 function originOf(fixture: ConformanceFixture): { externalConversationId: string; connector: string } {
 	const conversation = fixture.faces.user?.conversations?.[0]?.externalConversationId;
 	if (conversation === undefined)
@@ -297,6 +300,12 @@ function originOf(fixture: ConformanceFixture): { externalConversationId: string
 	return { externalConversationId: conversation, connector: fixture.name };
 }
 
+/**
+ * The actor the fixture's user face speaks as: its first, because `grantsOf` named that one the owner.
+ *
+ * A fixture with no advertised actor sends none, and mason accepts that: an actorless submission is a message nobody
+ * signed.
+ */
 function actorOf(fixture: ConformanceFixture): ExternalActor | undefined {
 	return fixture.faces.user?.actors?.[0];
 }
@@ -428,7 +437,7 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
-			name: "submission/an actor mason does not map is refused",
+			name: "submission/an actor that is not the owner is refused",
 			needs: ["user"],
 			async run({ connector, mason, fixture }) {
 				const outcome = await connector.submit({
@@ -437,7 +446,7 @@ export function conformanceCases(): readonly ConformanceCase[] {
 					content: [{ type: "text", text: "hello" }],
 					submissionId: "unknown-actor",
 				});
-				equal(outcome.status, "refused", "outcome for an unmapped actor");
+				equal(outcome.status, "refused", "outcome for an actor that is not the owner");
 				if (outcome.status === "refused") equal(outcome.error.code, "mason.actor_unknown", "refusal code");
 				equal(mason.submissions.length, 0, "submissions mason recorded");
 			},
