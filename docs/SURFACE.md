@@ -38,10 +38,10 @@ and both are true.
 | `/api/status` | exact | `conversation` | `src/server/main.ts:339` | `src/server/main.ts:340` |
 | `/api/integrations` | exact | `admin` | `src/server/main.ts:354` | `src/server/main.ts:355` |
 | `/api/health` | exact | public — the liveness probe: `ok` and the boot's root id, so an unpaired browser can tell a dead server from a wrong token | `src/server/main.ts:362` | not gated |
-| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:539` | not gated |
-| `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:539` | not gated |
-| `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:539` | not gated |
-| `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:539` | not gated |
+| `/` | exact | public — the panel's static shell: a bundle with no secrets in it, and where an unpaired browser is told so | `src/server/main.ts:507` | not gated |
+| `/index.html` | exact | public — the same shell, by its file name | `src/server/main.ts:507` | not gated |
+| `/admin` | exact | public — the same shell: `/admin` is a door into one page, not a second one | `src/server/main.ts:507` | not gated |
+| `/admin/` | exact | public — the same shell, with the trailing slash | `src/server/main.ts:507` | not gated |
 | `/api/permissions` | exact | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:95` | `src/server/admin.ts:528` |
 | `/api/permissions/` | prefix | `approve` (delegated to `handlePermissions`) | `src/server/admin.ts:95` | `src/server/admin.ts:528` |
 | `/api/admin/` | prefix | `admin`, filtered per area (delegated to `handleAdmin`) | `src/server/admin.ts:99` | `src/server/admin.ts:150` |

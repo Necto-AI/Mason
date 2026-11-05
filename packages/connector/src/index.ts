@@ -48,7 +48,6 @@ export {
 export {
 	type AttachmentClient,
 	type AttachmentClientOptions,
-	type AttachmentDownload,
 	AttachmentError,
 	createAttachmentClient,
 	type Fetcher,

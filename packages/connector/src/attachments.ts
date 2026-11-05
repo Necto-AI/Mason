@@ -3,19 +3,12 @@
  *
  * Bytes never cross the JSON-RPC socket and never sit in an argument as base64: a shared filesystem path is not a remote
  * protocol, and a 40 MB message is not a JSON-RPC frame. Mason hands back an id, the connector references that id, and
- * both sides move the bytes over their own credentialed endpoint.
+ * the bytes go up over that connector's own credentialed endpoint.
  *
  * The mechanics a connector would otherwise reimplement badly live here: the headers, the size cap, the expiry, and the
  * fact that an error is a coded refusal rather than a mystery status.
  */
 import type { AttachmentUploadResult, ProtocolErrorData } from "mason-protocol";
-
-export interface AttachmentDownload {
-	readonly bytes: Uint8Array;
-	readonly size: number;
-	readonly mimeType?: string;
-	readonly name?: string;
-}
 
 export interface AttachmentClient {
 	/** Put bytes in mason's store and get the id to reference. */
@@ -23,7 +16,6 @@ export interface AttachmentClient {
 		bytes: Uint8Array,
 		meta?: { readonly mimeType?: string; readonly name?: string },
 	): Promise<AttachmentUploadResult>;
-	download(contentId: string): Promise<AttachmentDownload>;
 }
 
 /** A refusal from the transfer endpoint, with the status and mason's code when it sent one. */
@@ -77,23 +69,6 @@ export function createAttachmentClient(options: AttachmentClientOptions): Attach
 			});
 			if (!response.ok) throw await refusal(response);
 			return (await response.json()) as AttachmentUploadResult;
-		},
-
-		async download(contentId) {
-			const response = await doFetch(`${base}/api/connector/attachments/${encodeURIComponent(contentId)}`, {
-				method: "GET",
-				headers: { authorization: `Bearer ${options.credential}` },
-			});
-			if (!response.ok) throw await refusal(response);
-			const buffer = new Uint8Array(await response.arrayBuffer());
-			const name = response.headers.get("x-mason-filename");
-			const mimeType = response.headers.get("content-type");
-			return {
-				bytes: buffer,
-				size: buffer.byteLength,
-				...(mimeType === null ? {} : { mimeType }),
-				...(name === null ? {} : { name: decodeURIComponent(name) }),
-			};
 		},
 	};
 }

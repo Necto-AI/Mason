@@ -397,15 +397,14 @@ async function handleConnectorRequest(
 		return true;
 	}
 	const name = auth.identity.name;
-	// Which of the two endpoints, and whether this request is one mason will act on — settled before the budget is
-	// charged, so a wrong verb or an unknown path costs the connector nothing.
+	// Whether this request is the one endpoint mason serves here — settled before the budget is charged, so a wrong
+	// verb or an unknown path costs the connector nothing.
 	const base = `${CONNECTOR_PATH}/attachments`;
-	const uploading = url.pathname === base;
-	if (!uploading && !url.pathname.startsWith(`${base}/`)) {
+	if (url.pathname !== base) {
 		notFound(response);
 		return true;
 	}
-	if (request.method !== (uploading ? "POST" : "GET")) {
+	if (request.method !== "POST") {
 		json(response, 405, { error: "method not allowed" });
 		return true;
 	}
@@ -425,61 +424,30 @@ async function handleConnectorRequest(
 		);
 		return true;
 	}
-	if (uploading) {
-		const raw = await readRawBodyCapped(request, attachments.maxBytes);
-		if (raw === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(
-				JSON.stringify({
-					code: "mason.invalid_request",
-					message: `that upload is over ${attachments.maxBytes} bytes`,
-				}),
-			);
-			return true;
-		}
-		const filename = headerValue(request, "x-mason-filename");
-		const meta = await attachments.save(name, raw, {
-			mimeType: headerValue(request, "content-type"),
-			...(filename === undefined ? {} : { name: safeFilename(filename) }),
-		});
-		if (meta === undefined) {
-			response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
-			response.end(JSON.stringify({ code: "mason.invalid_request", message: "that upload is over the cap" }));
-			return true;
-		}
-		json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
+	const raw = await readRawBodyCapped(request, attachments.maxBytes);
+	if (raw === undefined) {
+		response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+		response.end(
+			JSON.stringify({
+				code: "mason.invalid_request",
+				message: `that upload is over ${attachments.maxBytes} bytes`,
+			}),
+		);
 		return true;
 	}
-	// A malformed escape is a content id nobody uploaded, which is the same answer as one this connector did not upload.
-	let contentId: string;
-	try {
-		contentId = decodeURIComponent(url.pathname.slice(base.length + 1));
-	} catch {
-		notFound(response);
-		return true;
-	}
-	const read = await attachments.read(name, contentId);
-	if (read.status === "expired") {
-		response.writeHead(410, { "content-type": "application/json; charset=utf-8" });
-		response.end(JSON.stringify({ code: "mason.invalid_request", message: "that content id expired" }));
-		return true;
-	}
-	if (read.status === "missing") {
-		notFound(response);
-		return true;
-	}
-	response.writeHead(200, {
-		"content-type": read.attachment.meta.mimeType,
-		"content-length": String(read.attachment.meta.size),
-		"cache-control": "no-store",
-		...(read.attachment.meta.name === undefined
-			? {}
-			: { "x-mason-filename": encodeURIComponent(read.attachment.meta.name) }),
+	const filename = headerValue(request, "x-mason-filename");
+	const meta = await attachments.save(name, raw, {
+		mimeType: headerValue(request, "content-type"),
+		...(filename === undefined ? {} : { name: safeFilename(filename) }),
 	});
-	response.end(read.attachment.bytes);
+	if (meta === undefined) {
+		response.writeHead(413, { "content-type": "application/json; charset=utf-8", connection: "close" });
+		response.end(JSON.stringify({ code: "mason.invalid_request", message: "that upload is over the cap" }));
+		return true;
+	}
+	json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
 	return true;
 }
-
 /** A filename from a header, decoded and reduced to a name: it is shown and written, never used as a path. */
 function safeFilename(value: string): string | undefined {
 	let decoded: string;
