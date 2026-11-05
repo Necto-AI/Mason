@@ -119,7 +119,7 @@ describe("the transcript the client is sent", () => {
 	it("leaves no row for a trigger: a proactive turn is the message it sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
-				entry(1, "app.hook", [{ role: "user", content: "[EVENT HOOK: Morning brief]" }], {
+				entry(1, "app.hook", [{ role: "user", content: "[ROUTINE: Morning brief]" }], {
 					data: {
 						hookId: "morning-brief",
 						hookName: "Morning brief",
@@ -133,7 +133,7 @@ describe("the transcript the client is sent", () => {
 		assert.deepEqual(transcript, [{ kind: "delivered", id: "reply:m1", text: "Morning: three things need you." }]);
 		// The schedule, its payload and the prompt it built stay on the server.
 		const wire = JSON.stringify(transcript);
-		for (const leak of ["Morning brief", "app.hook", "EVENT HOOK", "firedAt"]) {
+		for (const leak of ["Morning brief", "app.hook", "ROUTINE:", "firedAt"]) {
 			assert.ok(!wire.includes(leak), `the trigger's ${leak} does not reach the reader`);
 		}
 	});

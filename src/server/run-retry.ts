@@ -6,10 +6,10 @@
  * missing is re-arming *after* the run has ended: the durable layer settles the input as unanswered (`model_error`)
  * and waits for new work, so nothing resumes it and the turn stays dead.
  *
- * This supervisor watches the committed view, and when a run ends in a model error it fires the built-in
- * `retry-failed-run` hook on a slower schedule (seconds → minutes) — as a hook event, not a message the user never
- * wrote. Each attempt is visible in the transcript, the budget is small and it resets on success or on anything the
- * user submits, and the `retry-failed-run` hook (fired from the panel's Hooks page) stays the manual way out.
+ * This supervisor watches the committed view, and when a run ends in a model error it fires the `retry-failed-run`
+ * hook on a slower schedule (seconds → minutes) — as a fire, not a message the user never wrote. Each attempt is
+ * visible in the transcript, the budget is small and it resets on success or on anything the user submits, and a
+ * connector's fire naming `retry-failed-run` stays the manual way out.
  *
  * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so `reply` in it
  * reaches the person who was waiting rather than committing to a transcript nobody in the chat can see (#83). And a
@@ -119,7 +119,7 @@ function newestFailure(entries: readonly EntryRecord[]): Failure | undefined {
  * Where a retry's words go: the origin of the turn the failure interrupted, read from the entries before it.
  *
  * Not the newest input. Between the failure and the re-fire — fifteen seconds, or fifteen minutes — an ordinary fire can
- * land: a scheduled check, another connector's event, an operator pressing any hook on the panel. Inheriting that fire's
+ * land: a scheduled check, another granted kind firing. Inheriting that fire's
  * destination would send the resumed answer to a chat that never asked for it, and one that named no conversation would
  * blank the resume back to "nobody was reached" with the failure still unanswered (#83).
  */
