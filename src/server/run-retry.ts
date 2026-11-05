@@ -22,8 +22,21 @@ import { CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
 import { isInputEntry, resumedOrigin } from "./replies.ts";
 import { isBusy } from "./status.ts";
 
-/** The hook the supervisor fires (`builtinHooks()` in `hooks.ts`); the panel's Hooks page fires the same one. */
+/**
+ * The hook the supervisor fires, defined where it fires: the boot defines this one into the hooks manager, because a
+ * run that ends in a model error has to be resumable. It is disabled and has no interval — nothing schedules it; a
+ * schedule would fire the retry at a model that may still be down.
+ */
 export const RETRY_HOOK_ID = "retry-failed-run";
+export const RETRY_HOOK = {
+	id: RETRY_HOOK_ID,
+	name: "Retry a failed run",
+	description: "Resume a run that ended in a model error, with the error as the payload.",
+	enabled: false,
+	promptTemplate:
+		"Your previous attempt failed before it finished, so the task is still open. Resume it from where it stopped: " +
+		"keep what is already done, redo only the step that failed, and do not start over from scratch. The failure was:\n{{payload}}",
+} as const;
 
 /** Delays between automatic re-fires, per attempt. Longer than a provider blip, shorter than a lost afternoon. */
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [15_000, 60_000, 300_000, 900_000];

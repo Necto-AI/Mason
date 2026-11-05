@@ -11,6 +11,7 @@
  * │   ├── log/2026-10-20.md   # dated facts, one per line, appended through the execution environment
  * │   ├── journal/            # where the daily journal will be written
  * │   ├── skills/<name>/SKILL.md
+ * │   ├── routines.json       # the timers the agent owns (hooks.ts reads it)
  * │   ├── agents/             # worker definitions; they sit beside skills so `write` can edit them
  * │   └── workspace/          # the directory the agent works in, separate from the code that runs it
  * └── service/                # everything the server owns: never a path inside the tool machine
@@ -19,7 +20,7 @@
  *     ├── integrations.json   # the services mason reaches (`integrations.ts`)
  *     ├── ssh/                # the key mason logs into the env machine with
  *     ├── pi/                 # the copy of the provider credential
- *     └── data/               # agent.sqlite, hooks.json, seeded-skills.json
+ *     └── data/               # agent.sqlite, routines-state.json, seeded-skills.json
  * ```
  *
  * The split is a mount boundary, not a permission mode: `bash` can talk its way around a mode. `agent/` is one volume
@@ -64,7 +65,7 @@ export interface HousePaths {
 	readonly agentsDir: string;
 	readonly workspaceDir: string;
 	/**
-	 * `agent.sqlite`, `hooks.json` and the record of seeded skills: state the server keeps, in the half the agent cannot
+	 * `agent.sqlite`, `routines-state.json` and the record of seeded skills: state the server keeps, in the half the agent cannot
 	 * see.
 	 */
 	readonly dataDir: string;
