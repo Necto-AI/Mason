@@ -3,12 +3,12 @@
  *
  * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
  * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
- * `connector` block is what the operator grants it: which external actors map to which roster names, which external
- * conversations may be spoken in, which event kinds fire which hook, which state scopes it may mirror, which controls it
- * may spend on `mason/control`, and whether its approval markers may waive approval.
+ * `connector` block is what the operator grants it: which external actor is the owner's, which external conversations may
+ * be spoken in, which event kinds fire which hook, which state scopes it may mirror, which controls it may spend on
+ * `mason/control`, and whether its approval markers may waive approval.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
- * the intersection with this file: an actor that is not mapped is refused, a conversation that is not listed is refused,
+ * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
  * a kind that maps to no hook is refused, a scope that is not granted is refused. A face the entry does not grant is
  * named in `inactive` with a reason rather than dropped, because a connector silently missing half its behaviour is the
  * bug nobody finds.
@@ -43,17 +43,18 @@ import type { Integration } from "./integrations.ts";
 /** A leaked connector credential is recognisable in a log, and distinct from an owner token at a glance. */
 const CONNECTOR_PREFIX = "masonc_";
 
-/** The user face as the operator granted it: the mapping, the rooms, and the content it may claim. */
+/**
+ * The user face as the operator granted it: the owner, the rooms, and the content it may claim.
+ *
+ * One person, one bot: the grant names the single external actor whose words are the owner's, and every other actor is
+ * refused. Absent means the connector may carry words nobody attributed — a notice, a forwarded thing — and no voice.
+ */
 export interface ConnectorUserGrant {
-	/** External actor id → the roster name mason will attribute the words to. */
-	readonly actors: Readonly<Record<string, string>>;
+	/** The external actor id that speaks for the person this bot works for. */
+	readonly owner?: string;
 	readonly conversations: readonly ExternalConversation[];
 	/** The content this connector may claim, when the operator narrowed it. Absent means "whatever it advertises". */
 	readonly capabilities?: readonly Capability[];
-	/** Whether an actor the mapping does not name may still speak, attributed to nobody. */
-	readonly unattributed: boolean;
-	/** The actor that answers permission requests, when #102 has one. A claim the roster still has to back. */
-	readonly approver?: string;
 }
 
 /** The events face: the operator's `kind` → hook map. A kind absent from it is refused. */
@@ -183,56 +184,49 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
 	return commands;
 }
 
+/**
+ * The keys a user face carried when mason kept a room: a mapping, an escape hatch for strangers, and a named approver.
+ *
+ * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
+ * decides that, and the one sentence that moves it is the doctor's.
+ */
+const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
+
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "connector.user" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
-	const actors = readActors(where, name, raw.actors);
-	const conversations = readConversations(where, name, raw.conversations);
-	const capabilities = readCapabilities(where, name, raw.capabilities);
-	const unattributed = readBoolean(where, name, raw, "unattributed");
-	const approver = raw.approver;
-	if (approver !== undefined && (typeof approver !== "string" || approver.trim() === "")) {
-		throw new Error(refusal(where, name, 'has a "connector.user.approver" that is not a name'));
-	}
-	return {
-		actors,
-		conversations,
-		...(capabilities === undefined ? {} : { capabilities }),
-		unattributed,
-		...(approver === undefined ? {} : { approver: approver as string }),
-	};
-}
-
-/** The mapping is the whole of mason's knowledge of who a connector's actors are: `{"8811": "Denis"}`. */
-function readActors(where: string, name: string, value: unknown): Record<string, string> {
-	if (value === undefined) return {};
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+	const retired = RETIRED_USER_KEYS.filter((key) => raw[key] !== undefined);
+	if (retired.length > 0) {
 		throw new Error(
-			refusal(where, name, 'has a "connector.user.actors" that is not an object mapping external ids to names'),
+			refusal(
+				where,
+				name,
+				`has a retired "connector.user.${retired[0]}": mason works for one person, so a user face names one ` +
+					'"owner" actor and no mapping, no unattributed switch and no approver. Run `npm run doctor -- migrate` ' +
+					"to rewrite it",
+			),
 		);
 	}
-	const actors: Record<string, string> = {};
-	for (const [externalActorId, person] of Object.entries(value)) {
-		if (externalActorId.trim() === "") {
-			throw new Error(
-				refusal(where, name, "maps an empty external actor id: the key is the actor the connector names"),
-			);
-		}
-		if (typeof person !== "string" || person.trim() === "") {
-			throw new Error(
-				refusal(
-					where,
-					name,
-					`maps actor "${externalActorId}" to no name: the value is the roster name mason will attribute to`,
-				),
-			);
-		}
-		actors[externalActorId] = person.trim();
+	const conversations = readConversations(where, name, raw.conversations);
+	const capabilities = readCapabilities(where, name, raw.capabilities);
+	const owner = raw.owner;
+	if (owner !== undefined && (typeof owner !== "string" || owner.trim() === "")) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				'has a "connector.user.owner" that is not an actor id: it is the one actor mason accepts',
+			),
+		);
 	}
-	return actors;
+	return {
+		...(owner === undefined ? {} : { owner: owner as string }),
+		conversations,
+		...(capabilities === undefined ? {} : { capabilities }),
+	};
 }
 
 function readConversations(where: string, name: string, value: unknown): ExternalConversation[] {
@@ -404,9 +398,18 @@ export function enabledConnectors(
 		.sort((left, right) => (left.name < right.name ? -1 : 1));
 }
 
-/** The actor mapping as the handshake answers it: the external id and the roster name mason will attribute to. */
-export function grantedActors(user: ConnectorUserGrant): ExternalActor[] {
-	return Object.entries(user.actors).map(([externalActorId, displayName]) => ({ externalActorId, displayName }));
+/**
+ * The one actor the handshake answers with: the advertised actor whose id is the grant's `owner`, as the connector
+ * advertised it, or nothing.
+ *
+ * The wire stays a list because it always was one, and the answer stays the connector's own record — its own id, its own
+ * display name — so mason never invents an actor the medium would not recognise. Empty means the connector advertised no
+ * such id, and then every submission that names an actor is refused.
+ */
+export function grantedActors(user: ConnectorUserGrant, advertised: readonly ExternalActor[]): ExternalActor[] {
+	if (user.owner === undefined) return [];
+	const actor = advertised.find((candidate) => candidate.externalActorId === user.owner);
+	return actor === undefined ? [] : [actor];
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */

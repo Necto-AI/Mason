@@ -5,6 +5,7 @@
  * server refusing and accepting requests — the socket and `/api` are where the hole was.
  */
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +27,7 @@ import {
 	sessionCookieValue,
 	verifyToken,
 } from "../src/server/auth.ts";
-import { housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
-import { addPerson, removePerson } from "../src/server/roster.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -140,28 +139,31 @@ describe("the browser's session", () => {
 		assert.equal(openSession(key as string, `v2.${minted.record.id}.x`), undefined);
 	});
 
-	it("seals the person a browser claimed into the cookie, where a client cannot rewrite it", async () => {
+	it("names a device in the cookie, and reads a v2 cookie from before the cutover as one too", async () => {
 		const home = await temporaryHome();
 		const minted = await mintToken(home, "browser");
 		const key = (await readConfig(home)).sessionKey as string;
 
-		const named = sealSession(key, minted.record.id, "Ilya");
-		assert.deepEqual(openSession(key, named), { tokenId: minted.record.id, person: "Ilya" });
-		// A paired device that has not claimed a name is still a session, just an unnamed one — that is what a `v1`
-		// cookie from before the roster opens as.
 		assert.deepEqual(openSession(key, sealSession(key, minted.record.id)), { tokenId: minted.record.id });
 
+		// A cookie signed by a build that kept a room: the person is inside the signed material, so it is read to check the
+		// signature and then dropped. Refusing it would log out every browser paired before the cutover for no gain.
+		const legacy = `v2.${minted.record.id}.${Buffer.from("Ilya", "utf8").toString("base64url")}`;
+		const signature = createHmac("sha256", key).update(`v2:${minted.record.id}:Ilya`, "utf8").digest("base64url");
+		const named = `${legacy}.${signature}`;
+		assert.deepEqual(openSession(key, named), { tokenId: minted.record.id }, "a v2 cookie names a device, no person");
+
 		// The name is inside the signed material, so swapping it out is a forgery rather than a rename.
-		const [version, tokenId, , signature] = named.split(".");
-		const forged = [version, tokenId, Buffer.from("Denis", "utf8").toString("base64url"), signature].join(".");
+		const [version, tokenId, , carried] = named.split(".");
+		const forged = [version, tokenId, Buffer.from("Denis", "utf8").toString("base64url"), carried].join(".");
 		assert.equal(openSession(key, forged), undefined, "a cookie cannot be decoded into a different person");
 
 		// A cookie another home signed is not a session here, whatever it claims.
-		assert.equal(openSession(key, sealSession("z".repeat(43), minted.record.id, "Ilya")), undefined);
+		assert.equal(openSession(key, sealSession("z".repeat(43), minted.record.id)), undefined);
 		assert.equal(openSession("z".repeat(43), named), undefined);
 
 		// The cookie keeps the attributes that make it unreadable to a page and unusable from another site.
-		const cookie = sessionCookieValue(key, minted.record.id, false, "Ilya");
+		const cookie = sessionCookieValue(key, minted.record.id, false);
 		assert.match(cookie, /HttpOnly/);
 		assert.match(cookie, /SameSite=Strict/);
 		assert.ok(!cookie.includes(minted.token), "the id names a record; the token is never in the cookie");
@@ -180,7 +182,7 @@ describe("the browser's session", () => {
 		const value = sealSession((await readConfig(home)).sessionKey as string, minted.record.id);
 		const request = { headers: { cookie: `mason_session=${value}` } } as never;
 
-		assert.equal(deviceFromCookie(request, await readConfig(home))?.token.label, "browser");
+		assert.equal(deviceFromCookie(request, await readConfig(home))?.label, "browser");
 		await revokeToken(home, minted.record.id);
 		assert.equal(deviceFromCookie(request, await readConfig(home)), undefined, "revoking a token ends its sessions");
 	});
@@ -381,7 +383,6 @@ describe("the server's door", () => {
 			assert.deepEqual(await session.json(), {
 				device: { id: record?.id, label: record?.label },
 				grants: ["conversation", "admin", "approve"],
-				joined: false,
 			});
 
 			// A link that is not one of ours is not a session: the shell still loads, unpaired.
@@ -398,29 +399,25 @@ describe("the server's door", () => {
 		return (setCookie.split(";")[0] as string).trim();
 	}
 
-	it("honours a cookie that names a person from before the join screen, and refuses a removed one", async () => {
+	it("opens a v2 cookie from before the cutover as a device, and answers no person with it", async () => {
 		const { server, home } = await openServer();
 		const port = server.port as number;
 		try {
-			const device = cookieOf(await pair(port, server.pairingToken as string));
-			assert.equal((await addPerson(housePaths(home), "Ilya")).ok, true);
-			// A cookie signed before #103 — the console let a browser claim a name, and those sessions outlive the screen
-			// they came from. The server still checks the claim against the roster on every request.
 			const key = (await readConfig(home)).sessionKey as string;
 			const [record] = await listTokens(home);
-			const named = cookieOf(`mason_session=${sealSession(key, (record as { id: string }).id, "Ilya")}; Path=/`);
+			const id = (record as { id: string }).id;
+			const person = Buffer.from("Ilya", "utf8").toString("base64url");
+			const signature = createHmac("sha256", key).update(`v2:${id}:Ilya`, "utf8").digest("base64url");
+			const named = cookieOf(`mason_session=v2.${id}.${person}.${signature}; Path=/`);
 			const session = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie: named } });
-			assert.equal(session.status, 200);
+			assert.equal(session.status, 200, "a browser paired before the cutover stays paired");
 			const body = (await session.json()) as Record<string, unknown>;
-			assert.deepEqual(body.person, { name: "Ilya" });
-			assert.equal(body.joined, true);
+			assert.deepEqual(body.device, { id, label: record?.label });
+			assert.equal("person" in body, false, "there is no person to answer with");
+			assert.equal("joined" in body, false);
 
-			assert.equal(await removePerson(housePaths(home), "Ilya"), true);
-			const after = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { cookie: named } });
-			assert.equal(after.status, 401, "a name off the roster is not a place in the room, cookie or no cookie");
-			assert.deepEqual(await after.json(), { error: "not on the roster" });
-
-			// The join route itself is gone: a page cannot claim a name any more, so a stale client cannot invent one.
+			// The join route is gone with the room: a page cannot claim a name, so a stale client cannot invent one.
+			const device = cookieOf(await pair(port, server.pairingToken as string));
 			assert.equal((await fetch(`http://127.0.0.1:${port}/api/join`, { headers: { cookie: device } })).status, 404);
 		} finally {
 			await server.close();

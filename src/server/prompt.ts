@@ -48,10 +48,10 @@ When you receive one, you were woken by a schedule or an external trigger, not b
 ${UNTRUSTED_RULE}`;
 
 /** Who is speaking, when the transcript has more than one voice in it. Short: it is paid for in every turn. */
-export const TEAM_GUIDELINES = `The transcript is shared: more than one person writes to it.
-A message from a person starts with "[from <name>] ", naming who wrote it.
-A message with no such prefix has no author: a scheduled trigger, or a device nobody has named.
-Attribute a decision to the person who wrote it, and do not assume the newest message came from Denis.`;
+export const TEAM_GUIDELINES = `You work for one person, and this conversation is theirs.
+An older message may start with "[from <name>] ": that was written when a bot carried a room, and the name is history
+rather than a second participant. Every message written now is theirs, whatever the medium called it.
+A scheduled trigger writes a message nobody authored; read it as a job, not as something somebody said.`;
 
 /**
  * The delivery invariant, in every turn: words reach the reader through one call and never as prose, so anything the

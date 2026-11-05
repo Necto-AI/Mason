@@ -239,7 +239,7 @@ function connectorTurn(text: string): FakeEntry[] {
 			id: 1,
 			kind: "app.connector",
 			model: [{ role: "user", content: text }],
-			data: { origin: { connector: "telegram", externalConversationId: "-1001234" }, person: "Denis" },
+			data: { origin: { connector: "telegram", externalConversationId: "-1001234" } },
 		},
 	];
 }
@@ -272,9 +272,8 @@ const TELEGRAM = {
 	enabled: true,
 	connector: {
 		user: {
-			actors: { "8811": "Denis" },
+			owner: "8811",
 			conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-			unattributed: false,
 		},
 		state: [],
 		trustMarkers: false,

@@ -30,7 +30,7 @@ export function Approvals({
 	return (
 		<Card
 			title="Approvals"
-			note="What the gateway is waiting on. An offline approver leaves the question here; nothing runs until it is answered or stopped."
+			note="What the gateway is waiting on. Nothing runs until it is answered here, from the chat the question came from, or stopped."
 			actions={<Badge tone={permissions.length === 0 ? "muted" : "warn"}>{permissions.length} waiting</Badge>}
 		>
 			<ErrorNote error={action.error} />
@@ -43,9 +43,6 @@ export function Approvals({
 							<header>
 								<code>{toolName(permission.tool)}</code>
 								<span className="faint">{asked(permission)}</span>
-								{permission.approver === null ? null : (
-									<Badge tone="muted">approver {permission.approver}</Badge>
-								)}
 							</header>
 							<p className="question-reason">{permission.reason}</p>
 							<Json label="arguments" value={permission.arguments} />

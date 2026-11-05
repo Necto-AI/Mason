@@ -37,7 +37,6 @@ import { currentIntegrations, type Integration, readIntegrations, setIntegration
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { createPermissions, type PermissionBook } from "./permissions.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
-import { readRoster } from "./roster.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
@@ -256,12 +255,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
 		});
 		opened.push(() => hooks.close());
-		// What kind of bot this is, for the one builtin template that speaks to a person's world: a home with one name in
-		// its roster works for that person, and the team-chat text has to say so or every instruction reads as an outside
-		// system asking. The roster is a file, so this is read where the hooks are defined and nowhere later.
-		const roster = await readRoster(house);
-		const sole = roster.people.length === 1 ? roster.people[0]?.name : undefined;
-		for (const hook of builtinHooks(sole === undefined ? {} : { person: sole })) hooks.define(hook);
+		for (const hook of builtinHooks()) hooks.define(hook);
 		assertConnectorHooksHaveHooks(currentIntegrations(), hooks, house.integrations);
 
 		const storage =

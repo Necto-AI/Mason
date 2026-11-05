@@ -3,7 +3,7 @@
  *
  * It exists so a connector can prove itself without a running mason, which is the only way a community connector can be
  * tested at all. It is deliberately a real implementation of the *server* half rather than a mock: it enforces the
- * version, the grants, the budgets, the actor mapping and the deduplication, because a mock that says yes to everything
+ * version, the grants, the budgets, the one owner actor and the deduplication, because a mock that says yes to everything
  * proves nothing about a connector that has to survive a no.
  *
  * What it is not: mason. The conformance suite checks the connector's side of the contract, and a real mason checks
@@ -71,11 +71,14 @@ export interface InteractionRecord {
 
 export interface FakeMasonGrants {
 	readonly user?: {
-		readonly actors?: readonly ExternalActor[];
+		/**
+		 * The one external actor id mason accepts as the person it works for. The handshake answers with the actor the
+		 * connector advertised under that id; a submission that names any other is refused, and one that names nobody is
+		 * accepted.
+		 */
+		readonly owner?: string;
 		readonly conversations?: readonly ExternalConversation[];
 		readonly capabilities?: readonly Capability[];
-		/** Whether an actor mason does not map may still speak, attributed to nobody. */
-		readonly unattributed?: boolean;
 	};
 	readonly tools?: { readonly url: string };
 	/** `kind` → hook id. A kind absent from this map is refused. */
@@ -310,8 +313,11 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 			if (granted.user === undefined) {
 				inactive.push({ face: "user", reason: "the entry grants no user face" });
 			} else {
+				const owner = granted.user.owner;
+				const advertised = request.faces.user.actors ?? [];
+				const matched = advertised.filter((actor) => actor.externalActorId === owner);
 				faces.user = {
-					actors: granted.user.actors ?? [],
+					actors: owner === undefined ? [] : matched,
 					conversations: granted.user.conversations ?? [],
 					capabilities: intersect(capabilities, granted.user.capabilities ?? capabilities),
 				};
@@ -354,18 +360,11 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		if (session?.faces.user === undefined || granted === undefined) {
 			throw refusal(ERROR_CODE.faceNotGranted, "this connector has no user face");
 		}
+		// One rule, stated once: the owner's actor is the person mason works for, an absent actor is a message nobody
+		// signed, and any other actor is a stranger.
 		const actor = params.actor;
-		if (actor === undefined) {
-			if (granted.unattributed !== true) {
-				throw refusal(ERROR_CODE.actorUnknown, "a submission needs an actor this entry maps");
-			}
-		} else if (!granted.actors?.some((known) => known.externalActorId === actor.externalActorId)) {
-			if (granted.unattributed !== true) {
-				throw refusal(
-					ERROR_CODE.actorUnknown,
-					`${actor.externalActorId} is not in this connector's roster mapping`,
-				);
-			}
+		if (actor !== undefined && actor.externalActorId !== granted.owner) {
+			throw refusal(ERROR_CODE.actorUnknown, `${actor.externalActorId} is not the actor this entry calls its owner`);
 		}
 		const conversation = params.origin.externalConversationId;
 		if (!granted.conversations?.some((known) => known.externalConversationId === conversation)) {
@@ -615,10 +614,9 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 /** The grants as an object this file may fill in. The options are readonly because a caller must not edit them later. */
 function mutableGrants(input: FakeMasonGrants | undefined): {
 	user?: {
-		actors: ExternalActor[];
+		owner?: string;
 		conversations: ExternalConversation[];
 		capabilities: Capability[];
-		unattributed?: boolean;
 	};
 	tools?: { url: string };
 	events?: Record<string, string>;
@@ -630,10 +628,9 @@ function mutableGrants(input: FakeMasonGrants | undefined): {
 			? {}
 			: {
 					user: {
-						actors: [...(input.user.actors ?? [])],
+						...(input.user.owner === undefined ? {} : { owner: input.user.owner }),
 						conversations: [...(input.user.conversations ?? [])],
 						capabilities: [...(input.user.capabilities ?? [])],
-						...(input.user.unattributed === undefined ? {} : { unattributed: input.user.unattributed }),
 					},
 				}),
 		...(input.tools === undefined ? {} : { tools: { url: input.tools.url } }),

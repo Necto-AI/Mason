@@ -28,7 +28,9 @@ async function withFixture(
 		connector: chat.name,
 		granted: {
 			user: {
-				actors: chat.faces.user?.actors ?? [],
+				...(chat.faces.user?.actors?.[0]?.externalActorId === undefined
+					? {}
+					: { owner: chat.faces.user.actors[0].externalActorId }),
 				conversations: chat.faces.user?.conversations ?? [],
 				capabilities: chat.faces.user?.capabilities ?? ["text"],
 			},

@@ -74,10 +74,9 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			skillsDir: join(home, "agent", "skills"),
 			agentsDir: join(home, "agent", "agents"),
 			workspaceDir: join(home, "agent", "workspace"),
-			// The server's half: the soul it renders, the door, the names, the keys and the state.
+			// The server's half: the soul it renders, the door, the keys and the state.
 			soul: join(home, "service", "soul.md"),
 			config: join(home, "service", "config.json"),
-			roster: join(home, "service", "roster.json"),
 			// Later than the split: no home from before it has one, so no migration carries it.
 			integrations: join(home, "service", "integrations.json"),
 			sshDir: join(home, "service", "ssh"),

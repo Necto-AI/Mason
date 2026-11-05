@@ -248,8 +248,8 @@ export async function turnOriginIn(tx: Tx, conversationId: ConversationId): Prom
 /**
  * The newest input entry itself, for a caller that needs more than where the turn came from.
  *
- * The permission gateway reads it for the person the words are attributed to: authority to approve is a roster name, and
- * the entry is where mason wrote it, while the origin a connector sent may not carry an actor at all.
+ * The input entry is what a retry or a resumed hook inherits its destination from: it is where mason wrote the origin a
+ * connector sent, and a turn's own words are the only place that origin exists.
  */
 export async function turnInputIn(tx: Tx, conversationId: ConversationId): Promise<EntryRecord | undefined> {
 	let cursor: Cursor | undefined;

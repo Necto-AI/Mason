@@ -30,7 +30,6 @@ import { mintToken, readConfig } from "../src/server/auth.ts";
 import { housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
 import { promptSectionKeys } from "../src/server/prompt.ts";
-import { addPerson } from "../src/server/roster.ts";
 import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
 import { grantsOf, type OperatorGrant, type PanelState } from "../src/shared/admin.ts";
@@ -83,11 +82,7 @@ interface Panel {
 }
 
 async function openPanel(
-	extra: {
-		settings?: NonNullable<Parameters<typeof startServer>[0]>["settings"];
-		contextWindow?: number;
-		withRoster?: boolean;
-	} = {},
+	extra: { settings?: NonNullable<Parameters<typeof startServer>[0]>["settings"]; contextWindow?: number } = {},
 ): Promise<Panel> {
 	const directory = await mkdtemp(join(tmpdir(), "mason-panel-"));
 	directories.add(directory);
@@ -96,7 +91,6 @@ async function openPanel(
 	const houseHome = join(directory, "house");
 	const previousHouseHome = process.env.MASON_HOME;
 	process.env.MASON_HOME = houseHome;
-	if (extra.withRoster === true) await addPerson(housePaths(houseHome), "Ilya");
 	const server = await startServer({
 		port: 0,
 		hostname: "127.0.0.1",
@@ -869,7 +863,6 @@ describe("the configuration the panel writes", () => {
 	it("edits a connector's grant and says a restart is needed", async () => {
 		const panel = await openPanel();
 		try {
-			await addPerson(housePaths(panel.home), "Ilya");
 			// A name is the one field whose refusal quotes what the operator typed, so a typo has to be a sentence in the
 			// form and not a stack in the log — including a quote, which used to break the classification itself.
 			for (const name of ["Bad_Name", 'x"y']) {
@@ -893,10 +886,8 @@ describe("the configuration the panel writes", () => {
 			const granted = await panel.call("PUT", "/api/admin/connectors/github", {
 				connector: {
 					user: {
-						actors: { "8811": "Ilya" },
+						owner: "8811",
 						conversations: [{ externalConversationId: "-1001234", kind: "room", title: "Team" }],
-						unattributed: false,
-						approver: "8811",
 					},
 					events: { hooks: { "issue-opened": "github-activity" } },
 					state: ["status", "projection"],
@@ -908,8 +899,8 @@ describe("the configuration the panel writes", () => {
 			assert.equal(granted.status, 200, JSON.stringify(granted.body));
 			const config = (await panel.state()).config;
 			const entry = config?.connectors.find((connector) => connector.name === "github");
-			assert.equal(entry?.connector?.user?.actors["8811"], "Ilya");
-			assert.equal(entry?.connector?.user?.approver, "8811");
+			assert.equal(entry?.connector?.user?.owner, "8811");
+			assert.equal(entry?.connector?.user?.conversations[0]?.title, "Team");
 			assert.deepEqual(entry?.connector?.state, ["status", "projection"]);
 			assert.equal(entry?.connector?.trustMarkers, true);
 			assert.deepEqual(entry?.connector?.policy?.deny, ["issues.delete"]);
@@ -922,6 +913,18 @@ describe("the configuration the panel writes", () => {
 			assert.deepEqual((file.integrations.github.connector as { state: string[] }).state, ["status", "projection"]);
 			assert.deepEqual((file.integrations.github.connector as { commands: string[] }).commands, ["stop", "status"]);
 			assert.deepEqual(file.integrations.github.tools, { url: "http://mason-github:8082/mcp" });
+
+			// The actor map a room needed is refused, and the refusal names the command that rewrites it.
+			const retired = await panel.call("PUT", "/api/admin/connectors/github", {
+				connector: {
+					user: { owner: "8811", conversations: [], actors: { "8811": "Ilya" } } as never,
+					state: ["status"],
+					trustMarkers: false,
+				},
+			});
+			assert.equal(retired.status, 400, JSON.stringify(retired.body));
+			assert.match(retired.body.error, /connector\.user\.actors/);
+			assert.match(retired.body.error, /npm run doctor -- migrate/);
 
 			// A control the protocol does not have is refused before it is written, naming the whole set.
 			const refused = await panel.call("PUT", "/api/admin/connectors/github", {
@@ -945,7 +948,7 @@ describe("the configuration the panel writes", () => {
 		}
 	});
 
-	it("mints a device with the grants asked for, and rewrites the roster", async () => {
+	it("mints a device with the grants asked for, and has no roster to rewrite", async () => {
 		const panel = await openPanel();
 		try {
 			const minted = await panel.call("POST", "/api/admin/tokens", {
@@ -965,14 +968,10 @@ describe("the configuration the panel writes", () => {
 				"the file holds the hash, never the token",
 			);
 
-			assert.equal((await panel.call("POST", "/api/admin/roster", { name: "Ilya" })).status, 200);
-			assert.equal((await panel.call("POST", "/api/admin/roster", { name: "ilya" })).status, 409);
-			assert.deepEqual(
-				(await panel.state()).config?.roster.map((person) => person.name),
-				["Ilya"],
-			);
-			assert.equal((await panel.call("DELETE", "/api/admin/roster/Ilya")).status, 200);
-			assert.deepEqual((await panel.state()).config?.roster, []);
+			// The room's last area is gone: there is no roster to add a name to, and the state carries none.
+			assert.equal((await panel.call("POST", "/api/admin/roster", { name: "Ilya" })).status, 404);
+			assert.equal((await panel.state()).config === undefined, false);
+			assert.equal("roster" in ((await panel.state()).config ?? {}), false);
 
 			// A hook's switch is the process's, not the file's: it lands now, and the state says so.
 			const off = await panel.call("PATCH", "/api/admin/hooks/workspace-check", { enabled: false });

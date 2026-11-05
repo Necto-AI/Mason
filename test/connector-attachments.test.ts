@@ -150,7 +150,7 @@ describe("a submission with a file", () => {
 					data?: string;
 				}>;
 				assert.equal(content[0]?.type, "text");
-				assert.match(content[0]?.text ?? "", /\[from Denis\] what is this/);
+				assert.match(content[0]?.text ?? "", /^what is this\n/);
 				const image = content.find((block) => block.type === "image");
 				assert.equal(image?.mimeType, "image/png");
 				assert.equal(Buffer.from(image?.data ?? "", "base64").toString("utf8"), "a photograph, allegedly");

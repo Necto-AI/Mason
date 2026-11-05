@@ -6,15 +6,17 @@
  * where it stands (both halves leave its index and enter its `.gitignore`) and creates the agent's own repository with
  * one commit — so the layout change is something he can inspect and revert like any other.
  *
- * It also finishes the configuration a cutover needs: a credential written before grants existed is stamped, and an
- * entry that still carries the signed event door's `trigger` (and the `commands` list that belonged to it) has both keys
+ * It also finishes the configuration a cutover needs: a credential written before grants existed is stamped, an entry
+ * that still carries the signed event door's `trigger` (and the `commands` list that belonged to it) has both keys
  * removed — the door is gone (#104), and a boot refuses a file that still names it rather than reading past a secret
- * nothing checks.
+ * nothing checks — and a connector whose user face still carries an actor map, an `unattributed` switch or a named
+ * approver is rewritten to the one `owner` mason now admits, with `service/roster.json` printed and deleted (#126).
  *
  * `doctor` rather than a command of its own because this is what it is: a check on the home that repairs it when asked.
  * Nothing here runs on boot. A server that moved files on start would be a server that edits the operator's home.
  */
 import { migrateTokenGrants } from "../src/server/auth.ts";
+import { cutOverSingleUser } from "../src/server/cutover.ts";
 import { currentHouse, migrateHouse } from "../src/server/house.ts";
 import { migrateIntegrationTriggers } from "../src/server/integrations.ts";
 
@@ -39,8 +41,10 @@ function usage(): never {
   is stamped with conversation, admin and approve — what the console it replaced could do, and not trace — and an entry
   that still carries the old signed event door's "trigger" (with the "commands" list that belonged to it) loses both,
   because that door is gone (#104). A credential that already has grants is left alone, so a narrowed device stays
-  narrowed. Neither step is done on boot: a server that rewrote the operator's files on start would be a server that
-  edits his home.`);
+  narrowed. A connector whose user face still maps actors to names is rewritten to the one owner it had, which is a
+  refusal when it mapped several: which of them this bot works for is the operator's call. service/roster.json is
+  printed and deleted, because nothing reads it any more. None of this is done on boot: a server that rewrote the
+  operator's files on start would be a server that edits his home.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -65,6 +69,22 @@ for (const entry of migrated) {
 				"they are gone — grant them there (`connector.commands`) when the connector has one",
 		);
 	}
+}
+const cutover = await cutOverSingleUser(house).catch((error: unknown) => {
+	console.error(`[doctor] ${error instanceof Error ? error.message : String(error)}`);
+	process.exit(1);
+});
+for (const entry of cutover.integrations) {
+	console.log(
+		`[doctor] ${entry.name}: removed ${entry.retired.join(", ")} from connector.user, and it is ` +
+			`${entry.owner === undefined ? "no owner: an actorless submission is still accepted, an actor is refused" : `owned by actor ${entry.owner}`}`,
+	);
+}
+if (cutover.roster !== undefined) {
+	console.log(
+		`[doctor] deleted service/roster.json: it held ${cutover.roster.length === 0 ? "no names" : cutover.roster.join(", ")}` +
+			". Who this bot works for is agent/profile.md",
+	);
 }
 const granted = await migrateTokenGrants(house.home);
 for (const record of granted) {

@@ -210,6 +210,64 @@ describe("the integration list on disk", () => {
 		assert.match(commands, /npm run doctor -- migrate/);
 	});
 
+	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					telegram: {
+						enabled: true,
+						connector: { user: { owner: "8811", conversations: [] }, state: [], trustMarkers: false },
+					},
+				},
+			}),
+		);
+		const booted = (await readIntegrations(paths)).integrations.telegram?.connector?.user;
+		assert.equal(booted?.owner, "8811");
+
+		// Each retired key is a file whose reader believes it still decides who may speak (#126). The refusal names the key
+		// and the one command that rewrites it, rather than reading past a setting that no longer exists.
+		for (const [key, retired] of [
+			["actors", { "8811": "Denis" }],
+			["unattributed", true],
+			["approver", "8811"],
+		] as const) {
+			await writeRaw(
+				paths,
+				JSON.stringify({
+					integrations: {
+						telegram: {
+							enabled: true,
+							connector: {
+								user: { owner: "8811", conversations: [], [key]: retired },
+								state: [],
+								trustMarkers: false,
+							},
+						},
+					},
+				}),
+			);
+			const refused = await refusal(paths);
+			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
+			assert.match(refused, /npm run doctor -- migrate/, key);
+		}
+
+		// An owner that is not an actor id is refused as well: an empty string is nobody, spelled as if it were somebody.
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					telegram: {
+						enabled: true,
+						connector: { user: { owner: "  ", conversations: [] }, state: [], trustMarkers: false },
+					},
+				},
+			}),
+		);
+		assert.match(await refusal(paths), /"connector\.user\.owner" that is not an actor id/);
+	});
+
 	it("migrates both old keys away, once, and carries a granted vocabulary onto the grant", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
@@ -392,7 +450,7 @@ describe("the integration command", () => {
 					github: {
 						...github,
 						connector: {
-							user: { actors: { "8811": "Denis" }, conversations: [] },
+							user: { owner: "8811", conversations: [] },
 							state: ["status"],
 							trustMarkers: false,
 						},

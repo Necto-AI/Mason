@@ -30,10 +30,10 @@
  * the wait. The first authorized answer settles the request; a later one changes nothing, and there is no "always
  * allow" — standing policy is an administrative act, not a chat button.
  *
- * A request is routed to a surface only when the person who started the turn is the approver the operator configured on
- * that connector (`connector.user.approver`). Otherwise it stays visibly pending and the owner answers it through
- * `POST /api/permissions/<id>` — the admin panel's route (#103), which is why an offline approver leaves a request
- * pending rather than silently denying it.
+ * A request is routed to the surface the turn came from, and is settled either by a device holding the `approve` grant or
+ * by the connector's own `owner` actor. There is one authority, not one per name: the credential is the strongest
+ * statement of who administers this bot, and the owner actor is the same person speaking through their chat. A request
+ * that came through one connector is never settled through another.
  */
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -50,6 +50,7 @@ import {
 	type Tx,
 } from "@earendil-works/pi-durable";
 import type { ApprovalMarker, Origin } from "mason-protocol";
+import { connectorGrantFor } from "./connectors.ts";
 import type { Integration } from "./integrations.ts";
 import { MCP_TOOL, type McpCatalog, rediscovery } from "./mcp.ts";
 import { type TurnOrigin, turnInputIn, turnOriginOfEntry } from "./replies.ts";
@@ -79,11 +80,7 @@ export interface PermissionRequest {
 	readonly arguments: JsonValue | undefined;
 	readonly reason: string;
 	readonly answers: readonly ("allow" | "deny")[];
-	/** The roster name with authority to answer, when the operator configured one. Absent: only the owner may. */
-	readonly approver?: string;
-	/** The roster name whose words started the turn, when a person's words did. Authority to approve is a name. */
-	readonly askedBy?: string;
-	/** Where the turn came from, which is where the question goes when that person is the approver. */
+	/** Where the turn came from, which is where the question goes. */
 	readonly origin?: Origin;
 	readonly askedAt: number;
 }
@@ -92,7 +89,7 @@ export interface PermissionRequest {
 export interface PermissionAnswer {
 	readonly permissionId: string;
 	readonly answer: PermissionOutcome;
-	/** Who answered: a roster name, or `stop` when the runtime cancelled the wait. */
+	/** Who answered: a connector's name, `owner` for a device, or `stop` when the runtime cancelled the wait. */
 	readonly by?: string;
 	readonly at: number;
 }
@@ -214,67 +211,56 @@ function matches(rules: readonly string[] | undefined, tool: string): boolean {
 }
 
 /**
- * The roster name with authority to answer a request from this turn, or `undefined` when the operator configured none.
+ * The surface a pending request may be sent to: where it came from, as long as the entry still grants that conversation.
  *
- * It is a claim the config backs and the roster has to hold: a connector that maps its actors to names says which of
- * those names may approve, and an actor that maps to somebody else gets no authority from having spoken.
+ * Whoever asked, the question goes back to the chat it was asked in. A request whose conversation the operator has since
+ * taken away stays pending in the panel: mason does not send a question to a room it may no longer speak in.
  */
-export function approverFor(origin: TurnOrigin, integrations: Record<string, Integration>): string | undefined {
-	return grantOf(origin, integrations)?.approver;
-}
-
-/** The surface a pending request may be sent to: only where the person who asked is the approver. */
 export function surfaceFor(
 	request: PermissionRequest,
 	integrations: Record<string, Integration>,
 ): { readonly connector: string; readonly conversation: string } | undefined {
 	const carried = request.origin;
-	if (carried === undefined || request.approver === undefined) return undefined;
-	const grant = integrations[carried.connector]?.connector?.user;
-	// The configuration may have changed since the question was written: the surface is what the file says now.
-	if (grant?.approver !== request.approver) return undefined;
-	// Only the approver's own words are answered where they were said. Anyone else's question stays pending in the owner's
-	// list, because showing it in a room the approver does not own would put another person's work in front of strangers.
-	if (request.askedBy !== grant.approver) return undefined;
-	return { connector: carried.connector, conversation: carried.externalConversationId };
+	if (carried === undefined) return undefined;
+	const live = connectorGrantFor(integrations, carried.connector)?.grant.user;
+	if (live === undefined) return undefined;
+	const permitted = live.conversations.some(
+		(entry) => entry.externalConversationId === carried.externalConversationId,
+	);
+	return permitted ? { connector: carried.connector, conversation: carried.externalConversationId } : undefined;
 }
 
-/** Whether an actor a connector names may answer this request. The owner's own route never asks this. */
+/**
+ * Whether an actor a connector names may answer this request. The owner's own route never asks this.
+ *
+ * Three refusals, and each is a different wrong answer. A question that came through another connector is not this
+ * connector's to settle, because two connectors are two seats. A connector with no `owner` has nobody to answer through
+ * it, so the panel is the only way. And a submission actor that is not the owner is a stranger: having spoken buys no
+ * authority to approve. What an answer records is the connector itself, which is what the transcript can hold.
+ */
 export function mayAnswer(
 	request: PermissionRequest,
 	grant: {
-		readonly approver?: string;
-		readonly actors: Readonly<Record<string, string>>;
+		readonly owner?: string;
 		/** The integration this grant belongs to: a question that came through another connector is not this one's. */
-		readonly connector?: string;
+		readonly connector: string;
 	},
 	by: { readonly externalActorId?: string },
 ): { readonly ok: true; readonly by: string } | { readonly ok: false; readonly reason: string } {
-	if (grant.approver === undefined) {
-		return { ok: false, reason: "this connector has no approver configured, so nobody on it may answer" };
+	if (grant.owner === undefined) {
+		return { ok: false, reason: "this connector names no owner, so nobody on it may answer" };
 	}
-	if (grant.connector !== undefined && request.origin !== undefined && request.origin.connector !== grant.connector) {
-		// The glossary's promise, kept: an approver settles the questions that came through their own connector. Two
-		// connectors configured with the same person are two seats, and a seat is not a claim on the other's traffic.
+	if (request.origin !== undefined && request.origin.connector !== grant.connector) {
 		return { ok: false, reason: `this request came through ${request.origin.connector}, not through this connector` };
-	}
-	if (request.approver !== undefined && request.approver !== grant.approver) {
-		return { ok: false, reason: `this request is for ${request.approver}, not for ${grant.approver}` };
 	}
 	const actor = by.externalActorId;
 	if (actor === undefined) {
 		return { ok: false, reason: "an answer must name the actor that gave it" };
 	}
-	const who = grant.actors[actor];
-	if (who !== grant.approver) {
-		return { ok: false, reason: `${who ?? actor} is not the approver this connector is configured with` };
+	if (actor !== grant.owner) {
+		return { ok: false, reason: `${actor} is not the owner this connector is configured with` };
 	}
-	return { ok: true, by: who };
-}
-
-function grantOf(origin: TurnOrigin, integrations: Record<string, Integration>) {
-	if (origin.kind !== "connector") return undefined;
-	return integrations[origin.origin.connector]?.connector?.user;
+	return { ok: true, by: grant.connector };
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */
@@ -420,8 +406,6 @@ export class PermissionBook {
 								arguments: request.arguments ?? null,
 								reason: request.reason,
 								answers: [...request.answers],
-								...(request.approver === undefined ? {} : { approver: request.approver }),
-								...(request.askedBy === undefined ? {} : { askedBy: request.askedBy }),
 								...(request.origin === undefined
 									? {}
 									: {
@@ -572,18 +556,15 @@ function committer(api: HookApi): HookCommitter {
 	return candidate as HookCommitter;
 }
 
-/** The turn, read through a hook's commit: the values go in locals, because the callback must answer nothing. */
-async function hookTurn(api: HookCommitter, context: Context): Promise<{ origin: TurnOrigin; askedBy?: string }> {
+/** The turn, read through a hook's commit: the value goes in a local, because the callback must answer nothing. */
+async function hookTurn(api: HookCommitter, context: Context): Promise<TurnOrigin> {
 	let origin: TurnOrigin = { kind: "console" };
-	let askedBy: string | undefined;
 	await api.commit(async (tx) => {
 		const entry = await turnInputIn(tx, api.conversationId);
 		if (entry === undefined) return;
 		origin = turnOriginOfEntry(entry);
-		const person = (entry.data as { person?: unknown } | undefined)?.person;
-		if (typeof person === "string") askedBy = person;
 	}, context);
-	return { origin, ...(askedBy === undefined ? {} : { askedBy }) };
+	return origin;
 }
 
 /**
@@ -644,8 +625,6 @@ export function requestOf(entry: EntryRecord): PermissionRequest | undefined {
 		? data.answers.filter((value): value is "allow" | "deny" => value === "allow" || value === "deny")
 		: [];
 	const origin = originOf(data.origin);
-	const approver = typeof data.approver === "string" ? data.approver : undefined;
-	const askedBy = typeof data.askedBy === "string" ? data.askedBy : undefined;
 	return {
 		permissionId: data.permissionId,
 		tool: {
@@ -656,8 +635,6 @@ export function requestOf(entry: EntryRecord): PermissionRequest | undefined {
 		arguments: (data.arguments ?? null) as JsonValue,
 		reason: typeof data.reason === "string" ? data.reason : "",
 		answers: answers.length === 0 ? ["allow", "deny"] : answers,
-		...(approver === undefined ? {} : { approver }),
-		...(askedBy === undefined ? {} : { askedBy }),
 		...(origin === undefined ? {} : { origin }),
 		askedAt: typeof data.askedAt === "number" ? data.askedAt : 0,
 	};
@@ -723,7 +700,7 @@ export function createPermissions(options: PermissionsOptions): Permissions {
 		beforeTool: async (call, api, context) => {
 			// The task runtime the hook is handed, narrowed to the half the gate writes with.
 			const runtime = committer(api);
-			const { origin, askedBy } = await hookTurn(runtime, context);
+			const origin = await hookTurn(runtime, context);
 			const args = (call.arguments ?? {}) as Record<string, unknown>;
 			// The catalog is asked before the decision, and it asks the service: `describe` reconnects a server that dropped
 			// and re-lists it, so the marker is what the service says now rather than what it said at boot.
@@ -743,15 +720,12 @@ export function createPermissions(options: PermissionsOptions): Permissions {
 			// A stable id per call attempt: a memo is written once for the task, so a rerun after a restart finds the same
 			// question instead of asking a second one about the same call.
 			const permissionId = await api.memo(PERMISSION_MEMO, `perm_${randomId()}`, context);
-			const approver = approverFor(origin, options.integrations());
 			const request: PermissionRequest = {
 				permissionId,
 				tool: decision.tool,
 				arguments: (call.arguments ?? {}) as JsonValue,
 				reason: decision.reason,
 				answers: ["allow", "deny"],
-				...(approver === undefined ? {} : { approver }),
-				...(askedBy === undefined ? {} : { askedBy }),
 				...(origin.kind === "console" || origin.origin === undefined ? {} : { origin: origin.origin }),
 				askedAt: now(),
 			};

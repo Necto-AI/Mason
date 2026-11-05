@@ -140,20 +140,21 @@ test("DEFAULT_SOUL is short: it is the first thing in every prompt", () => {
 	assert.ok(DEFAULT_SOUL.length < 700, `DEFAULT_SOUL is ${DEFAULT_SOUL.length} characters`);
 });
 
-test("the team section says how a message names its author, and what no prefix means", async () => {
+test("the team section says the conversation is one person's, and what the old prefix means now", async () => {
 	const rendered = await renderSection(sectionOf("team"));
 	assert.equal(
 		rendered,
 		`<team>\n${TEAM_GUIDELINES}\n</team>`,
 		"the section is the constant, tagged like its neighbours",
 	);
+	assert.match(TEAM_GUIDELINES, /You work for one person/, "the bot has one owner, and the prompt says so");
 	assert.match(
 		TEAM_GUIDELINES,
-		/starts with "\[from <name>\] "/,
-		"the convention is the prefix itself, and no example",
+		/an older message may start with "\[from <name>\] "/i,
+		"a stored prefix is history, not a second participant: rewriting it would change what somebody said",
 	);
-	assert.match(TEAM_GUIDELINES, /no such prefix has no author/, "an unnamed device and a trigger are not attributed");
-	// It is paid for in every turn: four lines of prose, no list, no example beyond the prefix.
+	assert.match(TEAM_GUIDELINES, /job, not as something somebody said/, "a trigger is still nobody's words");
+	assert.doesNotMatch(TEAM_GUIDELINES, /transcript is shared/, "there is no room to describe");
 	assert.ok(TEAM_GUIDELINES.length < 400, `the team section is ${TEAM_GUIDELINES.length} characters`);
 });
 

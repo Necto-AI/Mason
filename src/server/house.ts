@@ -16,7 +16,6 @@
  * └── service/                # everything the server owns: never a path inside the tool machine
  *     ├── soul.md             # the first section of the system prompt, supplied by the operator
  *     ├── config.json         # the token hashes and the session key (`auth.ts`)
- *     ├── roster.json         # who is in the room (`roster.ts`)
  *     ├── integrations.json   # the services mason reaches (`integrations.ts`)
  *     ├── ssh/                # the key mason logs into the env machine with
  *     ├── pi/                 # the copy of the provider credential
@@ -73,8 +72,6 @@ export interface HousePaths {
 	readonly dataDir: string;
 	/** The token hashes and the session key (`auth.ts`). */
 	readonly config: string;
-	/** The names a browser may claim as its author: the roster, read per request (`roster.ts`). */
-	readonly roster: string;
 	/**
 	 * The services mason reaches — an MCP endpoint and a trigger per entry — read once at boot (`integrations.ts`). Not in
 	 * `HOUSE_ENTRIES`: the file arrived after the split, so no home from before it has one to carry across.
@@ -123,7 +120,6 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		workspaceDir: join(agentDir, "workspace"),
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
-		roster: join(serviceDir, "roster.json"),
 		integrations: join(serviceDir, "integrations.json"),
 		sshDir: join(serviceDir, "ssh"),
 		piDir: join(serviceDir, "pi"),
@@ -178,7 +174,6 @@ export const HOUSE_ENTRIES: readonly HouseEntry[] = [
 	{ name: "workspace", half: "agent" },
 	{ name: "soul.md", half: "service" },
 	{ name: "config.json", half: "service" },
-	{ name: "roster.json", half: "service" },
 	{ name: "ssh", half: "service" },
 	{ name: "pi", half: "service" },
 	{ name: "data", half: "service" },
