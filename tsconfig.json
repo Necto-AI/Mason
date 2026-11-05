@@ -21,6 +21,6 @@
       "mason-connector/store/sqlite": ["./packages/connector/src/store-sqlite.ts"],
     }
   },
-  "include": ["src/**/*", "test/**/*", "scripts/**/*", "packages/**/*"],
+  "include": ["src/**/*", "test/**/*", "scripts/**/*", "bin/**/*", "packages/**/*"],
   "exclude": ["node_modules", "dist"]
 }
