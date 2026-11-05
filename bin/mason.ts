@@ -122,9 +122,19 @@ async function main(): Promise<void> {
 	// stdout/stderr are the operator's terminal exactly as `npm run …` delivers them.
 	const { path, flags } = scriptLoader(script);
 	const child = spawn(process.execPath, [...flags, path, ...args], { stdio: "inherit" });
+	// The stop signals name this wrapper's pid — the one the operator runs — but the child is the one that
+	// must act, so the wrapper forwards them. A TTY's Ctrl-C delivers SIGINT to the whole foreground group
+	// already (as `npm run …` does today), so the forward can arrive as a second delivery and the server's
+	// handlers run either way. A signal listener would hold the process open after the child is gone, so the
+	// child's exit is this command's exit and the wrapper goes with it.
 	child.on("exit", (code) => {
-		process.exitCode = code ?? 1;
+		process.exit(code ?? 1);
 	});
+	for (const signal of ["SIGINT", "SIGTERM"] as const) {
+		process.on(signal, () => {
+			child.kill(signal);
+		});
+	}
 }
 
 await main();
