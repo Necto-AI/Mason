@@ -268,8 +268,8 @@ a home rather than a path.
 Opening the runtime creates the home if it is missing — `log/`, `skills/`, and `soul.md` from `DEFAULT_SOUL`, written
 once and never overwritten — seeds the skills mason ships into `agent/skills/` (a name that already exists is left
 alone), and initialises `agent/` as a git repository, so a memory write is a commit Denis can revert. A home from
-before the split is refused before anything is created: boot names `npm run doctor -- migrate` and stops, because
-writing the new layout beside the old files would lose the soul and make the migration ambiguous. A
+before the split is refused before anything is created: boot names the entries it found and says to move them by hand,
+because writing the new layout beside the old files would lose the soul. A
 runtime takes `houseHome`, else `MASON_HOME`, else `~/.mason`, and configures that home for every section that reads
 it; tests pass `houseHome` (or set `MASON_HOME` for sections rendered outside a runtime) and no test touches the real
 one.
@@ -343,7 +343,7 @@ mason's.
 ### 4.1a What the client is sent — the wire boundary
 
 The client never receives the conversation. `src/server/projection.ts` derives three cells from the durable view, and
-they are the whole contract:
+they are the whole contract, and nothing in mason reads them yet — a reply reaches its connector through the outbox:
 
 | Cell | Holds | Never holds |
 |---|---|---|
@@ -484,8 +484,7 @@ connector that spent its minute on compactions can still stop the turn they were
 `mason.rate_limited` with `retryAfterMs`, capped at a minute.
 
 **The question, and why nothing asks it.** `connector/interaction.request` and `mason/interaction.answer` are reserved
-method names and nothing else: this build sends neither, because there is no approval step (§4.1e). An answer is not a
-submission and a question is not a reply, so no second way to speak exists while the pair is inert.
+method names and nothing else: this build sends neither, because there is no approval step (§4.1e).
 
 **The cutover is done, and there is nothing behind it.** #104 removed the HMAC event door (`POST /api/events/<name>` and
 its verifier), the trigger face in `integrations.json`, the vendor-aware delivery path and the boot-frozen MCP
@@ -521,10 +520,9 @@ may do is the credential it holds, and the answer to "may this run" is the crede
 ### 4.2 What a script may read
 
 `/api/status` and `/api/integrations` are gone with the panel. A script that wants the deployment's shape reads the
-files it wrote (`service/integrations.json`) or calls `runtime.viewSnapshot`; there is no HTTP area to grant, because
-there is no grant table left.
+files it wrote, or calls `runtime.viewSnapshot`; there is no HTTP area and no grant table.
 
-### 4.4 Failure handling: the run supervisor and the retry hook
+### 4.3 Failure handling: the run supervisor and the retry hook
 
 Three layers, because a provider outage has three different timescales.
 

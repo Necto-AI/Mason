@@ -107,7 +107,7 @@ export const replyTool = defineTool({
 			...(chosen.target === undefined ? {} : { target: chosen.target }),
 			...(origin.kind !== "local" && origin.origin !== undefined ? { origin: origin.origin } : {}),
 		};
-		// The commit is the delivery, and the commit is what makes it durable: a locale reply is read out of this entry,
+		// The commit is the delivery, and the commit is what makes it durable: a local reply is read out of this entry,
 		// and a connector reply is sent from it by the outbox, which records the acknowledgement as its own entry.
 		await api.commit(
 			(tx) =>

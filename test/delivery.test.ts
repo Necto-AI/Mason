@@ -273,8 +273,6 @@ const TELEGRAM = {
 			owner: "8811",
 			conversations: [{ externalConversationId: "-1001234", kind: "room" }],
 		},
-		state: [],
-		trustMarkers: false,
 	},
 } as const;
 

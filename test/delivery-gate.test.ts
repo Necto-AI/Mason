@@ -364,8 +364,6 @@ test("a fire that named its conversation routes the reply back to it", async () 
 				owner: "8811",
 				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
 			},
-			state: [],
-			trustMarkers: false,
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");

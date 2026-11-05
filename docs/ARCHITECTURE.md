@@ -64,7 +64,7 @@ A change that breaks one is not a trade-off to weigh, it is the wrong change.
 
 ## What can be generated, is generated
 
-`docs/SURFACE.md` holds the tables a hand cannot keep honest — the four doors and what opens each, the extensions a
+`docs/SURFACE.md` holds the tables a hand cannot keep honest — the doors and what opens each, the extensions a
 boot installs, and every exported budget in `src/server/limits.ts`. It
 is rendered by `scripts/surface.ts`, written by `npm run gen:surface`, and checked in CI by
 `npm run gen:surface:check`. Hand-editing it is a failing check, which is the point: the diff that adds a route without a

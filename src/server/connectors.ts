@@ -4,8 +4,7 @@
  * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
  * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
  * `connector` block is what the operator grants it: which external actor is the owner's, which external conversations may
- * be spoken in, which event kinds fire which routine, which controls it may spend on `mason/control`, and whether its
- * approval markers may waive approval.
+ * be spoken in, which event kinds fire which routine, and which controls it may spend on `mason/control`.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
  * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
@@ -18,12 +17,11 @@
  *
  * ## The credential
  *
- * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — beside the
- * browser tokens and for the same reason, that file ends up in bug reports — and read on every upgrade request, so a
- * revoke lands on the next connection rather than on the next restart. It is **not** an owner token: it opens
- * `/api/connector` and the attachment endpoints, and nothing else. A connector never receives the owner's token, and
- * the connector's own credential for mason's MCP calls is configured on the tools face (`tools.credential`), which is
- * the other direction and never leaves the server except on that call.
+ * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — that file ends up
+ * in bug reports — and read on every upgrade request, so a revoke lands on the next connection rather than on the next
+ * restart. It opens `/api/connector` and the attachment upload, and nothing else. The credential for mason's own MCP
+ * calls is the other direction: it is configured on the tools face (`tools.credential`) and never leaves the server
+ * except on that call.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -105,6 +103,19 @@ export function readConnectorGrant(
 		throw new Error(refusal(where, name, 'has a "connector" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
+	// The keys the approval apparatus owned. They were required once, so every file written before the cut carries one,
+	// and reading past them would leave an operator believing a rule still runs.
+	const retired = RETIRED_GRANT_KEYS.filter((key) => raw[key] !== undefined);
+	if (retired.length > 0) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				`has a retired "connector.${retired[0]}": there is no approval step and no state mirror any more, so the ` +
+					"grant is its faces and its commands. Delete that key by hand",
+			),
+		);
+	}
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
 	const commands = readCommands(where, name, raw.commands);
@@ -161,6 +172,9 @@ function readCommands(where: string, name: string, value: unknown): ControlOp[] 
  * They are refused rather than ignored. A file that still says who may speak is a file whose reader believes it still
  * decides that. Spelled once, because the refusal and what a command prints must agree.
  */
+/** The grant keys a removed mechanism owned, refused by name. */
+export const RETIRED_GRANT_KEYS = ["state", "trustMarkers", "policy"] as const;
+
 export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {

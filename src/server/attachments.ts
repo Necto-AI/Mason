@@ -3,8 +3,8 @@
  *
  * A shared filesystem path is not a remote protocol, and a 25 MB image is not a JSON-RPC message. So the connector
  * uploads to its own authenticated endpoint, gets an id back, and references that id in a submission's `file` block;
- * mason reads the bytes from its own store when it needs them, and a connector downloading an id gets back only what it
- * itself uploaded.
+ * mason reads the bytes from its own store when it needs them. The store is write-only for a connector: nothing serves
+ * an id back.
  *
  * The store is a directory per connector under the home's `data/`, with one file of bytes and one of metadata:
  *
@@ -16,9 +16,9 @@
  * It is durable on purpose. A restart between the upload and the submission that references it is exactly the moment a
  * resend happens, and an id that died with the process would turn a redelivery into a lost photograph.
  *
- * Everything here is scoped by connector and checked on the way out: an id that is not `cnt_<hex>` never reaches the
- * filesystem, an id another connector uploaded answers `404` (not `403` — which ids exist is not a sender's business),
- * an expired one answers `410`, and one over the cap is refused before it is stored.
+ * Everything here is scoped by connector and checked on the way in: an id that is not `cnt_<hex>` never reaches the
+ * filesystem, one over the cap is refused before it is stored, and `read()` is mason's own call — it answers `missing` or
+ * `expired` so the model can say the file is gone, which is a note to a turn and not an HTTP status.
  */
 import { randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";

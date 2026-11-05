@@ -71,7 +71,6 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 						capabilities: ["text", "markdown", "files", "approvals", "streaming"],
 					},
 					events: { hooks: { "chat.message": "team-chat" } },
-					state: ["status", "presence", "projection"],
 				},
 			},
 			// A second user-face connector, off by default: the outbox claims the door reads owed replies for every open
@@ -85,7 +84,6 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 									owner: "777",
 									conversations: [{ externalConversationId: "777", kind: "person" }],
 								},
-								state: ["status"],
 							},
 						},
 					}

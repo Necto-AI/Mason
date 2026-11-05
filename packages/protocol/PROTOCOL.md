@@ -212,6 +212,20 @@ still reserved method names, so a connector that implements them compiles and ru
 answers one: what a service may do is the credential it holds, and there is no paused-call question to answer. A
 connector may advertise the `approvals` capability; nothing acts on it.
 
+## Attachments
+
+Bytes cross through authenticated HTTP, referenced by content id. A shared filesystem path is not a remote protocol, and
+inline binary does not belong in a JSON-RPC frame.
+
+| | |
+|---|---|
+| `POST /api/connector/attachments` | raw body, `content-type` and `x-mason-filename` headers → `{contentId, size, expiresAt}` |
+| Cap | `limits.attachmentBytes`, `413` above it |
+| Expiry | `limits.attachmentTtlMs`; the submission that names a stale id says the file is gone |
+
+The transfer is one way. A content id is scoped to the connector that uploaded it, and mason reads the bytes itself when a
+submission names one: nothing serves them back to a connector, and no connector ever needs a download.
+
 ## Errors
 
 A JSON-RPC error's `data` is a `ProtocolErrorData`: a stable `code`, a sentence, and whether it is worth retrying.

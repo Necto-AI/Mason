@@ -121,4 +121,4 @@ function main(): void {
 	console.log(`[surface] wrote ${SURFACE_PATH}`);
 }
 
-if (process.argv[1] !== undefined && process.argv[1].endsWith("surface.ts")) main();
+if (process.argv[1]?.endsWith("surface.ts") === true) main();

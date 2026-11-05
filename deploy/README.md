@@ -523,7 +523,7 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   its own container, so nothing has to be terminated: keep the port unpublished.
 - Two paths answer without the connector credential, and both are narrower than it. `/api/health` answers one word and
   needs no credential at all (a monitor that needs a token is a monitor nobody runs). `/api/connector` (the socket) and
-  `/api/connector/attachments[/<contentId>]` (the bytes) are authenticated as **the connector**, by a credential mason
+  `/api/connector/attachments` (the upload) are authenticated as **the connector**, by a credential mason
   issued for that one entry: it opens those paths and nothing else, and a revoke lands on the next connection. There is
   no other route: no panel, no `/api/admin`, no Chord socket, and the signed event door is gone.
 

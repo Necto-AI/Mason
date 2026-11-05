@@ -7,7 +7,7 @@ which is current. This page is the map of which tier a sentence belongs to, and 
 |---|---|---|
 | `AGENTS.md` (root) | Standing orders an agent needs in every session: the rules, the commands, the paths. One to three lines each, linking the home for the rest | A tutorial, a file tree, or the detail of one subsystem — the file is read on every turn, so a paragraph here is one every session pays for |
 | [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) | How mason is assembled today, and where new behaviour goes: one row per goal, naming the file that owns it, the mechanism, and the test that pins it | The product goal, the milestones, the reasoning behind a decision, or anything that describes a version of the code that no longer exists |
-| [`docs/SURFACE.md`](SURFACE.md) | Generated: the four doors, the extensions, the budgets | Anything hand-written. Edit the code and run `npm run gen:surface`; the check fails on a hand edit |
+| [`docs/SURFACE.md`](SURFACE.md) | Generated: the doors, the extensions, the budgets | Anything hand-written. Edit the code and run `npm run gen:surface`; the check fails on a hand edit |
 | [`docs/SPEC.md`](SPEC.md) | The product goal, the milestone specifications, and how each is verified — what is being built and what "done" means | The current-state map. A specification is a contract with a milestone; a map moves with the code |
 | `docs/adr/NNNN-*.md` | One decision: the context that forced it, what was decided, what it cost, and where it stands | A plan, a how-to, or a description of the code as it happens to be written |
 | `docs/research/` | Evidence: what other projects do, with sources and the date they were read | Guidance. A research note answers "what is out there", never "what we must do" |

@@ -102,7 +102,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
 		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
 	});
-	// The connector door: one JSON-RPC socket per connector, the state mirrors and the reply outbox. Opened before the
+	// The connector door: one JSON-RPC socket per connector, the reply outbox. Opened before the
 	// listener so a delivery cannot be owed before there is anything to send it with.
 	const connectors = await createConnectorDoor({
 		runtime,

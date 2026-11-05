@@ -214,7 +214,7 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "8811", conversations: [] }, state: [], trustMarkers: false },
+						connector: { user: { owner: "8811", conversations: [] } },
 					},
 				},
 			}),
@@ -235,11 +235,7 @@ describe("the integration list on disk", () => {
 					integrations: {
 						telegram: {
 							enabled: true,
-							connector: {
-								user: { owner: "8811", conversations: [], [key]: retired },
-								state: [],
-								trustMarkers: false,
-							},
+							connector: { user: { owner: "8811", conversations: [], [key]: retired } },
 						},
 					},
 				}),
@@ -256,7 +252,7 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "  ", conversations: [] }, state: [], trustMarkers: false },
+						connector: { user: { owner: "  ", conversations: [] } },
 					},
 				},
 			}),
@@ -351,7 +347,7 @@ describe("the integration command", () => {
 						enabled: false,
 						description: "The old endpoint",
 						tools: { url: "http://mason-github:8082/mcp", required: true },
-						connector: { state: [], trustMarkers: true },
+						connector: { commands: ["stop"] },
 					},
 				},
 			}),
@@ -386,11 +382,7 @@ describe("the integration command", () => {
 				integrations: {
 					github: {
 						...github,
-						connector: {
-							user: { owner: "8811", conversations: [] },
-							state: ["status"],
-							trustMarkers: false,
-						},
+						connector: { user: { owner: "8811", conversations: [] } },
 					},
 				},
 			}),

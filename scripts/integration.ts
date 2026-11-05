@@ -7,7 +7,7 @@
  * time it writes.
  *
  * It edits the tools face — the one that reaches an MCP endpoint. What a connector may do on its socket is its
- * `connector` block, which only the panel edits (`/api/admin/connectors`): the grant, its `commands` and its policy are
+ * `connector` block, which is edited in the file by hand: the grant, its `commands` and its policy are
  * a person's permission decisions, and `npm run connector` mints the credential for them, not the grant. There is no
  * secret here any more, because the signed event door is gone (#104).
  */
