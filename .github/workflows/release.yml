@@ -81,9 +81,23 @@ jobs:
       - name: publish the packages, protocol first
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          npm publish --workspace mason-protocol --provenance --access public
-          npm publish --workspace mason-connector --provenance --access public
-          npm publish --workspaces=false --provenance --access public
+          # A version already on the registry is not a failure. The first release of each package goes out by hand,
+          # because npm's trusted publishing is configured on a package that already exists; after that a re-run of a
+          # tag, or a release where only one of the three moved, must publish what is missing and leave the rest alone.
+          publish() {
+            name="$1"
+            manifest="$2"
+            shift 2
+            version="$(node -p "require('./${manifest}/package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already on the registry; nothing to publish"
+              return 0
+            fi
+            npm publish "$@" --provenance --access public
+          }
+          publish mason-protocol packages/protocol --workspace mason-protocol
+          publish mason-connector packages/connector --workspace mason-connector
+          publish mason-agent . --workspaces=false
 
       - name: attach the tarballs to the release
         if: startsWith(github.ref, 'refs/tags/v')
