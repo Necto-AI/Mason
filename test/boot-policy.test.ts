@@ -2,7 +2,8 @@
  * A stack comes back after a reboot with nobody at the keyboard, and the two halves of that are pinned here.
  *
  * `restart: unless-stopped` is not a boot policy: podman records a shutdown as an explicit stop, and a container somebody
- * stopped is one that policy declines to start, so a reboot left both stacks down for six hours (#86). The policy is
+ * stopped is one that policy declines to start, so a reboot left the stacks down until a person ran `up` again,
+ * and a bot down that long reads as a broken bot (#86). The policy is
  * `restart: always` on every service, plus `podman-restart.service` enabled in the operator's own systemd session, which
  * is the half no compose file can carry. A stack that loses either half keeps a lifecycle that ends at the next reboot,
  * and nothing in the log says so: it looks like a bot with nothing to say.
@@ -60,7 +61,13 @@ for (const file of COMPOSE_FILES) {
 	test(`every service in ${file} is restored at boot`, async () => {
 		const text = await read(file);
 		const declared = services(text);
-		assert.ok(declared.length > 0, `${file} starts at least one service`);
+		// The five services this deployment runs, named: a dropped block or a commented name must fail this file, not hide.
+		const expected = file.endsWith("compose.yaml") ? ["mason-env", "mason", "mason-asr"] : ["mason-telegram", "vpn"];
+		assert.deepEqual(
+			declared.map((service) => service.name).sort(),
+			[...expected].sort(),
+			`${file} declares exactly these services`,
+		);
 		for (const service of declared) {
 			assert.equal(service.restart, "always", `${service.name} declares restart: always`);
 		}
@@ -88,7 +95,8 @@ test("the README names the boot policy, and the two commands that turn it on", a
 
 test("a stack that is already running takes the policy on from the next deploy", async () => {
 	const script = await read("deploy/deploy.sh");
-	// Recreation is what carries a compose-declared `restart` policy onto containers that were created without it.
+	// The recreate is the regression guard: podman-compose also recreates on a config-hash mismatch, so this pins the
+	// existing behaviour against an accidental drop, not a claim that recreate is the only path the policy takes.
 	assert.match(
 		script,
 		/up -d --force-recreate/,
