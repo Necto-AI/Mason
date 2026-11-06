@@ -172,7 +172,7 @@ The one thing they do share is the host port range (`MASON_PORT`) and the provid
 
 ## A reboot is not a stop
 
-Every service in this directory declares `restart: always`, and the host runs `podman-restart.service` in the operator's
+Every service in this stack declares `restart: always`, and the host runs `podman-restart.service` in the operator's
 own systemd session, with lingering on. That pair is the boot policy: the unit starts every container whose restart
 policy says it starts at boot, and it is what makes that happen with nobody at the keyboard. The policy is `always` and
 not `unless-stopped` because the podman this was measured on records a shutdown as an explicit stop, and a container
@@ -188,7 +188,8 @@ systemctl --user enable --now podman-restart.service
 
 A host that runs podman as root enables the system unit instead (`sudo systemctl enable --now podman-restart.service`).
 This deployment is rootless, so the unit belongs to the operator's session and the two commands above are the ones that
-apply.
+apply. A compose that runs docker instead needs none of this: `docker.service` itself restores `restart: always`
+containers at boot.
 
 Lingering is the half that is easy to miss. Without it the user's systemd instance exists only while somebody is logged
 in, and a unit enabled in a session that does not start at boot stays in the state this host was already in: `is-enabled`
