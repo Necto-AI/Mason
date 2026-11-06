@@ -3,6 +3,7 @@
  * agent speak first, and a run interrupted by a restart picks up where it stopped.
  */
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,19 @@ function openFor(
 	access: ResolvedModel,
 	options: { storage?: "sqlite" | "memory"; extensions?: OpenAgentRuntimeOptions["extensions"] } = {},
 ): Promise<AgentRuntime> {
+	// One routine the tests fire; a deployment ships none, so the file is what the test seeds. The interval is far
+	// past every test's lifetime, so only a test's own fire becomes a turn.
+	mkdirSync(join(directory, "house", "agent"), { recursive: true, mode: 0o700 });
+	writeFileSync(
+		join(directory, "house", "agent", "routines.json"),
+		JSON.stringify([
+			{
+				name: "workspace-check",
+				intervalSeconds: 3_600,
+				prompt: "Inspect the workspace and report only what needs attention.",
+			},
+		]),
+	);
 	return openAgentRuntime(BACKGROUND_CONTEXT, {
 		dataDir: join(directory, "data"),
 		workspaceDir: directory,
@@ -299,7 +313,8 @@ describe("durable harness + pi-env", () => {
 		try {
 			assert.deepEqual(
 				runtime.hooks.list().map((hook) => hook.id),
-				["morning-brief", "retry-failed-run", "github-activity", "workspace-check", "team-chat"],
+				// The file's routine, then the supervisor's own hook: a deployment otherwise ships none.
+				["workspace-check", "retry-failed-run"],
 			);
 			const submission = await runtime.hooks.fire("workspace-check");
 			assert.equal((await submission.wait(BACKGROUND_CONTEXT)).status, "done");
@@ -309,10 +324,10 @@ describe("durable harness + pi-env", () => {
 			assert.ok(hookEntry, "the proactive trigger is in the transcript");
 			const data = hookEntry.data as { hookId: string; hookName: string; payload: null; firedAt: string };
 			assert.equal(data.hookId, "workspace-check");
-			assert.equal(data.hookName, "Workspace check");
+			assert.equal(data.hookName, "workspace-check");
 			assert.equal(data.payload, null);
 			assert.match(data.firedAt, /^\d{4}-\d{2}-\d{2}T/);
-			assert.match(textOf(hookEntry.model?.[0]), /^\[EVENT HOOK: Workspace check\]/);
+			assert.match(textOf(hookEntry.model?.[0]), /^\[ROUTINE: workspace-check\]/);
 
 			// The hook input started a run, and the model's answer is the proactive message.
 			const answers = entries.filter((entry) => entry.kind === "pi.assistant");
@@ -365,7 +380,7 @@ describe("durable harness + pi-env", () => {
 			assert.equal(data.payload, "Connection error.");
 			// The prompt tells the agent to resume rather than restart, with the failure in it.
 			const prompt = textOf(hookEntry.model?.[0]);
-			assert.match(prompt, /^\[EVENT HOOK: Retry a failed run\]/);
+			assert.match(prompt, /^\[ROUTINE: Retry a failed run\]/);
 			assert.match(prompt, /resume it from where it stopped/i);
 			assert.match(prompt, /Connection error\./);
 		} finally {

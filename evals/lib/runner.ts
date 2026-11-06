@@ -12,7 +12,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, ConversationView } from "@earendil-works/pi-durable";
 import { Delivery } from "../../src/server/extensions/delivery.ts";
-import { formatPrompt } from "../../src/server/hooks.ts";
+import { formatPrompt, routineMarker } from "../../src/server/hooks.ts";
 import { HOUSE_ENTRIES, type HousePaths, housePaths } from "../../src/server/house.ts";
 import { projectTranscript } from "../../src/server/projection.ts";
 import { Prompt } from "../../src/server/prompt.ts";
@@ -98,7 +98,7 @@ async function submit(conversation: Conversation, turn: Turn, timeoutMs: number)
 	const content =
 		turn.hook === undefined
 			? (turn.text ?? "")
-			: `[EVENT HOOK: ${turn.hook.name}]\n${formatPrompt(
+			: `${routineMarker(turn.hook.name)}\n${formatPrompt(
 					{
 						id: turn.hook.name,
 						name: turn.hook.name,
