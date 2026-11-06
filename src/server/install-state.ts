@@ -172,8 +172,9 @@ export async function readInstalls(paths: HousePaths): Promise<ConnectorInstalls
 			throw new Error(`${record}: connector "${name}" is not a JSON object`);
 		const raw = value as Record<string, unknown>;
 		if (typeof raw.source !== "string") throw new Error(`${record}: connector "${name}" has no "source"`);
-		// The source is re-parsed on read, not trusted: a record this release cannot install is a record the next
-		// command should not act on, and saying so here is one place instead of every caller.
+		// Re-parsed on read, because a record is a file a person can edit: a source no reader understands is a typo, and
+		// one place to say so beats every caller discovering it. `npm:` and `git:` parse here; nothing refuses them, since
+		// a record written by this release must keep reading back in the next one.
 		parseSource(raw.source, record);
 		if (raw.project !== undefined && (typeof raw.project !== "string" || raw.project === ""))
 			throw new Error(`${record}: connector "${name}" has a "project" that is not a name`);
@@ -213,13 +214,4 @@ export async function writeInstall(
 		connectors: Object.fromEntries(names.map((key) => [key, key === name ? install : connectors[key]])),
 	});
 	return install;
-}
-
-/** Forgets one connector. `false` when there was none, so a typo does not read as a successful removal. */
-export async function removeInstall(paths: HousePaths, name: string): Promise<boolean> {
-	const { connectors } = await readInstalls(paths);
-	if (connectors[name] === undefined) return false;
-	const remaining = Object.fromEntries(Object.entries(connectors).filter(([key]) => key !== name));
-	await writeFileAtomic(installPaths(paths).record, { connectors: remaining });
-	return true;
 }

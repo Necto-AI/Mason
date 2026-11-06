@@ -8,12 +8,14 @@
  * back after a reboot.
  *
  * Three decisions are visible in the output and worth naming. `restart: always` and not `unless-stopped`, because podman
- * records a shutdown as a stop and a stopped container stays down (#86). The project name carries a hash of the home
- * path, because two homes on one host with the same connector name would otherwise fight over one project. And no port
- * is published: a connector opens an outbound socket to mason, so nothing needs to reach into it.
+ * records a shutdown as a stop and a stopped container stays down (#86) — and the file carries half of that policy
+ * alone, since the half that starts a container at boot is a systemd unit `podman.ts` reports rather than writes. The
+ * project name carries a hash of the home path, because two homes on one host with the same connector name would
+ * otherwise fight over one project. And no port is published: a connector opens an outbound socket to mason, so nothing
+ * needs to reach into it.
  */
 import { createHash } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { writeTextAtomic } from "./atomic.ts";
 import type { HousePaths } from "./house.ts";
@@ -103,25 +105,47 @@ export function renderCompose(options: RenderComposeOptions): string {
 	return lines.join("\n");
 }
 
-/** Renders and writes the project, replacing any previous render for this connector. Returns the path and its project. */
+/**
+ * The credential line this project was last rendered with, or `undefined`.
+ *
+ * A container needs the plaintext and mason keeps only a hash, so the rendered file is the one place it lives. Reading it
+ * back is what lets a second `mason setup` rewrite the project — for an answer that changed, for a version that moved —
+ * without minting a credential nobody asked for. It is the same trust boundary as writing it: a `0600` file in the
+ * server's half, read by the command that would rewrite it.
+ *
+ * The caller decides whether to trust it: a home whose credential record was revoked must not let a stale line back in,
+ * and only the caller knows whether the record is still there (`scripts/setup.ts`).
+ */
+export async function readComposeCredential(path: string): Promise<string | undefined> {
+	const text = await readFile(path, "utf8").catch(() => undefined);
+	if (text === undefined) return undefined;
+	// The one line the renderer writes for it, matched as it writes it: a quoted scalar with `\\` and `"` escaped.
+	const line = /^ {6}MASON_CONNECTOR_CREDENTIAL: "(.*)"$/m.exec(text);
+	if (line?.[1] === undefined) return undefined;
+	return line[1].replaceAll('\\"', '"').replaceAll("\\\\", "\\");
+}
+
+/**
+ * Renders and writes the project, replacing any previous render for this connector.
+ *
+ * The comparison is against what is on disk, because `writeCompose` is now the only path setup takes: an answer that
+ * changed, a catalog version that moved, or a credential that was rotated has to reach the container, and a file that is
+ * skipped because it exists is the file that keeps the old credential. What is *not* written when the text is identical
+ * is the write itself — a new mtime for an unchanged project would make every later `podman compose` re-evaluate a file
+ * that says the same thing, and `changed` tells the caller which of the two happened.
+ */
 export async function writeCompose(
 	paths: HousePaths,
 	options: RenderComposeOptions,
-): Promise<{ readonly path: string; readonly project: string }> {
+): Promise<{ readonly path: string; readonly project: string; readonly changed: boolean; readonly created: boolean }> {
 	const path = composePath(paths, options.connector);
 	const text = renderCompose(options);
 	const existing = await readFile(path, "utf8").catch(() => undefined);
-	// Unchanged is unwritten: a re-run of setup that rewrote an identical file would make every later `podman compose`
-	// start from a new mtime and re-evaluate nothing, and a test cannot tell a no-op from a write.
 	if (existing !== text) await writeTextAtomic(path, text);
-	return { path, project: projectName(paths.home, options.connector) };
-}
-
-/** Forgets one connector's project files. `false` when there was no directory. */
-export async function removeCompose(paths: HousePaths, connector: string): Promise<boolean> {
-	const directory = join(paths.connectorsDir, connector);
-	const existing = await readFile(join(directory, "compose.yaml"), "utf8").catch(() => undefined);
-	if (existing === undefined) return false;
-	await rm(directory, { recursive: true, force: true });
-	return true;
+	return {
+		path,
+		project: projectName(paths.home, options.connector),
+		changed: existing !== text,
+		created: existing === undefined,
+	};
 }

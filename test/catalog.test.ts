@@ -40,7 +40,8 @@ describe("the shipped catalog", () => {
 			telegram.env.map((item) => item.name),
 			["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHATS", "HTTPS_PROXY"],
 		);
-		// The token is the one answer that must not land in a log, so the file has to say so.
+		// The token is the one answer setup must warn about before it echoes it into a terminal: the file says which
+		// answer that is, and `scripts/setup.ts` reads the flag (`test/wizard`-level behaviour lives there).
 		assert.equal(telegram.env[0]?.secret, true);
 		// And the proxy is the one answer a host with a direct route does not have: leaving it out still starts.
 		assert.equal(telegram.env[2]?.optional, true);

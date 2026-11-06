@@ -64,10 +64,11 @@ describe("mason chat", () => {
 		}
 	});
 
-	test("a second run does not print the answer the first one already had", async () => {
+	test("a second run is not handed the first run's reply, and the ledger that decides is a file", async () => {
 		const { home, serve } = await household("mason-chat-ledger-");
-		// Two turns, one per run. The ledger is what keeps the first answer from arriving under the second question: mason
-		// resends a delivery it was never acknowledged for, and a process-local ledger would be empty by then.
+		// Two turns, one per run. Mason resends a delivery it was never acknowledged for, and the run that would be told so
+		// is the next process: the ledger is a file under the service half for exactly that reason, and the last assertion
+		// here is the one a process-local store could not satisfy.
 		const served = await serve([...replyTurn("first answer"), ...replyTurn("second answer")]);
 		try {
 			const runOnce = async (): Promise<string> => {
@@ -134,17 +135,24 @@ describe("mason chat", () => {
 			assert.match(stdout, /connected/, stderr);
 
 			child.stdin.write("a long question\n");
-			// In flight: the model is still thinking, so the stop lands on a run rather than on an idle server.
-			await new Promise((resolve) => setTimeout(resolve, 300));
-			child.stdin.write("/stop\n");
+			// In flight, and said so by mason: the model is still thinking, so the status line is the proof that the stop
+			// below lands on a running turn rather than on an idle server.
 			await new Promise((resolve) => setTimeout(resolve, 300));
 			child.stdin.write("/status\n");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			child.stdin.write("/stop\n");
+			// Past the model's own delay, so a stop that missed has somewhere to show: a turn nobody stopped would answer
+			// here, and a turn that was stopped has nothing left to send.
+			await new Promise((resolve) => setTimeout(resolve, 2_000));
+			child.stdin.write("/status\n");
+			await new Promise((resolve) => setTimeout(resolve, 300));
 			child.stdin.write("/exit\n");
 			const code = await exited;
 			assert.equal(code, 0, stderr);
+			assert.match(stdout, /\[status\] handled: (answering|running tools|retrying)/, "a turn was in flight");
 			assert.match(stdout, /\[stop\] handled: stopped/, "the control reached mason");
+			assert.match(stdout, /\[status\] handled: idle/, "and the turn settled rather than finishing late");
 			assert.doesNotMatch(stdout, /too late/, "the turn was stopped before it answered");
-			assert.match(stdout, /\[status\] handled/);
 		} finally {
 			await served.close();
 		}

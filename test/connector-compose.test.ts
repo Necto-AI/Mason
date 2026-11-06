@@ -2,8 +2,9 @@
  * `src/server/connector-compose.ts` — the project one installed connector runs in.
  *
  * What is pinned is the file a container is started from, byte for byte, because every field in it is a policy someone
- * decided: `always` and not `unless-stopped` is the one that brings the bot back after a reboot (#86), the project name
- * is what keeps two homes on one host apart, and the absent `ports:` is the promise that a connector adds no way in.
+ * decided: `always` and not `unless-stopped` is the policy that brings the bot back when the machine reboots — the
+ * systemd half of that is `podman.test.ts` — the project name is what keeps two homes on one host apart, and the absent
+ * `ports:` is the promise that a connector adds no way in.
  * A test that asserted "the image appears somewhere" would pass on a file podman refuses.
  */
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ import {
 	composePath,
 	homeId,
 	projectName,
-	removeCompose,
+	readComposeCredential,
 	renderCompose,
 	writeCompose,
 } from "../src/server/connector-compose.ts";
@@ -134,10 +135,28 @@ describe("the file on disk", () => {
 		assert.equal((await stat(first.path)).mtimeMs, before, "an unchanged project is not rewritten");
 	});
 
-	test("forgetting a connector removes its directory, and says whether there was one", async () => {
+	test("the credential it was rendered with is readable back, escapes included", async () => {
 		const paths = await temporaryHome();
-		await writeCompose(paths, await telegramOptions(paths.home));
-		assert.equal(await removeCompose(paths, "telegram"), true);
-		assert.equal(await removeCompose(paths, "telegram"), false);
+		const options = await telegramOptions(paths.home);
+		const written = await writeCompose(paths, {
+			...options,
+			env: { ...options.env, MASON_CONNECTOR_CREDENTIAL: 'masonc_a"b\\c' },
+		});
+		assert.equal(await readComposeCredential(written.path), 'masonc_a"b\\c');
+		assert.equal(await readComposeCredential(join(paths.connectorsDir, "absent", "compose.yaml")), undefined);
+	});
+
+	test("reports whether it wrote, rewrote or found the project already right", async () => {
+		const paths = await temporaryHome();
+		const options = await telegramOptions(paths.home);
+		const first = await writeCompose(paths, options);
+		assert.deepEqual([first.changed, first.created], [true, true]);
+		const again = await writeCompose(paths, options);
+		assert.deepEqual([again.changed, again.created], [false, false]);
+		// A rotated credential, or a version that moved: the file has to carry the new answer, because the container it
+		// starts reads nothing else.
+		const moved = await writeCompose(paths, { ...options, image: "ghcr.io/denissud/mason-telegram:0.3.0" });
+		assert.deepEqual([moved.changed, moved.created], [true, false]);
+		assert.match(await readFile(moved.path, "utf8"), /mason-telegram:0\.3\.0/);
 	});
 });

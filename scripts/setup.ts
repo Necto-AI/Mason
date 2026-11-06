@@ -15,11 +15,10 @@
  * podman network, and setup publishes no host port (a connector dials out and nothing dials in), so the entry it writes
  * carries the grant and no `tools` block. That arrives with the release that puts mason in the same network.
  */
-import { existsSync } from "node:fs";
 import type { Capability, ControlOp } from "mason-protocol";
 import { CONTROL_OPS } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
-import { composePath, projectName, type RenderComposeOptions, writeCompose } from "../src/server/connector-compose.ts";
+import { composePath, projectName, readComposeCredential, writeCompose } from "../src/server/connector-compose.ts";
 import { type ConnectorGrant, listConnectorCredentials, mintConnectorCredential } from "../src/server/connectors.ts";
 import { ensureHouse, type HousePaths, housePaths } from "../src/server/house.ts";
 import {
@@ -30,7 +29,7 @@ import {
 	writeInstall,
 } from "../src/server/install-state.ts";
 import { readIntegrations, writeIntegration } from "../src/server/integrations.ts";
-import { checkPodman, listening, loopbackRefusal, up } from "../src/server/podman.ts";
+import { bootPolicyFix, checkPodman, listening, loopbackRefusal, up } from "../src/server/podman.ts";
 import { DEFAULT_SOUL } from "../src/server/prompt.ts";
 import { CONSOLE, consoleGrant, runChat } from "./chat.ts";
 import { choosePrompter, MissingAnswer, OWNER_QUESTION, type Prompter } from "./wizard.ts";
@@ -218,8 +217,13 @@ const OWNER = {
 
 /** Every question the chosen connector needs, answered from a flag or from the prompter — and nothing written yet. */
 async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
+	// `--url` already named the connector it belongs to: a person who passes the address of a running connector has
+	// answered "which one", and asking again is the flag lying about what it does.
 	const name =
-		args.connector ?? (await prompter.pick("Which connector do you want to talk through?", await connectorChoices()));
+		args.connector ??
+		(args.url === undefined
+			? await prompter.pick("Which connector do you want to talk through?", await connectorChoices())
+			: "custom");
 	if (name === CONSOLE) {
 		// No env, no image, no container: the grant is fixed here and `mason chat` mints its own credential, so setup only
 		// records that the door exists.
@@ -271,6 +275,7 @@ async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
 		const answer = await prompter.text(variable.name, {
 			hint: optional ? `${variable.prompt} (leave it empty to skip)` : variable.prompt,
 			flag: `--env ${variable.name}="<${variable.prompt}>"`,
+			...(variable.secret === true ? { secret: true } : {}),
 			...(optional ? { fallback: "", required: false } : { required: true }),
 		});
 		if (answer !== "") answers[variable.name] = answer;
@@ -341,32 +346,34 @@ async function install(
 	if (plan_.container) {
 		const path = composePath(paths, plan_.name);
 		const project = projectName(paths.home, plan_.name);
-		// A container needs the plaintext credential and a hash cannot be turned back into one. A compose file that is
-		// gone while the credential remains is therefore a rotation, not a second credential: the old one is dropped in
-		// the same write, so there is exactly one live credential for this connector at any moment.
+		// A container needs the plaintext credential, and mason keeps only a hash. Three states, and each has one answer: a
+		// credential minted just now is the plaintext; a credential record this home still holds means the file's own line
+		// is the plaintext (the file is `0600` and this command is about to rewrite it); anything else — no record because
+		// it was revoked, or no file because it was deleted — is a rotation, and the old one is dropped in the same write.
 		let plaintext = credential;
-		if (!existsSync(path) && plaintext === undefined) {
+		if (plaintext === undefined && already !== undefined) plaintext = await readComposeCredential(path);
+		if (plaintext === undefined) {
 			const rotated = await mintConnectorCredential(paths.home, plan_.name, { replace: true });
 			plaintext = rotated.credential;
-			console.log(`[setup] the compose project was missing, so its credential was rotated: ${rotated.record.id}`);
+			console.log(`[setup] no usable credential for ${path}, so one was minted: ${rotated.record.id}`);
 			console.log(rotated.credential);
 		}
-		if (existsSync(path)) {
-			console.log(`[setup] ${path} is already there; left as it is`);
-		} else {
-			const render: RenderComposeOptions = {
-				connector: plan_.name,
-				image: plan_.image ?? "",
-				home: paths.home,
-				env: {
-					MASON_CONNECTOR_URL: `ws://host.containers.internal:${masonPort()}/api/connector`,
-					MASON_CONNECTOR_CREDENTIAL: plaintext ?? "",
-					...plan_.env,
-				},
-			};
-			await writeCompose(paths, render);
-			console.log(`[setup] wrote ${path}`);
-		}
+		const written = await writeCompose(paths, {
+			connector: plan_.name,
+			image: plan_.image ?? "",
+			home: paths.home,
+			env: {
+				MASON_CONNECTOR_URL: `ws://host.containers.internal:${masonPort()}/api/connector`,
+				MASON_CONNECTOR_CREDENTIAL: plaintext ?? "",
+				...plan_.env,
+			},
+		});
+		if (written.created) console.log(`[setup] wrote ${written.path}`);
+		else if (written.changed)
+			console.log(
+				`[setup] rewrote ${written.path}: an answer, or the version, changed — the container is recreated below`,
+			);
+		else console.log(`[setup] ${written.path} is up to date`);
 		if (args.start) {
 			// The record is written however this goes: a start that failed still installed the files, and a record that says
 			// so is what lets the next run report it rather than believe nothing happened.
@@ -386,6 +393,10 @@ async function install(
 				if (output !== "") console.log(output);
 				started = true;
 				console.log(`[setup] started project ${project}`);
+				// `restart: always` is only half of "it comes back after a reboot", and the other half is a systemd unit no
+				// compose file can enable. Said once, with the command, and never again for a machine that has it.
+				const boot = await bootPolicyFix();
+				if (boot !== undefined) console.log(`[setup] ${boot}`);
 			} catch (error) {
 				failure = error;
 			}
@@ -402,7 +413,9 @@ async function install(
 		...(plan_.version === undefined ? {} : { version: plan_.version }),
 		...(plan_.container ? { project: projectName(paths.home, plan_.name) } : {}),
 		createdAt: previous?.createdAt ?? new Date().toISOString(),
-		started,
+		// A `--no-start` run says nothing about a container that is already up, so it says nothing: it keeps what the last
+		// run recorded rather than reporting it stopped.
+		started: args.start ? started : (previous?.started ?? false),
 	};
 	await writeInstall(paths, plan_.name, record);
 	if (failure !== undefined) throw failure;

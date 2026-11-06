@@ -9,14 +9,17 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { listConnectorCredentials } from "../src/server/connectors.ts";
+import { readComposeCredential } from "../src/server/connector-compose.ts";
+import { listConnectorCredentials, revokeConnectorCredential } from "../src/server/connectors.ts";
 import { housePaths } from "../src/server/house.ts";
+
 import { readInstalls } from "../src/server/install-state.ts";
 import { readIntegrations } from "../src/server/integrations.ts";
 
@@ -40,7 +43,9 @@ async function setup(args: readonly string[], home: string): Promise<{ code: num
 	try {
 		const { stdout, stderr } = await run(process.execPath, ["--experimental-strip-types", script, ...args], {
 			cwd: root,
-			env: { ...process.env, MASON_HOME: home },
+			// `HOST` is pinned: setup reads it to decide whether a container could reach mason, and a machine where the
+			// documented `HOST=0.0.0.0` is exported would turn this refusal into a real `podman compose up -d`.
+			env: { ...process.env, MASON_HOME: home, HOST: "127.0.0.1" },
 			maxBuffer: 8 * 1024 * 1024,
 		});
 		return { code: 0, stdout, stderr };
@@ -129,7 +134,17 @@ describe("a start that cannot happen", () => {
 		// mason is bound to loopback by default, and a container cannot reach it: setup refuses before starting anything,
 		// and the record says the files are there and the container is not.
 		const result = await setup(
-			["--connector", "telegram", "--env", "TELEGRAM_BOT_TOKEN=123:fake", "--env", "TELEGRAM_ALLOWED_CHATS=8811", "--owner", "8811", "--yes"],
+			[
+				"--connector",
+				"telegram",
+				"--env",
+				"TELEGRAM_BOT_TOKEN=123:fake",
+				"--env",
+				"TELEGRAM_ALLOWED_CHATS=8811",
+				"--owner",
+				"8811",
+				"--yes",
+			],
 			home,
 		);
 		assert.equal(result.code, 1);
@@ -138,6 +153,63 @@ describe("a start that cannot happen", () => {
 		assert.equal((await readInstalls(paths)).connectors.telegram?.started, false);
 		// The files that make the second attempt cheap are all there, including the project setup rendered.
 		assert.match(await readFile(join(paths.connectorsDir, "telegram", "compose.yaml"), "utf8"), /restart: always/);
+	});
+});
+
+describe("the credential a container is given", () => {
+	/** The value the rendered project hands the container, unescaped, as the container would read it. */
+	async function composeCredential(home: string): Promise<string | undefined> {
+		const paths = housePaths(home);
+		return readComposeCredential(join(paths.connectorsDir, "telegram", "compose.yaml"));
+	}
+
+	/** The hash mason holds, so the value in the file can be checked against what the server would accept. */
+	function sha256(value: string): string {
+		return createHash("sha256").update(value, "utf8").digest("hex");
+	}
+
+	const answers = [
+		"--connector",
+		"telegram",
+		"--env",
+		"TELEGRAM_BOT_TOKEN=123:fake",
+		"--env",
+		"TELEGRAM_ALLOWED_CHATS=8811",
+		"--owner",
+		"8811",
+		"--yes",
+		"--no-start",
+	];
+
+	test("is one mason accepts: the file's value hashes to the record that was minted", async () => {
+		const home = await tempHome();
+		const result = await setup(answers, home);
+		assert.equal(result.code, 0, result.stderr);
+		const value = await composeCredential(home);
+		assert.equal(typeof value, "string");
+		const records = await listConnectorCredentials(housePaths(home).home);
+		assert.deepEqual(
+			records.filter((record) => record.connector === "telegram").map((record) => record.sha256),
+			[sha256(value ?? "")],
+		);
+	});
+
+	test("is replaced when the home no longer holds it, so a revoke is not a container that crash-loops", async () => {
+		const home = await tempHome();
+		assert.equal((await setup(answers, home)).code, 0);
+		const paths = housePaths(home);
+		const before = await composeCredential(home);
+		for (const record of await listConnectorCredentials(paths.home))
+			await revokeConnectorCredential(paths.home, record.id);
+		assert.equal((await setup(answers, home)).code, 0);
+		const after = await composeCredential(home);
+		assert.notEqual(after, before, "a credential nobody holds any more is not reused");
+		const live = (await listConnectorCredentials(paths.home)).filter((record) => record.connector === "telegram");
+		assert.deepEqual(
+			live.map((record) => record.sha256),
+			[sha256(after ?? "")],
+			"and exactly one is live",
+		);
 	});
 });
 
