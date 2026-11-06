@@ -10,6 +10,9 @@
  * The modes are set after the rename rather than trusted from it: `writeFile`'s `mode` applies only when it creates the
  * file, and the directory keeps whatever modes it already had, so both are re-applied on every write. The `catch` is
  * for filesystems without modes: there is nothing to set there, and a failure to set one is not a failed write.
+ *
+ * `writeTextAtomic` is the same promise for a file that is not JSON: a connector's `compose.yaml` holds the credential
+ * the container opens its socket with, so it is written here and not with `fs.writeFile` (`connector-compose.ts`).
  */
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -19,9 +22,14 @@ import { dirname } from "node:path";
  * the proof, and a caller that reported success from here would be reporting the rename, not the file.
  */
 export async function writeFileAtomic(path: string, value: unknown): Promise<void> {
+	await writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/** Write `text` to `path` as it stands, in one atomic step, `0600` in a `0700` directory. */
+export async function writeTextAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	const temporary = `${path}.${process.pid}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+	await writeFile(temporary, text, { mode: 0o600 });
 	await rename(temporary, path);
 	await chmod(dirname(path), 0o700).catch(() => {});
 	await chmod(path, 0o600).catch(() => {});
