@@ -170,6 +170,47 @@ not isolation, and the paragraph above should not be read as saying otherwise.
 The one thing they do share is the host port range (`MASON_PORT`) and the provider credential directory
 (`MASON_PI_AGENT_DIR`), which is read-only input and copied into each home.
 
+## A reboot is not a stop
+
+Every service in this stack declares `restart: always`, and the host runs `podman-restart.service` in the operator's
+own systemd session, with lingering on. That pair is the boot policy: the unit starts every container whose restart
+policy says it starts at boot, and it is what makes that happen with nobody at the keyboard. The policy is `always` and
+not `unless-stopped` because the podman this was measured on records a shutdown as an explicit stop, and a container
+somebody stopped is one `unless-stopped` declines to start: the reboot of 2026-10-30 left both stacks down until a person
+ran `up` again, and a bot that is down for six hours reads as a broken bot (#86).
+
+Two commands, once per host and not once per stack, because one user session restores every container of that user:
+
+```sh
+loginctl enable-linger "$USER"
+systemctl --user enable --now podman-restart.service
+```
+
+A host that runs podman as root enables the system unit instead (`sudo systemctl enable --now podman-restart.service`).
+This deployment is rootless, so the unit belongs to the operator's session and the two commands above are the ones that
+apply. A compose that runs docker instead needs none of this: `docker.service` itself restores `restart: always`
+containers at boot.
+
+Lingering is the half that is easy to miss. Without it the user's systemd instance exists only while somebody is logged
+in, and a unit enabled in a session that does not start at boot stays in the state this host was already in: `is-enabled`
+answers `linked`, `is-active` answers `inactive`, and no container comes back. `systemctl --user is-active
+podman-restart.service` answering `active` is one check, and `podman inspect <container>` showing
+`HostConfig.RestartPolicy.Name = "always"` is the other.
+
+What `always` costs is the same rule seen from the other side: a container somebody stopped comes back at the next boot,
+because the policy outlives a stop the way it outlives a reboot. A service that has to stay down past a reboot is removed
+once (`podman rm -f <container>`, and it returns on the next `up`); a service that has to stay down for an hour is
+stopped again after the boot. `unless-stopped` is the one policy that remembers a stop, and it is the one that let the
+reboot win.
+
+A stack deployed before this change is restored from the next `up`: `deploy/deploy.sh` passes `--force-recreate`, so
+every container comes back carrying the policy its compose file declares. The first boot after the update is an ordinary
+one, and nothing else about a running stack changes.
+
+What comes back is the containers, in no particular order. `mason` waits for `mason-env` inside its own entrypoint
+(`MASON_ENV_WAIT_ATTEMPTS`), so a restore that starts both at once is the same boot as a fresh `up`, and that wait is the
+thing that makes the order unnecessary.
+
 ## First boot, and the connector credential
 
 `docker compose logs mason` on a fresh home prints where its data lives and that masonry is listening. Nothing is
