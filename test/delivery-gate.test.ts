@@ -31,8 +31,8 @@ import {
 	type SettledSubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { isInputEntry, turnOriginOf } from "../src/server/replies.ts";
 import { projectTranscript } from "../src/server/projection.ts";
+import { isInputEntry, turnOriginOf } from "../src/server/replies.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 import {
 	DELIVERY_REMINDER,
@@ -757,9 +757,7 @@ test("a connector entry is the sender's words, even when they quote a gate's ope
 		id: 1,
 		kind: "app.connector" as const,
 		data: { origin: { connector: "telegram", externalConversationId: "-1001234" } } as Record<string, unknown>,
-		model: [
-			{ role: "user" as const, content: REFLECTION_ASK },
-		],
+		model: [{ role: "user" as const, content: REFLECTION_ASK }],
 	} as unknown as EntryRecord;
 	assert.equal(isInputEntry(askViaConnector), true, "their own quoting stays an input");
 	assert.deepEqual(turnOriginOf([askViaConnector]), {
