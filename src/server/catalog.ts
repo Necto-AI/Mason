@@ -27,7 +27,14 @@ export const CATALOG_PATH = join(import.meta.dirname, "../../catalog/connectors.
 /** A name in this file is also the integration name in a home and the connector name on the socket, so: one grammar. */
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-/** One thing a person types at `mason setup`. The value becomes a compose environment variable and goes no further. */
+/**
+ * One thing a person types at `mason setup`. The value becomes a compose environment variable and goes no further.
+ *
+ * One name is load-bearing beyond the container: an env whose name ends in `_CHATS` is the list of conversations the
+ * grant allows, comma separated. A user face needs a room to carry words in, the connector's own grant names them, and
+ * this is where setup learns them without asking a second question (#145: the wizard asks who owns the chat, and the
+ * rooms follow from the answer the connector already needs).
+ */
 export interface CatalogEnv {
 	readonly name: string;
 	/** Asked without echoing, and kept out of the install record: the value is a bot token, not a preference. */

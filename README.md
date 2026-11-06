@@ -8,17 +8,20 @@ One process, one bot, one person. mason runs continuously on a machine with Node
 
 ```sh
 npm install -g mason-agent
-mason onboard
+mason setup
 ```
 
-`mason onboard` creates or verifies the home, writes the default soul if none exists, seeds the shipped skills, and
-prints the next steps: a connector the bot answers through does not exist yet, so you add one with
-`mason integration add <name> --url <mcp-url> --description "…"`, write the entry's `connector` block by hand
-(what the connector may do on its socket is its grant, the operator's decision), and then
-`mason connector add <name>` issues the credential. `mason onboard` mints that credential itself once the entry has a
-grant.
+`mason setup` installs a connector. It offers the ones this release knows (`catalog/connectors.json`), asks for what
+the one you pick needs, and writes the integration entry, its grant and its credential. When the connector runs as a
+container it also generates the compose project and starts it, with `restart: always`, so it comes back after a reboot.
+Then `mason up` serves the bot: the connector connects when the socket is there, and after every reboot.
 
-Then `mason up` serves the bot. Changing the integration list is a restart: it is read once, at boot.
+Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a Dockerfile or a CI
+job drives the same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in
+console connector, which needs no Telegram at all.
+
+`mason onboard` is unchanged and still scriptable: it creates the home, mints a credential for a connector that has a
+grant and none, and prints the doors. Changing the integration list is a restart: it is read once, at boot.
 
 ## What a stranger reaches
 
@@ -29,7 +32,8 @@ UI talks to mason the same way.
 
 ## The commands the installed package answers
 
-`mason up`, `mason onboard`, `mason integration …`, `mason connector …`, `mason prompt`, `mason surface`,
+`mason up`, `mason setup`, `mason chat`, `mason onboard`, `mason integration …`, `mason connector …`, `mason prompt`,
+`mason surface`,
 `mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
 work from a source checkout with `npm run dev`, whose tests run with `npm test`.
 

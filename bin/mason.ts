@@ -33,6 +33,7 @@ const SCRIPTS: Readonly<Record<string, string>> = {
 	surface: "../scripts/surface.ts",
 	integration: "../scripts/integration.ts",
 	connector: "../scripts/connector.ts",
+	setup: "../scripts/setup.ts",
 	chat: "../scripts/chat.ts",
 	eval: "../evals/run.ts",
 };
@@ -55,6 +56,7 @@ function usage(): never {
 Commands (the npm scripts, mapped thin):
   mason up                     serve the bot (the server this checkout starts with npm run dev)
   mason onboard                create the home, mint a connector credential, print the doors
+  mason setup                  install a connector: grant, credential, compose project, container
   mason chat                   talk to the bot from this terminal, through the console connector
   mason integration …          add|remove|enable|disable|list: the services mason reaches
   mason connector …            list|add|revoke: the credentials a connector opens its socket with

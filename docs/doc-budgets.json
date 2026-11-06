@@ -3,12 +3,12 @@
 		"docs/SURFACE.md"
 	],
 	"ceilings": {
-		"AGENTS.md": 2009,
+		"AGENTS.md": 2136,
 		"GLOSSARY.md": 1544,
 		"docs/AGENTS.md": 911,
-		"docs/ARCHITECTURE.md": 1322,
+		"docs/ARCHITECTURE.md": 1569,
 		"docs/CONNECTOR-PROTOCOL.md": 431,
 		"docs/SPEC.md": 8553,
-		"README.md": 472
+		"README.md": 532
 	}
 }

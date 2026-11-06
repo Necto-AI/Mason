@@ -36,8 +36,12 @@ export interface ConnectorInstall {
 	/** The image and tag, for a source that names one. Absent for a `url:` connector: that one runs elsewhere. */
 	readonly image?: string;
 	readonly version?: string;
-	/** The compose project setup generated for it — `<home-id>-<connector>` — so a restart names the stack it starts. */
-	readonly project: string;
+	/**
+	 * The compose project setup generated for it — `<home-id>-<connector>` — so a restart names the stack it starts.
+	 * Absent for a connector that runs somewhere else (`custom`) or in this terminal (`console`): inventing a project
+	 * name for one would leave a later command trying to start something that does not exist.
+	 */
+	readonly project?: string;
 	readonly createdAt: string;
 	/** Whether setup started it. `false` is a real state: `--no-start` wrote the files and left the container down. */
 	readonly started: boolean;
@@ -171,8 +175,8 @@ export async function readInstalls(paths: HousePaths): Promise<ConnectorInstalls
 		// The source is re-parsed on read, not trusted: a record this release cannot install is a record the next
 		// command should not act on, and saying so here is one place instead of every caller.
 		parseSource(raw.source, record);
-		if (typeof raw.project !== "string" || raw.project === "")
-			throw new Error(`${record}: connector "${name}" has no "project": it is the stack setup generated`);
+		if (raw.project !== undefined && (typeof raw.project !== "string" || raw.project === ""))
+			throw new Error(`${record}: connector "${name}" has a "project" that is not a name`);
 		if (typeof raw.createdAt !== "string" || raw.createdAt === "")
 			throw new Error(`${record}: connector "${name}" has no "createdAt"`);
 		if (typeof raw.started !== "boolean")
@@ -181,7 +185,7 @@ export async function readInstalls(paths: HousePaths): Promise<ConnectorInstalls
 			source: raw.source,
 			...(typeof raw.image === "string" ? { image: raw.image } : {}),
 			...(typeof raw.version === "string" ? { version: raw.version } : {}),
-			project: raw.project,
+			...(typeof raw.project === "string" ? { project: raw.project } : {}),
 			createdAt: raw.createdAt,
 			started: raw.started,
 		};
