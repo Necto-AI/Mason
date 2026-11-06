@@ -17,6 +17,7 @@ import {
 	DELIVERY_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
 	isDeliveryReminder,
+	isReflectionAsk,
 	REPLY_ENTRY_KIND,
 	REPLY_TOOL,
 	splitAuthor,
@@ -132,13 +133,13 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	for (const entry of entries) {
 		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND || entry.kind === CONNECTOR_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
-			// The delivery gate's reminder is a user entry the model reads, not one the reader sent — in either shape,
-			// a local turn's and the one a fired turn gets.
-			const reminder = entry.kind !== CONNECTOR_ENTRY_KIND && isDeliveryReminder(spoken);
-			if (!reminder) spoke = false;
+			// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder, in
+			// either shape a local turn and a fired turn get, and the reflection ask at the end of a long turn.
+			const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(spoken) || isReflectionAsk(spoken));
+			if (!gate) spoke = false;
 			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
 			// is not part of the conversation.
-			if (entry.kind !== HOOK_ENTRY_KIND && spoken !== "" && !reminder) {
+			if (entry.kind !== HOOK_ENTRY_KIND && spoken !== "" && !gate) {
 				const { text, author } = splitAuthor(spoken);
 				items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
 			}

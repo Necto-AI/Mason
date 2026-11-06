@@ -18,6 +18,10 @@
  * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
  * the client shows as a bubble that may not have reached the reader.
  *
+ * The extension carries a second gate over the same lifecycle plumbing, because a turn has two endings and both are
+ * about what it leaves behind: the delivery gate, and the reflection gate that asks a turn of ten tool rounds or more
+ * what it kept. One continuation each, in the turn that did the work, and no second model.
+ *
  * A **nested** call — `tools.reply()` inside a code-mode script — is refused: its result goes back to the script instead
  * of into the transcript, so nothing reaches the reader while the script is told it did. The entry is the delivery, and
  * a script cannot write one that a reader sees; the refusal says what to do instead.
@@ -25,7 +29,14 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { DELIVERY_REMINDER, isDeliveryReminder, REPLY_ENTRY_KIND, REPLY_TOOL } from "../../shared/contract.ts";
+import {
+	DELIVERY_REMINDER,
+	isDeliveryReminder,
+	isReflectionAsk,
+	REFLECTION_ASK,
+	REPLY_ENTRY_KIND,
+	REPLY_TOOL,
+} from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
 	type ReplyRecord,
@@ -240,8 +251,72 @@ export const deliveryGate = hook(GenerationTask, {
 	},
 });
 
+const LONG_TURN = "reflection.long";
+const ASKED = "reflection.asked";
+
+/** How much work earns the ask: ten tool rounds in one turn, counted rather than offered. */
+const REFLECTION_ROUNDS = 10;
+
+/**
+ * The turn so far: the messages after the newest input a person or a fire wrote.
+ *
+ * A continuation is one of the gates' own lines, so it is stepped over rather than taken for a new turn: the ten rounds
+ * that earned the ask are still in the turn when the model answers the reminder, and a count that restarted would ask
+ * for the extraction only in the turns that never needed rescuing. The run's context is the whole conversation, so the
+ * boundary has to be found in it; the memo cannot supply it, because a continuation starts a new generation.
+ */
+function turnSoFar(messages: readonly Message[]): readonly Message[] {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index] as Message;
+		if (message.role !== "user") continue;
+		const text = textOf(message);
+		if (isDeliveryReminder(text) || isReflectionAsk(text)) continue;
+		return messages.slice(index + 1);
+	}
+	return messages;
+}
+
+/** Whether an assistant message asked for tools: one round of work, which is what the counter counts. */
+function carriedCalls(message: Message): boolean {
+	const content = (message as { content?: unknown }).content;
+	if (!Array.isArray(content)) return false;
+	return content.some((part) => (part as { type?: unknown }).type === "toolCall");
+}
+
+/** Whether the turn has already been asked what to keep: the ending after the ask is not asked again. */
+function askedAlready(turn: readonly Message[]): boolean {
+	return turn.some((message) => message.role === "user" && isReflectionAsk(textOf(message)));
+}
+
+/**
+ * A turn of real work ends by keeping what it learned, asked once.
+ *
+ * The mechanism is the delivery gate's, one counter over: `beforeRequest` reads the turn's progress and memoizes it,
+ * `onYield` continues the run with one ask. Not a timer, not a background fork, not a second model: the work is the
+ * turn's own context, and the same generation answers it. The ask is a `pi.user` entry, so the projection drops it and
+ * the reader sees only the reply that says what was kept.
+ *
+ * The guards are the ask's wording, and what code can enforce of them is enforced here: writes are the agent's own tools
+ * on its own half of the home, so a file outside `agent/` is refused by the tool machine's mount rather than by this
+ * gate. A skill description under 60 characters, and a skill retired only by naming what absorbed it, are instructions:
+ * there is no `skill_manage` to refuse a malformed one, and ADR 0013 is why there is no gateway to ask.
+ */
+export const reflectionGate = hook(GenerationTask, {
+	beforeRequest: async ({ messages }, api, context) => {
+		const turn = turnSoFar(messages);
+		if (turn.filter(carriedCalls).length >= REFLECTION_ROUNDS) await api.memo(LONG_TURN, true, context);
+		if (askedAlready(turn)) await api.memo(ASKED, true, context);
+		return undefined;
+	},
+	onYield: async (_answer, api, context) => {
+		if ((await api.memo(LONG_TURN, context)) !== true) return undefined;
+		if ((await api.memo(ASKED, context)) === true) return undefined;
+		return { continue: REFLECTION_ASK };
+	},
+});
+
 export const Delivery = defineExtension({
 	name: "delivery",
 	tools: [replyTool],
-	hooks: [deliveryGate],
+	hooks: [deliveryGate, reflectionGate],
 });

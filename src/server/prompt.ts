@@ -1,12 +1,12 @@
 /**
  * The agent's entire system prompt, in one place and in order.
  *
- * Eight sections stand between the model and the turn: who it is, how it speaks, where it works, what it knows (its
- * skills, the person it works for), what it can reach, and the one rule that decides whether anyone hears it. Every
- * section is declared here: its key, whether it is tagged, and where its text comes from — a service-owned file
- * (`service/soul.md`), an agent-owned file read through the execution environment (`agent/profile.md`, `agent/skills/`),
- * the boot's configuration (`service/integrations.json`), a count of the tools a script can call, or a constant in this
- * file. No other extension contributes a section, so an audit reads one file and a test fails if anything else appears.
+ * Nine sections stand between the model and the turn: who it is, how it speaks, where it works, what it knows (its
+ * skills, the person it works for), what it can reach, what a long turn owes the next one, and the one rule that decides
+ * whether anyone hears it. Every section is declared here: its key, whether it is tagged, and where its text comes from
+ * (a service-owned file `service/soul.md`, an agent-owned file read through the execution environment, the boot's
+ * configuration, a count of the tools a script can call, or a constant in this file). No other extension contributes a
+ * section, so an audit reads one file and a test fails if anything else appears.
  *
  * Which half a section reads from is not cosmetic. `service/` is never mounted into the tool machine, so the soul is a
  * file the bot cannot see, let alone rewrite; `agent/` is on the tool machine, so the profile and the skills index are
@@ -87,6 +87,22 @@ parameter. Answer every turn with a reply, even a one-line answer to a direct qu
 const PROFILE_MAX_CHARS = 4_800;
 
 /**
+ * What a turn of real work owes the next one, in the prompt because the counter that enforces it fires at the end.
+ *
+ * The gate states the same rule once, at the moment it binds (`REFLECTION_ASK` in `src/shared/contract.ts`); a rule the
+ * model has read for the whole turn is still a rule it can decide about, so the prompt is where the shape of the memory
+ * lives and the continuation is where it is asked for. The order inside the paragraph is the measurement's: the profile
+ * and the log are written often, a skill rarely, and a description stays under 60 characters because the index is
+ * resident in every request.
+ */
+export const REFLECTION_RULE = `A turn of ten tool rounds or more has work in it worth keeping, and what you do not write down is gone by the
+next turn. Before it ends: read \`agent/profile.md\` and add what you learned about them; add one dated line to
+\`agent/log/YYYY-MM-DD.md\` for what must not be forgotten; and write a skill only when a procedure repeated, its
+description under 60 characters. The log line is the rule and the skill is the exception. Retire a skill by naming what
+absorbed it, never silently. All of it lands inside \`agent/\`, and \`service/soul.md\` is the operator's file. If nothing
+was worth keeping, that is one line in the reply.`;
+
+/**
  * What the model is told about the services that lend it tools: a name and one line each, and the one thing that
  * connects a name to a callable tool — the script surface, described in the `codemode` section. No MCP schema is in the
  * declared tool list, and none is in this section either.
@@ -164,6 +180,8 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	// declarations in every turn, and the script can ask for the one it needs. Declared here so `delivery` stays the
 	// prompt's last word; installed with its section, the vendor would place it by extension order instead.
 	CODEMODE_SECTION,
+	// What a long turn owes the next one. Beside the delivery rule because the two are the turn's two endings.
+	section("reflect", () => REFLECTION_RULE),
 	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.
 	section("delivery", () => DELIVERY_INVARIANT),
 ];
