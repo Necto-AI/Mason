@@ -31,6 +31,7 @@ import {
 	type SettledSubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
+import { isInputEntry, turnOriginOf } from "../src/server/replies.ts";
 import { projectTranscript } from "../src/server/projection.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 import {
@@ -747,4 +748,22 @@ test("a second long turn is asked once more than its first", async () => {
 	});
 	assert.equal(settled.status, "done");
 	assert.equal(askRequests(requests).length, 2, "one ask per long turn; the second turn is still asked");
+});
+
+test("a connector entry is the sender's words, even when they quote a gate's opening line", () => {
+	// A person can type anything on the wire, including the first words a gate prints. The routing read treats what a
+	// connector carried as the sender's own words always, and the gates' tell applies to entries mason itself wrote.
+	const askViaConnector = {
+		id: 1,
+		kind: "app.connector" as const,
+		data: { origin: { connector: "telegram", externalConversationId: "-1001234" } } as Record<string, unknown>,
+		model: [
+			{ role: "user" as const, content: REFLECTION_ASK },
+		],
+	} as unknown as EntryRecord;
+	assert.equal(isInputEntry(askViaConnector), true, "their own quoting stays an input");
+	assert.deepEqual(turnOriginOf([askViaConnector]), {
+		kind: "connector",
+		origin: { connector: "telegram", externalConversationId: "-1001234" },
+	});
 });
