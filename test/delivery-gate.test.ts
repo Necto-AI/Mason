@@ -9,7 +9,7 @@
  * refused, the turn is reminded as if it had never spoken, and the model's own call is the only thing the reader sees.
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -39,6 +39,24 @@ const directories = new Set<string>();
 after(async () => {
 	for (const directory of directories) await rm(directory, { recursive: true, force: true });
 });
+
+/**
+ * A runTurn home carries one routine, because a boot ships none and a fired turn needs a hook to answer. The interval
+ * is far past every test's lifetime, so only the test's own fire becomes a turn.
+ */
+async function seedRoutine(directory: string): Promise<void> {
+	await mkdir(join(directory, "house", "agent"), { recursive: true, mode: 0o700 });
+	await writeFile(
+		join(directory, "house", "agent", "routines.json"),
+		JSON.stringify([
+			{
+				name: "team-chat",
+				intervalSeconds: 3_600,
+				prompt: "A message arrived in the chat: the person you work for asked. Answer it with reply.\n{{payload}}",
+			},
+		]),
+	);
+}
 
 function fauxAccess(): { access: ResolvedModel; faux: ReturnType<typeof fauxProvider> } {
 	const faux = fauxProvider();
@@ -140,8 +158,8 @@ function runScripted(
 let fires = 0;
 
 /**
- * A turn an event hook started, through the hook a boot defines: the chat door firing `team-chat`, which is how the
- * person in the chat reaches the agent. The template is the boot's own, so this is the production instruction.
+ * A turn an event hook started, through a fired hook the home's routine file names: the chat door firing `team-chat`,
+ * which is how the person in the chat reaches the agent.
  */
 function runFired(
 	directory: string,
@@ -340,6 +358,7 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 test("a hooked turn answers with reply, and the gate counts the call", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Привет!"), said("Done.")]);
+	await seedRoutine(directory);
 	const { settled, requests, entries, transcript } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");
@@ -367,6 +386,7 @@ test("a fire that named its conversation routes the reply back to it", async () 
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
+	await seedRoutine(directory);
 	const { settled, entries } = await runTurn(directory, script, [], async (runtime) => {
 		// The operator's configuration, as the boot would have it: the reply can only name a connector that exists.
 		setIntegrations({ telegram: telegram as never });
@@ -398,6 +418,7 @@ test("a fire that named its conversation routes the reply back to it", async () 
 test("a hooked turn that says nothing is reminded, and the reminder names reply", async () => {
 	const directory = await temporary();
 	const script = recorder([said("I will look into it."), deliver("Привет!"), said("Done.")]);
+	await seedRoutine(directory);
 	const { settled, requests } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");

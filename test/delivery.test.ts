@@ -331,7 +331,7 @@ test("a fire that named its conversation answers in it, and one that did not rec
 			apiFor(
 				{
 					callId: "call-9",
-					entries: hookTurn("[EVENT HOOK: Team chat message]", {
+					entries: hookTurn("[EVENT: chat.message]", {
 						connector: "telegram",
 						externalConversationId: "-1001234",
 					}),
@@ -351,7 +351,7 @@ test("a fire that named its conversation answers in it, and one that did not rec
 	const appended: unknown[] = [];
 	const orphan = await replyTool.execute(
 		{ message: "Morning: three things need you." },
-		apiFor({ callId: "call-10", entries: hookTurn("[EVENT HOOK: Morning brief]") }, appended),
+		apiFor({ callId: "call-10", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
 		{} as never,
 	);
 	assert.notEqual(orphan.isError, true);
@@ -369,7 +369,7 @@ test("a named target is used for a turn that has no origin, and a room the entry
 		const appended: unknown[] = [];
 		const sent = await replyTool.execute(
 			{ message: "the brief", to: { connector: "telegram", conversation: "-1001234" } },
-			apiFor({ callId: "call-11", entries: hookTurn("[EVENT HOOK: Morning brief]") }, appended),
+			apiFor({ callId: "call-11", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
 			{} as never,
 		);
 		assert.equal(outputText(sent.output), 'queued for delivery to telegram "-1001234"');
@@ -380,7 +380,7 @@ test("a named target is used for a turn that has no origin, and a room the entry
 
 		const refused = await replyTool.execute(
 			{ message: "elsewhere", to: { connector: "telegram", conversation: "-1009999" } },
-			apiFor({ callId: "call-12", entries: hookTurn("[EVENT HOOK: Morning brief]") }),
+			apiFor({ callId: "call-12", entries: hookTurn("[ROUTINE: morning brief]") }),
 			{} as never,
 		);
 		assert.match(outputText(refused.output), /cannot deliver:/);
