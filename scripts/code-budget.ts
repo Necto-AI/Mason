@@ -111,7 +111,7 @@ export function governedAreas(base: string): string[] {
 	};
 	for (const entry of children("")) {
 		if (!entry.isDirectory() || SKIP.has(entry.name)) continue;
-		if (entry.name === "scripts" || entry.name === "evals") areas.push(entry.name);
+		if (entry.name === "scripts" || entry.name === "evals" || entry.name === "bin") areas.push(entry.name);
 		if (entry.name !== "packages") continue;
 		for (const pkg of children("packages")) {
 			if (pkg.isDirectory() && children(`packages/${pkg.name}/src`).length > 0) {

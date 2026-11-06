@@ -8,7 +8,8 @@ are [`docs/SURFACE.md`](SURFACE.md). Nothing here repeats those.
 
 ## The assembly
 
-One process, started by `npm run dev`, is one bot.
+One process is one bot: started by `npm run dev` in a checkout, or by `mason up` from the installed package
+(`mason-agent`; the checkout's README holds the install).
 
 - **`src/server/main.ts`** is the process: an HTTP server with three doors and the WebSocket upgrade that turns into a
   connector's socket. Everything a request can reach is routed here.
