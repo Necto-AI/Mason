@@ -72,6 +72,9 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			config: join(home, "service", "config.json"),
 			// Later than the split: no home from before it has one, so no migration carries it.
 			integrations: join(home, "service", "integrations.json"),
+			// What `mason setup` installed, and the projects it generated: written by the CLI, never read by the server.
+			connectors: join(home, "service", "connectors.json"),
+			connectorsDir: join(home, "service", "connectors"),
 			sshDir: join(home, "service", "ssh"),
 			piDir: join(home, "service", "pi"),
 			dataDir: join(home, "service", "data"),
