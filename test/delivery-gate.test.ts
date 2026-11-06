@@ -630,3 +630,121 @@ test("the reflection ask carries the guards, and says what to do when nothing wa
 		"a person's line is kept",
 	);
 });
+
+test("a fire that named its conversation keeps its origin through the reflection ask", async () => {
+	const directory = await temporary();
+	const kept: string[] = [];
+	const script = recorder([
+		probed("r1", "the deploy order"),
+		probed("r2", "the release notes"),
+		probed("r3", "the two schemas"),
+		probed("r4", "the rollback path"),
+		probed("r5", "the migration plan"),
+		probed("r6", "the plan on a copy"),
+		probed("r7", "the slow step"),
+		probed("r8", "the routine behind it"),
+		probed("r9", "the fix"),
+		deliver("The migration is done, and the release notes are updated."),
+		said("Done."),
+		// The continuation's own turn: the extraction, then the reply that reports it.
+		worked("r10", "Denis moves standups to nine."),
+		deliver("Kept one line about the standup."),
+		said("Done."),
+	]);
+	const telegram = {
+		enabled: true,
+		connector: {
+			user: {
+				owner: "8811",
+				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
+			},
+		},
+	};
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	await seedRoutine(directory);
+	const { settled, entries } = await runTurn(directory, script, [keeper(kept)], async (runtime) => {
+		setIntegrations({ telegram: telegram as never });
+		fires += 1;
+		return runtime.hooks.fire("team-chat", {
+			payload: "Migrate the notes.",
+			requestId: `delivery-gate:ask-target:${fires}`,
+			origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m9" },
+		});
+	});
+	try {
+		assert.equal(settled.status, "done");
+		assert.equal(askRequests(script.requests).length, 1, "the ask landed, so this test sees the real misread");
+		const replies = entries.filter((entry) => entry.kind === "app.reply");
+		assert.ok(replies.length >= 1, "the turn spoke once");
+		// The newest input after the ask is the ask itself, the misread; the reply must still carry its origin.
+		for (const reply of replies) {
+			assert.deepEqual((reply.data as { target?: unknown }).target, {
+				connector: "telegram",
+				externalConversationId: "-1001234",
+			});
+		}
+	} finally {
+		setIntegrations({});
+	}
+});
+
+test("nine tool rounds is under the ask, in the same turn shape that asks at ten", async () => {
+	const directory = await temporary();
+	const script = recorder([
+		probed("r1", "the deploy order"),
+		probed("r2", "the release notes"),
+		probed("r3", "the two schemas"),
+		probed("r4", "the rollback path"),
+		probed("r5", "the migration plan"),
+		probed("r6", "the plan on a copy"),
+		probed("r7", "the slow step"),
+		probed("r8", "the routine behind it"),
+		deliver("Eight finds, one answer."),
+		said("Done."),
+	]);
+	const { requests } = await runScripted(directory, script, "Migrate the notes while I am out.");
+	assert.equal(askRequests(requests).length, 0, "nine carried calls is one short of the gate");
+});
+
+test("a second long turn is asked once more than its first", async () => {
+	const directory = await temporary();
+	const kept: string[] = [];
+	const probes = (tag: string) => [
+		probed(`${tag}1`, "the deploy order"),
+		probed(`${tag}2`, "the release notes"),
+		probed(`${tag}3`, "the two schemas"),
+		probed(`${tag}4`, "the rollback path"),
+		probed(`${tag}5`, "the migration plan"),
+		probed(`${tag}6`, "the plan on a copy"),
+		probed(`${tag}7`, "the slow step"),
+		probed(`${tag}8`, "the routine behind it"),
+		probed(`${tag}9`, "the fix"),
+	];
+	const script = recorder([
+		...probes("a"),
+		deliver("The first migration is done."),
+		said("Done."),
+		// The first ask's continuation, then a new turn the person starts once it landed, with its own ten carried calls.
+		deliver("Kept one line about the first run."),
+		said("Done."),
+		...probes("b"),
+		deliver("The second migration is done."),
+		said("Done."),
+		// The second ask's continuation ends the conversation on a settle.
+		deliver("Kept one line about the second run."),
+		said("Done."),
+	]);
+	// Two separate submits: a single submit's continuation is the same turn and gets no second ask.
+	const { settled, requests } = await runTurn(directory, script, [keeper(kept)], async (runtime) => {
+		const conversation = await runtime.conversation();
+		await (await conversation.submit({ type: "input", content: "Migrate the first run." }, BACKGROUND_CONTEXT)).wait(
+			BACKGROUND_CONTEXT,
+		);
+		const second = await (
+			await conversation.submit({ type: "input", content: "Migrate the second run." }, BACKGROUND_CONTEXT)
+		).wait(BACKGROUND_CONTEXT);
+		return { wait: () => Promise.resolve(second) };
+	});
+	assert.equal(settled.status, "done");
+	assert.equal(askRequests(requests).length, 2, "one ask per long turn; the second turn is still asked");
+});

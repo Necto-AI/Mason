@@ -143,7 +143,7 @@ test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does 
 test("the whole prompt fits in its budget, and the tool list is the six", async () => {
 	// A ceiling on the prompt, not on one section: this text is paid again on every turn of every conversation, and the
 	// sections grow a sentence at a time. Raising it is a decision, like raising a code ceiling. 4,000 became 4,400 for
-	// the reflection rule (#134), which is 641 characters of new resident text: 3,445 before it, 4,086 after.
+	// the reflection rule (#134), which is 641 characters of new resident text: 3,455 before it, 4,096 after.
 	await withHouseHome(async () => {
 		// The module's integrations are global: a test that set some would otherwise be counted here.
 		setIntegrations({});
