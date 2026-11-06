@@ -25,10 +25,20 @@ export async function writeFileAtomic(path: string, value: unknown): Promise<voi
 	await writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+/**
+ * A counter, because two writes from one process are one process id.
+ *
+ * A temp name of `${path}.${pid}.tmp` is unique across processes and not within one: a connector's ledger writes its
+ * delivery acknowledgement and its outbox in the same turn, both land on one descriptor, and the rename that follows
+ * leaves the target holding half of each. The counter costs nothing and makes the name unique where the pid cannot.
+ */
+let writes = 0;
+
 /** Write `text` to `path` as it stands, in one atomic step, `0600` in a `0700` directory. */
 export async function writeTextAtomic(path: string, text: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-	const temporary = `${path}.${process.pid}.tmp`;
+	writes += 1;
+	const temporary = `${path}.${process.pid}.${writes}.tmp`;
 	await writeFile(temporary, text, { mode: 0o600 });
 	await rename(temporary, path);
 	await chmod(dirname(path), 0o700).catch(() => {});
