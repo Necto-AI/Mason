@@ -13,6 +13,7 @@ import { projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
 	DELIVERY_ENTRY_KIND,
+	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
 	REPLY_TOOL,
 	splitAuthor,
@@ -244,6 +245,37 @@ describe("the transcript the client is sent", () => {
 		]);
 		// The answer the model wrote is still working notes, not a message: the wire is unchanged.
 		assert.ok(!JSON.stringify(transcript).includes("I read it earlier"));
+	});
+
+	it("drops the reflection ask, and keeps a person's line that opens with the marker", () => {
+		// Both halves of one rule: the gate's question is a user entry the model answers, so the reader must not see it,
+		// and a line somebody actually typed is never dropped for looking like it. `[reflection]` is the tell, and the
+		// sentence after it is what makes it the ask.
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: "Migrate the notes while I am out." }]),
+				entry(2, "pi.user", [{ role: "user", content: "[reflection] That was a big one, anything to keep?" }]),
+				entry(3, "pi.user", [{ role: "user", content: REFLECTION_ASK }]),
+				assistant(
+					4,
+					[
+						{ type: "text", text: "Kept: two lines in the log." },
+						call(REPLY_TOOL, { message: "Kept two lines." }, "m1"),
+					],
+					{
+						stopReason: "toolUse",
+					},
+				),
+				result(5, "m1", "delivered"),
+				replyEntry(6, "reply:m1", "Kept two lines."),
+				assistant(7, [{ type: "text", text: "Nothing else to report." }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Migrate the notes while I am out." },
+			{ kind: "user", id: "2", text: "[reflection] That was a big one, anything to keep?" },
+			{ kind: "delivered", id: "reply:m1", text: "Kept two lines." },
+		]);
 	});
 
 	it("does not call an answer that carries its own delivery silent", () => {

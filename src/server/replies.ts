@@ -30,7 +30,7 @@
 import type { Context } from "@earendil-works/chord";
 import type { ConversationId, Cursor, EntryRecord, Tx } from "@earendil-works/pi-durable";
 import type { ContentBlock, Origin } from "mason-protocol";
-import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder } from "../shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder, isReflectionAsk } from "../shared/contract.ts";
 import type { Integration } from "./integrations.ts";
 
 /** Where a reply goes: one connector, one external conversation. */
@@ -91,7 +91,7 @@ export function originOf(data: unknown): Origin | undefined {
 }
 
 /**
- * The turn whose reply is being written: the newest input entry that is not the gate's own reminder.
+ * The turn whose reply is being written: the newest input entry that is not a gate's own words.
  *
  * Read from the end because the newest one is the input in hand. `undefined` when the transcript holds no input at all —
  * a compacted or resumed turn — which is read as a local turn, the same fallback the delivery gate takes.
@@ -104,10 +104,16 @@ export function turnOriginOf(entries: readonly EntryRecord[]): TurnOrigin {
 	return { kind: "local" };
 }
 
-/** Whether an entry is an input at all: a user message that is not the gate's own nudge. */
+/**
+ * Whether an entry is an input at all. A connector entry is always the sender's words: anything a person may type is
+ * what the wire carried, including the first words a gate prints, and only mason's own side writes a gate's words. The
+ * delivery reminder and the reflection ask are things the model reads mid-turn, not words a person sent, so a turn that
+ * began with a person keeps its origin even after a gate wrote the newest entry in the transcript.
+ */
 export function isInputEntry(entry: EntryRecord): boolean {
 	const text = userText(entry);
-	return text !== undefined && !isDeliveryReminder(text);
+	if (entry.kind === CONNECTOR_ENTRY_KIND) return text !== undefined;
+	return text !== undefined && !isDeliveryReminder(text) && !isReflectionAsk(text);
 }
 
 /**

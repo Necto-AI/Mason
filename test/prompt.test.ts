@@ -22,6 +22,7 @@ import {
 	PROMPT_SECTIONS,
 	Prompt,
 	promptSectionKeys,
+	REFLECTION_RULE,
 	TONE,
 	WAKE_RULE,
 } from "../src/server/prompt.ts";
@@ -141,7 +142,8 @@ test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does 
 
 test("the whole prompt fits in its budget, and the tool list is the six", async () => {
 	// A ceiling on the prompt, not on one section: this text is paid again on every turn of every conversation, and the
-	// sections grow a sentence at a time. Raising it is a decision, like raising a code ceiling.
+	// sections grow a sentence at a time. Raising it is a decision, like raising a code ceiling. 4,000 became 4,400 for
+	// the reflection rule (#134), which is 641 characters of new resident text: 3,455 before it, 4,096 after.
 	await withHouseHome(async () => {
 		// The module's integrations are global: a test that set some would otherwise be counted here.
 		setIntegrations({});
@@ -149,7 +151,7 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 		for (const promptSection of PROMPT_SECTIONS) {
 			total += (await renderSection(promptSection))?.length ?? 0;
 		}
-		assert.ok(total <= 4_000, `the prompt is ${total} characters, over its 4,000`);
+		assert.ok(total <= 4_400, `the prompt is ${total} characters, over its 4,400`);
 	});
 
 	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));
@@ -194,6 +196,32 @@ test("the tone section is rules about a reply, not a banned-word list", async ()
 	assert.match(TONE, /Do not offer to do what you can do/, "doing it beats offering it");
 	assert.doesNotMatch(TONE, /be concise|avoid|never say|banned/i, "brevity comes from the turn, not from a word list");
 	assert.ok(TONE.length < 700, `the tone section is ${TONE.length} characters`);
+});
+
+/**
+ * The guards are the wording, and the wording is what the research measured a difference with: the log line rather than
+ * the skill, a description short enough for a resident index, a skill retired by naming what replaced it. What code can
+ * enforce of them is enforced elsewhere (the tool machine mounts only `agent/`); the rest is pinned here as text.
+ */
+test("the reflect section is what a long turn owes the next one, guards included", async () => {
+	const rendered = await renderSection(sectionOf("reflect"));
+	assert.equal(rendered, `<reflect>\n${REFLECTION_RULE}\n</reflect>`, "tagged like its neighbours");
+	assert.match(REFLECTION_RULE, /read\s+`agent\/profile\.md`/, "the file is read before it is rewritten");
+	assert.match(
+		REFLECTION_RULE,
+		/one dated line to\s+`agent\/log\/YYYY-MM-DD\.md`/,
+		"a fact with a date goes to the log",
+	);
+	assert.match(REFLECTION_RULE, /under 60 characters/, "a description is short enough for a resident index");
+	assert.match(
+		REFLECTION_RULE,
+		/Retire a skill by naming what\s+absorbed it, never silently/,
+		"a skill is not dropped quietly",
+	);
+	assert.match(REFLECTION_RULE, /inside `agent\/`/, "writes stay on the agent's half of the home");
+	assert.match(REFLECTION_RULE, /`service\/soul\.md` is the operator's file/, "the soul is not the agent's to edit");
+	assert.match(REFLECTION_RULE, /the log line is the rule and the skill is the exception/i, "the measured order");
+	assert.doesNotMatch(REFLECTION_RULE, /be active|most turns|every session/i, "no quota: a skill is the exception");
 });
 
 test("DEFAULT_SOUL is short: it is the first thing in every prompt", () => {
@@ -704,7 +732,8 @@ test("the prompt opens with the soul and closes with the delivery rule", () => {
 	assert.equal(keys[0], "preamble", "the soul opens the prompt");
 	assert.equal(keys.at(-1), "delivery", "the delivery rule is the closest thing to the turn");
 	assert.ok(keys.indexOf("integrations") < keys.indexOf("codemode"), "what exists, then the tools a script can call");
-	assert.ok(keys.indexOf("codemode") < keys.indexOf("delivery"));
+	assert.ok(keys.indexOf("codemode") < keys.indexOf("reflect"), "the turn's endings come after what it can reach");
+	assert.ok(keys.indexOf("reflect") < keys.indexOf("delivery"));
 });
 
 /**
@@ -724,9 +753,11 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"skills",
 		"profile",
 		// What exists beyond the tool list, and then the tools a script can call: a capability and the way to reach it
-		// sit next to each other, and both before the rule about the reader.
+		// sit next to each other, and both before the two rules about the turn's ending.
 		"integrations",
 		"codemode",
+		// What a long turn owes the next one: the memory it keeps, which is the only part of the turn that outlives it.
+		"reflect",
 		// Last because the rule that decides whether the reader hears anything should be closest to the turn. The
 		// eval suite measured the difference: a fact recalled in a later turn was delivered 0/2 times when this
 		// section sat fourth, and once it moved here.
