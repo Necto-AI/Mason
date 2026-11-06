@@ -17,10 +17,14 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { readComposeCredential } from "../src/server/connector-compose.ts";
-import { listConnectorCredentials, revokeConnectorCredential } from "../src/server/connectors.ts";
+import {
+	listConnectorCredentials,
+	mintConnectorCredential,
+	revokeConnectorCredential,
+} from "../src/server/connectors.ts";
 import { housePaths } from "../src/server/house.ts";
 
-import { readInstalls } from "../src/server/install-state.ts";
+import { readInstalls, writeInstall } from "../src/server/install-state.ts";
 import { readIntegrations } from "../src/server/integrations.ts";
 
 const run = promisify(execFile);
@@ -191,6 +195,37 @@ describe("the credential a container is given", () => {
 		assert.deepEqual(
 			records.filter((record) => record.connector === "telegram").map((record) => record.sha256),
 			[sha256(value ?? "")],
+		);
+	});
+
+	test("a --no-start run does not report a running container as stopped", async () => {
+		const home = await tempHome();
+		assert.equal((await setup(answers, home)).code, 0);
+		// A home that was started once, then asked to write without starting: the record says it is up because it is.
+		const paths = housePaths(home);
+		const record = (await readInstalls(paths)).connectors.telegram;
+		assert.ok(record !== undefined);
+		await writeInstall(paths, "telegram", { ...record, started: true });
+		assert.equal((await setup(answers, home)).code, 0);
+		assert.equal((await readInstalls(paths)).connectors.telegram?.started, true);
+	});
+
+	test("is replaced when it was rotated elsewhere, which is the one case a file can lie about", async () => {
+		// `mason connector add <name> --replace` is a rotation mas on does not perform, so the file's line survives it:
+		// only the hash says whether the plaintext in the project is still the credential this home holds.
+		const home = await tempHome();
+		assert.equal((await setup(answers, home)).code, 0);
+		const paths = housePaths(home);
+		const before = await composeCredential(home);
+		await mintConnectorCredential(paths.home, "telegram", { replace: true });
+		assert.equal((await setup(answers, home)).code, 0);
+		const after = await composeCredential(home);
+		assert.notEqual(after, before, "a plaintext whose hash is gone is not reused");
+		const live = (await listConnectorCredentials(paths.home)).filter((record) => record.connector === "telegram");
+		assert.deepEqual(
+			live.map((record) => record.sha256),
+			[sha256(after ?? "")],
+			"and the project matches what is live",
 		);
 	});
 

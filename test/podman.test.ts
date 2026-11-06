@@ -17,6 +17,8 @@ import {
 	listening,
 	logs,
 	loopbackRefusal,
+	type ProbeOutput,
+	type Prober,
 	ps,
 	up,
 } from "../src/server/podman.ts";
@@ -106,23 +108,66 @@ describe("the four verbs", () => {
 });
 
 describe("the half of the restart policy no compose file carries", () => {
-	test("says nothing when the unit is enabled or linked", async () => {
-		for (const state of ["enabled", "linked", "static"]) {
-			const { run } = recorder({ systemctl: { stdout: `${state}\n`, stderr: "" } });
-			assert.equal(await bootPolicyFix({ runner: run }), undefined, state);
+	/**
+	 * A prober shaped like the real thing: `systemctl is-enabled` answers through its exit code, and `disabled`, `masked`
+	 * and `linked` all exit 1. A recorder that resolved with `disabled` and code 0 would pin a shape the binary never
+	 * produces, which is exactly how the first version of this check passed a test and printed nothing in the field.
+	 */
+	function prober(answers: Readonly<Record<string, ProbeOutput | Error>>): Prober {
+		return async (command, argv) => {
+			const key = [command, ...argv].join(" ");
+			const answer = answers[key] ??
+				answers[argv[0] ?? ""] ??
+				answers[command] ?? { code: 0, stdout: "", stderr: "" };
+			if (answer instanceof Error) throw answer;
+			return answer;
+		};
+	}
+
+	test("says nothing when the unit is enabled and this user lingers", async () => {
+		for (const state of ["enabled", "enabled-runtime"]) {
+			assert.equal(
+				await bootPolicyFix({
+					probe: prober({
+						"systemctl --user is-enabled podman-restart.service": { code: 0, stdout: `${state}\n`, stderr: "" },
+						"loginctl show-user --property=Linger": { code: 0, stdout: "Linger=yes\n", stderr: "" },
+					}),
+				}),
+				undefined,
+				state,
+			);
 		}
 	});
 
-	test("names the two commands when it is not", async () => {
-		const disabled = recorder({ systemctl: { stdout: "disabled\n", stderr: "" } });
-		assert.match(
-			(await bootPolicyFix({ runner: disabled.run })) ?? "",
-			/systemctl --user enable podman-restart\.service.*loginctl enable-linger/s,
-		);
+	test("names both commands when the unit is not enabled, exit code and all", async () => {
+		for (const state of ["disabled", "masked", "linked", "linked-runtime", "static"]) {
+			const advice = await bootPolicyFix({
+				probe: prober({
+					"systemctl --user is-enabled podman-restart.service": { code: 1, stdout: `${state}\n`, stderr: "" },
+				}),
+			});
+			assert.match(
+				advice ?? "",
+				/systemctl --user enable podman-restart\.service && loginctl enable-linger/s,
+				`${state} is not a boot policy`,
+			);
+		}
+	});
+
+	test("a unit that is enabled but a user who does not linger is still a container that stays down", async () => {
+		const advice = await bootPolicyFix({
+			probe: prober({
+				"systemctl --user is-enabled podman-restart.service": { code: 0, stdout: "enabled\n", stderr: "" },
+				"loginctl show-user --property=Linger": { code: 0, stdout: "\n", stderr: "" },
+			}),
+		});
+		assert.match(advice ?? "", /loginctl enable-linger/);
 	});
 
 	test("says nothing on a machine that cannot answer, because an unanswered question is not a complaint", async () => {
-		const noSystemd = recorder({ systemctl: new Error("Failed to connect to bus") });
-		assert.equal(await bootPolicyFix({ runner: noSystemd.run }), undefined);
+		assert.equal(
+			await bootPolicyFix({ probe: prober({ systemctl: new Error("Failed to connect to bus") }) }),
+			undefined,
+		);
 	});
 });

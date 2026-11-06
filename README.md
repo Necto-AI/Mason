@@ -11,24 +11,24 @@ npm install -g mason-agent
 mason setup
 ```
 
-`mason setup` installs a connector. It offers the ones this release knows (`catalog/connectors.json`), asks for what
-the one you pick needs, and writes the integration entry, its grant and its credential. When the connector runs as a
-container it also generates the compose project and starts it, with `restart: always`, so it comes back after a reboot.
-Then `mason up` serves the bot: the connector connects when the socket is there, and after every reboot.
+`mason setup` installs a connector: it offers the ones this release knows (`catalog/connectors.json`), asks what the one
+you pick needs, and writes the integration entry, its grant and its credential. A connector that runs as a container
+also gets a compose project, started with `restart: always` — the half of "it comes back after a reboot" a file can
+carry, with the other half (`podman-restart.service`, and linger) printed when it is missing. Then `mason up` serves the
+bot, and the connector connects when the socket is there.
 
-Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a Dockerfile or a CI
-job drives the same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in
-console connector, which needs no Telegram at all.
+Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a CI job drives the
+same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in console connector, with
+no Telegram at all.
 
 `mason onboard` is unchanged and still scriptable: it creates the home, mints a credential for a connector that has a
-grant and none, and prints the doors. Changing the integration list is a restart: it is read once, at boot.
+grant and none, and prints the doors. The integration list is read once, at boot: changing it is a restart.
 
 ## What a stranger reaches
 
 `/api/health` is the only path that answers without a credential, and it answers one word. `/api/connector` is the
-connector's JSON-RPC socket and its attachment endpoint; each is the `Authorization: Bearer masonc_…` credential the
-`mason connector add` printed once. There is no owner token and no panel: a person speaks through a connector, and a
-UI talks to mason the same way.
+connector's JSON-RPC socket; it takes the `Authorization: Bearer masonc_…` credential `mason connector add` printed once.
+There is no owner token and no panel: a person speaks through a connector, and a UI does the same.
 
 ## The commands the installed package answers
 
