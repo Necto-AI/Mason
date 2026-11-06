@@ -33,7 +33,8 @@
 		"predev": "npm run build:packages",
 		"pregen:surface": "npm run build:packages",
 		"prebuild": "npm run build:packages",
-		"build": "node scripts/build-runtime.ts"
+		"build": "node scripts/build-runtime.ts",
+		"prepack": "npm run build"
 	},
 	"files": [
 		"dist",

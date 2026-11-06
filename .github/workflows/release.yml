@@ -64,7 +64,8 @@ jobs:
       - run: npm run prove:connector
 
       # The consumer's tarball ships `dist`, which nothing above builds (the dev path stays source-from-types and
-      # `ci` rightly never builds it, so a tag is where the compile has to happen). The two workspace packages pack
+      # `ci` rightly never builds it, so a tag is where the compile has to happen; `npm pack` runs the same build
+      # itself through `prepack`, so a publish by hand from any checkout ships the compiled tree too). The two workspace packages pack
       # beside it, protocol first, in the same order the publish below keeps. The copies to attach land in
       # `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in the next one packed.
       - run: npm run build

@@ -4,7 +4,7 @@
 		"type": "git",
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
-	"version": "1.0.0",
+	"version": "0.1.0",
 	"description": "The TypeScript SDK for a mason connector: the WebSocket runtime, negotiation, durable deduplication and outbound replay, attachments, MCP helpers, and the fake-Mason conformance suite.",
 	"license": "MIT",
 	"type": "module",
@@ -48,7 +48,7 @@
 		"build": "tsc -p tsconfig.build.json"
 	},
 	"dependencies": {
-		"mason-protocol": "1.0.0"
+		"mason-protocol": "0.1.0"
 	},
 	"engines": {
 		"node": ">=22.6"
