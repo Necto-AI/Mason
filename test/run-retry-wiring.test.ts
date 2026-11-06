@@ -28,10 +28,9 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { builtinHooks } from "../src/server/hooks.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
-import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
+import { RETRY_HOOK, RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
 import { HOOK_ENTRY_KIND, REPLY_ENTRY_KIND, REPLY_TOOL } from "../src/shared/contract.ts";
 
@@ -43,6 +42,15 @@ after(async () => {
 // An empty list is the honest one: this test fires a hook the build defines, and the retry is the subject, not a
 // connector's grant.
 const integrations = { integrations: {} };
+
+/**
+ * A routine file a test home starts with: the boot ships none, but these tests fire the chat hook through a runtime
+ * whose definitions come from this file. The interval is far past every test's lifetime, so only the test's own fires
+ * become turns.
+ */
+const ROUTINES = JSON.stringify([
+	{ name: "team-chat", intervalSeconds: 3_600, prompt: "A message arrived in the chat. Answer it with reply." },
+]);
 
 /** The one chat the reply of the second test has to land in: a user face, and the room the words arrived in. */
 const CHAT = { connector: "telegram", externalConversationId: "-1001234" };
@@ -64,11 +72,13 @@ async function temporaryHome(file: unknown = integrations): Promise<HousePaths> 
 	await mkdir(paths.home, { recursive: true, mode: 0o700 });
 	await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
 	await writeFile(paths.integrations, JSON.stringify(file), { encoding: "utf8", mode: 0o600 });
+	await mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
+	await writeFile(join(paths.agentDir, "routines.json"), ROUTINES, { encoding: "utf8" });
 	return paths;
 }
 
 /** The first line of the retry hook's instruction, which is how the factory tells the resumed turn from the parked one. */
-const RETRY_INSTRUCTION = `[EVENT HOOK: ${builtinHooks().find((hook) => hook.id === RETRY_HOOK_ID)?.name}]`;
+const RETRY_INSTRUCTION = `[ROUTINE: ${RETRY_HOOK.name}]`;
 
 /** The text a message carries: a plain string, or its text blocks joined. */
 function textOfMessage(message: { readonly content?: unknown }): string {

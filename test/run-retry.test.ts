@@ -232,7 +232,7 @@ test("a retry inherits the origin of the turn it resumes", async () => {
 	);
 
 	// A fire that landed after the failure is not the turn being resumed. One arrives in that window all the time — a
-	// workspace check, another connector's event, a press on the panel — and inheriting its destination would answer a
+	// workspace check, another granted kind firing — and inheriting its destination would answer a
 	// chat that never asked, or blank the resume back to "nobody was reached".
 	assert.deepEqual(
 		await firedFor(

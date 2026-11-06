@@ -91,7 +91,7 @@ async function rendered(runtime: AgentRuntime): Promise<Rendered> {
 
 const args = parseArgs(process.argv.slice(2));
 const home = args.home ?? process.env.MASON_HOME ?? join(homedir(), ".mason");
-// The state a boot writes — `hooks.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
+// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
 const dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
 
 const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
