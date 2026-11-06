@@ -24,9 +24,20 @@ export interface CommandOutput {
 /** Runs one command and resolves with what it printed, or rejects with its exit code and stderr. */
 export type CommandRunner = (command: string, argv: readonly string[]) => Promise<CommandOutput>;
 
-/** The real runner: argv, no shell, so nothing a name or a path holds can become a second command. */
-export const spawnRunner: CommandRunner = (command, argv) =>
-	new Promise((done, fail) => {
+/** What a command printed, and how it ended. For a question whose "no" is an answer rather than a failure. */
+export interface ProbeOutput extends CommandOutput {
+	readonly code: number;
+}
+
+/**
+ * Runs one command and resolves with its exit code: `systemctl is-enabled` exits 1 for `disabled`, `masked` and `linked`,
+ * and a state is the answer to the question, not a failure of it.
+ */
+export type Prober = (command: string, argv: readonly string[]) => Promise<ProbeOutput>;
+
+/** argv, no shell, so nothing a name or a path holds can become a second command. Rejects when the command cannot run. */
+function spawned(command: string, argv: readonly string[]): Promise<ProbeOutput> {
+	return new Promise((done, fail) => {
 		const child = spawn(command, [...argv], { stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
@@ -40,14 +51,26 @@ export const spawnRunner: CommandRunner = (command, argv) =>
 			fail(error);
 		});
 		child.on("exit", (code) => {
-			if (code === 0) done({ stdout, stderr });
-			else fail(new Error(`${command} ${argv.join(" ")} exited ${code}: ${stderr.trim() || stdout.trim()}`));
+			done({ code: code ?? 1, stdout, stderr });
 		});
 	});
+}
+
+/** The real runner: an exit code that is not zero is an error, carrying what the command said. */
+export const spawnRunner: CommandRunner = async (command, argv) => {
+	const { code, stdout, stderr } = await spawned(command, argv);
+	if (code !== 0) throw new Error(`${command} ${argv.join(" ")} exited ${code}: ${stderr.trim() || stdout.trim()}`);
+	return { stdout, stderr };
+};
+
+/** The real prober: the same spawn, and the exit code is part of the answer. */
+export const spawnProbe: Prober = spawned;
 
 export interface PodmanOptions {
 	/** Injected for tests; the real driver shells out to `podman`. */
 	readonly runner?: CommandRunner;
+	/** Injected for tests; the real prober shells out to `systemctl`. */
+	readonly probe?: Prober;
 }
 
 /** The compose invocation, without a verb: `podman compose -f <file> -p <project>`. */
@@ -156,32 +179,32 @@ export async function ps(composeFile: string, project: string, options: PodmanOp
  *
  * `restart: always` is only the compose half. The half that starts a marked container when the machine boots is
  * `podman-restart.service`, and on a rootless session it needs `loginctl enable-linger` beside it, because until the
- * user's systemd is running there is nothing to start it (`deploy/README.md` says the same for a deployment). No file
- * mason writes can enable either, so this is a question rather than a change: setup prints the two commands and gets on
- * with it.
+ * user's systemd is running there is nothing to start the container (`deploy/README.md` says the same for a deployment).
+ * No file mason writes can enable either, so this is a question rather than a change: setup prints the commands and gets
+ * on with it.
  *
- * A machine without a user session — a container, a CI job — cannot answer, and an unanswered question is not a
- * complaint, which is why a failing `systemctl` says nothing rather than guessing.
+ * The question is asked with a prober, not a runner, because `systemctl is-enabled` exits non-zero for every answer that
+ * owes advice — `disabled`, `masked`, and the `linked`/`linked-runtime` a NixOS host reports. Only `enabled` and
+ * `enabled-runtime` are accepted: a unit linked into a runtime path is not a unit that starts at boot, and guessing in
+ * that direction costs a bot that does not come back. A machine with no user session cannot answer, and an unanswered
+ * question is not a complaint, which is why a `systemctl` that cannot run says nothing.
  */
 export async function bootPolicyFix(options: PodmanOptions = {}): Promise<string | undefined> {
+	const probe = options.probe ?? spawnProbe;
 	let state: string;
 	try {
-		const { stdout } = await (options.runner ?? spawnRunner)("systemctl", [
-			"--user",
-			"is-enabled",
-			"podman-restart.service",
-		]);
-		state = stdout.trim();
+		state = (await probe("systemctl", ["--user", "is-enabled", "podman-restart.service"])).stdout.trim();
 	} catch {
 		return undefined;
 	}
-	// `enabled` is the obvious answer and `linked` is the one NixOS gives: both mean the unit is wired into a target, and
-	// so does `static`. `disabled`, `masked` and an empty answer do not.
-	if (/^(enabled|linked|static)$/m.test(state)) return undefined;
-	return (
-		"`restart: always` brings the container back when it dies, but nothing starts it at boot yet: enable " +
-		"`systemctl --user enable podman-restart.service` and `loginctl enable-linger $USER`"
-	);
+	const both = "`systemctl --user enable podman-restart.service && loginctl enable-linger $USER`";
+	if (!/^(enabled|enabled-runtime)$/m.test(state)) {
+		return `\`restart: always\` brings the container back when it dies, and nothing starts it at boot yet: run ${both}`;
+	}
+	// Enabled and still not at boot, if this user's systemd only runs while they are logged in.
+	const linger = await probe("loginctl", ["show-user", "--property=Linger"]).catch(() => undefined);
+	if (linger !== undefined && /^Linger=yes$/m.test(linger.stdout.trim())) return undefined;
+	return `\`podman-restart.service\` is enabled, and this user's systemd only runs while they are logged in: run ${both}`;
 }
 
 /** `podman compose logs`: the last `tail` lines, for the one question a first run asks — why it did not connect. */

@@ -177,7 +177,10 @@ export function terminalPrompter(): Prompter {
 			// real value on the line anyway. It buys the one thing that is honest: saying so, with the flag that avoids it.
 			const hint =
 				options.secret === true
-					? [options.hint, "this answer is echoed as you type it: pass the flag instead on a shared screen"]
+					? [
+							options.hint,
+							`this answer is echoed as you type it: on a shared screen pass ${options.flag ?? "it as a flag"} instead`,
+						]
 							.filter((line) => line !== undefined)
 							.join("\n")
 					: options.hint;

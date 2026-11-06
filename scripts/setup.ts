@@ -15,6 +15,7 @@
  * podman network, and setup publishes no host port (a connector dials out and nothing dials in), so the entry it writes
  * carries the grant and no `tools` block. That arrives with the release that puts mason in the same network.
  */
+import { createHash } from "node:crypto";
 import type { Capability, ControlOp } from "mason-protocol";
 import { CONTROL_OPS } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
@@ -66,8 +67,13 @@ export function usage(): string {
   --chat               open \`mason chat\` when it is done
   --help               this
 
-  A home that already holds this connector's grant is added to, never rewritten: a second \`mason setup\` reports what it
-  found and writes nothing.`;
+  A home that already holds this connector's grant is added to, never rewritten, and its credential is reused: a second
+  \`mason setup\` rewrites the project only where an answer, the version or the container's image changed, and says which.`;
+}
+
+/** The hash `mintConnectorCredential` stores: the one thing that says a plaintext is the credential this home holds. */
+function sha256(value: string): string {
+	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** Flags, in the two spellings a person types: `--connector telegram`, and `--env=TELEGRAM_BOT_TOKEN=…`. */
@@ -346,16 +352,20 @@ async function install(
 	if (plan_.container) {
 		const path = composePath(paths, plan_.name);
 		const project = projectName(paths.home, plan_.name);
-		// A container needs the plaintext credential, and mason keeps only a hash. Three states, and each has one answer: a
-		// credential minted just now is the plaintext; a credential record this home still holds means the file's own line
-		// is the plaintext (the file is `0600` and this command is about to rewrite it); anything else — no record because
-		// it was revoked, or no file because it was deleted — is a rotation, and the old one is dropped in the same write.
+		// A container needs the plaintext credential, and mason keeps only a hash. Two of them are usable, and both are
+		// proven rather than assumed: a credential minted by this run, or the file's own line when its hash is the hash this
+		// home holds (the file is `0600` and this command is about to rewrite it). Anything else is a rotation — revoked,
+		// deleted, or rotated elsewhere by `mason connector add --replace` — and the credential nobody holds any more is
+		// dropped in the same write, because a container left crash-looping on it is the failure this avoids.
 		let plaintext = credential;
-		if (plaintext === undefined && already !== undefined) plaintext = await readComposeCredential(path);
+		if (plaintext === undefined && already !== undefined) {
+			const held = await readComposeCredential(path);
+			if (held !== undefined && sha256(held) === already.sha256) plaintext = held;
+		}
 		if (plaintext === undefined) {
 			const rotated = await mintConnectorCredential(paths.home, plan_.name, { replace: true });
 			plaintext = rotated.credential;
-			console.log(`[setup] no usable credential for ${path}, so one was minted: ${rotated.record.id}`);
+			console.log(`[setup] no credential this home holds was in ${path}, so one was minted: ${rotated.record.id}`);
 			console.log(rotated.credential);
 		}
 		const written = await writeCompose(paths, {
@@ -463,7 +473,7 @@ export async function runSetup(
 		console.log(`[setup] "${plan_.name}" is installed.`);
 		if (plan_.container)
 			console.log(
-				"[setup] next: mason up  — the connector connects when the socket is there, and after every reboot",
+				"[setup] next: mason up  — the connector connects when the socket is there; the container starts when the machine does, if the line above was clean",
 			);
 		else if (plan_.name === CONSOLE) console.log("[setup] next: mason chat");
 		else
