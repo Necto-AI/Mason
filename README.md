@@ -33,6 +33,17 @@ UI talks to mason the same way.
 `mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
 work from a source checkout with `npm run dev`, whose tests run with `npm test`.
 
+## How a release goes out
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+A `v*` tag starts the `release` workflow: the same checks CI runs, then the three packages published with npm
+provenance, protocol first, and the three tarballs attached to the GitHub release. Publishing holds no secret: it
+is npm trusted publishing, configured once per package on npmjs.com (package settings, Trusted Publisher, naming
+this repository and the workflow file).
+
 ## The workspace packages inside the tarball
 
 The server imports `mason-protocol` (the connector wire contract) bare. The packages are not on the registry yet
