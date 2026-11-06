@@ -706,4 +706,13 @@ describe("the routines file's validation", () => {
 		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":30},{"prompt":"x"}]'));
 		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":30,"prompt":""}]'));
 	});
+
+	// The run supervisor's retry lifecycle hook occupies the id in code; the file cannot take it, and a file that
+	// does is one malformed notice, not a fatal boot.
+	it("rejects the id the run supervisor's retry lifecycle hook occupies", () => {
+		assert.throws(
+			() => parseRoutines('[{"name":"retry-failed-run","intervalSeconds":60,"prompt":"x"}]'),
+			/retry-failed-run/,
+		);
+	});
 });
