@@ -151,6 +151,39 @@ export async function ps(composeFile: string, project: string, options: PodmanOp
 	return stdout.trim();
 }
 
+/**
+ * What the operator still has to do for the container to come back after a reboot, or `undefined` when nothing is owed.
+ *
+ * `restart: always` is only the compose half. The half that starts a marked container when the machine boots is
+ * `podman-restart.service`, and on a rootless session it needs `loginctl enable-linger` beside it, because until the
+ * user's systemd is running there is nothing to start it (`deploy/README.md` says the same for a deployment). No file
+ * mason writes can enable either, so this is a question rather than a change: setup prints the two commands and gets on
+ * with it.
+ *
+ * A machine without a user session — a container, a CI job — cannot answer, and an unanswered question is not a
+ * complaint, which is why a failing `systemctl` says nothing rather than guessing.
+ */
+export async function bootPolicyFix(options: PodmanOptions = {}): Promise<string | undefined> {
+	let state: string;
+	try {
+		const { stdout } = await (options.runner ?? spawnRunner)("systemctl", [
+			"--user",
+			"is-enabled",
+			"podman-restart.service",
+		]);
+		state = stdout.trim();
+	} catch {
+		return undefined;
+	}
+	// `enabled` is the obvious answer and `linked` is the one NixOS gives: both mean the unit is wired into a target, and
+	// so does `static`. `disabled`, `masked` and an empty answer do not.
+	if (/^(enabled|linked|static)$/m.test(state)) return undefined;
+	return (
+		"`restart: always` brings the container back when it dies, but nothing starts it at boot yet: enable " +
+		"`systemctl --user enable podman-restart.service` and `loginctl enable-linger $USER`"
+	);
+}
+
 /** `podman compose logs`: the last `tail` lines, for the one question a first run asks — why it did not connect. */
 export async function logs(
 	composeFile: string,

@@ -37,9 +37,9 @@ export interface TextQuestion {
 	/** The flag that answers this without a terminal, e.g. `--env TELEGRAM_BOT_TOKEN="<token>"`. */
 	readonly flag?: string;
 	/**
-	 * The value is echoed as it is typed: pi-tui's `Input` has no masked mode, and faking one would leave the real value
-	 * on the line anyway. A person on a shared screen passes `--env` instead, and either way the answer is written to the
-	 * compose file only — never to the install record.
+	 * The answer is a credential, and the terminal has to say that it is about to echo it: pi-tui's `Input` has no masked
+	 * mode. What the answer is *not* is written down — the value goes into the container's environment and nowhere else,
+	 * never into the install record.
 	 */
 	readonly secret?: boolean;
 	/** Taken when the person presses enter on an empty line. */
@@ -173,7 +173,15 @@ export function terminalPrompter(): Prompter {
 
 	function text(question: string, options: TextQuestion = {}): Promise<string> {
 		return new Promise((answer, reject) => {
-			const label = new Text(options.hint === undefined ? question : `${question}\n${options.hint}`, 0, 1);
+			// `secret` cannot buy a masked field — pi-tui's `Input` has no such mode, and drawing over it would leave the
+			// real value on the line anyway. It buys the one thing that is honest: saying so, with the flag that avoids it.
+			const hint =
+				options.secret === true
+					? [options.hint, "this answer is echoed as you type it: pass the flag instead on a shared screen"]
+							.filter((line) => line !== undefined)
+							.join("\n")
+					: options.hint;
+			const label = new Text(hint === undefined ? question : `${question}\n${hint}`, 0, 1);
 			const input = new Input({ prompt: "> " });
 			const done = (value: string): void => {
 				tui.removeChild(input);

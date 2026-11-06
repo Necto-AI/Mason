@@ -126,7 +126,10 @@ function fileStore(path: string): ConnectorStore {
 		if (cache !== undefined) return cache;
 		const text = await readFile(path, "utf8").catch(() => "{}");
 		const parsed: unknown = JSON.parse(text);
-		cache = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, Bucket>) : {};
+		cache =
+			typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+				? (parsed as Record<string, Bucket>)
+				: {};
 		return cache;
 	};
 	const bucket = async (namespace: string): Promise<Bucket> => {

@@ -54,6 +54,8 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	for (const command of [
 		"mason up",
 		"mason onboard",
+		"mason setup",
+		"mason chat",
 		"mason integration",
 		"mason connector",
 		"mason prompt",

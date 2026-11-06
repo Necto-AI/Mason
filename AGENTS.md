@@ -62,7 +62,7 @@ tool or entry kind is invisible until the whitelist says so.
   knows (`catalog/connectors.json`, parsed by `src/server/catalog.ts`, where an unknown key is a refusal), asks what the
   chosen one needs, writes the grant through the writer the boot reads, mints one credential, renders
   `service/connectors/<name>/compose.yaml` (`connector-compose.ts`) and starts it through `podman compose` (`podman.ts`)
-  with `restart: always`, so a reboot brings it back. Every step has a flag (`--connector`, `--url`, `--env K=V`,
+  with `restart: always`, and reports `podman-restart.service` when the boot half of that policy is missing. Every step has a flag (`--connector`, `--url`, `--env K=V`,
   `--owner`, `--no-start`, `--yes`), so CI drives the same flow with no terminal, and the wizard (`scripts/wizard.ts`,
   `@earendil-works/pi-tui`) is a shell over it. `mason chat` is the built-in `console` connector: it mints its own
   credential for that entry and opens the same socket every connector opens. `service/connectors.json` records what was

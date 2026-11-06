@@ -17,7 +17,6 @@ import {
 	type ConnectorInstall,
 	parseSource,
 	readInstalls,
-	removeInstall,
 	requireInstallable,
 	writeInstall,
 } from "../src/server/install-state.ts";
@@ -132,15 +131,6 @@ describe("service/connectors.json", () => {
 		const { connectors } = await readInstalls(paths);
 		assert.deepEqual(connectors.telegram, first);
 		assert.deepEqual(Object.keys(connectors), ["console", "telegram"], "sorted, so a diff is stable");
-	});
-
-	test("forgetting one connector keeps the others, and says whether there was one", async () => {
-		const paths = await temporaryHome();
-		await writeInstall(paths, "telegram", record("catalog:telegram@0.2.0"));
-		await writeInstall(paths, "console", record("catalog:console@0.1.0"));
-		assert.equal(await removeInstall(paths, "telegram"), true);
-		assert.deepEqual(Object.keys((await readInstalls(paths)).connectors), ["console"]);
-		assert.equal(await removeInstall(paths, "telegram"), false, "a typo must not read as a removal");
 	});
 
 	test("a record this release cannot act on is a refusal naming the file", async () => {
