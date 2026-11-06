@@ -266,7 +266,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
 		});
 		opened.push(() => hooks.close());
-		// The supervisor's hook is code, not a routine: the agent does not edit it, and nothing schedules it.
+		// The supervisor's retry is code, not a routine: the agent does not edit it, and nothing schedules it.
 		hooks.define(RETRY_HOOK);
 		assertConnectorHooksHaveHooks(currentIntegrations(), hooks, house.integrations);
 

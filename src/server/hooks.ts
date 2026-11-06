@@ -4,7 +4,7 @@
  * A routine is a timer the agent owns, configured in `agent/routines.json` — the agent edits the file with `write`, and
  * a deployment ships none. An event is a connector fire the operator granted, of a kind its grant names; the kind map
  * points at a hook id, so the id a grant names must exist in the file (or be defined in code, the way the run
- * supervisor's retry hook is). Runtime state (`lastFiredAt`, `fireCount`, `nextFireAt`) stays in `service/data/`, so
+ * supervisor's retry lifecycle hook is). Runtime state (`lastFiredAt`, `fireCount`, `nextFireAt`) stays in `service/data/`, so
  * the agent's git diff shows only what it chose.
  *
  * A fire submits an input whose entry kind is `app.hook`, so clients can tell a proactive trigger from a human message,
@@ -26,8 +26,8 @@ export interface EventHookConfig {
 	description: string;
 	enabled: boolean;
 	/**
-	 * When set, the hook fires on a schedule, one fire per interval slot (`scheduledRequestId()`): a hook that fires
-	 * every minute has a one-minute slot, and re-arming cannot double-fire inside it.
+	 * When set, the definition fires on a schedule, one fire per interval slot (`scheduledRequestId()`): a one-minute
+	 * interval has a slot that long, and re-arming cannot double-fire inside it.
 	 */
 	intervalMs?: number;
 	promptTemplate: string;
@@ -41,6 +41,9 @@ export interface RoutineConfig {
 	intervalSeconds: number;
 	prompt: string;
 }
+
+/** The id the run supervisor's retry lifecycle hook occupies (`RETRY_HOOK_ID` in `run-retry.ts`); the file cannot take it. */
+export const RESERVED_ROUTINE_ID: ReadonlySet<string> = new Set(["retry-failed-run"]);
 
 /**
  * Validate one routines file before a word of it arms anything. Names must be the ids a connector's kind map names,
@@ -62,6 +65,9 @@ export function parseRoutines(text: string): RoutineConfig[] {
 			throw new Error(`has a name that is not [a-z0-9-]: ${JSON.stringify(routine.name)}`);
 		}
 		if (seen.has(routine.name)) throw new Error(`names "${routine.name}" twice`);
+		if (RESERVED_ROUTINE_ID.has(routine.name)) {
+			throw new Error(`"${routine.name}" is kept for the run supervisor's retry lifecycle hook`);
+		}
 		seen.add(routine.name);
 		if (
 			typeof routine.intervalSeconds !== "number" ||
@@ -123,7 +129,7 @@ export interface FireOptions {
 	readonly requestId?: string;
 	/**
 	 * What happened, as the sender named it (`issue.opened`, `push`): a label for the log and the prompt, never a dispatch
-	 * key — one trigger fires one hook, and nothing here decides anything from it. When it is present the wake is an
+	 * key — one trigger fires one definition, and nothing here decides anything from it. When it is present the wake is an
 	 * event and the marker says so; its absence is the routine's own timer, and the marker says that instead.
 	 */
 	readonly kind?: string;
@@ -249,7 +255,7 @@ export class HooksManager {
 		this.#writeState();
 	}
 
-	/** Registers (or replaces) a hook definition from code; persisted runtime state is kept. */
+	/** Registers (or replaces) a lifecycle hook definition from code; persisted runtime state is kept. */
 	define(config: Omit<EventHookConfig, "fireCount"> & { fireCount?: number }): EventHookConfig {
 		const previous = this.#hooks.get(config.id);
 		const state = this.#state[config.id];
@@ -414,7 +420,10 @@ export class HooksManager {
 		// awaits then finds the schedule resumed in the future, so the delayed fire is the only one the slot gets.
 		this.#advance(hook.id, intervalMs, dueMs);
 		try {
-			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs - 1) });
+			// The slot the key names is the one `#advance` just wrote (`dueMs`), which a second catch-up of the same
+			// delayed slot then deduplicates by: the advance precedes every fire, so `dueMs` is always fresh, while
+			// `dueMs - 1` aliaes the previous slot's already-consumed key when the schedule sits on a slot boundary.
+			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
@@ -541,7 +550,7 @@ export function gestureRequestId(hookId: string, gestureId: string = randomUUID(
 }
 
 /**
- * The scheduler's identity: one fire per interval slot, so a re-arm cannot double-fire and a daily hook is not
+ * The scheduler's identity: one fire per interval slot, so a re-arm cannot double-fire and a daily routine is
  * deduplicated into a single fire for good. `nextFireAt` holds the slot's start, so the boot scan inherits its identity
  * from the same key a live timer would have used.
  */
