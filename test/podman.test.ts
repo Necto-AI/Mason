@@ -7,6 +7,7 @@
  * would be testing a different program.
  */
 import assert from "node:assert/strict";
+import { userInfo } from "node:os";
 import { describe, test } from "node:test";
 import {
 	bootPolicyFix,
@@ -20,6 +21,7 @@ import {
 	type ProbeOutput,
 	type Prober,
 	ps,
+	spawnProbe,
 	up,
 } from "../src/server/podman.ts";
 
@@ -110,14 +112,14 @@ describe("the four verbs", () => {
 describe("the half of the restart policy no compose file carries", () => {
 	/**
 	 * A prober shaped like the real thing: `systemctl is-enabled` answers through its exit code, and `disabled`, `masked`
-	 * and `linked` all exit 1. A recorder that resolved with `disabled` and code 0 would pin a shape the binary never
-	 * produces, which is exactly how the first version of this check passed a test and printed nothing in the field.
+	 * or `linked` exit 1 with the word on stdout. A recorder that resolved with `disabled` and code 0 would pin a shape
+	 * the binary never produces, which is exactly how the first version of this check passed a test and printed nothing
+	 * in the field.
 	 */
-	function prober(answers: Readonly<Record<string, ProbeOutput | Error>>): Prober {
+	function prober(answers: Readonly<Record<string, ProbeOutput | Error>>, calls: string[] = []): Prober {
 		return async (command, argv) => {
-			const key = [command, ...argv].join(" ");
-			const answer = answers[key] ??
-				answers[argv[0] ?? ""] ??
+			calls.push([command, ...argv].join(" "));
+			const answer = answers[[command, ...argv].join(" ")] ??
 				answers[command] ?? { code: 0, stdout: "", stderr: "" };
 			if (answer instanceof Error) throw answer;
 			return answer;
@@ -130,7 +132,7 @@ describe("the half of the restart policy no compose file carries", () => {
 				await bootPolicyFix({
 					probe: prober({
 						"systemctl --user is-enabled podman-restart.service": { code: 0, stdout: `${state}\n`, stderr: "" },
-						"loginctl show-user --property=Linger": { code: 0, stdout: "Linger=yes\n", stderr: "" },
+						loginctl: { code: 0, stdout: "Linger=yes\n", stderr: "" },
 					}),
 				}),
 				undefined,
@@ -158,16 +160,58 @@ describe("the half of the restart policy no compose file carries", () => {
 		const advice = await bootPolicyFix({
 			probe: prober({
 				"systemctl --user is-enabled podman-restart.service": { code: 0, stdout: "enabled\n", stderr: "" },
-				"loginctl show-user --property=Linger": { code: 0, stdout: "\n", stderr: "" },
+				loginctl: { code: 0, stdout: "Linger=no\n", stderr: "" },
 			}),
 		});
 		assert.match(advice ?? "", /loginctl enable-linger/);
 	});
 
-	test("says nothing on a machine that cannot answer, because an unanswered question is not a complaint", async () => {
+	test("asks loginctl about a user by name, because the manager has no Linger to report", async () => {
+		const calls: string[] = [];
+		await bootPolicyFix({
+			probe: prober(
+				{
+					"systemctl --user is-enabled podman-restart.service": { code: 0, stdout: "enabled\n", stderr: "" },
+					loginctl: { code: 0, stdout: "Linger=no\n", stderr: "" },
+				},
+				calls,
+			),
+		});
+		assert.deepEqual(calls[1], `loginctl show-user ${userInfo().username} --property=Linger`);
+	});
+
+	test("says nothing when systemctl exits 1 with nothing on stdout: a machine with no user manager", async () => {
 		assert.equal(
-			await bootPolicyFix({ probe: prober({ systemctl: new Error("Failed to connect to bus") }) }),
+			await bootPolicyFix({
+				probe: prober({
+					"systemctl --user is-enabled podman-restart.service": {
+						code: 1,
+						stdout: "",
+						stderr: "Failed to connect to user scope bus via local transport",
+					},
+				}),
+			}),
 			undefined,
 		);
+	});
+
+	test("says nothing when systemctl cannot run at all, because an unanswered question is not a complaint", async () => {
+		assert.equal(
+			await bootPolicyFix({ probe: prober({ systemctl: new Error("spawn systemctl ENOENT") }) }),
+			undefined,
+		);
+	});
+
+	test("the argv it asks with is one the real loginctl answers", async (context) => {
+		// The question this file got wrong twice was answered by a mock, so this one asks the binary. A machine without a
+		// user manager cannot answer and is not the case under test.
+		const answer = await spawnProbe("loginctl", ["show-user", userInfo().username, "--property=Linger"]).catch(
+			() => undefined,
+		);
+		if (answer === undefined || answer.stdout.trim() === "") {
+			context.skip("no user manager on this machine to ask");
+			return;
+		}
+		assert.match(answer.stdout.trim(), /^Linger=(yes|no)$/);
 	});
 });

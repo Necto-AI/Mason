@@ -68,7 +68,7 @@ export function usage(): string {
   --help               this
 
   A home that already holds this connector's grant is added to, never rewritten, and its credential is reused: a second
-  \`mason setup\` rewrites the project only where an answer, the version or the container's image changed, and says which.`;
+  \`mason setup\` rewrites the project only where an answer, the version, the image or the credential changed, and says so.`;
 }
 
 /** The hash `mintConnectorCredential` stores: the one thing that says a plaintext is the credential this home holds. */
@@ -381,7 +381,7 @@ async function install(
 		if (written.created) console.log(`[setup] wrote ${written.path}`);
 		else if (written.changed)
 			console.log(
-				`[setup] rewrote ${written.path}: an answer, or the version, changed — the container is recreated below`,
+				`[setup] rewrote ${written.path}: an answer, the version, the image or the credential changed; the container is recreated below`,
 			);
 		else console.log(`[setup] ${written.path} is up to date`);
 		if (args.start) {
@@ -471,9 +471,13 @@ export async function runSetup(
 		const outcome = await install(paths, plan_, args);
 		console.log("");
 		console.log(`[setup] "${plan_.name}" is installed.`);
-		if (plan_.container)
+		if (plan_.container && outcome.started)
 			console.log(
-				"[setup] next: mason up  — the connector connects when the socket is there; the container starts when the machine does, if the line above was clean",
+				"[setup] next: mason up  — the connector connects when the socket is there, and the project above comes back with the machine",
+			);
+		else if (plan_.container)
+			console.log(
+				`[setup] next: mason up  — the connector connects when the socket is there. Start it with: podman compose -f ${composePath(paths, plan_.name)} -p ${projectName(paths.home, plan_.name)} up -d`,
 			);
 		else if (plan_.name === CONSOLE) console.log("[setup] next: mason chat");
 		else

@@ -14,6 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
+import { userInfo } from "node:os";
 
 /** What a command printed. A non-zero exit is an error with this as its detail; nothing here interprets the output. */
 export interface CommandOutput {
@@ -184,25 +185,30 @@ export async function ps(composeFile: string, project: string, options: PodmanOp
  * on with it.
  *
  * The question is asked with a prober, not a runner, because `systemctl is-enabled` exits non-zero for every answer that
- * owes advice — `disabled`, `masked`, and the `linked`/`linked-runtime` a NixOS host reports. Only `enabled` and
- * `enabled-runtime` are accepted: a unit linked into a runtime path is not a unit that starts at boot, and guessing in
- * that direction costs a bot that does not come back. A machine with no user session cannot answer, and an unanswered
- * question is not a complaint, which is why a `systemctl` that cannot run says nothing.
+ * owes advice — `disabled`, `masked`, and the `linked`/`linked-runtime` a NixOS host reports — and because an answer is
+ * only an answer when the command printed one. `systemctl --user` with no reachable user manager exits 1 with nothing on
+ * stdout and its complaint on stderr; that is a machine that cannot answer, and an unanswered question is not a
+ * complaint. `loginctl` is asked about the user by name, since with no argument it reports the manager's properties and
+ * `Linger` is a user property.
+ *
+ * Only `enabled` and `enabled-runtime` are accepted: a unit linked into a runtime path is not a unit that starts at
+ * boot, and guessing in that direction costs a bot that does not come back.
  */
 export async function bootPolicyFix(options: PodmanOptions = {}): Promise<string | undefined> {
 	const probe = options.probe ?? spawnProbe;
-	let state: string;
-	try {
-		state = (await probe("systemctl", ["--user", "is-enabled", "podman-restart.service"])).stdout.trim();
-	} catch {
-		return undefined;
-	}
 	const both = "`systemctl --user enable podman-restart.service && loginctl enable-linger $USER`";
+	const query = await probe("systemctl", ["--user", "is-enabled", "podman-restart.service"]).catch(() => undefined);
+	// Nothing on stdout is no answer — no user manager, or no systemd at all — and no answer is not a complaint.
+	const state = query?.stdout.trim() ?? "";
+	if (state === "") return undefined;
 	if (!/^(enabled|enabled-runtime)$/m.test(state)) {
 		return `\`restart: always\` brings the container back when it dies, and nothing starts it at boot yet: run ${both}`;
 	}
-	// Enabled and still not at boot, if this user's systemd only runs while they are logged in.
-	const linger = await probe("loginctl", ["show-user", "--property=Linger"]).catch(() => undefined);
+	// Enabled and still not at boot, if this user's systemd only runs while they are logged in. The user is named because
+	// `loginctl show-user` without one reports the manager, which has no `Linger` to report.
+	const linger = await probe("loginctl", ["show-user", userInfo().username, "--property=Linger"]).catch(
+		() => undefined,
+	);
 	if (linger !== undefined && /^Linger=yes$/m.test(linger.stdout.trim())) return undefined;
 	return `\`podman-restart.service\` is enabled, and this user's systemd only runs while they are logged in: run ${both}`;
 }
