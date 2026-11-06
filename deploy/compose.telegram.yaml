@@ -14,6 +14,9 @@
 #     COMPOSE_EXTRA_FILES=compose.telegram.yaml
 #
 # `mason-mcp` and `mason-egress` are declared in `compose.yaml` and joined from here; it is one project either way.
+#
+# Both services carry `restart: always` for the reason `compose.yaml`'s header gives: a reboot is not a stop, and the
+# host's `podman-restart.service` restores what declares that policy (#86).
 services:
   # mason-telegram: the Telegram connector, in its own repository (github.com/DenisSud/mason-telegram, its own package,
   # tests and image). It holds a user face on mason's connector socket — the words, the files and the approvals — and an
@@ -26,7 +29,7 @@ services:
     # Published by its own repository and its own release cycle: a connector is not part of mason's image, and a mason
     # upgrade must not require a connector rebuild. `docker build .` in that repository produces the same image.
     image: ghcr.io/denissud/mason-telegram:latest
-    restart: unless-stopped
+    restart: always
     environment:
       # The bot's own credential, in this container's environment and nowhere else: not in `service/`, not in an image,
       # never written to the volume.
@@ -85,7 +88,7 @@ services:
     # rewritten) between minor versions. `latest` would one day refuse a file that was correct yesterday, at whichever
     # boot pulled it. v1.14.4 is what this template's config.example.json is written for.
     image: ghcr.io/sagernet/sing-box:v1.14.4
-    restart: unless-stopped
+    restart: always
     command: ["run", "-c", "/etc/sing-box/config.json"]
     volumes:
       # A real server's address, port, key and password. Copied from ./vpn/config.example.json once, and gitignored: a

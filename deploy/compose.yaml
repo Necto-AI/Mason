@@ -12,6 +12,10 @@
 # Build contexts: the mason image is built from the REPOSITORY ROOT (`context: ..`), because the image is the repo — its
 # TypeScript run from source. The env image is built from this directory alone.
 #
+# Every service here carries `restart: always`, and the host enables `podman-restart.service` in the operator's own
+# systemd session: that pair is the boot policy (#86). `unless-stopped` is not one, because podman records a shutdown
+# as a stop and then declines to start what a person stopped. deploy/README.md, "A reboot is not a stop".
+#
 # Nothing here terminates TLS. The server is published on 127.0.0.1 and a reverse proxy in front of it is the deployer's
 # business; see deploy/README.md for the two headers such a proxy has to preserve.
 
@@ -28,7 +32,7 @@ services:
         MASON_UID: ${MASON_UID:-1000}
         MASON_GID: ${MASON_GID:-1000}
     image: ${MASON_STACK:-mason}-env:local
-    restart: unless-stopped
+    restart: always
     environment:
       # The one account sshd allows in (`AllowUsers`); the same name the mason service logs in as.
       MASON_ENV_USER: ${MASON_ENV_USER:-mason}
@@ -82,7 +86,7 @@ services:
         MASON_UID: ${MASON_UID:-1000}
         MASON_GID: ${MASON_GID:-1000}
     image: ${MASON_STACK:-mason}:local
-    restart: unless-stopped
+    restart: always
     depends_on:
       mason-env:
         # Started, not healthy: there is no healthcheck to wait for, and the entrypoint's own wait is what decides
@@ -218,7 +222,7 @@ services:
     build:
       context: ../asr
     image: ${MASON_STACK:-mason}-asr:local
-    restart: unless-stopped
+    restart: always
     environment:
       # The model volume's mount point. Empty on a fresh stack, and the entrypoint fetches the export from Hugging Face
       # once before the port opens; a fetch that fails exits non-zero rather than serving with no model behind it.
@@ -264,7 +268,7 @@ services:
   #   # Their image, not ours: an integration is a service somebody else maintains, and it carries its own updates,
   #   # healthcheck and language.
   #   image: ghcr.io/example/mcp-example:latest
-  #   restart: unless-stopped
+  #   restart: always
   #   environment:
   #     # The upstream credential belongs to the container that uses it (ADR-0003), so it lives in deploy/.env beside
   #     # this file and in this container's environment — never in `service/`, never in an image. mason holds the URL and
