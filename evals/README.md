@@ -1,9 +1,10 @@
 # Evals
 
-Five scenarios that answer one question: does the agent loop behave the way mason promises? A fired hook is acted on
+Six scenarios that answer one question: does the agent loop behave the way mason promises? A fired hook is acted on
 and reported once. A check-in with nothing to report stays short and invents nothing. A question the model already knows
 costs no tool call. A number only a file can answer is read before it is claimed. A preference told in one turn is
-written to the log and answered from it in the next.
+written to the log and answered from it in the next. A long turn is asked what it kept, and the preference it carried
+comes back two turns later.
 
 This is not a model benchmark. The model is whatever `--model` names and the scenario is the constant, so the
 interesting result is a scenario that flips between runs or that fails for a model that is otherwise fine: that is a
@@ -149,6 +150,7 @@ passed 15.
 | cheap-first | 3/3 | a known answer costs zero work calls |
 | verify-first | 3/3 | `read` before the claim, exact count |
 | remember | **0/3** | a recalled preference is delivered on the next turn |
+| long-task | not run | a long turn keeps what it learned, and the preference is answered two turns later |
 
 The scenario writes the fact down with `write` rather than `remember`, which the six-tool cut removed; the numbers in
 the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the recall
@@ -157,6 +159,10 @@ so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). 
 four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
 silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
 to the log and read back through the same path.
+
+`long-task` was added with the reflection gate (#134) and has not been run against a model: the eval costs real
+tokens, so its `maxInputTokens` is a bound carried over from `remember`'s two turns rather than a measured one, and the
+first run of it is the run that should set it.
 
 The gate changes what green means. `calls.reply` still measures the model's own discipline; `reminders` measures
 how often it needed help, and that is the number to watch — a model that stops delivering still turns the suite green,

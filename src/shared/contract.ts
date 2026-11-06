@@ -3,8 +3,8 @@
  * transcript, the queue, the agent's status, and the entry kinds it is made of.
  *
  * There is no wire contract here: an interface is a connector and speaks `packages/protocol`. This file holds what is
- * still shared in TypeScript — the entry kinds, the reply tool's name, the delivery reminder, and the shapes the
- * projection builds. Nothing consumes the projection yet; sibling is where it crosses.
+ * still shared in TypeScript: the entry kinds, the reply tool's name, the two continuations a gate adds to a turn, and
+ * the shapes the projection builds. Nothing consumes the projection yet; sibling is where it crosses.
  */
 
 /**
@@ -37,7 +37,21 @@ export const DELIVERY_ENTRY_KIND = "app.delivery";
 export const DELIVERY_REMINDER = `${deliveryReminderOpening(REPLY_TOOL)} Send the answer now with \`${REPLY_TOOL}\`, in the words the reader should see.`;
 
 /**
- * Whether a user message is the gate's own nudge rather than something a person typed.
+ * What the reflection gate asks when a turn of ten tool rounds or more ends: the work is kept, or it is gone.
+ *
+ * The same shape as the delivery reminder, and for the same reason: a continuation is a `pi.user` entry, the delivery
+ * rule is advice, and the counter that decides it is the mechanism. Mason's own memory is three files the agent writes
+ * (`agent/profile.md`, `agent/log/`, `agent/skills/`), so looking back is a paragraph of instruction rather than a tool.
+ * The order is the research's, not a preference: a self-authored skill measured below the no-skill baseline, so the log
+ * line is the rule and the skill is the exception.
+ */
+export const REFLECTION_ASK = `[reflection] That turn took ten tool rounds or more, so keep what it produced: read \`agent/profile.md\` and add
+what you learned about them, add one dated line to \`agent/log/YYYY-MM-DD.md\` for what must not be forgotten, and write a
+skill only if a procedure repeated, its description under 60 characters. Everything you write is inside \`agent/\`; retire a
+skill only by naming what absorbed it. Reply with what you kept, or one line saying nothing was worth keeping.`;
+
+/**
+ * Whether a user message is a gate's own words rather than something a person typed.
  *
  * The opening sentence is the tell, and it is one sentence for every shape: a person's own line that merely begins with
  * the marker is not a reminder, so nothing anybody typed is dropped from their transcript.
@@ -46,8 +60,15 @@ export function isDeliveryReminder(text: string): boolean {
 	return DELIVERY_REMINDER_OPENING.test(text.trim());
 }
 
+/** The reflection gate's ask, told apart from a person's line that opens with the same marker. */
+export function isReflectionAsk(text: string): boolean {
+	return REFLECTION_ASK_OPENING.test(text.trim());
+}
+
 const DELIVERY_REMINDER_OPENING =
 	/^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
+
+const REFLECTION_ASK_OPENING = /^\[reflection\] That turn took ten tool rounds or more, so keep what it produced:/;
 
 /** The sentence the reminder opens with: what did not happen, in the name of the tool that did not happen with. */
 function deliveryReminderOpening(tool: string): string {
