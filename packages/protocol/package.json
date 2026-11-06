@@ -4,7 +4,7 @@
 		"type": "git",
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
-	"version": "1.0.0",
+	"version": "0.1.0",
 	"description": "The mason connector protocol, v1: language-neutral JSON Schema plus the TypeScript view of the same shapes.",
 	"license": "MIT",
 	"type": "module",
