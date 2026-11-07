@@ -36,8 +36,6 @@ export interface Glyphs {
 	readonly warn: string;
 	readonly wait: string;
 	readonly skip: string;
-	readonly run: string;
-	readonly start: string;
 	readonly cursor: string;
 	readonly rule: string;
 	readonly mask: string;
@@ -103,8 +101,6 @@ export function glyphs(utf8: boolean): Glyphs {
 			warn: "!",
 			wait: ".",
 			skip: "-",
-			run: ">",
-			start: ">",
 			cursor: ">",
 			rule: "-",
 			mask: "*",
@@ -118,8 +114,6 @@ export function glyphs(utf8: boolean): Glyphs {
 		warn: "!",
 		wait: "·",
 		skip: "·",
-		run: "▸",
-		start: "›",
 		cursor: "›",
 		rule: "─",
 		mask: "•",

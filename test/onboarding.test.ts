@@ -70,6 +70,8 @@ interface Fixture {
 		up: boolean;
 		ready: boolean;
 		podman: boolean;
+		/** Fail the connector step before it prints anything: the other half of "what is on disk now". */
+		quiet: boolean;
 	};
 }
 
@@ -90,6 +92,7 @@ function fixture(options: { readonly faux?: boolean } = {}): Fixture {
 		up: true,
 		ready: false,
 		podman: true,
+		quiet: false,
 	};
 	const operations: Operations = {
 		ready: async () => break_.ready,
@@ -113,6 +116,10 @@ function fixture(options: { readonly faux?: boolean } = {}): Fixture {
 			calls.push(`setup ${args.join(" ")}`);
 			if (break_.setup > 0) {
 				break_.setup -= 1;
+				// The real command writes the grant and then mints the credential before anything starts, so a failure after
+				// this line is a failure with something on disk — which is what the failure page has to say. A failure that
+				// prints nothing is the other case, and the page has to say the opposite.
+				if (!break_.quiet) console.log("[setup] wrote the grant for console");
 				return 1;
 			}
 			return 0;
@@ -427,6 +434,47 @@ describe("what the disk already answers", () => {
 		assert.ok(!screen.asked.some((question) => question.id === "connector.kind"));
 		assert.ok(calls.includes("init --provider faux --model faux-1"));
 		assert.ok(calls.includes("setup --connector console"));
+		// And the review offers no way back into a section the flags answered: that route ends on "nothing to ask".
+		const review = screen.asked.find((question) => question.id === "review.action");
+		assert.ok(
+			!(review?.choices ?? []).includes("provider"),
+			"a flag answered the provider: the review cannot change it",
+		);
+		assert.ok(!(review?.choices ?? []).includes("connector"), "and the same for the connector");
+	});
+
+	test("a seeded connector the flags only half answered asks for the rest before it installs", async () => {
+		// `--connector telegram` names the connector and nothing else: the token and the owner are still owed, and a plan
+		// that went straight to the install would fail inside mason setup on a question nobody was shown.
+		const { code, screen, calls } = await drive(
+			{
+				"welcome.mode": "quickstart",
+				"provider.id": "faux",
+				"provider.model": "faux-1",
+				"agent.name": "alice",
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+				"review.action": "apply",
+				"done.action": "finish",
+			},
+			{ flags: { setup: ["--connector", "telegram"] } },
+		);
+		assert.equal(code, 0);
+		assert.ok(!screen.asked.some((question) => question.id === "connector.flags"), "half an answer is not an answer");
+		assert.ok(!screen.asked.some((question) => question.id === "connector.kind"), "the flag named the kind");
+		assert.ok(
+			screen.asked.some((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN"),
+			"the token was asked",
+		);
+		assert.ok(
+			screen.asked.some((question) => question.id === "connector.owner"),
+			"so was the owner",
+		);
+		const setup = calls.find((call) => call.startsWith("setup"));
+		assert.match(setup ?? "", /^setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc/);
+		assert.match(setup ?? "", /--owner @denis/);
 	});
 });
 
@@ -464,7 +512,23 @@ describe("failures", () => {
 		const said = failed?.page.lines.join("\n") ?? "";
 		assert.ok(said.includes("connector"), said);
 		assert.ok(said.includes("mason doctor"), "the recovery is named");
+		assert.match(
+			said,
+			/grant and the credential were written/,
+			"what the step left on disk is read off what it printed, not assumed",
+		);
 		assert.ok(screen.asked.some((question) => question.id === "done.action"));
+	});
+
+	test("a connector step that failed before it printed anything says nothing was written", async () => {
+		const fake = fixture();
+		fake.break_.setup = 9;
+		fake.break_.quiet = true;
+		const { code, screen } = await drive(quickstart(), { fixture: fake });
+		assert.equal(code, 1);
+		const said = screen.pages.find((page) => page.id === "apply.failed")?.page.lines.join("\n") ?? "";
+		assert.match(said, /Nothing was written/);
+		assert.doesNotMatch(said, /grant and the credential were written/, "the page does not claim what it cannot see");
 	});
 
 	test("retrying runs the failed step only, and finishes", async () => {
@@ -475,6 +539,24 @@ describe("failures", () => {
 		assert.equal(calls.filter((call) => call.startsWith("setup")).length, 2);
 		assert.equal(calls.filter((call) => call.startsWith("init")).length, 1, "the store was not written twice");
 		assert.equal(calls.filter((call) => call === "create alice").length, 1);
+	});
+
+	test("a run that failed once and then went through says it went through", async () => {
+		const fake = fixture();
+		fake.break_.setup = 1;
+		// Stop on the failure, read the summary, then go back and apply again: the second apply does the work, and the
+		// completion screen is written from what happened last rather than from what happened first.
+		const { code, screen } = await drive(
+			{ ...quickstart(), "apply.steps.key": "enter", "done.action": [CANCEL, "finish"] },
+			{ fixture: fake },
+		);
+		assert.equal(code, 0, "the retried run finished, so the exit code says it did");
+		const read = [
+			...(screen.asked.filter((question) => question.id === "done.action").at(-1)?.preface ?? []),
+			...screen.pages.filter((entry) => entry.id === "done.read").flatMap((entry) => entry.page.lines),
+		].join("\n");
+		assert.match(read, /installed/);
+		assert.doesNotMatch(read, /failed/, "a failure that was fixed is not the summary");
 	});
 
 	test("a check that fails after the install is a failed run with the repair named", async () => {

@@ -38,7 +38,13 @@ import type { Glyphs, Paint } from "../src/tui/style.ts";
 import { CONSOLE } from "./chat.ts";
 import { parseArgs as parseInitArgs, runInit } from "./init.ts";
 import { runNew } from "./new.ts";
-import { parseArgs as parseSetupArgs, runSetup } from "./setup.ts";
+import {
+	masonPort,
+	parseEvents as parseGrantEvents,
+	parseArgs as parseSetupArgs,
+	runSetup,
+	splitIds,
+} from "./setup.ts";
 import { MissingAnswer, type Prompter } from "./wizard.ts";
 
 /** `kind=hook` pairs, as the grant carries them. */
@@ -143,11 +149,6 @@ export function answeredPrompter(): Prompter {
  */
 function pageAndChoicesFit(screen: Screen, page: readonly string[], choices: number): boolean {
 	return page.length + 6 + choices <= screen.rows - 6;
-}
-
-/** The port `mason up` binds, which is what a completion screen asks about. */
-function masonPort(): number {
-	return Number(process.env.PORT ?? 8787);
 }
 
 /** The real operations: the commands, unchanged, and the reads the wizard needs to know what is already there. */
@@ -258,26 +259,18 @@ export function botNameProblem(value: string): string | undefined {
 	return undefined;
 }
 
-/** The ids a comma-separated answer names, without the empties a trailing comma leaves. */
-function splitIds(text: string): string[] {
-	return text
-		.split(",")
-		.map((id) => id.trim())
-		.filter((id) => id !== "");
-}
-
-/** `kind=hook, kind=hook` as the grant carries it, refused here where the person can still correct it. */
+/**
+ * `kind=hook` pairs, as the screen says them.
+ *
+ * The same parser `mason setup` reads its `--events` with, because the two must agree on what a pair is; only the
+ * sentence differs, since a screen shows a message and a command throws one.
+ */
 function parseEvents(text: string): Events | string {
-	const events: Events = {};
-	for (const pair of splitIds(text)) {
-		const separator = pair.indexOf("=");
-		const kind = separator === -1 ? "" : pair.slice(0, separator).trim();
-		const hook = separator === -1 ? "" : pair.slice(separator + 1).trim();
-		if (kind === "" || hook === "")
-			return `"${pair}" is not kind=hook: the event kind, then the routine it wakes, as event=name`;
-		events[kind] = hook;
+	try {
+		return parseGrantEvents(text, "--events");
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
 	}
-	return events;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -499,6 +492,22 @@ async function agent(ctx: Context): Promise<Direction> {
 }
 
 /**
+ * Whether a seeded plan already answers every question its connector will ask.
+ *
+ * The flags are a partial answer by nature: `--connector telegram` says which connector and nothing about its token or its
+ * owner, and a plan that went straight to the install with those missing would fail inside `mason setup` on a question the
+ * person was never shown.
+ */
+async function connectorAnswered(plan: ConnectorPlan): Promise<boolean> {
+	if (plan.kind === CONSOLE) return true;
+	if (plan.owner === undefined) return false;
+	if (plan.kind === "custom") return plan.url !== undefined;
+	const entry = await catalogEntry(plan.kind).catch(() => undefined);
+	if (entry === undefined) return false;
+	return entry.env.every((variable) => variable.optional === true || plan.env[variable.name] !== undefined);
+}
+
+/**
  * The connector a home already grants, when it grants exactly one.
  *
  * A second run is a run about a home that exists, and that home's grant is the answer it already gave: offering it as the
@@ -514,13 +523,13 @@ async function grantedKind(ctx: Context): Promise<string | undefined> {
 	return granted.length === 1 ? granted[0] : undefined;
 }
 
+/** `/stop /compact /clear /status`: the controls a grant names, as a sentence reads them. */
+
 /** What a catalog connector's grant says, in words, before the person is asked to grant it. */
 async function permissionLines(kind: string): Promise<string[]> {
-	const entry = await catalogEntry(kind);
+	const { face, controls } = await grantFace(kind);
 	return [
-		`It may carry ${entry.connector.capabilities.join(", ")} replies and send ${entry.connector.commands
-			.map((command) => `/${command}`)
-			.join(" ")}.`,
+		`It may carry ${face} and send ${controls}.`,
 		"Nothing else: the grant is written at exactly that ceiling, and the credential it holds belongs to this home.",
 	];
 }
@@ -530,25 +539,31 @@ async function connector(ctx: Context): Promise<Direction> {
 	const { screen, draft, io } = ctx;
 	const { paint, glyphs } = look(ctx);
 	const advanced = draft.mode === "advanced";
-	if (draft.seeded?.connector === true && draft.connector !== undefined) {
+	// A flag answers its own question, and only that one: `--connector telegram` names the kind and still owes a token, so a
+	// seeded plan that is missing an answer is asked for it here rather than announced as complete.
+	const seeded = draft.seeded?.connector === true ? draft.connector : undefined;
+	if (seeded !== undefined && (await connectorAnswered(seeded))) {
 		await screen.note("connector.flags", "Connector", {
 			lines: rows(paint, "Answered on the command line", [
-				["type", draft.connector.kind],
-				["owner", draft.connector.owner ?? "(none named)"],
-				["starts", draft.connector.start ? "now" : "no: --no-start"],
+				["type", seeded.kind],
+				["owner", seeded.owner ?? "(none named)"],
+				["starts", seeded.start ? "now" : "no: --no-start"],
 			]),
 			note: "nothing to ask: the flags answered it",
 		});
 		return NEXT;
 	}
 	const granted = draft.connector === undefined ? await grantedKind(ctx) : draft.connector.kind;
-	const kind = await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
-		...(granted === undefined ? {} : { value: granted }),
-		hint:
-			granted === undefined
-				? "the console is built in; a catalog connector runs as a container beside mason"
-				: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
-	});
+	const kind =
+		seeded === undefined
+			? await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
+					...(granted === undefined ? {} : { value: granted }),
+					hint:
+						granted === undefined
+							? "the console is built in; a catalog connector runs as a container beside mason"
+							: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
+				})
+			: seeded.kind;
 	if (kind === CONSOLE) {
 		ctx.draft.connector = {
 			kind,
@@ -695,23 +710,26 @@ async function connector(ctx: Context): Promise<Direction> {
 	return NEXT;
 }
 
+/** `/stop /compact /clear /status`: the controls a grant names, as a sentence reads them. */
+const controlList = (commands: readonly string[]): string => commands.map((command) => `/${command}`).join(" ");
+
 /**
- * What a connector's grant allows, as the review reads it back.
+ * What a connector's grant allows, in the two halves every screen about it needs: what it may carry, and what it may send.
  *
  * The catalog is the ceiling for a connector mason runs, and the protocol's own control set is the ceiling for the
  * console. A `custom` connector is granted the owner's conversations and every control, because setup has nothing else to
- * narrow it with: saying so is better than an empty line.
+ * narrow it with. One function, because the screen that asks for a grant and the screen that reads it back must not be
+ * able to disagree about it.
  */
-async function grantedLines(kind: string): Promise<string[]> {
-	const controls = CONTROL_OPS.map((command) => `/${command}`).join(" ");
-	if (kind === CONSOLE) return [`the terminal's words, with ${controls}`];
-	if (kind === "custom") return [`the conversations it names, with ${controls}`];
+async function grantFace(kind: string): Promise<{ readonly face: string; readonly controls: string }> {
+	if (kind === CONSOLE) return { face: "the terminal's words", controls: controlList(CONTROL_OPS) };
+	if (kind === "custom") return { face: "the conversations it names", controls: controlList(CONTROL_OPS) };
 	const entry = await catalogEntry(kind).catch(() => undefined);
-	if (entry === undefined) return [];
-	return [
-		`${entry.connector.capabilities.join(", ")} replies`,
-		entry.connector.commands.map((command) => `/${command}`).join(" "),
-	];
+	if (entry === undefined) return { face: "nothing yet", controls: "nothing yet" };
+	return {
+		face: `${entry.connector.capabilities.join(", ")} replies`,
+		controls: controlList(entry.connector.commands),
+	};
 }
 
 /** The catalog's connectors, the built-in console, and a connector that is already running somewhere else. */
@@ -739,9 +757,11 @@ async function review(ctx: Context): Promise<Direction> {
 	const name = draft.agent?.name ?? "";
 	const home = name === "" ? "(unchosen)" : short(botHome(root.root, name), env);
 	const settings = draft.provider === undefined ? await ctx.io.settings(root.root) : undefined;
-	// The provider screen has something to ask only when the store does not answer it, or when a flag already did: an
-	// entry that leads to a note saying "nothing to ask" is a dead end dressed as a choice.
-	const canChangeProvider = draft.provider !== undefined || !(await ctx.io.ready(root.root));
+	// The provider screen has something to ask only when the store does not answer it and no flag already did: an entry that
+	// leads to a note saying "nothing to ask" is a dead end dressed as a choice.
+	const canChangeProvider =
+		draft.seeded?.provider !== true && (draft.provider !== undefined || !(await ctx.io.ready(root.root)));
+	const canChangeConnector = draft.seeded?.connector !== true;
 	const connectorPlan = draft.connector;
 	const lines: string[] = [
 		"Nothing has been written yet. This is what will be.",
@@ -777,8 +797,10 @@ async function review(ctx: Context): Promise<Direction> {
 		connectorPairs.push(["starts", connectorPlan.start ? "now, and after a reboot" : "no: written and left down"]);
 	// What the grant allows, on the screen that asks for it: the connector step explained it before the answers, and the
 	// review is where a person reads the whole thing back.
-	const may = connectorPlan === undefined ? [] : await grantedLines(connectorPlan.kind);
-	if (may.length > 0) connectorPairs.push(["may", may.join("; ")]);
+	if (connectorPlan !== undefined) {
+		const { face, controls } = await grantFace(connectorPlan.kind);
+		connectorPairs.push(["may", `${face}; ${controls}`]);
+	}
 	lines.push(...rows(paint, "Connector", connectorPairs));
 	lines.push(
 		...rows(paint, "Install", [
@@ -798,7 +820,7 @@ async function review(ctx: Context): Promise<Direction> {
 		{ value: "apply", label: "install it", description: "four steps, then the checks" },
 		...(canChangeProvider ? [{ value: "provider", label: "change the provider or model" }] : []),
 		{ value: "agent", label: "change the agent name" },
-		{ value: "connector", label: "change the connector" },
+		...(canChangeConnector ? [{ value: "connector", label: "change the connector" }] : []),
 		{ value: "cancel", label: "leave without writing anything" },
 	];
 	const fits = pageAndChoicesFit(screen, lines, choices.length);
@@ -893,7 +915,7 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
  * makes this safe across an `await`, and it is why the operations need no progress callback of their own — the lines
  * they already print are the progress.
  */
-export function capture(sink: (line: string) => void): () => void {
+function capture(sink: (line: string) => void): () => void {
 	const log = console.log;
 	const error = console.error;
 	const write = (...parts: unknown[]): void => {
@@ -1002,8 +1024,9 @@ async function apply(ctx: Context): Promise<Direction> {
 		states.set(failure.step.id, "wait");
 	}
 	progress.close();
+	// On both paths: a retry that worked is a run that worked, and the summary is written from this field.
+	draft.failed = failure?.step.label;
 	if (failure === undefined) return NEXT;
-	draft.failed = failure.step.label;
 	await screen.note("apply.failed", "Not finished", {
 		lines: [
 			paint.bad(`${glyphs.fail} ${failure.step.label}: ${failure.message}`),
