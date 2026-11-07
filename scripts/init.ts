@@ -14,7 +14,13 @@
  * it does not exist yet, each copied aside with a timestamp before it is replaced.
  */
 import { existsSync } from "node:fs";
-import { commonPaths, commonReady, readCommonRuntime, writeCommonStore } from "../src/server/common.ts";
+import {
+	assertCommonStoreReadable,
+	commonPaths,
+	commonReady,
+	readCommonRuntime,
+	writeCommonStore,
+} from "../src/server/common.ts";
 import { modelIds, openProviders, type ProviderAccess, providerIds, verifyCompletion } from "../src/server/provider.ts";
 import { readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
 import {
@@ -169,17 +175,20 @@ export async function runInit(
 					secret: true,
 					required: true,
 				})));
+		// Before the completion, not after it: a store that cannot be rewritten is one sentence, and a spent verify is not.
+		await assertCommonStoreReadable(root.root);
 		console.log(`[init] verifying ${provider}/${model} with one completion…`);
 		const reply = await verifyCompletion(access, { provider, modelId: model }, key);
 		console.log(`[init] the provider answered: ${reply.slice(0, 60)}`);
+		const wroteRuntime = !existsSync(paths.runtime);
 		await writeCommonStore(root.root, {
 			defaultProvider: provider,
 			defaultModel: model,
 			...(key === undefined ? {} : { key }),
 		});
-		console.log(
-			`[init] wrote ${paths.settings}, ${paths.auth}${existsSync(paths.runtime) ? "" : ` and ${paths.runtime}`}`,
-		);
+		// `writeCommonStore` writes `runtime.json` only when there is none, and the check has to be *before* the write:
+		// testing it afterwards was a clause that could never be true.
+		console.log(`[init] wrote ${paths.settings}, ${paths.auth}${wroteRuntime ? ` and ${paths.runtime}` : ""}`);
 		console.log("[init] next: `mason new <name>` creates a bot, or `mason onboard` does both");
 		return 0;
 	} catch (error) {

@@ -274,6 +274,17 @@ describe("a connector that is already running somewhere else", () => {
 
 	test("--conversations and --events are written through the grant writer, with no hand-written JSON", async () => {
 		const home = await tempHome();
+		// The hooks a grant may fire are the ones the boot defines: the retry hook, plus the routines the agent owns. A
+		// grant that names a hook nobody defines is refused before anything is written (the next test), so this one writes
+		// the routines first, the way a person would.
+		await mkdir(join(home, "agent"), { recursive: true });
+		await writeFile(
+			join(home, "agent", "routines.json"),
+			JSON.stringify([
+				{ name: "check-mail", intervalSeconds: 600, prompt: "Read the mail." },
+				{ name: "check-calendar", intervalSeconds: 600, prompt: "Read the calendar." },
+			]),
+		);
 		const url = "ws://127.0.0.1:9999/api/connector";
 		const result = await setup(
 			[

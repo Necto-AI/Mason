@@ -16,11 +16,14 @@
  * carries the grant and no `tools` block. That arrives with the release that puts mason in the same network.
  */
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Capability, ControlOp, ExternalConversation } from "mason-protocol";
 import { CONTROL_OPS } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
 import { composePath, projectName, readComposeCredential, writeCompose } from "../src/server/connector-compose.ts";
 import { type ConnectorGrant, listConnectorCredentials, mintConnectorCredential } from "../src/server/connectors.ts";
+import { parseRoutines } from "../src/server/hooks.ts";
 import { ensureHouse, type HousePaths, housePaths } from "../src/server/house.ts";
 import {
 	type ConnectorInstall,
@@ -32,6 +35,7 @@ import {
 import { readIntegrations, writeIntegration } from "../src/server/integrations.ts";
 import { bootPolicyFix, checkPodman, listening, loopbackRefusal, up } from "../src/server/podman.ts";
 import { DEFAULT_SOUL } from "../src/server/prompt.ts";
+import { RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import { CONSOLE, consoleGrant, runChat } from "./chat.ts";
 import {
 	CONNECTOR_QUESTION,
@@ -237,6 +241,25 @@ function splitIds(text: string): string[] {
 		.filter((id) => id !== "");
 }
 
+/** The hooks a boot defines: the supervisor's retry, and every routine `agent/routines.json` carries. */
+async function assertKnownHooks(paths: HousePaths, events: Record<string, string>): Promise<void> {
+	const known = new Set<string>([RETRY_HOOK_ID]);
+	const text = await readFile(join(paths.agentDir, "routines.json"), "utf8").catch(() => undefined);
+	if (text !== undefined) {
+		try {
+			for (const routine of parseRoutines(text)) known.add(routine.name);
+		} catch {
+			// A malformed routines file is the boot's own refusal, with its own message; this check is about the grant.
+		}
+	}
+	const unknown = Object.entries(events).filter(([, hook]) => !known.has(hook));
+	if (unknown.length === 0) return;
+	throw new Error(
+		`${unknown.map(([kind, hook]) => `the kind "${kind}" fires "${hook}"`).join(", ")}, which is not a hook: ` +
+			`this build defines ${[...known].map((name) => `"${name}"`).join(", ")}. Nothing was written.`,
+	);
+}
+
 /**
  * `kind=hook, kind=hook` as the events face's map.
  *
@@ -283,7 +306,7 @@ const OWNER = {
 } as const;
 
 /** Every question the chosen connector needs, answered from a flag or from the prompter — and nothing written yet. */
-async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
+async function plan(args: SetupArgs, prompter: Prompter, paths: HousePaths): Promise<Plan> {
 	// `--url` already named the connector it belongs to: a person who passes the address of a running connector has
 	// answered "which one", and asking again is the flag lying about what it does.
 	const name =
@@ -339,6 +362,10 @@ async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
 						}),
 						EVENTS_QUESTION,
 					);
+		// A hook no build defines is a boot that refuses, and it refused *after* this grant was written: the wizard
+		// promised a connector the server would not start with, and `mason doctor` said nine ok. The names are the
+		// retry hook plus the routines the agent owns, which is exactly what the boot will accept.
+		await assertKnownHooks(paths, events);
 		return {
 			name,
 			description: `A connector already running at ${url}`,
@@ -400,9 +427,14 @@ async function install(
 	plan_: Plan,
 	args: SetupArgs,
 ): Promise<{ readonly credential?: string; readonly started: boolean }> {
+	// Every read that can refuse happens before the first write: a broken `config.json` used to be discovered after the
+	// grant had landed, which left a connector installed with no credential and a command that exited 1.
 	const { integrations } = await readIntegrations(paths);
+	const issued = await listConnectorCredentials(paths.home);
+	const previous = (await readInstalls(paths)).connectors[plan_.name];
 	const existing = integrations[plan_.name];
-	if (existing?.connector === undefined) {
+	const granted = existing?.connector;
+	if (granted === undefined) {
 		await writeIntegration(paths, plan_.name, {
 			...existing,
 			enabled: true,
@@ -412,12 +444,15 @@ async function install(
 			connector: plan_.grant,
 		});
 		console.log(`[setup] wrote the grant for "${plan_.name}" to ${paths.integrations}`);
+	} else if (previous?.source !== undefined && previous.source !== plan_.source) {
+		// The url lives in the install record, not the grant: a second run with a different `--url` moves it, and a run that
+		// did that silently was a wizard reporting success while the connector kept dialling the old address.
+		console.log(`[setup] "${plan_.name}" is already granted; its address moves: ${previous.source} -> ${plan_.source}`);
 	} else {
-		console.log(`[setup] "${plan_.name}" is already granted in ${paths.integrations}; left as it is`);
+		console.log(`[setup] "${plan_.name}" is already granted in ${paths.integrations}; the grant is unchanged`);
 	}
 
 	let credential: string | undefined;
-	const issued = await listConnectorCredentials(paths.home);
 	const already = issued.find((record) => record.connector === plan_.name);
 	if (already === undefined) {
 		const minted = await mintConnectorCredential(paths.home, plan_.name, { replace: false });
@@ -429,7 +464,6 @@ async function install(
 		console.log(`[setup] "${plan_.name}" already has connector credential ${already.id}; nothing minted`);
 	}
 
-	const previous = (await readInstalls(paths)).connectors[plan_.name];
 	let started = false;
 	/** A start that failed after the files were written: the record goes in, and the failure goes up after it. */
 	let failure: unknown;
@@ -553,7 +587,7 @@ export async function runSetup(
 		// First, because it makes the two halves and refuses a home from before the split by name: every write below
 		// assumes the layout it creates, and a soul it finds is left alone.
 		await ensureHouse(paths, DEFAULT_SOUL);
-		const plan_ = await plan(args, prompter);
+		const plan_ = await plan(args, prompter, paths);
 		const outcome = await install(paths, plan_, args);
 		console.log("");
 		console.log(`[setup] "${plan_.name}" is installed.`);
@@ -565,7 +599,8 @@ export async function runSetup(
 			console.log(
 				`[setup] next: mason up  — the connector connects when the socket is there. Start it with: podman compose -f ${composePath(paths, plan_.name)} -p ${projectName(paths.home, plan_.name)} up -d`,
 			);
-		else if (plan_.name === CONSOLE) console.log("[setup] next: mason chat");
+		else if (plan_.name === CONSOLE)
+			console.log(`[setup] next: mason chat${paths.fleet === undefined ? "" : ` -b ${paths.fleet.bot}`}`);
 		else
 			console.log(
 				`[setup] next: give the credential above to the connector at ${args.url ?? "its url"}. Its grant names ` +
