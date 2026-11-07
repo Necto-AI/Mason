@@ -1,11 +1,14 @@
 /**
- * `~/.mason/` — everything the agent is made of, in two halves.
+ * A bot's home — everything the agent is made of, in two halves.
  *
  * The pattern: the agent's identity and memory are files Denis can read, diff and revert, not rows in a database he
  * cannot type into. This module owns the layout and the paths; nothing else in the server builds one by hand.
  *
+ * A home is one directory under the mason root (`root.ts`: `~/.mason` or `MASON_ROOT`, with `common/` beside the bots),
+ * or whatever `MASON_HOME` names directly.
+ *
  * ```text
- * ~/.mason/
+ * ~/.mason/<bot>/
  * ├── agent/                  # everything the agent owns: mounted into the tool machine, same absolute path
  * │   ├── profile.md          # who Denis is, agent-managed, always in the prompt
  * │   ├── log/2026-10-20.md   # dated facts, one per line, appended through the execution environment
@@ -43,15 +46,21 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
+import { type BotTarget, expandHome, HOME_ENTRIES, readRoot, resolveBot } from "./root.ts";
 
 const run = promisify(execFile);
 
 export interface HousePaths {
-	/** The root: `MASON_HOME`, else `~/.mason`. Two halves hang below it. */
+	/** The home itself: `MASON_HOME`, or one bot's directory under the mason root. Two halves hang below it. */
 	readonly home: string;
+	/**
+	 * The fleet root this bot lives under, and its name there. Absent when a home was addressed directly (`MASON_HOME`, an
+	 * explicit path): such a home is a fleet of one, and keeps the older fallbacks a fleet root deliberately drops.
+	 */
+	readonly fleet?: { readonly root: string; readonly bot: string };
 	/** The half the agent owns and the tool machine sees: the home's repository lives here. */
 	readonly agentDir: string;
 	/** The half the server owns and no tool ever sees. */
@@ -104,13 +113,29 @@ export function configureHouse(paths: HousePaths): HousePaths {
 }
 
 /**
- * Where a home is: the path given, else `MASON_HOME`, else `~/.mason`.
+ * Where a home is: the path given, else `MASON_HOME`, else the targeted bot under the mason root.
  *
  * `~` is expanded here because `MASON_HOME=~/x` is what a person writes in a shell, and a literal `~` in a path is a
  * directory name no file is ever in.
+ *
+ * The root is the fleet layout (`root.ts`): `MASON_ROOT`, else `~/.mason`, holding `common/` and one directory per bot.
+ * `MASON_HOME` still names one home directly, which is how a home written before the fleet layout keeps booting without a
+ * move; a command that knows which bot it wants passes `botPaths` rather than relying on the ambient target.
  */
-export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".mason")): HousePaths {
-	home = resolve(home.startsWith("~/") ? join(homedir(), home.slice(2)) : home);
+export function housePaths(home?: string): HousePaths {
+	if (home !== undefined) return layout(home);
+	const configured = process.env.MASON_HOME;
+	if (configured !== undefined && configured !== "") return layout(configured);
+	return botPaths(resolveBot(readRoot()));
+}
+
+/** One bot's home under a root, with the fleet it belongs to recorded so model resolution knows it may not read pi's. */
+export function botPaths(target: BotTarget): HousePaths {
+	return { ...layout(target.home), fleet: { root: target.root, bot: target.name } };
+}
+
+function layout(path: string): HousePaths {
+	const home = expandHome(path);
 	const agentDir = join(home, "agent");
 	const serviceDir = join(home, "service");
 	return {
@@ -134,9 +159,16 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 	};
 }
 
-/** The home the prompt is rendered against: whatever this process configured, else the default resolution. */
+/**
+ * The home the prompt is rendered against: whatever this process configured, else the default home path.
+ *
+ * The fallback is a layout and not a target on purpose. A section rendered outside a runtime — a test that asks what one
+ * section says, `npm run prompt` before a bot exists — has no bot to resolve, and resolving one there would make a render
+ * fail for a reason the render cannot fix. A boot always configures its house first (`openAgentRuntime`), so the target
+ * that matters is never this fallback.
+ */
 export function currentHouse(): HousePaths {
-	return configured ?? housePaths();
+	return configured ?? housePaths(process.env.MASON_HOME ?? join(homedir(), ".mason"));
 }
 
 /** The directories of a layout, both halves, deepest first: what a fresh install creates and a migration ensures. */
@@ -162,20 +194,27 @@ export interface HouseEntry {
 	readonly half: "agent" | "service";
 }
 
+/** Which half each entry belongs to. The names are `root.ts`'s list — one home's root looks the same whether it is a
+ * bot's or a root's — and this is the one place the halves are decided. */
+const HALVES: Readonly<Record<string, "agent" | "service">> = {
+	"profile.md": "agent",
+	log: "agent",
+	journal: "agent",
+	skills: "agent",
+	agents: "agent",
+	workspace: "agent",
+	"soul.md": "service",
+	"config.json": "service",
+	ssh: "service",
+	pi: "service",
+	data: "service",
+};
+
 /** Every entry the layout knows, and the half it belongs to. A path outside this list goes with the agent's own. */
-export const HOUSE_ENTRIES: readonly HouseEntry[] = [
-	{ name: "profile.md", half: "agent" },
-	{ name: "log", half: "agent" },
-	{ name: "journal", half: "agent" },
-	{ name: "skills", half: "agent" },
-	{ name: "agents", half: "agent" },
-	{ name: "workspace", half: "agent" },
-	{ name: "soul.md", half: "service" },
-	{ name: "config.json", half: "service" },
-	{ name: "ssh", half: "service" },
-	{ name: "pi", half: "service" },
-	{ name: "data", half: "service" },
-];
+export const HOUSE_ENTRIES: readonly HouseEntry[] = HOME_ENTRIES.map((name) => ({
+	name,
+	half: HALVES[name] ?? "agent",
+}));
 
 /**
  * A home from before the split cannot be opened, and this version does not move it. Booting one would create `agent/`
