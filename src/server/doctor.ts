@@ -317,7 +317,23 @@ async function checkConnectors(
 			detail: broken,
 			repair: `fix ${house.connectors} by hand, or delete it and run \`mason setup\` for each connector`,
 		};
-	if (containers.length === 0) return { name: "connectors", ok: true, detail: "no connector runs in a container" };
+	// A bot with no connector granted has no door: nothing can reach it, and the nine checks used to pass vacuously for it.
+	// That is the state a first run that died on the connector question leaves behind, and "doctor 0" is the proof the
+	// issue asks a first run to produce.
+	const granted = await grantedConnectors(house);
+	if (granted.length === 0)
+		return {
+			name: "connectors",
+			ok: false,
+			detail: "no connector is granted: nothing can reach this bot",
+			repair: "run `mason setup --connector <name>` (console, telegram or custom)",
+		};
+	if (containers.length === 0)
+		return {
+			name: "connectors",
+			ok: true,
+			detail: `no connector runs in a container; granted: ${granted.join(", ")}`,
+		};
 	const live = await listConnectorCredentials(house.home).catch(() => []);
 	const lines: string[] = [];
 	let repair: string | undefined;
@@ -383,6 +399,14 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 			repair: "restart to apply: `mason up`",
 		};
 	return { name: "integrations", ok: true, detail: `${house.integrations} parses, unchanged since the last boot` };
+}
+
+/** The connector names a bot's integrations grant, sorted; empty when nothing can reach it. */
+async function grantedConnectors(house: HousePaths): Promise<string[]> {
+	const { integrations } = await readIntegrations(house).catch(() => ({ integrations: {} as Record<string, never> }));
+	return Object.keys(integrations)
+		.filter((name) => integrations[name]?.connector !== undefined)
+		.sort();
 }
 
 /** The ninth check is the contract the other eight are read through: this report exits 0 or 1, and the line says which. */
