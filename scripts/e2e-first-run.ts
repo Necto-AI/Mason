@@ -65,8 +65,12 @@ async function mason(directory: string, args: readonly string[], extra: NodeJS.P
 		});
 		let stdout = "";
 		let stderr = "";
-		child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-		child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
 		child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
 	});
 }
@@ -155,8 +159,12 @@ async function main(): Promise<void> {
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let log = "";
-	server.stdout.on("data", (chunk: Buffer) => (log += chunk.toString()));
-	server.stderr.on("data", (chunk: Buffer) => (log += chunk.toString()));
+	server.stdout.on("data", (chunk: Buffer) => {
+		log += chunk.toString();
+	});
+	server.stderr.on("data", (chunk: Buffer) => {
+		log += chunk.toString();
+	});
 	const ready = await waitFor(
 		async () => (await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => undefined))?.ok === true,
 	);

@@ -22,7 +22,7 @@
  * pi's, and only a home addressed directly by `MASON_HOME` keeps the older fallback (`runtime.ts`).
  */
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
