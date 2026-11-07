@@ -67,6 +67,50 @@ const json = async (path: string): Promise<Record<string, unknown>> =>
 	JSON.parse(await read(path)) as Record<string, unknown>;
 
 describe("a first run, on disk", () => {
+	test("a connector that runs elsewhere is granted, credentialed, and never claimed to be in a compose file", async () => {
+		offline();
+		const root = await tempRoot();
+		const screen = new ScriptedScreen({
+			"welcome.mode": "advanced",
+			"provider.id": "faux",
+			"provider.model": "faux-1",
+			"agent.name": "alice",
+			"connector.kind": "custom",
+			"connector.url": "ws://127.0.0.1:8083/api/connector",
+			"connector.owner": "@denis",
+			"connector.conversations": "@denis",
+			"connector.events": "",
+			"review.action": "apply",
+			"done.action": "finish",
+		});
+		const code = await runOnboarding({ root, screen });
+		assert.equal(code, 0, "the plan's argv is the argv mason setup reads, optional questions included");
+
+		const grant = (await json(join(root, "alice", "service", "integrations.json"))) as {
+			integrations: Record<string, { connector?: { user?: { owner?: string } } }>;
+		};
+		assert.equal(
+			grant.integrations.custom?.connector?.user?.owner,
+			"@denis",
+			"the grant names the owner it was asked for",
+		);
+		assert.equal(
+			existsSync(join(root, "alice", "service", "connectors", "custom")),
+			false,
+			"no compose project: it runs elsewhere",
+		);
+
+		// The credential is minted and printed once; the wizard does not keep it, so the screen that swallowed it has to say
+		// where another comes from — and must not claim a compose file that does not exist.
+		const read = [
+			...(screen.asked.find((question) => question.id === "done.action")?.preface ?? []),
+			...screen.pages.flatMap((entry) => entry.page.lines),
+		].join("\n");
+		assert.match(read, /mason connector add custom --replace/, "where a new credential comes from");
+		assert.doesNotMatch(read, /compose/, "no credential went into a compose file");
+		assert.doesNotMatch(read, /masonc_/, "nothing printed a credential into the summary");
+	});
+
 	test("writes the store, the home and the grant the review promised, and nothing in plaintext", async () => {
 		offline();
 		const root = await tempRoot();
@@ -125,6 +169,18 @@ describe("a first run, on disk", () => {
 			"the store was reported, not asked about",
 		);
 		assert.ok(!second.asked.some((question) => question.id === "provider.id"));
+		// The run continues a root that already holds one bot: its name and its grant are what the screens start from, so a
+		// person who presses enter three times finishes this run rather than installing a second home beside the first.
+		assert.equal(
+			second.asked.find((question) => question.id === "agent.name")?.value,
+			"alice",
+			"the name comes from the root, not from the login",
+		);
+		assert.equal(
+			second.asked.find((question) => question.id === "connector.kind")?.value,
+			"console",
+			"so does the grant",
+		);
 	});
 
 	test("an advanced run writes the same files, with the questions it adds", async () => {

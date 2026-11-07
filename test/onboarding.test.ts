@@ -19,7 +19,14 @@ import { after, describe, test } from "node:test";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { runOnboard } from "../scripts/onboard.ts";
-import { botNameProblem, type Operations, preseed, redact, runOnboarding } from "../scripts/onboarding.ts";
+import {
+	answeredPrompter,
+	botNameProblem,
+	type Operations,
+	preseed,
+	redact,
+	runOnboarding,
+} from "../scripts/onboarding.ts";
 import type { DoctorCheck } from "../src/server/doctor.ts";
 import { CANCEL, ScriptedScreen } from "../src/tui/screen.ts";
 
@@ -226,6 +233,35 @@ describe("the flow", () => {
 		assert.equal(narrow.asked.find((question) => question.id === "review.action")?.value, undefined);
 	});
 
+	test("a connector's own questions become its flags, and an optional one left empty is no flag at all", async () => {
+		const { code, calls } = await drive(
+			quickstart({
+				"connector.kind": "telegram",
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+			}),
+		);
+		assert.equal(code, 0);
+		const setup = calls.find((call) => call.startsWith("setup"));
+		assert.equal(
+			setup,
+			"setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc --env TELEGRAM_ALLOWED_CHATS=@denis " +
+				"--owner @denis --conversations @denis",
+			"the token and the chat are flags; the proxy nobody needs is not a flag with an empty value",
+		);
+	});
+
+	test("an optional question the plan left empty is answered, not refused, when the operation asks it", async () => {
+		// The operation asks its own optional questions — no proxy, no conversations of its own — and the plan answered them
+		// by not answering. A refusal here is the bug the connector step would fail with on a `--connector telegram` run.
+		const prompter = answeredPrompter();
+		assert.equal(await prompter.text("HTTPS_PROXY", { fallback: "", required: false }), "");
+		assert.equal(await prompter.text("conversations", { required: false }), "", "no fallback is the empty answer");
+		await assert.rejects(prompter.text("a token", { required: true }), /bug in the flow/);
+	});
+
 	test("the answers become the flags the commands already read", async () => {
 		const { calls } = await drive(
 			quickstart({
@@ -358,6 +394,15 @@ describe("what the disk already answers", () => {
 			false,
 			"the store was not written again",
 		);
+		// The review offers a way back into every section except the one that has nothing to ask: a choice that leads to
+		// "nothing to ask" is a dead end wearing a choice's clothes.
+		const review = screen.asked.find((question) => question.id === "review.action");
+		assert.ok(!(review?.choices ?? []).includes("provider"), "the provider cannot change when the store answers it");
+		for (const section of ["apply", "agent", "connector", "cancel"]) assert.ok(review?.choices?.includes(section));
+		// And it says what the connector may do, on the screen that asks a person to install it.
+		const read = screen.pages.flatMap((entry) => entry.page.lines).join("\n");
+		assert.match(read, /may/, "the grant is read back, not only the connector's name");
+		assert.match(read, /\/stop/, "including the commands it may send");
 	});
 
 	test("flags answer their own questions, and the screens say so", async () => {
@@ -442,8 +487,12 @@ describe("failures", () => {
 		assert.equal(code, 1);
 		const done = screen.asked.find((question) => question.id === "done.action");
 		assert.deepEqual(done?.choices, ["chat", "finish"], "mason answers, so a conversation is still offered");
-		const page = screen.pages.find((entry) => entry.id === "apply.done");
-		assert.ok(page === undefined || page.page.lines.join("\n").includes("checks"));
+		// What the person reads, wherever the summary landed: the check that failed is named, not just counted.
+		const read = [
+			...(screen.asked.find((question) => question.id === "done.action")?.preface ?? []),
+			...screen.pages.filter((entry) => entry.id === "done.read").flatMap((entry) => entry.page.lines),
+		].join("\n");
+		assert.match(read, /server/, "the failed check is named on the screen, not only counted");
 	});
 });
 

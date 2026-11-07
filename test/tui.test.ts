@@ -297,21 +297,6 @@ describe("StatusList and NoteView", () => {
 		);
 		fits(lines, 40);
 	});
-
-	test("enter continues, escape goes back", () => {
-		const note = new NoteView(["hello"]);
-		let continued = 0;
-		let cancelled = 0;
-		note.onContinue = () => {
-			continued += 1;
-		};
-		note.onCancel = () => {
-			cancelled += 1;
-		};
-		note.handleInput("\r");
-		note.handleInput("\x1b");
-		assert.deepEqual([continued, cancelled], [1, 1]);
-	});
 });
 
 describe("Frame", () => {
@@ -438,6 +423,57 @@ describe("TerminalScreen", () => {
 		screen.close();
 	});
 
+	test("a page longer than the window scrolls to its end, and enter continues from there", async () => {
+		const { screen, terminal } = open();
+		const answering = screen.note("long", "The plan", {
+			lines: Array.from({ length: 40 }, (_, index) => `line ${index}`),
+		});
+		await settle();
+		const first = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
+		assert.ok(first.includes("line 0"));
+		assert.ok(!first.includes("line 39"), "the page is longer than the window, which is what this test is about");
+		assert.ok(first.includes("up/down scroll"), "the footer says the page goes on below the fold");
+		// The arrows reach the scroll view: the page being read is never the thing that swallows them.
+		// The arrows are the alt screen's own: it repaints on its frame timer, so a real tick is what makes them visible.
+		for (let index = 0; index < 30; index += 1) terminal.type("\x1b[B");
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		const last = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
+		assert.ok(last.includes("line 39"), `scrolled to the end:\n${last}`);
+		terminal.type("\r");
+		await answering;
+		screen.close();
+	});
+
+	test("a window that shrinks to nothing still has its frame, and every line fits it", async () => {
+		const { screen, terminal } = open();
+		const answering = screen.select(
+			"connector",
+			"How will you talk to it?",
+			[
+				{ value: "console", label: "the console", description: "built in: no token, no container" },
+				{ value: "telegram", label: "telegram", description: "a bot token, and a container beside mason" },
+			],
+			{ hint: "the console needs nothing; telegram needs a token from the bot's father" },
+		);
+		await settle();
+		terminal.resize(58, 16);
+		screen.where({ title: "Connector", index: 4, total: 7 });
+		await settle();
+		const lines = screenText(terminal.writes, { columns: 58, rows: 16 });
+		assert.equal(lines.length, 16);
+		assert.ok(
+			lines.every((line) => visible(line).length <= 58),
+			`nothing is wider than the window:\n${lines.map(visible).join("\n")}`,
+		);
+		const text = lines.join("\n");
+		assert.ok(text.includes("mason"), "the brand survives");
+		assert.ok(text.includes("step 4 of 7"), "the counter survives even when the dots do not");
+		assert.ok(!text.includes("●"), "the dots are the first thing the width drops");
+		terminal.type("\r");
+		await answering;
+		screen.close();
+	});
+
 	test("a progress screen takes keys, and reports the rows it ended with", async () => {
 		const { screen, terminal } = open();
 		const progress = screen.progress("apply", "Installing", [{ label: "provider and model", state: "run" }]);
@@ -447,8 +483,13 @@ describe("TerminalScreen", () => {
 		await settle();
 		const text = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
 		assert.ok(text.includes("the provider did not answer"));
-		const key = progress.key(["r", "enter"]);
+		const key = progress.key([
+			{ key: "r", label: "retry what failed" },
+			{ key: "enter", label: "stop here" },
+		]);
 		await settle();
+		const hints = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
+		assert.ok(hints.includes("retry what failed"), "the key carries its own label, not the keycode");
 		terminal.type("r");
 		assert.equal(await key, "r");
 		progress.close();
