@@ -76,6 +76,13 @@ export interface HousePaths {
 	 * `HOUSE_ENTRIES`: the file arrived after the split, so no home from before it has one to carry across.
 	 */
 	readonly integrations: string;
+	/**
+	 * Which connectors `mason setup` installed, and the directory one connector's compose project is generated in
+	 * (`install-state.ts`). Written by the CLI alone: the server reads a connector's grant, never this, so a bad record
+	 * costs a setup and not a boot.
+	 */
+	readonly connectors: string;
+	readonly connectorsDir: string;
 	/** The key masonry logs into the tool machine with, and the pinned host key beside it. */
 	readonly sshDir: string;
 	/** The copy of pi's `settings.json` and `auth.json` the server reads (`deploy/mason-entrypoint.sh`). */
@@ -120,6 +127,8 @@ export function housePaths(home = process.env.MASON_HOME ?? join(homedir(), ".ma
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
 		integrations: join(serviceDir, "integrations.json"),
+		connectors: join(serviceDir, "connectors.json"),
+		connectorsDir: join(serviceDir, "connectors"),
 		sshDir: join(serviceDir, "ssh"),
 		piDir: join(serviceDir, "pi"),
 	};

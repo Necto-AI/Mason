@@ -131,6 +131,11 @@ async function main(): Promise<void> {
 	await cp(join(root, "skills"), join(tools, "skills"), { recursive: true });
 	await rm(join(tools, "evals", "scenarios"), { recursive: true, force: true });
 	await cp(join(root, "evals", "scenarios"), join(tools, "evals", "scenarios"), { recursive: true });
+	// And the connector catalog `mason setup` offers, which is data for the same reason: `CATALOG_PATH` resolves two
+	// directories up from the compiled module, which is `dist/` here and the checkout root in a dev tree. It ships under
+	// `dist/` rather than as a second top-level `files` entry, so the tarball holds one copy of it.
+	await rm(join(tools, "catalog"), { recursive: true, force: true });
+	await cp(join(root, "catalog"), join(tools, "catalog"), { recursive: true });
 }
 
 await main();
