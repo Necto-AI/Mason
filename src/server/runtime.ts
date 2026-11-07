@@ -2,14 +2,14 @@
  * Durable harness bootstrap: SQLite storage, model access (real providers or the faux provider),
  * the extension registry, the `pi-env` execution split, and the root conversation.
  */
-import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
-import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
 	AgentDoc,
 	type Conversation,
@@ -25,12 +25,19 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { readPiSettingsModel, resolveModelChoice } from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { HooksManager } from "./hooks.ts";
-import { configureHouse, ensureHouse, ensureRepository, housePaths } from "./house.ts";
-import { currentIntegrations, type Integration, readIntegrations, setIntegrations } from "./integrations.ts";
+import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
+import {
+	currentIntegrations,
+	type Integration,
+	readIntegrations,
+	recordIntegrationBoot,
+	setIntegrations,
+} from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
@@ -176,26 +183,24 @@ export function compactionReserve(models: Models, ref: AgentModelRef): number {
 	return Math.max(window - COMPACTION_GOALPOST_TOKENS, COMPACTION_RESERVE_FLOOR_TOKENS);
 }
 
-/** `settings.json`'s `defaultProvider` / `defaultModel`, as pi's own CLI reads them. */
-function storedDefaultModel(): AgentModelRef | undefined {
-	try {
-		const parsed: unknown = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8"));
-		if (typeof parsed !== "object" || parsed === null) return undefined;
-		const settings = parsed as { defaultProvider?: unknown; defaultModel?: unknown };
-		if (typeof settings.defaultProvider !== "string" || typeof settings.defaultModel !== "string") return undefined;
-		return { provider: settings.defaultProvider, modelId: settings.defaultModel };
-	} catch {
-		return undefined;
-	}
-}
-
 export interface ResolvedModel {
 	readonly models: Models;
 	readonly ref: AgentModelRef;
 	readonly faux: boolean;
 }
 
-export async function resolveModelAccess(options: OpenAgentRuntimeOptions): Promise<ResolvedModel> {
+/**
+ * Which model this boot runs, and the key that answers for it.
+ *
+ * The order is `common.ts`'s: the bot's own `service/settings.json`, then the root's `common/settings.json`, then
+ * `PI_PROVIDER`/`PI_MODEL`. A home addressed directly (`MASON_HOME`, `houseHome`) keeps one more fallback, pi's own
+ * `settings.json`, because that is how it booted before the fleet layout existed; a bot under a root has no such
+ * fallback, so a root whose common store is missing says `mason init` instead of quietly borrowing a stranger's key.
+ *
+ * A key from the common store is set as a *runtime* key: it lives for this process, wins over anything pi has stored, and
+ * is never written into pi's `auth.json` (`docs/research/pi-config.md` §4).
+ */
+export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house: HousePaths): Promise<ResolvedModel> {
 	const env = process.env;
 	if (options.faux === true || env.PI_FAUX_MODEL === "1") {
 		const faux = fauxProvider();
@@ -204,16 +209,19 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions): Prom
 		return { models, ref: options.model ?? FAUX_MODEL, faux: true };
 	}
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false });
-	const ref =
-		options.model ??
-		(env.PI_PROVIDER !== undefined && env.PI_MODEL !== undefined
-			? { provider: env.PI_PROVIDER, modelId: env.PI_MODEL }
-			: storedDefaultModel());
+	const choice = await resolveModelChoice(house, env);
+	const chosen = choice === undefined ? undefined : { provider: choice.provider, modelId: choice.modelId };
+	const ref = options.model ?? chosen ?? (house.fleet === undefined ? readPiSettingsModel() : undefined);
 	if (ref === undefined) {
 		throw new Error(
-			"No model configured: set defaultProvider/defaultModel in ~/.pi/agent/settings.json, or PI_PROVIDER/PI_MODEL",
+			house.fleet === undefined
+				? "No model configured: set defaultProvider/defaultModel in ~/.pi/agent/settings.json, or PI_PROVIDER/PI_MODEL"
+				: `No model configured for bot "${house.fleet.bot}": run \`mason init\` for ${house.fleet.root}, or set ` +
+						`defaultProvider/defaultModel in ${join(house.serviceDir, "settings.json")}`,
 		);
 	}
+	if (choice?.key !== undefined && choice.provider === ref.provider)
+		await runtime.setRuntimeApiKey(ref.provider, choice.key);
 	return { models: runtime, ref, faux: false };
 }
 
@@ -228,6 +236,9 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// and a file that cannot be read is refused here rather than leaving the process with fewer tools than the operator
 	// configured and no way to notice.
 	setIntegrations((await readIntegrations(house)).integrations);
+	// What this boot read, so `mason doctor` can say the file moved under it. Best effort: a home without a writable data
+	// directory still serves, it just cannot answer "restart to apply".
+	await recordIntegrationBoot(house);
 	// The tools face of every enabled integration, reached here and nowhere else. What the servers offer is a catalog, not
 	// a tool list: `mcp` registers three stable tools that ask the servers what they have now, so a container that
 	// restarts, redeploys or redefines a tool mid-conversation moves nothing the prompt is built from. A boot with no
@@ -274,7 +285,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			options.storageOverride ??
 			(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
 
-		const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options));
+		const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options, house));
 
 		const extensionList: readonly Extension[] = [
 			...BASE_EXTENSIONS,
