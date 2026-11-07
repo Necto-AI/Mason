@@ -32,9 +32,8 @@ The file-by-file tree is [`docs/SPEC.md` §2](SPEC.md#2-repository-structure); t
 
 ## Where new behaviour goes
 
-One row per goal. "Owner" is the file that decides the thing; a change that edits a different file to change that
-behaviour is in the wrong place. "Pinned by" is the test that fails if the mechanism is removed — where there is none,
-this table says so rather than implying a test exists.
+One row per goal. "Owner" decides the thing; a change that edits another file to change that behaviour is in the wrong
+place. "Pinned by" is the test that fails when the mechanism is removed, or a note that none exists.
 
 | Goal | Owner | Mechanism | Pinned by |
 |---|---|---|---|
@@ -52,9 +51,10 @@ this table says so rather than implying a test exists.
 | The root a fleet lives in | `src/server/root.ts` | `MASON_ROOT`, else `~/.mason`: `common/` plus one directory per bot, each today's home. `-b` over `MASON_BOT` over the only bot over a refusal that names them; halves at the root are refused with the manual move; `MASON_HOME` still names one home directly | `test/root.test.ts` |
 | The store every bot shares | `src/server/common.ts` | `common/settings.json` (tolerant read-merge), `common/auth.json` (strict, whole-file, under a lock), `common/runtime.json` (strict kind). A version other than `0.1` is refused; every write is staged with a timestamped copy beside it | `test/common.test.ts` |
 | A first run, and day-2 configuration | `scripts/init.ts`, `scripts/new.ts`, `scripts/onboard.ts`, `scripts/bots.ts`, `scripts/status.ts` | Skins over the same functions: `init` once per root (one real completion before anything is written), `new` per bot, `onboard` the dispatcher. `bin/mason.ts` turns `-b` into `MASON_BOT` for every verb | `test/init.test.ts`, `test/new.test.ts`, `test/onboard.test.ts` |
+| A screen a first run shows | `src/tui/` for the primitives, `scripts/onboarding.ts` for the flow | `Screen` is the seam: a second implementation answers from a table, so navigation and failures run with no terminal. The plan reaches the commands as their own flags, so `--yes` and the wizard cannot drift | `test/tui.test.ts`, `test/onboarding.test.ts`, `test/onboarding-live.test.ts` |
 | Proving a configuration | `src/server/doctor.ts` | Nine read-only checks, one repair command per failure, exit 1 on any failure, no `--fix`; a server nobody started passes | `test/doctor.test.ts` |
 | Talking to the bot with no connector deployed | `scripts/chat.ts` | The console connector is built in: it mints its own credential for the `console` entry, opens the same `/api/connector` socket every connector opens, streams the reply as it grows and maps `/stop`, `/status`, `/compact`, `/clear` onto the protocol's controls | `test/chat.test.ts` (a real server and a real socket: the answer, the missing server, a stop mid-turn) |
-| A new control a connector may send | `src/server/commands.ts` and the closed set in `packages/protocol` | `connector.commands` in the entry's grant decides which of them that connector may say; a word the entry does not declare spends nothing | `test/connector.test.ts` — "runs a declared command once per request id, and an undeclared word spends nothing" |
+| A new control a connector may send | `src/server/commands.ts` and the closed set in `packages/protocol` | `connector.commands` in the grant decides which that connector may say; a word the entry does not declare spends nothing | `test/connector.test.ts` — "runs a declared command once per request id, and an undeclared word spends nothing" |
 
 ## The three invariants
 
@@ -73,9 +73,8 @@ A change that breaks one is not a trade-off to weigh, it is the wrong change.
 
 ## What can be generated, is generated
 
-`docs/SURFACE.md` holds the tables a hand cannot keep honest — the doors and what opens each, the extensions a
-boot installs, and every exported budget in `src/server/limits.ts`. It
-is rendered by `scripts/surface.ts`, written by `npm run gen:surface`, and checked in CI by
-`npm run gen:surface:check`. Hand-editing it is a failing check, which is the point: the diff that adds a route without a
-grant is the diff that says so. The word budgets in `docs/doc-budgets.json`, and which document owns which kind of fact,
-are in [`docs/AGENTS.md`](AGENTS.md).
+`docs/SURFACE.md` holds the tables a hand cannot keep honest — the doors and what opens each, the extensions a boot
+installs, and every exported budget in `src/server/limits.ts`. `scripts/surface.ts` renders it and
+`npm run gen:surface:check` fails a stale copy, so hand-editing it is a failing check: the diff that adds a route without
+a grant is the diff that says so. The word budgets in `docs/doc-budgets.json`, and which document owns which kind of
+fact, are in [`docs/AGENTS.md`](AGENTS.md).
