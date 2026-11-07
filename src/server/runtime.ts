@@ -15,6 +15,7 @@ import {
 	type Conversation,
 	type ConversationId,
 	type ConversationView,
+	configure,
 	createRegistry,
 	type Extension,
 	Harness,
@@ -102,6 +103,11 @@ export interface AgentRuntime {
 	readonly mcp: McpCatalog;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
+	/**
+	 * The model this conversation was on before the boot moved it, when the configured one differs from the stored one.
+	 * The boot line says so once; nothing else needs it, and it is `undefined` on every ordinary boot.
+	 */
+	readonly previousModel?: AgentModelRef;
 	/** `false` when the model access is the offline faux provider, so the UI can say so. */
 	readonly modelIsFaux: boolean;
 	conversation(): Promise<Conversation>;
@@ -358,6 +364,11 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const root = await harness.root(context, {
 			agent: { model: ref, cwd: workspaceDir, extensions: options.selection ?? extensionList },
 		});
+		// The model the root conversation runs is durable state, not a boot option: `harness.root()` seeds `pi.agent`
+		// only when it creates the conversation, so a bot whose transcript predates a `defaultModel` change kept the old
+		// model for the life of the home while `mason status` and `doctor` reported the new one. Config takes effect at
+		// boot, which is when an operator expects a settings edit to land.
+		const previousModel = await applyModelChoice(root, ref, context);
 		// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
 		// or before an integration offered tools — would leave the conversation without it, while a catalog said it had
 		// connected. A failed repair is a failed guarantee, so the server does not start with it.
@@ -375,6 +386,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			mcp,
 			workspaceDir,
 			model: ref,
+			...(previousModel === undefined ? {} : { previousModel }),
 			modelIsFaux: faux,
 			conversation: () => Promise.resolve(root),
 			viewState: (viewContext) => watchConversation(root, viewContext),
@@ -459,6 +471,25 @@ async function readConversation(conversation: Conversation, context: Context): P
  * otherwise keep the tool out of reach while the route reported the integration connected. The stored order is kept and
  * nothing is pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
  */
+/**
+ * Moves a stored conversation onto the model this boot was configured with, and answers the one it was on.
+ *
+ * A run the last process left unfinished keeps its checkpoint's model for the turn it resumes: it started on that one,
+ * and half an answer in a different model's voice is worse than one turn on the old model.
+ */
+async function applyModelChoice(
+	root: Conversation,
+	ref: AgentModelRef,
+	context: Context,
+): Promise<AgentModelRef | undefined> {
+	return root.commit(async (tx) => {
+		const stored = (await tx.doc(AgentDoc, root.id)).model;
+		if (stored?.provider === ref.provider && stored.modelId === ref.modelId) return undefined;
+		configure(tx, root.id, { model: ref });
+		return stored === undefined ? undefined : { provider: stored.provider, modelId: stored.modelId };
+	}, context);
+}
+
 async function appendMissingExtensions(
 	root: Conversation,
 	unconditional: readonly string[],
