@@ -13,6 +13,7 @@
  * mason does not ship a list of is a provider nobody can choose. Mason's code reads no store of pi's here: the key it
  * sets is a runtime key, held for this process only, and the store mason writes is `common/auth.json`.
  */
+import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Models, TextContent } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
@@ -75,15 +76,22 @@ export async function verifyCompletion(access: ProviderAccess, ref: AgentModelRe
 	}
 	let answer: AssistantMessage;
 	try {
-		answer = await access.models.complete(model, {
-			messages: [
-				{
-					role: "user",
-					content: [{ type: "text", text: "Reply with the single word: ok" }],
-					timestamp: Date.now(),
-				},
-			],
-		});
+		answer = await access.models.complete(
+			model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: "Reply with the single word: ok" }],
+						timestamp: Date.now(),
+					},
+				],
+			},
+			// OpenCode (and a custom provider pointing at opencode.ai) routes on `x-opencode-session`, which pi-ai's
+			// provider fills from this option: a check without one is a 400 before the key is even looked at. Any id
+			// does, because the verify is its own conversation and nothing follows it.
+			{ sessionId: randomUUID() },
+		);
 	} catch (error) {
 		throw new Error(`the provider did not answer: ${error instanceof Error ? error.message : String(error)}`);
 	}
