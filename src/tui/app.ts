@@ -49,14 +49,6 @@ function hints(action: "select" | "continue" | "scroll"): readonly Hint[] {
 	return [{ ...ENTER, label: action === "select" ? "select" : action }, BACK, QUIT];
 }
 
-/**
- * The blank line the padded body keeps under its content.
- *
- * `CHROME_ROWS` counts the frame, and the body still spends one row of its own on the blank line that keeps text off the
- * footer rule: a page sized to `rows - CHROME_ROWS` loses its last line, which is why the measurement subtracts this too.
- */
-const BODY_TAIL = 1;
-
 /** A running operation repaints on a timer of its own: a spinner that waits for the next keypress is not a spinner. */
 const SPINNER_REPAINT_MS = 80;
 
@@ -119,12 +111,16 @@ export class TerminalScreen implements Screen {
 		return Math.max(8, this.terminal.rows);
 	}
 
-	/** The room a body has: the window, less the frame and the blank line the padded body keeps. */
+	/**
+	 * The room a body has: the window, less the frame's own lines. A list sizes itself against this.
+	 *
+	 * A constant rather than a measurement, because the footer's height is what a screen is about to set: measuring it here
+	 * would size every body against the hints of the screen before it.
+	 */
 	private bodyRows(): number {
-		return Math.max(4, this.rows - CHROME_ROWS - BODY_TAIL);
+		return Math.max(4, this.rows - CHROME_ROWS);
 	}
 
-	/** The room a body has: the window, less the frame. A list sizes itself against this. */
 	private geometry(): Geometry {
 		return {
 			columns: this.columns,

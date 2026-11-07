@@ -147,6 +147,23 @@ export class ScriptedScreen implements Screen {
 		return this.closed;
 	}
 
+	/**
+	 * One line, validated the way the real screen validates it.
+	 *
+	 * A scripted screen that skipped `validate` would pass every flow whose field refuses its own input, which is exactly
+	 * the bug that test is for: a refusal is a second question, and the script owes it a second answer.
+	 */
+	private async answer(id: string, kind: string, title: string, options: Question): Promise<string> {
+		for (;;) {
+			const answer = this.take(id, kind, title, options.value);
+			if (typeof answer !== "string") throw new Error(`the scripted answer for "${id}" is not a line`);
+			const problem = options.validate?.(answer);
+			if (problem === undefined) return answer;
+			if ((this.queues.get(id) ?? []).length === 0)
+				throw new Error(`the scripted answer for "${id}" is "${answer}", which the screen refused: ${problem}`);
+		}
+	}
+
 	private take(
 		id: string,
 		kind: string,
@@ -200,15 +217,11 @@ export class ScriptedScreen implements Screen {
 	}
 
 	async text(id: string, title: string, options: Question = {}): Promise<string> {
-		const answer = this.take(id, "text", title, options.value);
-		if (typeof answer !== "string") throw new Error(`the scripted answer for "${id}" is not a line`);
-		return answer;
+		return await this.answer(id, "text", title, options);
 	}
 
 	async secret(id: string, title: string, options: Question = {}): Promise<string> {
-		const answer = this.take(id, "secret", title, options.value);
-		if (typeof answer !== "string") throw new Error(`the scripted answer for "${id}" is not a secret`);
-		return answer;
+		return await this.answer(id, "secret", title, options);
 	}
 
 	async confirm(id: string, title: string): Promise<boolean> {
