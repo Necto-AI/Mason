@@ -24,6 +24,16 @@ import { namesConnector, runNew } from "./new.ts";
 import { runSetup } from "./setup.ts";
 import { MissingAnswer } from "./wizard.ts";
 
+/** The connector `--connector <name>` (or `--connector=<name>`) names, when the setup flags name one. */
+function connectorNamed(setup: readonly string[]): string | undefined {
+	for (let index = 0; index < setup.length; index += 1) {
+		const arg = setup[index];
+		if (arg === "--connector") return setup[index + 1];
+		if (arg?.startsWith("--connector=") === true) return arg.slice("--connector=".length);
+	}
+	return undefined;
+}
+
 export interface OnboardArgs {
 	readonly bot?: string;
 	/** What `mason init` understands. */
@@ -118,6 +128,14 @@ export async function runOnboard(
 	}
 	try {
 		refuseHomeEnv();
+		// `--yes` answers the connector question too: a scripted first run that stalls on "which connector?" has answered
+		// nothing, and the half-created root it left behind used to be discovered after the bot was written.
+		const setupArgs = args.yes && !namesConnector(args.setup) ? [...args.setup, "--connector", "console"] : args.setup;
+		if (!process.stdin.isTTY && !namesConnector(setupArgs))
+			throw new Error(
+				"no terminal, and no connector was named: pass --connector <name>, or --yes for the console one. " +
+					"Nothing was created.",
+			);
 		let root = readRoot(options.root ?? rootPath());
 		console.log(`[onboard] root: ${root.root}`);
 		if (!(await commonReady(root.root))) {
@@ -135,7 +153,7 @@ export async function runOnboard(
 			// A name on a root with no bots is the first bot's name; a name beside other bots is a target, and a typo there is
 			// a refusal with the list rather than a home created in the wrong place.
 			if (root.bots.length === 0) {
-				const code = await runNew([named, ...args.setup], { root: root.root, doctor: false });
+				const code = await runNew([named, ...setupArgs], { root: root.root, doctor: false });
 				if (code !== 0) return code;
 				root = readRoot(root.root);
 				bot = resolveBot(root);
@@ -146,7 +164,7 @@ export async function runOnboard(
 		} else if (root.bots.length === 1) {
 			bot = resolveBot(root);
 		} else if (root.bots.length === 0) {
-			const code = await runNew(["bot", ...args.setup], { root: root.root, doctor: false });
+			const code = await runNew(["bot", ...setupArgs], { root: root.root, doctor: false });
 			if (code !== 0) return code;
 			root = readRoot(root.root);
 			bot = resolveBot(root);
@@ -167,13 +185,20 @@ export async function runOnboard(
 			const granted = Object.keys(integrations)
 				.filter((name) => integrations[name]?.connector !== undefined)
 				.sort();
-			if (granted.length === 0) {
-				const setup =
-					args.yes && !namesConnector(args.setup) ? [...args.setup, "--connector", "console"] : args.setup;
-				const code = await runSetup(setup, { house: paths });
+			// A flag that names a connector which is not granted yet is a request, not a duplicate: it used to be dropped
+			// with "nothing installed twice" and an exit code that said the run had done what was asked.
+			const wanted = connectorNamed(setupArgs);
+			const missing = wanted !== undefined && !granted.includes(wanted);
+			if (granted.length === 0 || missing) {
+				const code = await runSetup(setupArgs, { house: paths });
 				if (code !== 0) return code;
+			} else if (wanted !== undefined) {
+				console.log(`[onboard] already granted: ${wanted}; nothing installed twice`);
 			} else {
-				console.log(`[onboard] already granted: ${granted.join(", ")}; nothing installed twice`);
+				console.log(
+					`[onboard] already granted: ${granted.join(", ")}; pass \`--connector <name>\` to add another, or ` +
+						"`mason setup` to change this one",
+				);
 			}
 		}
 
