@@ -7,6 +7,7 @@
  */
 import { doctorExitCode, formatCheck, runDoctor } from "../src/server/doctor.ts";
 import { housePaths } from "../src/server/house.ts";
+import { takeBot } from "../src/server/root.ts";
 
 export function usage(): string {
 	return `usage: mason doctor
@@ -20,12 +21,13 @@ export function usage(): string {
 }
 
 export async function runDoctorCommand(argv: readonly string[]): Promise<number> {
-	if (argv.includes("--help") || argv.includes("-h")) {
-		console.log(usage());
-		return 0;
-	}
 	let checks: Awaited<ReturnType<typeof runDoctor>>;
 	try {
+		const args = takeBot(argv);
+		if (args.includes("--help") || args.includes("-h")) {
+			console.log(usage());
+			return 0;
+		}
 		checks = await runDoctor({ house: housePaths() });
 	} catch (error) {
 		console.error(`[doctor] ${error instanceof Error ? error.message : String(error)}`);

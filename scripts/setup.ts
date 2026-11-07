@@ -538,15 +538,17 @@ export async function runSetup(
 		console.log(usage());
 		return 0;
 	}
-	const paths = options.house ?? housePaths();
-	const prompter =
-		options.prompter ??
-		choosePrompter({
-			yes: args.yes,
-			...(args.connector === undefined ? {} : { connector: args.connector }),
-			...(args.owner === undefined ? {} : { owner: args.owner }),
-		});
+	let prompter: Prompter | undefined;
 	try {
+		// Resolved inside the handler: a root with no bot is a refusal with one sentence, not a stack trace.
+		const paths = options.house ?? housePaths();
+		prompter =
+			options.prompter ??
+			choosePrompter({
+				yes: args.yes,
+				...(args.connector === undefined ? {} : { connector: args.connector }),
+				...(args.owner === undefined ? {} : { owner: args.owner }),
+			});
 		console.log(`[setup] home: ${paths.home}`);
 		// First, because it makes the two halves and refuses a home from before the split by name: every write below
 		// assumes the layout it creates, and a soul it finds is left alone.
@@ -581,7 +583,7 @@ export async function runSetup(
 		// A missing answer is not a failure of the install: it is a run that needs a terminal or a flag.
 		return error instanceof MissingAnswer ? 2 : 1;
 	} finally {
-		prompter.close();
+		prompter?.close();
 	}
 }
 

@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { takeBot as takeBotArgs } from "../src/server/root.ts";
 
 /** The checkout root and the install share this file's relative neighbourhood, computed once from where it runs. */
 const here = dirname(fileURLToPath(import.meta.url));
@@ -76,34 +77,14 @@ everything else speaks the connector's credential. Stop a running bot: SIGINT or
 	process.exit(process.argv[2] === "--help" || process.argv[2] === "-h" ? 0 : 1);
 }
 
-/**
- * `-b <name>` anywhere on the line, taken out before the script sees it and exported as `MASON_BOT`.
- *
- * One place decides this, so every verb targets the same way: the scripts resolve their bot from the environment
- * (`root.ts`), and a wrapper that passed the flag through would be a second precedence to keep in step. `mason onboard`
- * parses `-b` itself as well, which is why stripping it here is not a loss: the environment is what it reads second.
- */
+/** `-b <name>` anywhere on the line: `root.ts` parses it once, and exports `MASON_BOT` for the child. */
 function takeBot(argv: readonly string[]): string[] {
-	const rest: string[] = [];
-	for (let index = 0; index < argv.length; index += 1) {
-		const arg = argv[index] ?? "";
-		if (arg === "-b" || arg === "--bot") {
-			const value = argv[index + 1];
-			if (value === undefined) {
-				console.error(`${arg} needs a bot name; \`mason bots\` lists them`);
-				process.exit(1);
-			}
-			process.env.MASON_BOT = value;
-			index += 1;
-			continue;
-		}
-		if (arg.startsWith("--bot=")) {
-			process.env.MASON_BOT = arg.slice("--bot=".length);
-			continue;
-		}
-		rest.push(arg);
+	try {
+		return takeBotArgs(argv);
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exit(1);
 	}
-	return rest;
 }
 
 async function main(): Promise<void> {

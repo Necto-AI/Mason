@@ -123,7 +123,7 @@ export function configureHouse(paths: HousePaths): HousePaths {
  * move; a command that knows which bot it wants passes `botPaths` rather than relying on the ambient target.
  */
 export function housePaths(home?: string): HousePaths {
-	if (home !== undefined) return layout(home);
+	if (home !== undefined && home !== "") return layout(home);
 	const configured = process.env.MASON_HOME;
 	if (configured !== undefined && configured !== "") return layout(configured);
 	return botPaths(resolveBot(readRoot()));
@@ -168,7 +168,9 @@ function layout(path: string): HousePaths {
  * that matters is never this fallback.
  */
 export function currentHouse(): HousePaths {
-	return configured ?? housePaths(process.env.MASON_HOME ?? join(homedir(), ".mason"));
+	if (configured !== undefined) return configured;
+	const home = process.env.MASON_HOME;
+	return housePaths(home === undefined || home === "" ? join(homedir(), ".mason") : home);
 }
 
 /** The directories of a layout, both halves, deepest first: what a fresh install creates and a migration ensures. */

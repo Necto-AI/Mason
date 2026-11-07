@@ -34,6 +34,23 @@ async function tempRoot(): Promise<string> {
 	return directory;
 }
 
+/** The child's environment: one temporary root, offline, no port, and none of this process's own model choice. */
+function childEnv(directory: string, extra: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {
+		...process.env,
+		MASON_ROOT: directory,
+		MASON_HOME: "",
+		PORT: "1",
+		PI_FAUX_MODEL: "1",
+		...extra,
+	};
+	// The agent running the tests exports its own provider and model; a test that inherited them would be reading the
+	// ambient machine instead of the root it built.
+	delete env.PI_PROVIDER;
+	delete env.PI_MODEL;
+	return env;
+}
+
 /** `mason …` against one temporary root, offline, on a port nothing listens on. */
 async function mason(
 	args: readonly string[],
@@ -43,16 +60,32 @@ async function mason(
 	try {
 		const { stdout, stderr } = await run(process.execPath, ["--experimental-strip-types", script, ...args], {
 			cwd: root,
-			env: {
-				...process.env,
-				MASON_ROOT: directory,
-				MASON_HOME: "",
-				PORT: "1",
-				PI_FAUX_MODEL: "1",
-				...extra,
-			},
+			env: childEnv(directory, extra),
 			maxBuffer: 8 * 1024 * 1024,
 		});
+		return { code: 0, stdout, stderr };
+	} catch (error) {
+		const failure = error as { code?: number; stdout?: string; stderr?: string };
+		return { code: failure.code ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+	}
+}
+
+/** A script run the way `npm run …` runs it: no wrapper, so the flag the usage advertises is the script's own. */
+async function runScript(
+	name: string,
+	args: readonly string[],
+	directory: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+	try {
+		const { stdout, stderr } = await run(
+			process.execPath,
+			["--experimental-strip-types", join(root, "scripts", `${name}.ts`), ...args],
+			{
+				cwd: root,
+				env: childEnv(directory),
+				maxBuffer: 8 * 1024 * 1024,
+			},
+		);
 		return { code: 0, stdout, stderr };
 	} catch (error) {
 		const failure = error as { code?: number; stdout?: string; stderr?: string };
@@ -135,6 +168,31 @@ describe("a fleet of two", () => {
 		assert.match(viaEnv.stdout, /model faux\/faux-1/);
 		assert.match(viaEnv.stdout, /1 integration, 1 connector/);
 		assert.match(viaEnv.stdout, /mason not running/);
+	});
+
+	test("the npm path takes -b too: the scripts parse the flag they advertise", async () => {
+		const directory = await tempRoot();
+		assert.equal((await mason(["onboard", "--yes", "--connector", "console"], directory)).code, 0);
+		assert.equal((await mason(["new", "alice", "--yes", "--connector", "console", "--no-start"], directory)).code, 0);
+
+		const doctor = await runScript("doctor", ["-b", "alice"], directory);
+		assert.equal(doctor.code, 0, doctor.stderr);
+		assert.match(doctor.stdout, /9 checks: 9 ok, 0 failed/);
+
+		const status = await runScript("status", ["-b", "alice"], directory);
+		assert.equal(status.code, 0, status.stderr);
+		assert.match(status.stdout, /^bot alice \(/);
+	});
+
+	test("status reads no pi store for a bot: with the common settings gone the model is none", async () => {
+		const directory = await tempRoot();
+		assert.equal((await mason(["onboard", "--yes", "--connector", "console"], directory)).code, 0);
+		assert.equal((await mason(["new", "alice", "--yes", "--connector", "console", "--no-start"], directory)).code, 0);
+		await rm(join(directory, "common", "settings.json"));
+		const status = await mason(["status", "-b", "alice"], directory);
+		assert.equal(status.code, 0, status.stderr);
+		assert.match(status.stdout, /model none/);
+		assert.doesNotMatch(status.stdout, /pi's settings\.json/);
 	});
 
 	test("a bot with no common store refuses new, and says which command writes one", async () => {

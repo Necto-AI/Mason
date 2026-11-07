@@ -99,8 +99,12 @@ function isBot(home: string): boolean {
  */
 export function refuseLegacyRoot(root: string): void {
 	// The two halves of a home that has already split, and the entries of one that has not: either way the directory is a
-	// single home, and opening it as a root would put `common/` and a bot directory around an operator's files.
-	const found = ["agent", "service", ...HOME_ENTRIES].filter((name) => existsSync(join(root, name)));
+	// single home, and opening it as a root would put `common/` and a bot directory around an operator's files. A bot
+	// directory is never one of them, whatever it is called: `mason new data` is a bot named after a legacy entry, not a
+	// root holding a home's `data/`.
+	const found = ["agent", "service", ...HOME_ENTRIES].filter(
+		(name) => existsSync(join(root, name)) && !isBot(join(root, name)),
+	);
 	if (found.length === 0) return;
 	throw new Error(
 		`${root} holds a single home's halves at the root (${found.join(", ")}): the fleet layout keeps one directory ` +
@@ -151,6 +155,35 @@ function readEntries(directory: string): Dirent[] {
 	} catch {
 		return [];
 	}
+}
+
+/** `-b <name>` (or `--bot=<name>`) taken out of argv: the one parser, so the wrapper and the `npm run` path cannot disagree. */
+export function takeBotFlag(argv: readonly string[]): { readonly bot?: string; readonly rest: readonly string[] } {
+	const rest: string[] = [];
+	let bot: string | undefined;
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index] ?? "";
+		if (arg === "-b" || arg === "--bot") {
+			const value = argv[index + 1];
+			if (value === undefined) throw new Error(`${arg} needs a bot name; \`mason bots\` lists them`);
+			bot = value;
+			index += 1;
+			continue;
+		}
+		if (arg.startsWith("--bot=")) {
+			bot = arg.slice("--bot=".length);
+			continue;
+		}
+		rest.push(arg);
+	}
+	return { ...(bot === undefined ? {} : { bot }), rest };
+}
+
+/** `takeBotFlag` plus the `MASON_BOT` export it implies: what a script calls before it resolves a home. */
+export function takeBot(argv: readonly string[]): string[] {
+	const { bot, rest } = takeBotFlag(argv);
+	if (bot !== undefined) process.env.MASON_BOT = bot;
+	return [...rest];
 }
 
 /** The names of every bot, for a refusal that has to list them. */

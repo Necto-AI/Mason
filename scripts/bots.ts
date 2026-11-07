@@ -5,7 +5,7 @@
  * needs to see where each one lives before they pick. The marker is the same resolution every other verb uses, so the
  * line that says `(current)` is the line that says what `mason up` would serve — not a second opinion about targeting.
  */
-import { readRoot, refuseHomeEnv, resolveBot, rootPath } from "../src/server/root.ts";
+import { readRoot, refuseHomeEnv, resolveBot, rootPath, takeBot } from "../src/server/root.ts";
 
 export function usage(): string {
 	return `usage: mason bots
@@ -15,11 +15,12 @@ export function usage(): string {
 }
 
 export function runBots(argv: readonly string[]): number {
-	if (argv.includes("--help") || argv.includes("-h")) {
-		console.log(usage());
-		return 0;
-	}
 	try {
+		const args = takeBot(argv);
+		if (args.includes("--help") || args.includes("-h")) {
+			console.log(usage());
+			return 0;
+		}
 		refuseHomeEnv();
 		const root = readRoot(rootPath());
 		if (root.bots.length === 0) {
