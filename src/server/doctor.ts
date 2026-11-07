@@ -105,7 +105,7 @@ export async function runDoctor(options: DoctorOptions): Promise<readonly Doctor
 	checks.push(await checkBootPolicy(containers.length > 0, podman));
 	checks.push(await checkConnectors(house, containers, podman, installsError));
 	checks.push(await checkIntegrations(house));
-	checks.push(checkExitShape());
+	checks.push(checkExitShape(checks));
 	return checks;
 }
 
@@ -169,16 +169,20 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 		};
 	}
 	const ref = `${choice.provider}/${choice.modelId}`;
-	if (choice.source === "bot") return { name: "model", ok: true, detail: `${ref} from the bot's settings.json` };
+	const from = choice.source === "bot" ? " from the bot's settings.json" : "";
 	if (choice.source === "env") return { name: "model", ok: true, detail: `${ref} from PI_PROVIDER/PI_MODEL` };
-	if (choice.key !== undefined) return { name: "model", ok: true, detail: `${ref}, key stored` };
+	if (choice.key !== undefined) return { name: "model", ok: true, detail: `${ref}${from}, key stored` };
 	if (choice.provider === "faux" || env.PI_FAUX_MODEL === "1")
-		return { name: "model", ok: true, detail: `${ref}, the offline provider needs no key` };
+		return { name: "model", ok: true, detail: `${ref}${from}, the offline provider needs no key` };
+	// A home addressed directly has no common store to check: its key is the one pi's own store or the provider's
+	// environment answers with, and this build reads neither.
+	if (choice.source === "bot" && house.fleet === undefined)
+		return { name: "model", ok: true, detail: `${ref} from the bot's settings.json (a MASON_HOME home)` };
 	const where = house.fleet === undefined ? "common/auth.json" : commonPaths(house.fleet.root).auth;
 	return {
 		name: "model",
 		ok: false,
-		detail: `${ref} has no key in ${where}`,
+		detail: `${ref}${from} has no key in ${where}`,
 		repair: "run `mason init` to verify and store one",
 	};
 }
@@ -207,7 +211,13 @@ async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 					detail: "the ssh runtime names no host",
 					repair: "write common/runtime.json by hand, or run `mason init`",
 				}
-			: { name: "runtime", ok: true, detail: `ssh ${runtime.host}` };
+			: {
+					name: "runtime",
+					ok: true,
+					// Named, not dialled: a check that opens an ssh session hangs on a slow host, and the question here is
+					// whether the configuration names a machine the boot will use.
+					detail: `ssh ${runtime.host}, configured (doctor does not open a session)`,
+				};
 	const daemon = localDaemon();
 	return existsSync(daemon)
 		? { name: "runtime", ok: true, detail: "local (the pi-env daemon is where this build says it is)" }
@@ -338,11 +348,12 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 	return { name: "integrations", ok: true, detail: `${house.integrations} parses, unchanged since the last boot` };
 }
 
-/** The ninth check is the contract the other eight are read through, and it cannot fail while they exist. */
-function checkExitShape(): DoctorCheck {
+/** The ninth check is the contract the other eight are read through: this report exits 0 or 1, and the line says which. */
+function checkExitShape(checks: readonly DoctorCheck[]): DoctorCheck {
+	const code = doctorExitCode(checks);
 	return {
 		name: "exit",
-		ok: true,
-		detail: "0 when every check passes, 1 when one fails",
+		ok: code === 0 || code === 1,
+		detail: `this report exits ${code} (0 when every check passes, 1 when one fails)`,
 	};
 }

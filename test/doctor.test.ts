@@ -6,19 +6,28 @@
  * promises a CI job depends on: the exit code, and that a credential never appears in the output.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { consoleGrant } from "../scripts/chat.ts";
 import { writeTextAtomic } from "../src/server/atomic.ts";
-import { commonPaths, writeCommonStore } from "../src/server/common.ts";
+import { commonPaths, hashFile, writeCommonStore } from "../src/server/common.ts";
 import { writeCompose } from "../src/server/connector-compose.ts";
 import { doctorExitCode, formatCheck, runDoctor } from "../src/server/doctor.ts";
 import { botPaths, ensureHouse, type HousePaths } from "../src/server/house.ts";
 import { writeInstall } from "../src/server/install-state.ts";
-import { bootRecordPath, writeIntegration } from "../src/server/integrations.ts";
+import {
+	bootRecordPath,
+	readIntegrationBoot,
+	recordIntegrationBoot,
+	writeIntegration,
+} from "../src/server/integrations.ts";
 import type { CommandRunner, Prober } from "../src/server/podman.ts";
+import { openAgentRuntime } from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -149,6 +158,26 @@ describe("each failure names one repair", () => {
 		assert.match(model.repair ?? "", /mason init/);
 	});
 
+	test("a bot override whose provider has no key fails the model check", async () => {
+		const { house } = await goodBot();
+		await writeFile(
+			join(house.serviceDir, "settings.json"),
+			JSON.stringify({ defaultProvider: "opencode-go", defaultModel: "deepseek" }),
+		);
+		const model = check(await doctor(house), "model");
+		assert.equal(model.ok, false);
+		assert.match(model.detail, /opencode-go\/deepseek from the bot's settings\.json has no key/);
+		assert.match(model.repair ?? "", /mason init/);
+	});
+
+	test("an ssh runtime is reported as configured, not dialled", async () => {
+		const { root, house } = await goodBot();
+		await writeFile(commonPaths(root).runtime, JSON.stringify({ version: "0.1", kind: "ssh", host: "box" }));
+		const runtime = check(await doctor(house), "runtime");
+		assert.equal(runtime.ok, true);
+		assert.match(runtime.detail, /ssh box, configured \(doctor does not open a session\)/);
+	});
+
 	test("an integration file changed since the boot says restart to apply", async () => {
 		const { house } = await goodBot();
 		await writeTextAtomic(
@@ -172,6 +201,13 @@ describe("each failure names one repair", () => {
 		assert.equal(connectors.ok, false);
 		assert.match(connectors.detail, /telegram: exited/);
 		assert.match(connectors.repair ?? "", /podman compose -f .* up -d/);
+	});
+
+	test("a running container whose credential matches passes", async () => {
+		const house = await containerBot("running", true);
+		const connectors = check(await doctor(house, { runner: runner("running") }), "connectors");
+		assert.equal(connectors.ok, true, connectors.detail);
+		assert.match(connectors.detail, /telegram: up/);
 	});
 
 	test("a compose credential this home does not hold names mason setup", async () => {
@@ -207,6 +243,39 @@ describe("each failure names one repair", () => {
 	});
 });
 
+describe("the boot's record", () => {
+	test("the writer is what makes staleness visible: a recorded read passes, a changed file does not", async () => {
+		const { house } = await goodBot();
+		assert.match(check(await doctor(house), "integrations").detail, /not booted yet/);
+		await recordIntegrationBoot(house);
+		assert.match(check(await doctor(house), "integrations").detail, /unchanged since the last boot/);
+		await writeIntegration(house, "console", {
+			enabled: true,
+			description: "a different line",
+			connector: consoleGrant(),
+		});
+		const stale = check(await doctor(house), "integrations");
+		assert.equal(stale.ok, false);
+		assert.match(stale.detail, /changed since the boot/);
+	});
+
+	test("a boot writes the record, so the check is wired to the boot and not only to the writer", async () => {
+		const { house } = await goodBot();
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			houseHome: house.home,
+			storage: "memory",
+			modelAccess: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
+		});
+		await runtime.close();
+		const boot = await readIntegrationBoot(house);
+		assert.ok(boot !== undefined, "the boot recorded what it read");
+		assert.equal(boot.integrations, await hashFile(house.integrations));
+	});
+});
+
 describe("the report", () => {
 	test("one line per check, a failure carrying its repair in the same line", async () => {
 		const root = await tempRoot();
@@ -218,6 +287,6 @@ describe("the report", () => {
 		assert.equal(lines.length, 9);
 		assert.match(lines.find((line) => line.startsWith("[fail] model:")) ?? "", /\(repair: .*mason init.*\)/);
 		assert.equal(doctorExitCode(await doctor(house)), 1);
-		assert.equal(commonPaths(root).auth.endsWith("auth.json"), true);
+		assert.match(lines.find((line) => line.startsWith("[ok] exit:")) ?? "", /this report exits 1/);
 	});
 });

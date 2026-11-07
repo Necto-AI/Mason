@@ -26,6 +26,7 @@ import { closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync } f
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { SshTarget } from "@earendil-works/pi-env";
 import { writeTextAtomic } from "./atomic.ts";
 import type { HousePaths } from "./house.ts";
 
@@ -392,7 +393,14 @@ export async function resolveModelChoice(
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<ModelChoice | undefined> {
 	const own = readBotOverride(house);
-	if (own !== undefined) return { ...own, source: "bot" };
+	if (own !== undefined) {
+		// A bot's override still answers with a credential, and the credential lives in the root's common store: a model
+		// chosen in one file and a key in another is one decision, and the boot sets the key it found here.
+		const auth =
+			house.fleet === undefined ? undefined : await readCommonAuth(house.fleet.root).catch(() => undefined);
+		const key = auth?.providers[own.provider]?.key;
+		return { ...own, ...(key === undefined ? {} : { key }), source: "bot" };
+	}
 	if (house.fleet !== undefined) {
 		const { value } = await readCommonSettings(house.fleet.root);
 		if (value.defaultProvider !== undefined && value.defaultModel !== undefined) {
@@ -427,6 +435,19 @@ export function readPiSettingsModel(): { provider: string; modelId: string } | u
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * The ssh target `common/runtime.json` names, or `undefined` for a local runtime. The pinned host key lives in the home's
+ * `service/ssh/`: a runtime file names a machine, not a path to every key. `PI_ENV_SSH_*` still wins in the boot.
+ */
+export function sshTargetFromRuntime(runtime: CommonRuntime, house: HousePaths): SshTarget | undefined {
+	if (runtime.kind !== "ssh" || runtime.host === undefined) return undefined;
+	return {
+		host: runtime.host,
+		knownHostsFile: join(house.sshDir, "known_hosts"),
+		hostKeyAlias: runtime.alias ?? `pi-env-${runtime.host}`,
+	};
 }
 
 /** The sha256 of a file's bytes, or `undefined` when there is no such file: how a boot and a doctor compare one read. */

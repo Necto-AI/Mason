@@ -48,9 +48,15 @@ export interface TextQuestion {
 	readonly required?: boolean;
 }
 
+/** A question answered from a list, and the flag that answers it without a terminal. */
+export interface PickQuestion {
+	/** e.g. `--provider <id>`: what a headless run should pass instead of an answer. */
+	readonly flag?: string;
+}
+
 /** What the flow may ask. Every method is one question, and nothing here decides what an answer means. */
 export interface Prompter {
-	pick(question: string, choices: readonly Choice[]): Promise<string>;
+	pick(question: string, choices: readonly Choice[], options?: PickQuestion): Promise<string>;
 	text(question: string, options?: TextQuestion): Promise<string>;
 	confirm(question: string, fallback: boolean): Promise<boolean>;
 	/** Releases the terminal, if one was taken. Safe to call twice. */
@@ -85,7 +91,7 @@ export function scriptedPrompter(answers: ScriptedAnswers): Prompter {
 		return question === CONNECTOR_QUESTION ? answers.connector : undefined;
 	};
 	return {
-		async pick(question, choices) {
+		async pick(question, choices, options = {}) {
 			const scripted = picked(question);
 			if (scripted !== undefined) {
 				if (!choices.some((choice) => choice.value === scripted))
@@ -96,7 +102,8 @@ export function scriptedPrompter(answers: ScriptedAnswers): Prompter {
 			}
 			if (choices.length === 1 && choices[0] !== undefined) return choices[0].value;
 			throw new MissingAnswer(
-				`no terminal, and ${question}: pass --connector <name>, one of ${choices.map((choice) => choice.value).join(", ")}`,
+				`no terminal, and ${question}: pass ${options.flag ?? "--connector <name>"}, one of ` +
+					`${choices.map((choice) => choice.value).join(", ")}`,
 			);
 		},
 		async text(question, options = {}) {
