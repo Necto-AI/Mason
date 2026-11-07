@@ -18,7 +18,13 @@ import { housePaths } from "../src/server/house.ts";
 import { readIntegrations } from "../src/server/integrations.ts";
 
 const [command, ...args] = process.argv.slice(2);
-const house = housePaths();
+let house: ReturnType<typeof housePaths>;
+try {
+	house = housePaths();
+} catch (error) {
+	console.error(`[connector] ${error instanceof Error ? error.message : String(error)}`);
+	process.exit(1);
+}
 
 function usage(): never {
 	console.log(`usage:

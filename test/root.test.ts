@@ -58,6 +58,17 @@ describe("the root and its bots", () => {
 		assert.equal(read.commonDir, join(root, "common"));
 	});
 
+	test("a bot named after a legacy entry is a bot, not a half at the root", async () => {
+		const root = await tempRoot();
+		await bot(root, "data");
+		await bot(root, "log");
+		const read = readRoot(root);
+		assert.deepEqual(
+			read.bots.map((entry) => entry.name),
+			["data", "log"],
+		);
+	});
+
 	test("a root that does not exist yet is an empty fleet, not a refusal", async () => {
 		const root = join(await tempRoot(), "missing");
 		assert.deepEqual(readRoot(root).bots, []);

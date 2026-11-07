@@ -124,4 +124,5 @@ test("a mapped command runs the same script the npm script runs", async () => {
 	// one's, which is what "mapped thin" means.
 	assert.equal(result.code, 1);
 	assert.match(result.stderr, /has no bot yet/);
+	assert.doesNotMatch(result.stderr, /\n\s+at /, "one sentence, not a stack trace");
 });

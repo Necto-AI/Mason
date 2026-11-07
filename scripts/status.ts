@@ -11,7 +11,7 @@ import { readPiSettingsModel, resolveModelChoice } from "../src/server/common.ts
 import { botPaths } from "../src/server/house.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { listening } from "../src/server/podman.ts";
-import { readRoot, resolveBot, rootPath } from "../src/server/root.ts";
+import { readRoot, resolveBot, rootPath, takeBot } from "../src/server/root.ts";
 
 export function usage(): string {
 	return `usage: mason status
@@ -21,16 +21,17 @@ export function usage(): string {
 }
 
 export async function runStatus(argv: readonly string[]): Promise<number> {
-	if (argv.includes("--help") || argv.includes("-h")) {
-		console.log(usage());
-		return 0;
-	}
 	try {
+		const args = takeBot(argv);
+		if (args.includes("--help") || args.includes("-h")) {
+			console.log(usage());
+			return 0;
+		}
 		const root = readRoot(rootPath());
 		const target = resolveBot(root);
 		const house = botPaths(target);
 		const choice = await resolveModelChoice(house);
-		const fallback = choice === undefined ? readPiSettingsModel() : undefined;
+		const fallback = choice === undefined && house.fleet === undefined ? readPiSettingsModel() : undefined;
 		const model =
 			choice === undefined
 				? fallback === undefined
