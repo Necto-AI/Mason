@@ -330,14 +330,26 @@ async function checkConnectors(
 			repair: "run `mason setup --connector <name>` (console, telegram or custom)",
 		};
 	// A grant is not a door: `authenticateConnector` refuses a switched-off entry and a connector with no credential, so a
-	// check that counts the grant alone calls a bot reachable while every socket closes 1008.
-	// A container connector is judged below, by the compose file and the container it runs: its messages are more precise
-	// (a credential rotated out of the file is not the same as one never minted), so these two only cover the rest.
-	const credentials = await listConnectorCredentials(house.home).catch(() => []);
+	// check that counts the grant alone calls a bot reachable while every socket closes 1008. The switch comes first,
+	// containers included: a switched-off connector refuses every socket whatever its container does, and the loop below
+	// would report it "up".
+	const off = entries.filter((entry) => !entry.enabled).map((entry) => entry.name);
+	// A credential is the other half, and a container's is judged below by the compose file it carries: a credential rotated
+	// out of the file is not the same as one never minted.
+	const read = await listConnectorCredentials(house.home).then(
+		(credentials) => ({ credentials }),
+		(error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+	);
+	if ("error" in read)
+		return {
+			name: "connectors",
+			ok: false,
+			detail: `the credential store cannot be read: ${read.error}`,
+			repair: `fix ${house.config} by hand, then run \`mason doctor\` again`,
+		};
 	const inContainer = new Set(containers.map(([name]) => name));
-	const off = entries.filter((entry) => !entry.enabled && !inContainer.has(entry.name)).map((entry) => entry.name);
 	const keyless = granted.filter(
-		(name) => !inContainer.has(name) && !credentials.some((record) => record.connector === name),
+		(name) => !inContainer.has(name) && !read.credentials.some((record) => record.connector === name),
 	);
 	if (off.length > 0)
 		return {
