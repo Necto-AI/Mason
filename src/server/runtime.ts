@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { readPiSettingsModel, resolveModelChoice } from "./common.ts";
+import { readCommonRuntime, readPiSettingsModel, resolveModelChoice, sshTargetFromRuntime } from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
@@ -340,11 +340,17 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// The execution-target seam reads and writes its `app.target` document through the opened harness, so the manager
 		// is built here, after the open. The `env` closure above reaches it at the first turn only: no environment is
 		// built while the harness opens, so the manager and its connection exist before anything resolves one.
+		// The machine tools run on: the environment's own target wins, and a root's `common/runtime.json` is the default a
+		// bot inherits when the environment names none. A malformed runtime file refuses the boot here rather than running
+		// tools on the wrong machine.
+		const runtimeDefault = house.fleet === undefined ? undefined : await readCommonRuntime(house.fleet.root);
+		const ssh =
+			sshTargetFromEnv() ?? (runtimeDefault === undefined ? undefined : sshTargetFromRuntime(runtimeDefault, house));
 		const envManager: RuntimeEnvManager =
 			options.env ??
 			createRuntimeEnvManager({
 				workspaceDir,
-				...(sshTargetFromEnv() === undefined ? {} : { ssh: sshTargetFromEnv() }),
+				...(ssh === undefined ? {} : { ssh }),
 				targets: targetDocChannel(harness),
 			});
 		opened.push(() => envManager.close());

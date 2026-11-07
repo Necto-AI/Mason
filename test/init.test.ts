@@ -109,6 +109,23 @@ describe("a first init", () => {
 		assert.equal(existsSync(commonPaths(root).dir), false, "nothing was written");
 	});
 
+	test("a headless run with no provider names the flag that answers it, not the connector's", async () => {
+		const root = await tempRoot();
+		// Two providers, so the list cannot be answered by being the only choice: the refusal has to name the flag.
+		const first = fauxProvider();
+		const second = fauxProvider({ provider: "second" });
+		const models = createModels();
+		models.setProvider(first.provider);
+		models.setProvider(second.provider);
+		const code = await runInit(["--yes"], {
+			root,
+			prompter: scriptedPrompter({}),
+			access: { models, faux: true },
+		});
+		assert.equal(code, 2, "a missing answer is not a failed store");
+		assert.equal(existsSync(commonPaths(root).dir), false);
+	});
+
 	test("the offline provider asks for no key, and a --key beside it stores none", async () => {
 		const root = await tempRoot();
 		// The prompter would throw if it were asked anything: `--provider` and `--model` answer both questions, and the

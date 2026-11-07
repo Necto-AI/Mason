@@ -148,6 +148,7 @@ export async function runInit(
 			(await prompter.pick(
 				PROVIDER_QUESTION,
 				known.map((id) => ({ value: id, label: id })),
+				{ flag: "--provider <id>" },
 			));
 		if (!known.includes(provider))
 			throw new Error(`there is no provider "${provider}": this build knows ${known.join(", ")}`);
