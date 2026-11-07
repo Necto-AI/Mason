@@ -349,7 +349,8 @@ whole-file rewrite that lost a key somebody just stored is the one write that ca
 meaning `0.1`, and every write is staged: the text is built first, the file it replaces is copied aside with a timestamp,
 and the rename lands last. Model precedence is the bot's `service/settings.json` → the common default →
 `PI_PROVIDER`/`PI_MODEL` → pi's own `settings.json`, that last only for a home addressed by `MASON_HOME`. A key from the
-common store is set as a runtime key and never written into pi's `auth.json`.
+common store is set as a runtime key and never written into pi's `auth.json`. The boot moves a stored conversation onto
+the configured model.
 
 The commands are skins over those functions: `mason init` (provider, model, and a key verified with one completion before
 anything is written), `mason new <name>` (a home, its soul and seeded skills, its first connector through `mason setup`,
