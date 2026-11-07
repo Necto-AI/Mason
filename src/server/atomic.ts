@@ -14,6 +14,7 @@
  * `writeTextAtomic` is the same promise for a file that is not JSON: a connector's `compose.yaml` holds the credential
  * the container opens its socket with, so it is written here and not with `fs.writeFile` (`connector-compose.ts`).
  */
+import { closeSync, openSync, statSync, unlinkSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -43,4 +44,67 @@ export async function writeTextAtomic(path: string, text: string): Promise<void>
 	await rename(temporary, path);
 	await chmod(dirname(path), 0o700).catch(() => {});
 	await chmod(path, 0o600).catch(() => {});
+}
+
+/**
+ * The lock a read-modify-write of a store holds, in this process and across processes.
+ *
+ * In-process writers queue on a promise chain; two processes queue on an `O_EXCL` lock file beside the store, waiting up
+ * to a second and treating a lock older than thirty seconds as a writer that died rather than one still thinking. Every
+ * store here is read, changed and written whole, so two writers that each read the old file lose one of the two changes
+ * and both exit 0 — which is what a person saw as a credential that printed once and then did not exist.
+ *
+ * A lock is held around the *read* as well as the write: the point is that the file a writer merged into is the file it
+ * saw, and a read outside the lock is a lost update waiting for a second writer.
+ */
+const queues = new Map<string, Promise<unknown>>();
+
+export async function withStoreLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+	const previous = queues.get(path) ?? Promise.resolve();
+	const next = previous.then(
+		() => takeFileLock(path, work),
+		() => takeFileLock(path, work),
+	);
+	queues.set(
+		path,
+		next.catch(() => undefined),
+	);
+	return next;
+}
+
+const LOCK_WAIT_MS = 20;
+const LOCK_ATTEMPTS = 50;
+const LOCK_STALE_MS = 30_000;
+
+/** The `O_EXCL` half: a file beside the store, released in a `finally`. */
+async function takeFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+	const lock = `${path}.lock`;
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	for (let attempt = 0; ; attempt += 1) {
+		try {
+			closeSync(openSync(lock, "wx", 0o600));
+			break;
+		} catch (error) {
+			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+			// A lock left by a process that died is not a writer: the store it protected was never half-written (the write
+			// is a rename), so the only thing to do is remove it and try once more.
+			const age = Date.now() - statSync(lock).mtimeMs;
+			if (age > LOCK_STALE_MS) {
+				try {
+					unlinkSync(lock);
+				} catch {
+					// Another writer released it between the stat and the unlink; the next attempt takes it.
+				}
+				continue;
+			}
+			if (attempt >= LOCK_ATTEMPTS)
+				throw new Error(`${path} is locked by another writer (${lock}); remove it if nothing is writing`);
+			await new Promise((done) => setTimeout(done, LOCK_WAIT_MS));
+		}
+	}
+	try {
+		return await work();
+	} finally {
+		unlinkSync(lock);
+	}
 }

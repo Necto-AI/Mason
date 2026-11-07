@@ -26,7 +26,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { writeTextAtomic } from "./atomic.ts";
+import { withStoreLock, writeTextAtomic } from "./atomic.ts";
 import { commitStaged, hashFile, jsonText } from "./common.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";
@@ -326,20 +326,31 @@ export async function writeIntegration(
 	integration: Integration,
 ): Promise<Integration> {
 	const entry = validate(paths.integrations, name, integration);
-	const { file, integrations } = await load(paths.integrations);
-	const next = { version: INTEGRATIONS_VERSION, ...file, integrations: ordered({ ...integrations, [name]: entry }) };
-	await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
+	// Read inside the lock: two writers that each merged into the file they saw before the other wrote lost one entry.
+	await withStoreLock(paths.integrations, async () => {
+		const { file, integrations } = await load(paths.integrations);
+		const next = {
+			version: INTEGRATIONS_VERSION,
+			...file,
+			integrations: ordered({ ...integrations, [name]: entry }),
+		};
+		await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
+	});
 	return entry;
 }
 
 /** Removes one entry. `false` when there is none: a typo must not read as a successful removal. */
 export async function removeIntegration(paths: HousePaths, name: string): Promise<boolean> {
-	const { file, integrations } = await load(paths.integrations);
-	if (integrations[name] === undefined) return false;
-	const remaining = Object.fromEntries(Object.entries(integrations).filter(([key]) => key !== name));
-	const next = { version: INTEGRATIONS_VERSION, ...file, integrations: remaining };
-	await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
-	return true;
+	let removed = false;
+	await withStoreLock(paths.integrations, async () => {
+		const { file, integrations } = await load(paths.integrations);
+		if (integrations[name] === undefined) return;
+		const remaining = Object.fromEntries(Object.entries(integrations).filter(([key]) => key !== name));
+		const next = { version: INTEGRATIONS_VERSION, ...file, integrations: remaining };
+		await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
+		removed = true;
+	});
+	return removed;
 }
 
 /** Flips the one switch. `undefined` when there is no such entry, so the command can exit non-zero. */

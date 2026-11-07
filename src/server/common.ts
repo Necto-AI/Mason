@@ -27,7 +27,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SshTarget } from "@earendil-works/pi-env";
-import { writeTextAtomic } from "./atomic.ts";
+import { withStoreLock, writeTextAtomic } from "./atomic.ts";
 import type { HousePaths } from "./house.ts";
 
 /** The only version this build writes and reads. A number nobody migrates is a number that never had to. */
@@ -245,59 +245,16 @@ export function jsonText(value: unknown): string {
 }
 
 /**
- * The lock one auth write holds, in this process and across processes.
+ * Refuse a store `mason init` could not rewrite, before it spends a verifying completion.
  *
- * In-process writers queue on a promise chain; two processes queue on an `O_EXCL` lock file beside the store, waiting up
- * to a second and treating a lock older than thirty seconds as a writer that died rather than one still thinking. The
- * lock exists because a whole-file rewrite of credentials is the one write where last-writer-wins loses a key somebody
- * just stored; settings merge field by field and need none.
+ * The write refuses a broken file on its own; asking first is what turns "the provider answered, then the store refused"
+ * into one sentence a person can act on.
  */
-const queues = new Map<string, Promise<unknown>>();
-
-export async function withAuthLock<T>(path: string, work: () => Promise<T>): Promise<T> {
-	const previous = queues.get(path) ?? Promise.resolve();
-	const next = previous.then(work, work);
-	queues.set(
-		path,
-		next.catch(() => undefined),
-	);
-	return next;
-}
-
-const LOCK_WAIT_MS = 20;
-const LOCK_ATTEMPTS = 50;
-const LOCK_STALE_MS = 30_000;
-
-/** The `O_EXCL` half of the lock: a file beside the store, released in a `finally`. */
-async function withFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
-	const lock = `${path}.lock`;
-	for (let attempt = 0; ; attempt += 1) {
-		try {
-			closeSync(openSync(lock, "wx", 0o600));
-			break;
-		} catch (error) {
-			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-			// A lock left by a process that died is not a writer: the store it protected was never half-written (the write
-			// is a rename), so the only thing to do is remove it and try once more.
-			const age = Date.now() - statSync(lock).mtimeMs;
-			if (age > LOCK_STALE_MS) {
-				try {
-					unlinkSync(lock);
-				} catch {
-					// Another writer released it between the stat and the unlink; the next attempt takes it.
-				}
-				continue;
-			}
-			if (attempt >= LOCK_ATTEMPTS)
-				throw new Error(`${path} is locked by another writer (${lock}); remove it if nothing is writing`);
-			await new Promise((done) => setTimeout(done, LOCK_WAIT_MS));
-		}
-	}
-	try {
-		return await work();
-	} finally {
-		unlinkSync(lock);
-	}
+export async function assertCommonStoreReadable(root: string): Promise<void> {
+	const { broken } = await readCommonSettings(root);
+	if (broken !== undefined)
+		throw new Error(`${broken}. Refusing to overwrite it: fix the file or delete it, then run \`mason init\` again`);
+	await readCommonAuth(root);
 }
 
 /**
@@ -316,42 +273,46 @@ export async function writeCommonStore(
 	const paths = commonPaths(root);
 	// The lock lives beside the store, so the directory has to exist before the first lock is taken.
 	await mkdir(paths.dir, { recursive: true, mode: 0o700 });
-	const { value, broken } = await readCommonSettings(root);
-	if (broken !== undefined)
-		throw new Error(`${broken}. Refusing to overwrite it: fix the file or delete it, then run \`mason init\` again`);
-	await withAuthLock(paths.auth, () =>
-		withFileLock(paths.auth, async () => {
-			let auth: CommonAuth;
-			try {
-				auth = await readCommonAuth(root);
-			} catch (error) {
-				throw new Error(
-					`${error instanceof Error ? error.message : String(error)}. Refusing to overwrite it: fix the file or ` +
-						"delete it, then run `mason init` again",
-				);
-			}
-			const settings: CommonSettings = {
-				...value,
-				version: COMMON_VERSION,
-				defaultProvider: input.defaultProvider,
-				defaultModel: input.defaultModel,
-			};
-			const providers =
-				input.key === undefined
-					? auth.providers
-					: {
-							...auth.providers,
-							[input.defaultProvider]: { ...auth.providers[input.defaultProvider], key: input.key },
-						};
-			const writes: StagedWrite[] = [
-				{ path: paths.settings, text: jsonText(settings) },
-				{ path: paths.auth, text: jsonText({ version: COMMON_VERSION, providers }) },
-			];
-			if (!existsSync(paths.runtime))
-				writes.push({ path: paths.runtime, text: jsonText({ version: COMMON_VERSION, kind: "local" }) });
-			await commitStaged(writes);
-		}),
-	);
+	await withStoreLock(paths.auth, async () => {
+		// Read inside the lock: a merge against the file as it is at write time is the difference between keeping a key
+		// somebody added a second ago and reverting it.
+		const { value, broken } = await readCommonSettings(root);
+		if (broken !== undefined)
+			throw new Error(
+				`${broken}. Refusing to overwrite it: fix the file or delete it, then run \`mason init\` again`,
+			);
+		let auth: CommonAuth;
+		try {
+			auth = await readCommonAuth(root);
+		} catch (error) {
+			throw new Error(
+				`${error instanceof Error ? error.message : String(error)}. Refusing to overwrite it: fix the file or ` +
+					"delete it, then run `mason init` again",
+			);
+		}
+		const settings: CommonSettings = {
+			...value,
+			version: COMMON_VERSION,
+			defaultProvider: input.defaultProvider,
+			defaultModel: input.defaultModel,
+		};
+		const providers =
+			input.key === undefined
+				? auth.providers
+				: {
+						...auth.providers,
+						[input.defaultProvider]: { ...auth.providers[input.defaultProvider], key: input.key },
+					};
+		// Auth first: a key for a provider nothing names is harmless, and a provider named with no key is the state this
+		// whole function exists to prevent. A failure between the two renames leaves the harmless half.
+		const writes: StagedWrite[] = [
+			{ path: paths.auth, text: jsonText({ version: COMMON_VERSION, providers }) },
+			{ path: paths.settings, text: jsonText(settings) },
+		];
+		if (!existsSync(paths.runtime))
+			writes.push({ path: paths.runtime, text: jsonText({ version: COMMON_VERSION, kind: "local" }) });
+		await commitStaged(writes);
+	});
 }
 
 /** Where a bot's own model override lives: the service half, beside the grant it was chosen with. */
