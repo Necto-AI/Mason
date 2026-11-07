@@ -8,28 +8,32 @@ One process, one bot, one person. mason runs continuously on a machine with Node
 
 ```sh
 npm install -g mason-agent
-mason onboard
+mason setup
 ```
 
-`mason onboard` creates or verifies the home, writes the default soul if none exists, seeds the shipped skills, and
-prints the next steps: a connector the bot answers through does not exist yet, so you add one with
-`mason integration add <name> --url <mcp-url> --description "…"`, write the entry's `connector` block by hand
-(what the connector may do on its socket is its grant, the operator's decision), and then
-`mason connector add <name>` issues the credential. `mason onboard` mints that credential itself once the entry has a
-grant.
+`mason setup` installs a connector: it offers the ones this release knows (`catalog/connectors.json`), asks what the one
+you pick needs, and writes the integration entry, its grant and its credential. A connector that runs as a container
+also gets a compose project, started with `restart: always` — the half of "it comes back after a reboot" a file can
+carry, with the other half (`podman-restart.service`, and linger) printed when it is missing. Then `mason up` serves the
+bot, and the connector connects when the socket is there.
 
-Then `mason up` serves the bot. Changing the integration list is a restart: it is read once, at boot.
+Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a CI job drives the
+same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in console connector, with
+no Telegram at all.
+
+`mason onboard` is unchanged and still scriptable: it creates the home, mints a credential for a connector that has a
+grant and none, and prints the doors. The integration list is read once, at boot: changing it is a restart.
 
 ## What a stranger reaches
 
 `/api/health` is the only path that answers without a credential, and it answers one word. `/api/connector` is the
-connector's JSON-RPC socket and its attachment endpoint; each is the `Authorization: Bearer masonc_…` credential the
-`mason connector add` printed once. There is no owner token and no panel: a person speaks through a connector, and a
-UI talks to mason the same way.
+connector's JSON-RPC socket; it takes the `Authorization: Bearer masonc_…` credential `mason connector add` printed once.
+There is no owner token and no panel: a person speaks through a connector, and a UI does the same.
 
 ## The commands the installed package answers
 
-`mason up`, `mason onboard`, `mason integration …`, `mason connector …`, `mason prompt`, `mason surface`,
+`mason up`, `mason setup`, `mason chat`, `mason onboard`, `mason integration …`, `mason connector …`, `mason prompt`,
+`mason surface`,
 `mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
 work from a source checkout with `npm run dev`, whose tests run with `npm test`.
 

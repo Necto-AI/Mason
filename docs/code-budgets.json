@@ -3,9 +3,9 @@
 		"evals": 565,
 		"packages/connector/src": 2533,
 		"packages/protocol/src": 240,
-		"scripts": 1130,
-		"src/server": 5109,
+		"scripts": 2054,
+		"src/server": 5633,
 		"src/shared": 54,
-		"bin": 95
+		"bin": 99
 	}
 }
