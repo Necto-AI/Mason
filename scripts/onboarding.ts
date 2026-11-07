@@ -78,7 +78,13 @@ export interface Draft {
 	/** What the person chose on the last screen: whether to hand over to `mason chat`. */
 	chat?: boolean;
 	/** Which steps a flag answered, so their screens say so instead of asking the same question again. */
-	seeded?: { readonly provider?: boolean; readonly connector?: boolean };
+	seeded?: {
+		readonly provider?: boolean;
+		/** The flags answered every question this connector has, so its screen has nothing to ask. */
+		readonly connector?: boolean;
+		/** The flags named the kind: the picker is skipped even when the rest was asked on screen. */
+		readonly connectorKind?: boolean;
+	};
 }
 
 /** The commands and the disk reads the wizard needs; injected, so a failure is a test and not an outage. */
@@ -269,7 +275,8 @@ function parseEvents(text: string): Events | string {
 	try {
 		return parseGrantEvents(text, "--events");
 	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
+		// The parser names the flag it was written for, and a screen has no flag to name.
+		return (error instanceof Error ? error.message : String(error)).replace(/^--events: /, "");
 	}
 }
 
@@ -449,6 +456,9 @@ async function provider(ctx: Context): Promise<Direction> {
 			],
 			note: "continue asks for the model again; escape goes back, and writes nothing",
 		});
+		// The key was refused by the provider that would have stored it, so it is not an answer any more: keeping it would
+		// re-ask only the model and send the same key to the same refusal.
+		draft.provider = undefined;
 		// The step asks again rather than unwinding: the person is one answer from a working plan, and the screen they
 		// need is the one they just left.
 		return { go: "jump", to: "provider" };
@@ -491,6 +501,12 @@ async function agent(ctx: Context): Promise<Direction> {
 	return NEXT;
 }
 
+/** Whether this build ships a connector by that name: the console, a connector already running elsewhere, or the catalog. */
+async function knownConnector(kind: string): Promise<boolean> {
+	if (kind === CONSOLE || kind === "custom") return true;
+	return (await catalogEntry(kind).catch(() => undefined)) !== undefined;
+}
+
 /**
  * Whether a seeded plan already answers every question its connector will ask.
  *
@@ -504,7 +520,7 @@ async function connectorAnswered(plan: ConnectorPlan): Promise<boolean> {
 	if (plan.kind === "custom") return plan.url !== undefined;
 	const entry = await catalogEntry(plan.kind).catch(() => undefined);
 	if (entry === undefined) return false;
-	return entry.env.every((variable) => variable.optional === true || plan.env[variable.name] !== undefined);
+	return entry.env.every((variable) => variable.optional === true || (plan.env[variable.name] ?? "") !== "");
 }
 
 /**
@@ -523,8 +539,6 @@ async function grantedKind(ctx: Context): Promise<string | undefined> {
 	return granted.length === 1 ? granted[0] : undefined;
 }
 
-/** `/stop /compact /clear /status`: the controls a grant names, as a sentence reads them. */
-
 /** What a catalog connector's grant says, in words, before the person is asked to grant it. */
 async function permissionLines(kind: string): Promise<string[]> {
 	const { face, controls } = await grantFace(kind);
@@ -541,7 +555,26 @@ async function connector(ctx: Context): Promise<Direction> {
 	const advanced = draft.mode === "advanced";
 	// A flag answers its own question, and only that one: `--connector telegram` names the kind and still owes a token, so a
 	// seeded plan that is missing an answer is asked for it here rather than announced as complete.
+	const unknown =
+		draft.seeded?.connector === true &&
+		draft.connector !== undefined &&
+		!(await knownConnector(draft.connector.kind));
+	if (unknown) {
+		// A flag can name a connector this build does not ship. The picker is where that is answered, so the seed stops
+		// being a seed rather than throwing the run away four screens in.
+		draft.seeded = { ...draft.seeded, connector: false, connectorKind: false };
+		draft.connector = undefined;
+	}
 	const seeded = draft.seeded?.connector === true ? draft.connector : undefined;
+	if (unknown)
+		await screen.note("connector.unknown", "That connector is not in this build", {
+			lines: [
+				`${glyphs.warn} the command line named a connector this build does not ship. Nothing was written.`,
+				"",
+				paint.dim("The next screen lists the ones it has; the rest of your answers are still here."),
+			],
+			note: "continue picks one from the list",
+		});
 	if (seeded !== undefined && (await connectorAnswered(seeded))) {
 		await screen.note("connector.flags", "Connector", {
 			lines: rows(paint, "Answered on the command line", [
@@ -553,17 +586,21 @@ async function connector(ctx: Context): Promise<Direction> {
 		});
 		return NEXT;
 	}
+	// Half a seed is not a seed: what the person types here is not "answered on the command line", and the review must keep
+	// its way back into this step once it has been asked. The kind the flag named stays named, so the picker is not asked
+	// again behind their back.
+	if (draft.seeded?.connector === true) draft.seeded = { ...draft.seeded, connector: false };
+	const namedKind = draft.seeded?.connectorKind === true ? draft.connector?.kind : undefined;
 	const granted = draft.connector === undefined ? await grantedKind(ctx) : draft.connector.kind;
 	const kind =
-		seeded === undefined
-			? await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
-					...(granted === undefined ? {} : { value: granted }),
-					hint:
-						granted === undefined
-							? "the console is built in; a catalog connector runs as a container beside mason"
-							: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
-				})
-			: seeded.kind;
+		namedKind ??
+		(await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
+			...(granted === undefined ? {} : { value: granted }),
+			hint:
+				granted === undefined
+					? "the console is built in; a catalog connector runs as a container beside mason"
+					: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
+		}));
 	if (kind === CONSOLE) {
 		ctx.draft.connector = {
 			kind,
@@ -620,6 +657,12 @@ async function connector(ctx: Context): Promise<Direction> {
 							}),
 					required: false,
 					flag: "--events <kind=hook>",
+					// The screen refuses what the install would refuse, and says why in its own words: a typed answer that
+					// throws out of the step is a whole run lost to one missing `=`.
+					validate: (value) => {
+						const parsed = value === "" ? {} : parseEvents(value);
+						return typeof parsed === "string" ? parsed : undefined;
+					},
 				})
 			: "";
 		const events = raw === "" ? {} : parseEvents(raw);
@@ -690,13 +733,17 @@ async function connector(ctx: Context): Promise<Direction> {
 	const chats = Object.entries(answers)
 		.filter(([name]) => name.endsWith("_CHATS"))
 		.flatMap(([, value]) => splitIds(value));
+	// `--no-start` is a flag like any other: it says no to this question wherever the question is asked, and a run that
+	// asked for the token on screen still must not start a container the command line said not to start.
 	const start =
-		advanced && podman.ok
-			? await screen.confirm("connector.start", "Start it now?", {
-					yes: "start the container, and it comes back after a reboot",
-					no: "write everything and leave it down",
-				})
-			: podman.ok;
+		ctx.flags.setup.includes("--no-start") || !podman.ok
+			? false
+			: advanced
+				? await screen.confirm("connector.start", "Start it now?", {
+						yes: "start the container, and it comes back after a reboot",
+						no: "write everything and leave it down",
+					})
+				: true;
 	ctx.draft.connector = {
 		kind,
 		description: entry.description,
@@ -1174,7 +1221,7 @@ export function preseed(flags: { readonly init: readonly string[]; readonly setu
 	if (draft.provider !== undefined || draft.connector !== undefined)
 		draft.seeded = {
 			...(draft.provider === undefined ? {} : { provider: true }),
-			...(draft.connector === undefined ? {} : { connector: true }),
+			...(draft.connector === undefined ? {} : { connector: true, connectorKind: true }),
 		};
 	return draft;
 }

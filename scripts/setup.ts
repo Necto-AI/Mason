@@ -138,7 +138,9 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 				const answer = value();
 				const separator = answer.indexOf("=");
 				if (separator <= 0) throw new Error(`--env takes NAME=value, not "${answer}"`);
-				env.set(answer.slice(0, separator), answer.slice(separator + 1));
+				// `NAME=` is how a script says "no answer", which is the same thing as not passing the flag: the connector's
+				// question is still open, and setup asks it.
+				if (answer.slice(separator + 1) !== "") env.set(answer.slice(0, separator), answer.slice(separator + 1));
 				break;
 			}
 			case "--no-start":
@@ -265,7 +267,7 @@ async function assertKnownHooks(paths: HousePaths, events: Record<string, string
  *
  * Parsed before anything is written, like the url beside it: a pair with no `=` would otherwise become a kind named
  * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message. `where` is the flag
- * or the question the text came from; the wizard passes the screen it is on, so the message is a sentence it can show.
+ * the text came from, so the message can name the one the person typed.
  */
 export function parseEvents(text: string, where: string): Record<string, string> {
 	const hooks: Record<string, string> = {};

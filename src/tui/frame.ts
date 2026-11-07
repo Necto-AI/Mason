@@ -39,8 +39,8 @@ export interface Hint {
 /** The margin the body gets on each side: two columns is enough to keep text off the edge without eating a narrow window. */
 export const MARGIN = 2;
 
-/** The lines the frame spends on everything but the body: three above, two below. A screen sizes a list against this. */
-export const CHROME_ROWS = 5;
+/** The lines the frame spends on everything but the body: four above (brand, title, rule, blank), two below. */
+export const CHROME_ROWS = 6;
 
 class Padded implements Component {
 	private readonly child: Component;

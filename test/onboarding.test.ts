@@ -65,7 +65,8 @@ interface Fixture {
 		init: boolean;
 		create: boolean;
 		setup: number;
-		verify: boolean;
+		/** How many checks the provider refuses before it answers: one is a key that has to be retyped. */
+		verify: number;
 		checks: readonly DoctorCheck[];
 		up: boolean;
 		ready: boolean;
@@ -87,7 +88,7 @@ function fixture(options: { readonly faux?: boolean } = {}): Fixture {
 		init: false,
 		create: false,
 		setup: 0,
-		verify: false,
+		verify: 0,
 		checks: PASSING,
 		up: true,
 		ready: false,
@@ -101,7 +102,10 @@ function fixture(options: { readonly faux?: boolean } = {}): Fixture {
 		providers: async () => ({ ...fauxAccess(), faux: options.faux ?? true }),
 		verify: async () => {
 			calls.push("verify");
-			if (break_.verify) throw new Error("401 Unauthorized: the key was rejected");
+			if (break_.verify > 0) {
+				break_.verify -= 1;
+				throw new Error("401 Unauthorized: the key was rejected");
+			}
 			return "ok";
 		},
 		init: async (args) => {
@@ -476,12 +480,115 @@ describe("what the disk already answers", () => {
 		assert.match(setup ?? "", /^setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc/);
 		assert.match(setup ?? "", /--owner @denis/);
 	});
+
+	test("--no-start still means no start when the rest of the connector is asked on screen", async () => {
+		const { code, calls } = await drive(
+			quickstart({
+				"welcome.mode": "advanced",
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+			}),
+			{ flags: { setup: ["--connector", "telegram", "--no-start"] } },
+		);
+		assert.equal(code, 0);
+		const setup = calls.find((call) => call.startsWith("setup")) ?? "";
+		assert.match(setup, /--no-start/, "the flag is not spent by the questions the flags did not answer");
+	});
+
+	test("a flag that names a connector this build does not ship is a picker, not a lost run", async () => {
+		const { code, screen } = await drive(quickstart({ "connector.kind": "console" }), {
+			flags: { setup: ["--connector", "nope"] },
+		});
+		assert.equal(code, 0, "the run survives the typo and installs what the next screen says");
+		assert.ok(
+			screen.pages.some((page) => page.id === "connector.unknown"),
+			"the typo was named",
+		);
+		assert.ok(
+			screen.asked.some((question) => question.id === "connector.kind"),
+			"and the list was shown",
+		);
+	});
+
+	test("a connector the flags half answered is still a step the review can go back into", async () => {
+		// Escape at the review returns to the connector with what was typed kept, and the review keeps its way back: a
+		// half-seeded plan is not "answered on the command line", whatever the flag said.
+		const { code, screen } = await drive(
+			quickstart({
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+				"review.action": [CANCEL, "apply"],
+			}),
+			{ flags: { setup: ["--connector", "telegram"] } },
+		);
+		assert.equal(code, 0);
+		assert.ok(
+			!screen.asked.some((question) => question.id === "connector.flags"),
+			"nothing claims the flags answered it",
+		);
+		assert.equal(
+			screen.asked.filter((question) => question.id === "connector.permissions").length,
+			2,
+			"escape re-entered the step, with the answers it already has",
+		);
+		assert.ok(
+			!screen.asked.some((question) => question.id === "connector.kind"),
+			"the flag named the kind: not asked again",
+		);
+		const review = screen.asked.filter((question) => question.id === "review.action").at(-1);
+		assert.ok(review?.choices?.includes("connector"), "the review can go back into a step it asked itself");
+	});
+
+	test("an empty --env NAME= is not an answer, and the screen asks for it", async () => {
+		const { code, screen } = await drive(
+			quickstart({
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+			}),
+			{ flags: { setup: ["--connector", "telegram", "--owner", "@denis", "--env", "TELEGRAM_BOT_TOKEN="] } },
+		);
+		assert.equal(code, 0);
+		assert.ok(
+			screen.asked.some((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN"),
+			"an empty flag value is the question, unanswered",
+		);
+	});
+
+	test("an events pair that is not kind=hook is refused on its own screen, not as a lost run", async () => {
+		const { code, screen } = await drive(
+			quickstart({
+				"welcome.mode": "advanced",
+				"connector.kind": "custom",
+				"connector.url": "ws://127.0.0.1:8083/api/connector",
+				"connector.owner": "@denis",
+				"connector.conversations": "",
+				"connector.events": ["stop", "wake=retry"],
+			}),
+		);
+		assert.equal(code, 0, "the typo was corrected where it was typed");
+		assert.equal(
+			screen.asked.filter((question) => question.id === "connector.events").length,
+			2,
+			"refused once, answered once",
+		);
+		const read = [
+			...(screen.asked.find((question) => question.id === "connector.events")?.preface ?? []),
+			...screen.pages.flatMap((entry) => entry.page.lines),
+		];
+		assert.ok(!read.join("\n").includes("--events"), "a screen does not name a flag the person never typed");
+	});
 });
 
 describe("failures", () => {
 	test("a provider that does not answer sends the person back to the model, and writes nothing", async () => {
 		const fake = fixture({ faux: false });
-		fake.break_.verify = true;
+		fake.break_.verify = 1;
 		const { code, screen, calls } = await drive(
 			{
 				...quickstart(),
@@ -496,10 +603,30 @@ describe("failures", () => {
 		assert.ok(screen.pages.some((page) => page.id === "provider.failed"));
 		assert.equal(
 			screen.asked.filter((question) => question.id === "provider.model").length,
-			3,
+			2,
 			"asked, failed, asked again",
 		);
 		assert.ok(calls.includes("init --provider faux --model faux-1 --key sk-test"), calls.join("\n"));
+	});
+
+	test("a key the provider refused is asked for again, not reused", async () => {
+		const fake = fixture({ faux: false });
+		fake.break_.verify = 1;
+		const { code, screen, calls } = await drive(
+			{
+				...quickstart(),
+				"provider.key": ["sk-bad", "sk-good"],
+				"provider.check": true,
+			},
+			{ fixture: fake },
+		);
+		assert.equal(code, 0);
+		assert.equal(
+			screen.asked.filter((question) => question.id === "provider.key").length,
+			2,
+			"a key the provider refused is not an answer to the question about the key",
+		);
+		assert.ok(calls.includes("init --provider faux --model faux-1 --key sk-good"), calls.join("\n"));
 	});
 
 	test("a connector step that fails says what is on disk, and the run ends 1", async () => {
