@@ -320,13 +320,38 @@ async function checkConnectors(
 	// A bot with no connector granted has no door: nothing can reach it, and the nine checks used to pass vacuously for it.
 	// That is the state a first run that died on the connector question leaves behind, and "doctor 0" is the proof the
 	// issue asks a first run to produce.
-	const granted = await grantedConnectors(house);
+	const entries = await grantedConnectors(house);
+	const granted = entries.map((entry) => entry.name);
 	if (granted.length === 0)
 		return {
 			name: "connectors",
 			ok: false,
 			detail: "no connector is granted: nothing can reach this bot",
 			repair: "run `mason setup --connector <name>` (console, telegram or custom)",
+		};
+	// A grant is not a door: `authenticateConnector` refuses a switched-off entry and a connector with no credential, so a
+	// check that counts the grant alone calls a bot reachable while every socket closes 1008.
+	// A container connector is judged below, by the compose file and the container it runs: its messages are more precise
+	// (a credential rotated out of the file is not the same as one never minted), so these two only cover the rest.
+	const credentials = await listConnectorCredentials(house.home).catch(() => []);
+	const inContainer = new Set(containers.map(([name]) => name));
+	const off = entries.filter((entry) => !entry.enabled && !inContainer.has(entry.name)).map((entry) => entry.name);
+	const keyless = granted.filter(
+		(name) => !inContainer.has(name) && !credentials.some((record) => record.connector === name),
+	);
+	if (off.length > 0)
+		return {
+			name: "connectors",
+			ok: false,
+			detail: `granted but switched off: ${off.join(", ")}`,
+			repair: `run \`mason integration enable ${off[0]}\``,
+		};
+	if (keyless.length > 0)
+		return {
+			name: "connectors",
+			ok: false,
+			detail: `granted but with no credential: ${keyless.join(", ")}`,
+			repair: `run \`mason setup --connector ${keyless[0]}\` to mint one`,
 		};
 	if (containers.length === 0)
 		return {
@@ -402,11 +427,14 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 }
 
 /** The connector names a bot's integrations grant, sorted; empty when nothing can reach it. */
-async function grantedConnectors(house: HousePaths): Promise<string[]> {
+async function grantedConnectors(
+	house: HousePaths,
+): Promise<readonly { readonly name: string; readonly enabled: boolean }[]> {
 	const { integrations } = await readIntegrations(house).catch(() => ({ integrations: {} as Record<string, never> }));
 	return Object.keys(integrations)
 		.filter((name) => integrations[name]?.connector !== undefined)
-		.sort();
+		.sort()
+		.map((name) => ({ name, enabled: integrations[name]?.enabled === true }));
 }
 
 /** The ninth check is the contract the other eight are read through: this report exits 0 or 1, and the line says which. */
