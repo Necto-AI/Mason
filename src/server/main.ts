@@ -209,7 +209,8 @@ async function handleRequest(
 
 	// The one path that answers without a credential, and it answers one word: a probe that needed a token is a probe
 	// that cannot tell a dead process from a refused one.
-	if (url.pathname === "/api/health") return json(response, 200, { status: "ok", root: String(runtime.rootId) });
+	if (url.pathname === "/api/health")
+		return json(response, 200, { status: "ok", root: String(runtime.rootId), home: runtime.home });
 
 	notFound(response);
 }
@@ -368,7 +369,16 @@ function headerValue(request: IncomingMessage, name: string): string | undefined
 export type { ConversationId };
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-	const server = await startServer();
+	// A refused boot is one sentence, not a stack trace: `mason up` is the repair `doctor` names, and the reasons it can
+	// refuse — several bots and no target, a hook a connector fires that no build defines, no model configured — are all
+	// things the operator fixes by reading the sentence.
+	let server: RunningServer;
+	try {
+		server = await startServer();
+	} catch (error) {
+		console.error(`[up] ${error instanceof Error ? error.message : String(error)}`);
+		process.exit(1);
+	}
 	const stop = async (): Promise<void> => {
 		await server.close();
 		process.exit(0);
