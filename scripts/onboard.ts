@@ -130,7 +130,8 @@ export async function runOnboard(
 		refuseHomeEnv();
 		// `--yes` answers the connector question too: a scripted first run that stalls on "which connector?" has answered
 		// nothing, and the half-created root it left behind used to be discovered after the bot was written.
-		const setupArgs = args.yes && !namesConnector(args.setup) ? [...args.setup, "--connector", "console"] : args.setup;
+		const setupArgs =
+			args.yes && !namesConnector(args.setup) ? [...args.setup, "--connector", "console"] : args.setup;
 		if (!process.stdin.isTTY && !namesConnector(setupArgs))
 			throw new Error(
 				"no terminal, and no connector was named: pass --connector <name>, or --yes for the console one. " +
