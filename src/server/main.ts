@@ -150,6 +150,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	const boundPort = typeof address === "object" && address !== null ? address.port : port;
 	console.log(`mason listening on http://${hostname}:${boundPort}`);
 	console.log(`[data] ${runtime.dataDir}`);
+	// A settings edit that moved the conversation's model is worth one line: nothing else in the boot says the transcript
+	// was on something else a minute ago, and the alternative is a reader wondering why a reply sounds different.
+	if (runtime.previousModel !== undefined)
+		console.log(
+			`[model] ${runtime.previousModel.provider}/${runtime.previousModel.modelId} -> ${runtime.model.provider}/${runtime.model.modelId}`,
+		);
 	// A state directory next to the code was the old default; saying so is worth more than silently starting a second
 	// agent that looks empty. Only for a server that took the default: a caller that passed `dataDir` (a test, a script)
 	// has already decided where its state is.
