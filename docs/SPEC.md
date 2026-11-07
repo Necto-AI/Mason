@@ -333,6 +333,39 @@ spent:
 its cache, and `miss` is the prompt the provider had to take uncached (`input + cacheWrite`). A run that sent no prompt
 tokens writes no line.
 
+### 3.6 The root, the common store, and the doctor
+
+`~/.mason` (or `MASON_ROOT`) is a **root**: `common/` plus one directory per bot, and each bot's directory is the home of
+§3.5 unchanged. `src/server/root.ts` owns the resolution: `-b` over `MASON_BOT` over the only bot over a refusal that
+names every bot; a root whose halves sit at the root itself is refused with the manual move, and `MASON_HOME` still names
+one home directly, which is how a home written before the root keeps booting. Every command resolves its bot through
+that one function, and `bin/mason.ts` turns `-b` into `MASON_BOT` for the child.
+
+`common/` is mason's own store, three files with one discipline each (`src/server/common.ts`): `settings.json`
+(`defaultProvider`, `defaultModel`) is read tolerantly and merged field by field, so a key a later version wrote survives
+an earlier one's write; `auth.json` (one key per provider) is strict about shape and written whole under a lock, because a
+whole-file rewrite that lost a key somebody just stored is the one write that cannot be retried; `runtime.json`
+(`kind`, `host`) refuses a kind this build cannot run. Every file refuses a `version` it does not read, an absent one
+meaning `0.1`, and every write is staged: the text is built first, the file it replaces is copied aside with a timestamp,
+and the rename lands last. Model precedence is the bot's `service/settings.json` → the common default →
+`PI_PROVIDER`/`PI_MODEL` → pi's own `settings.json`, that last only for a home addressed by `MASON_HOME`. A key from the
+common store is set as a runtime key and never written into pi's `auth.json`.
+
+The commands are skins over those functions: `mason init` (provider, model, and a key verified with one completion before
+anything is written), `mason new <name>` (a home, its soul and seeded skills, its first connector through `mason setup`,
+then a doctor), `mason bots`, `mason onboard` (the dispatcher: init when the root has no store, new when it has no bot,
+setup when the bot has no connector), `mason status` (one line) and `mason doctor`. Doctor is nine read-only checks — the
+two halves, the model and its key, the execution environment, the server, podman and its compose provider, the restart
+policy, each connector's container and credential, `integrations.json` including whether it changed since the last boot,
+and the exit-code shape — printing one repair command per failure and exiting 1 on any of them. Nothing repairs, and
+"nothing is listening" passes: a fleet nobody started is not a misconfiguration.
+
+`service/integrations.json` carries `"version": "0.1"`: every wizard write stamps it, a file without one is `0.1`, and any
+other value is refused with both versions named. The setup wizard writes a `url:` connector's grant — owner,
+conversations, event kinds — through the same writer the boot reads, so no grant needs hand-written JSON and a hand edit
+stays valid input. The boot records the hash it read in `service/data/boot.json`, which is how doctor says "restart to
+apply".
+
 ---
 
 ## 4. Milestone 2 Specification: the wire and the door

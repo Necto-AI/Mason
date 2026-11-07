@@ -27,9 +27,19 @@ _Avoid_: the app, mason's client (it is one of several), the router
 ## The home
 
 **home**:
-The bot's own directory tree, `~/.mason`. It is split in two, and the split is the boundary between the server and the
-machine its tools run on.
+The bot's own directory tree: one directory under the root, or whatever `MASON_HOME` names. It is split in two, and the
+split is the boundary between the server and the machine its tools run on.
 _Avoid_: house, state dir, `.mason`
+
+**root**:
+The directory the bots live under, `~/.mason` or `MASON_ROOT`: `common/` and one directory per bot, each one home. A
+command targets one with `-b`, else `MASON_BOT`, else the only bot.
+_Avoid_: fleet (that is the bots, not the directory), state dir
+
+**common store**:
+The three files every bot under a root shares: the default provider and model, one key per provider, and where tools run.
+Written by `mason init` and read by every boot.
+_Avoid_: global config, shared home
 
 **agent-owned files**:
 The part of the home the bot reads and edits with its own tools, on the machine its tools run on: profile, log, skills,
