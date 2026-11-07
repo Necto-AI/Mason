@@ -23,7 +23,7 @@ import {
 	readCommonRuntime,
 	readCommonSettings,
 } from "../src/server/common.ts";
-import type { ProviderAccess } from "../src/server/provider.ts";
+import { type ProviderAccess, verifyCompletion } from "../src/server/provider.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -45,6 +45,24 @@ function offline(): { access: ProviderAccess; answers: () => number } {
 	const access: ProviderAccess = { models, faux: true };
 	return { access, answers: () => faux.state.callCount };
 }
+
+test("the verifying completion carries a session id, which OpenCode routes on", async () => {
+	// The header is `x-opencode-session`, and pi-ai's OpenCode provider fills it from `options.sessionId`. A check without
+	// one is a 400 before the key is looked at, which is exactly what `mason init --provider opencode-go` used to get.
+	const faux = fauxProvider();
+	const models = createModels();
+	models.setProvider(faux.provider);
+	let seen: string | undefined;
+	faux.setResponses([
+		(_context, options) => {
+			seen = options?.sessionId;
+			return fauxAssistantMessage(fauxText("ok"));
+		},
+	]);
+	const text = await verifyCompletion({ models, faux: true }, { provider: "faux", modelId: "faux-1" });
+	assert.equal(text, "ok");
+	assert.match(seen ?? "", /^[0-9a-f-]{36}$/, "a session id, and a fresh one per check");
+});
 
 /** The prompter a `--yes` run gets, with the two questions answered as flags would answer them. */
 function prompter(): ReturnType<typeof scriptedPrompter> {
