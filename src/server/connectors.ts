@@ -33,7 +33,7 @@ import {
 	type ExternalActor,
 	type ExternalConversation,
 } from "mason-protocol";
-import { originAllowed, readConfig, writeConfig } from "./auth.ts";
+import { originAllowed, readConfig, updateConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
 
 /** A leaked connector credential is recognisable in a log, and distinct from an owner token at a glance. */
@@ -83,7 +83,7 @@ export interface ConnectorCredential {
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 function refusal(where: string, name: string, message: string): string {
-	return `${where}: integration "${name}" ${message}`;
+	return `${where}: integration "${name}" ${message}; fix the entry by hand, then run \`mason doctor\``;
 }
 
 /**
@@ -367,8 +367,6 @@ export async function mintConnectorCredential(
 	options: { readonly replace?: boolean } = {},
 ): Promise<MintedConnectorCredential> {
 	if (!NAME.test(connector)) throw new Error(`"${connector}" is not an integration name`);
-	const config = await readConfig(home);
-	const existing = await listConnectorCredentials(home);
 	const credential = `${CONNECTOR_PREFIX}${randomBytes(32).toString("base64url")}`;
 	const record: ConnectorCredential = {
 		id: `con_${randomBytes(4).toString("hex")}`,
@@ -376,19 +374,25 @@ export async function mintConnectorCredential(
 		sha256: digest(credential),
 		createdAt: new Date().toISOString(),
 	};
-	const kept = options.replace === true ? existing.filter((entry) => entry.connector !== connector) : existing;
-	await writeConfig(home, { ...config, connectors: [...kept, record] });
+	await updateConfig(home, (config) => {
+		const existing = Array.isArray(config.connectors) ? config.connectors.filter(isCredentialRecord) : [];
+		const kept = options.replace === true ? existing.filter((entry) => entry.connector !== connector) : existing;
+		return { ...config, connectors: [...kept, record] };
+	});
 	return { credential, record };
 }
 
 /** Remove one credential. `false` when no such id: a typo must not read as a successful revoke. */
 export async function revokeConnectorCredential(home: string, id: string): Promise<boolean> {
-	const config = await readConfig(home);
-	const existing = await listConnectorCredentials(home);
-	const remaining = existing.filter((record) => record.id !== id);
-	if (remaining.length === existing.length) return false;
-	await writeConfig(home, { ...config, connectors: remaining });
-	return true;
+	let removed = false;
+	await updateConfig(home, (config) => {
+		const existing = Array.isArray(config.connectors) ? config.connectors.filter(isCredentialRecord) : [];
+		const remaining = existing.filter((record) => record.id !== id);
+		if (remaining.length === existing.length) return undefined;
+		removed = true;
+		return { ...config, connectors: remaining };
+	});
+	return removed;
 }
 
 /**
