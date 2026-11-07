@@ -41,7 +41,8 @@
 		"pregen:surface": "npm run build:packages",
 		"prebuild": "npm run build:packages",
 		"build": "node scripts/build-runtime.ts",
-		"prepack": "npm run build"
+		"prepack": "npm run build",
+		"e2e:first-run": "node --experimental-strip-types scripts/e2e-first-run.ts"
 	},
 	"files": [
 		"dist",
