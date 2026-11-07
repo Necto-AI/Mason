@@ -163,10 +163,8 @@ export class Frame {
 		if (body !== undefined) this.body.addChild(body);
 	}
 
-	/** The whole document at `width`, the way a test and the alternate screen's restore both read it. */
+	/** The whole document at `width`: header, body and footer in one array, which is what the tests read. */
 	render(width: number): string[] {
 		return [...this.header.render(width), ...this.padded.render(width), ...this.footer.render(width)];
 	}
-
-	/** A one-line caption, wrapped: what the review and the completion screens are made of. */
 }

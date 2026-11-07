@@ -234,7 +234,7 @@ function conversationsOf(owner: string, ids: readonly string[]): readonly Extern
 }
 
 /** `a, b, c` as the ids a grant names, trimmed and without the empties a trailing comma leaves. */
-function splitIds(text: string): string[] {
+export function splitIds(text: string): string[] {
 	return text
 		.split(",")
 		.map((id) => id.trim())
@@ -264,9 +264,10 @@ async function assertKnownHooks(paths: HousePaths, events: Record<string, string
  * `kind=hook, kind=hook` as the events face's map.
  *
  * Parsed before anything is written, like the url beside it: a pair with no `=` would otherwise become a kind named
- * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message.
+ * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message. `where` is the flag
+ * or the question the text came from; the wizard passes the screen it is on, so the message is a sentence it can show.
  */
-function parseEvents(text: string, where: string): Record<string, string> {
+export function parseEvents(text: string, where: string): Record<string, string> {
 	const hooks: Record<string, string> = {};
 	for (const pair of splitIds(text)) {
 		const separator = pair.indexOf("=");
@@ -294,7 +295,7 @@ interface Plan {
 }
 
 /** Mason's port: the one `mason up` binds, so a container is told where the socket it dials answers. */
-function masonPort(): number {
+export function masonPort(): number {
 	return Number(process.env.PORT ?? 8787);
 }
 

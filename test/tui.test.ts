@@ -116,13 +116,22 @@ describe("ChoiceList", () => {
 	test("the arrows wrap at both ends, and escape cancels", () => {
 		const list = new ChoiceList(geometry(), { question: "Which?", choices });
 		let cancelled = false;
+		let picked: string | undefined;
 		list.onCancel = () => {
 			cancelled = true;
 		};
+		list.onSelect = (value) => {
+			picked = value;
+		};
+		// Which row is selected is the thing wrap means: the cursor is drawn on that row and nowhere else.
+		const selected = (): string | undefined => list.render(100).find((line) => line.includes(utf8.cursor));
+
 		list.handleInput("\x1b[A");
-		assert.equal(list.render(100).filter((line) => line.includes(glyphs(false).cursor)).length <= 1, true);
-		list.handleInput("\x1b[A");
+		assert.match(selected() ?? "", /console/, "up from the first row lands on the last");
 		list.handleInput("\x1b[B");
+		assert.match(selected() ?? "", /telegram/, "down from the last row lands on the first");
+		list.handleInput("\r");
+		assert.equal(picked, "telegram");
 		list.handleInput("\x1b");
 		assert.equal(cancelled, true);
 	});
@@ -442,6 +451,29 @@ describe("TerminalScreen", () => {
 		terminal.type("\r");
 		await answering;
 		screen.close();
+	});
+
+	test("a page that fits to the last row is not told it scrolls, and one row more is", async () => {
+		// The boundary the off-by-one lived on: the frame is five rows, the body keeps one blank line of its own, so a
+		// window of twenty rows holds fourteen. A page that fits must not carry a scroll hint, and a page one row longer must.
+		const body = 20 - 5 - 1;
+		for (const [lines, hinted] of [
+			[body - 2, false],
+			[body - 1, true],
+		] as const) {
+			const { screen, terminal } = open({ columns: 100, rows: 20 });
+			const answering = screen.note("page", "The plan", {
+				lines: Array.from({ length: lines }, (_, index) => `line ${index}`),
+			});
+			await settle();
+			const text = screenText(terminal.writes, { columns: 100, rows: 20 }).join("\n");
+			assert.equal(text.includes("up/down scroll"), hinted, `${lines} lines in a body of ${body}`);
+			if (!hinted)
+				assert.ok(text.includes(`line ${lines - 1}`), "the last line of a page that fits is on the screen");
+			terminal.type("\r");
+			await answering;
+			screen.close();
+		}
 	});
 
 	test("a window that shrinks to nothing still has its frame, and every line fits it", async () => {

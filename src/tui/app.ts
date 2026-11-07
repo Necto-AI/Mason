@@ -49,6 +49,14 @@ function hints(action: "select" | "continue" | "scroll"): readonly Hint[] {
 	return [{ ...ENTER, label: action === "select" ? "select" : action }, BACK, QUIT];
 }
 
+/**
+ * The blank line the padded body keeps under its content.
+ *
+ * `CHROME_ROWS` counts the frame, and the body still spends one row of its own on the blank line that keeps text off the
+ * footer rule: a page sized to `rows - CHROME_ROWS` loses its last line, which is why the measurement subtracts this too.
+ */
+const BODY_TAIL = 1;
+
 /** A running operation repaints on a timer of its own: a spinner that waits for the next keypress is not a spinner. */
 const SPINNER_REPAINT_MS = 80;
 
@@ -111,11 +119,16 @@ export class TerminalScreen implements Screen {
 		return Math.max(8, this.terminal.rows);
 	}
 
+	/** The room a body has: the window, less the frame and the blank line the padded body keeps. */
+	private bodyRows(): number {
+		return Math.max(4, this.rows - CHROME_ROWS - BODY_TAIL);
+	}
+
 	/** The room a body has: the window, less the frame. A list sizes itself against this. */
 	private geometry(): Geometry {
 		return {
 			columns: this.columns,
-			rows: Math.max(4, this.rows - CHROME_ROWS),
+			rows: this.bodyRows(),
 			paint: this.frame.style.paint,
 			glyphs: this.frame.style.glyphs,
 		};
@@ -135,8 +148,8 @@ export class TerminalScreen implements Screen {
 		this.tui.requestRender(true);
 	}
 
-	private show(title: string, bodyHints: readonly Hint[], body: Component, focus: Component | null): void {
-		void title;
+	/** Mount a body with the hints its screen carries: the body draws its own question, so the title is the flow's. */
+	private show(bodyHints: readonly Hint[], body: Component, focus: Component | null): void {
 		this.frame.setHints(bodyHints);
 		this.paint(body, focus);
 	}
@@ -163,7 +176,7 @@ export class TerminalScreen implements Screen {
 				this.clear();
 				reject(new Cancelled());
 			};
-			this.show(title, hints("select"), list, list);
+			this.show(hints("select"), list, list);
 		});
 	}
 
@@ -185,7 +198,7 @@ export class TerminalScreen implements Screen {
 				this.clear();
 				reject(new Cancelled());
 			};
-			this.show(title, hints("continue"), field, field);
+			this.show(hints("continue"), field, field);
 		});
 	}
 
@@ -204,7 +217,7 @@ export class TerminalScreen implements Screen {
 				this.clear();
 				reject(new Cancelled());
 			};
-			this.show(title, hints("continue"), field, field);
+			this.show(hints("continue"), field, field);
 		});
 	}
 
@@ -251,8 +264,8 @@ export class TerminalScreen implements Screen {
 				this.tui.scrollBy(-1);
 				return { consume: true };
 			});
-			const overflows = view.render(this.columns - 2 * MARGIN).length > this.rows - CHROME_ROWS;
-			this.show(title, overflows ? hints("scroll") : hints("continue"), view, null);
+			const overflows = view.render(this.columns - 2 * MARGIN).length > this.bodyRows();
+			this.show(overflows ? hints("scroll") : hints("continue"), view, null);
 		});
 	}
 
@@ -268,7 +281,7 @@ export class TerminalScreen implements Screen {
 		};
 		// No `enter` hint while the steps run: it means something only once one of them has failed, and `key()` below is
 		// what says so. A footer that advertises a key that does nothing is a footer that lies on every frame.
-		this.show(title, [QUIT], stack([new NoteView([this.frame.style.paint.heading(title)]), list]), list);
+		this.show([QUIT], stack([new NoteView([this.frame.style.paint.heading(title)]), list]), list);
 		return {
 			update: (next, note) => {
 				list.set(next, note);
