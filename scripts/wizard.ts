@@ -67,15 +67,32 @@ export class MissingAnswer extends Error {}
  * should not have to name it — and otherwise refuses with the list, because a default chosen here would be a guess about
  * which bot the person wants.
  */
-export function scriptedPrompter(answers: { readonly connector?: string; readonly owner?: string }): Prompter {
+export interface ScriptedAnswers {
+	/** Setup's `--connector`, which answers the one question whose list is the catalog. */
+	readonly connector?: string;
+	/** Setup's `--owner`. */
+	readonly owner?: string;
+	/** Any other pick, keyed by the question text: `mason init` asks which provider, `mason new` nothing. */
+	readonly picks?: ReadonlyMap<string, string>;
+	/** Any other text answer, keyed by the question text: the provider's model and key. */
+	readonly texts?: ReadonlyMap<string, string>;
+}
+
+export function scriptedPrompter(answers: ScriptedAnswers): Prompter {
+	const picked = (question: string): string | undefined => {
+		const scripted = answers.picks?.get(question);
+		if (scripted !== undefined) return scripted;
+		return question === CONNECTOR_QUESTION ? answers.connector : undefined;
+	};
 	return {
 		async pick(question, choices) {
-			if (answers.connector !== undefined) {
-				if (!choices.some((choice) => choice.value === answers.connector))
+			const scripted = picked(question);
+			if (scripted !== undefined) {
+				if (!choices.some((choice) => choice.value === scripted))
 					throw new MissingAnswer(
-						`there is no connector "${answers.connector}": it is ${choices.map((choice) => choice.value).join(", ")}`,
+						`there is no "${scripted}": it is ${choices.map((choice) => choice.value).join(", ")}`,
 					);
-				return answers.connector;
+				return scripted;
 			}
 			if (choices.length === 1 && choices[0] !== undefined) return choices[0].value;
 			throw new MissingAnswer(
@@ -83,6 +100,9 @@ export function scriptedPrompter(answers: { readonly connector?: string; readonl
 			);
 		},
 		async text(question, options = {}) {
+			// A question with a flag was answered before this point; the map is how the caller hands the answer over.
+			const scripted = answers.texts?.get(question);
+			if (scripted !== undefined) return scripted;
 			// The owner is the one free-text question that has a flag of its own; everything else is an env answer, and
 			// the caller resolves those before it gets here.
 			if (question === OWNER_QUESTION && answers.owner !== undefined) return answers.owner;
@@ -101,6 +121,20 @@ export function scriptedPrompter(answers: { readonly connector?: string; readonl
 
 /** The question whose answer has a flag; `scriptedPrompter` compares against it rather than guessing from the text. */
 export const OWNER_QUESTION = "who owns this chat?";
+
+/** The connector list's question. Setup's `--connector` answers this one, and no other pick. */
+export const CONNECTOR_QUESTION = "Which connector do you want to talk through?";
+
+/** The conversations a connector's grant allows, asked when `--conversations` was not passed. */
+export const CONVERSATIONS_QUESTION = "which conversations may it carry? (ids, comma separated)";
+
+/** The event kinds a connector may fire, asked when `--events` was not passed: `kind=hook`, comma separated. */
+export const EVENTS_QUESTION = "which event kinds may it fire? (kind=hook, comma separated, empty for none)";
+
+/** `mason init`'s three answers. */
+export const PROVIDER_QUESTION = "which provider?";
+export const MODEL_QUESTION = "which model?";
+export const KEY_QUESTION = "the provider's API key?";
 
 /** The theme pi-tui wants, in the colours a terminal already has: no truecolor dependency, no colour on a pipe. */
 function theme(): SelectListTheme {
@@ -240,12 +274,16 @@ export function choosePrompter(options: {
 	readonly yes: boolean;
 	readonly connector?: string;
 	readonly owner?: string;
+	readonly picks?: ReadonlyMap<string, string>;
+	readonly texts?: ReadonlyMap<string, string>;
 }): Prompter {
 	const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
 	if (options.yes || !interactive)
 		return scriptedPrompter({
 			...(options.connector === undefined ? {} : { connector: options.connector }),
 			...(options.owner === undefined ? {} : { owner: options.owner }),
+			...(options.picks === undefined ? {} : { picks: options.picks }),
+			...(options.texts === undefined ? {} : { texts: options.texts }),
 		});
 	return terminalPrompter();
 }

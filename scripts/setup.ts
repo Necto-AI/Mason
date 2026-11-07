@@ -16,7 +16,7 @@
  * carries the grant and no `tools` block. That arrives with the release that puts mason in the same network.
  */
 import { createHash } from "node:crypto";
-import type { Capability, ControlOp } from "mason-protocol";
+import type { Capability, ControlOp, ExternalConversation } from "mason-protocol";
 import { CONTROL_OPS } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
 import { composePath, projectName, readComposeCredential, writeCompose } from "../src/server/connector-compose.ts";
@@ -33,7 +33,15 @@ import { readIntegrations, writeIntegration } from "../src/server/integrations.t
 import { bootPolicyFix, checkPodman, listening, loopbackRefusal, up } from "../src/server/podman.ts";
 import { DEFAULT_SOUL } from "../src/server/prompt.ts";
 import { CONSOLE, consoleGrant, runChat } from "./chat.ts";
-import { choosePrompter, MissingAnswer, OWNER_QUESTION, type Prompter } from "./wizard.ts";
+import {
+	CONNECTOR_QUESTION,
+	CONVERSATIONS_QUESTION,
+	choosePrompter,
+	EVENTS_QUESTION,
+	MissingAnswer,
+	OWNER_QUESTION,
+	type Prompter,
+} from "./wizard.ts";
 
 /**
  * The env whose answer names the conversations the grant allows: `TELEGRAM_ALLOWED_CHATS` today, and any connector that
@@ -46,6 +54,10 @@ export interface SetupArgs {
 	readonly url?: string;
 	readonly env: ReadonlyMap<string, string>;
 	readonly owner?: string;
+	/** A `url:` connector's conversations, comma separated. Absent means ask. */
+	readonly conversations?: string;
+	/** A `url:` connector's event kinds, `kind=hook` pairs comma separated. Absent means ask. */
+	readonly events?: string;
 	readonly start: boolean;
 	readonly yes: boolean;
 	readonly chat: boolean;
@@ -62,6 +74,8 @@ export function usage(): string {
   --url <ws-url>       a connector already running somewhere else; implies --connector custom
   --env NAME=value     one answer a connector needs; repeatable, and it answers a question so nothing is asked
   --owner <id>         who owns this chat: the id the connector will send for the person mason works for
+  --conversations <ids>  a url: connector's conversations, comma separated (default: the owner's)
+  --events <kind=hook>   a url: connector's event kinds, comma separated (default: none)
   --no-start           write everything and leave the container down
   --yes                take every flag it has and ask nothing; what CI and a script use
   --chat               open \`mason chat\` when it is done
@@ -82,6 +96,8 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 	let connector: string | undefined;
 	let url: string | undefined;
 	let owner: string | undefined;
+	let conversations: string | undefined;
+	let events: string | undefined;
 	let start = true;
 	let yes = false;
 	let chat = false;
@@ -107,6 +123,12 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 				break;
 			case "--owner":
 				owner = value();
+				break;
+			case "--conversations":
+				conversations = value();
+				break;
+			case "--events":
+				events = value();
 				break;
 			case "--env": {
 				const answer = value();
@@ -140,6 +162,8 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 		...(connector === undefined ? {} : { connector }),
 		...(url === undefined ? {} : { url }),
 		...(owner === undefined ? {} : { owner }),
+		...(conversations === undefined ? {} : { conversations }),
+		...(events === undefined ? {} : { events }),
 		env,
 		start,
 		yes,
@@ -185,14 +209,51 @@ function catalogGrant(
 	return {
 		user: {
 			owner,
-			conversations: (chats.length === 0 ? [owner] : chats).map((id) => ({
-				externalConversationId: id,
-				kind: id.startsWith("-") ? ("room" as const) : ("person" as const),
-			})),
+			conversations: conversationsOf(owner, chats),
 			capabilities: [...entry.capabilities],
 		},
 		commands: [...entry.commands],
 	};
+}
+
+/**
+ * One conversation of a grant. A negative id is a group or a channel and anything else is a person — the only
+ * distinction the Telegram wire carries, and the one `kind` exists to record.
+ */
+function conversation(id: string): ExternalConversation {
+	return { externalConversationId: id, kind: id.startsWith("-") ? "room" : "person" };
+}
+
+/** The list a grant names: the answers, or the owner's own room when nothing was answered. */
+function conversationsOf(owner: string, ids: readonly string[]): readonly ExternalConversation[] {
+	return (ids.length === 0 ? [owner] : ids).map(conversation);
+}
+
+/** `a, b, c` as the ids a grant names, trimmed and without the empties a trailing comma leaves. */
+function splitIds(text: string): string[] {
+	return text
+		.split(",")
+		.map((id) => id.trim())
+		.filter((id) => id !== "");
+}
+
+/**
+ * `kind=hook, kind=hook` as the events face's map.
+ *
+ * Parsed before anything is written, like the url beside it: a pair with no `=` would otherwise become a kind named
+ * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message.
+ */
+function parseEvents(text: string, where: string): Record<string, string> {
+	const hooks: Record<string, string> = {};
+	for (const pair of splitIds(text)) {
+		const separator = pair.indexOf("=");
+		const kind = separator === -1 ? "" : pair.slice(0, separator).trim();
+		const hook = separator === -1 ? "" : pair.slice(separator + 1).trim();
+		if (kind === "" || hook === "")
+			throw new Error(`${where}: "${pair}" is not kind=hook, the event kind and the routine it fires`);
+		hooks[kind] = hook;
+	}
+	return hooks;
 }
 
 /** One connector's answers, before anything is written: what the grant says and what the container is handed. */
@@ -227,9 +288,7 @@ async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
 	// answered "which one", and asking again is the flag lying about what it does.
 	const name =
 		args.connector ??
-		(args.url === undefined
-			? await prompter.pick("Which connector do you want to talk through?", await connectorChoices())
-			: "custom");
+		(args.url === undefined ? await prompter.pick(CONNECTOR_QUESTION, await connectorChoices()) : "custom");
 	if (name === CONSOLE) {
 		// No env, no image, no container: the grant is fixed here and `mason chat` mints its own credential, so setup only
 		// records that the door exists.
@@ -254,13 +313,38 @@ async function plan(args: SetupArgs, prompter: Prompter): Promise<Plan> {
 		// connector that can never open a socket.
 		requireInstallable(parseSource(`url:${url}`));
 		const owner = args.owner ?? (await prompter.text(OWNER_QUESTION, OWNER));
+		// The grant a connector mason does not run is still written here, not by hand (#147): its owner, the conversations
+		// it will send, and the kinds it may fire. The wizard asks each one, and each has a flag, so a script answers the
+		// same questions a person does.
+		const conversations =
+			args.conversations !== undefined
+				? splitIds(args.conversations)
+				: splitIds(
+						await prompter.text(CONVERSATIONS_QUESTION, {
+							hint: "the ids it will send for its rooms and people, as it sends them; empty means the owner's",
+							flag: "--conversations <id,id>",
+							fallback: "",
+							required: false,
+						}),
+					);
+		const events =
+			args.events !== undefined
+				? parseEvents(args.events, "--events")
+				: parseEvents(
+						await prompter.text(EVENTS_QUESTION, {
+							hint: "each kind the connector may fire and the routine it wakes, as kind=hook; empty means none",
+							flag: "--events <kind=hook,kind=hook>",
+							fallback: "",
+							required: false,
+						}),
+						EVENTS_QUESTION,
+					);
 		return {
 			name,
 			description: `A connector already running at ${url}`,
-			// One conversation, and it is the owner's: this home knows nothing else about a connector it does not run. The
-			// command says so, because a connector that sends other ids is refused until this list names them.
 			grant: {
-				user: { owner, conversations: [{ externalConversationId: owner, kind: "person" }] },
+				user: { owner, conversations: conversationsOf(owner, conversations) },
+				...(Object.keys(events).length === 0 ? {} : { events: { hooks: events } }),
 				commands: [...CONTROL_OPS],
 			},
 			source: `url:${url}`,
@@ -441,7 +525,7 @@ async function install(
  */
 export async function runSetup(
 	argv: readonly string[],
-	options: { readonly prompter?: Prompter } = {},
+	options: { readonly prompter?: Prompter; readonly house?: HousePaths } = {},
 ): Promise<number> {
 	let args: SetupArgs;
 	try {
@@ -454,7 +538,7 @@ export async function runSetup(
 		console.log(usage());
 		return 0;
 	}
-	const paths = housePaths();
+	const paths = options.house ?? housePaths();
 	const prompter =
 		options.prompter ??
 		choosePrompter({
@@ -483,8 +567,10 @@ export async function runSetup(
 		else
 			console.log(
 				`[setup] next: give the credential above to the connector at ${args.url ?? "its url"}. Its grant names ` +
-					`${plan_.grant.user?.conversations.length ?? 0} conversation(s): edit connector.user.conversations in ` +
-					`${paths.integrations} to the ids that connector sends`,
+					`${plan_.grant.user?.conversations.length ?? 0} conversation(s) and ` +
+					`${Object.keys(plan_.grant.events?.hooks ?? {}).length} event kind(s): change either with ` +
+					`\`mason setup --connector ${plan_.name} --url ${args.url ?? "<url>"} --conversations <ids> ` +
+					"--events <kind=hook>`",
 			);
 		if (outcome.credential !== undefined)
 			console.log("[setup] the credential was printed once, above: mason keeps only its hash.");
