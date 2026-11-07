@@ -88,7 +88,14 @@ async function takeFileLock<T>(path: string, work: () => Promise<T>): Promise<T>
 			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
 			// A lock left by a process that died is not a writer: the store it protected was never half-written (the write
 			// is a rename), so the only thing to do is remove it and try once more.
-			const age = Date.now() - statSync(lock).mtimeMs;
+			// The holder can release between our failed create and this stat: that is a writer that finished, not an
+			// error, and the next attempt takes the lock it just freed.
+			let age: number;
+			try {
+				age = Date.now() - statSync(lock).mtimeMs;
+			} catch {
+				continue;
+			}
 			if (age > LOCK_STALE_MS) {
 				try {
 					unlinkSync(lock);

@@ -17,6 +17,7 @@ import { consoleGrant } from "../scripts/chat.ts";
 import { writeTextAtomic } from "../src/server/atomic.ts";
 import { commonPaths, hashFile, writeCommonStore } from "../src/server/common.ts";
 import { writeCompose } from "../src/server/connector-compose.ts";
+import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { doctorExitCode, formatCheck, runDoctor } from "../src/server/doctor.ts";
 import { botPaths, ensureHouse, type HousePaths } from "../src/server/house.ts";
 import { writeInstall } from "../src/server/install-state.ts";
@@ -48,6 +49,9 @@ async function goodBot(): Promise<{ root: string; house: HousePaths }> {
 	const house = botPaths({ root, name: "alice", home });
 	await ensureHouse(house, "a soul for the doctor");
 	await writeIntegration(house, "console", { enabled: true, description: "the terminal", connector: consoleGrant() });
+	// A grant with no credential is a door that closes 1008, which the connectors check now fails: the good fixture is a
+	// bot a connector can actually open.
+	await mintConnectorCredential(house.home, "console");
 	return { root, house };
 }
 
@@ -208,6 +212,36 @@ describe("each failure names one repair", () => {
 		const connectors = check(await doctor(house, { runner: runner("running") }), "connectors");
 		assert.equal(connectors.ok, true, connectors.detail);
 		assert.match(connectors.detail, /telegram: up/);
+	});
+
+	test("a grant that is switched off fails the connectors check", async () => {
+		const { house } = await goodBot();
+		await writeIntegration(house, "console", {
+			enabled: false,
+			description: "the terminal",
+			connector: consoleGrant(),
+		});
+		const connectors = check(await doctor(house), "connectors");
+		assert.equal(connectors.ok, false);
+		assert.match(connectors.detail, /switched off: console/);
+		assert.match(connectors.repair ?? "", /mason integration enable console/);
+	});
+
+	test("a grant with no credential fails the connectors check", async () => {
+		const root = await tempRoot();
+		await writeCommonStore(root, { defaultProvider: "faux", defaultModel: "faux-1" });
+		const home = join(root, "alice");
+		const house = botPaths({ root, name: "alice", home });
+		await ensureHouse(house, "a soul for the doctor");
+		await writeIntegration(house, "console", {
+			enabled: true,
+			description: "the terminal",
+			connector: consoleGrant(),
+		});
+		const connectors = check(await doctor(house), "connectors");
+		assert.equal(connectors.ok, false, "a grant nothing can authenticate against is not a door");
+		assert.match(connectors.detail, /no credential: console/);
+		assert.match(connectors.repair ?? "", /mason setup --connector console/);
 	});
 
 	test("a compose credential this home does not hold names mason setup", async () => {
