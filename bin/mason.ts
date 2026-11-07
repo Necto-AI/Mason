@@ -56,6 +56,7 @@ function usage(): never {
 
 Commands (the npm scripts, mapped thin):
   mason onboard                the first run: init the root, create a bot, install its first connector, doctor
+                               (with a terminal it asks; --yes and a pipe answer with flags)
   mason init                   the common store: provider, model, a key verified before it is written
   mason new <name>             one bot under the root: a home, its soul and skills, a first connector
   mason bots                   the bots under the root, and which one a command targets
