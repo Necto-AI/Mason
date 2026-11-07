@@ -101,16 +101,52 @@ export function refuseLegacyRoot(root: string): void {
 	// The two halves of a home that has already split, and the entries of one that has not: either way the directory is a
 	// single home, and opening it as a root would put `common/` and a bot directory around an operator's files. A bot
 	// directory is never one of them, whatever it is called: `mason new data` is a bot named after a legacy entry, not a
-	// root holding a home's `data/`.
-	const found = ["agent", "service", ...HOME_ENTRIES].filter(
-		(name) => existsSync(join(root, name)) && !isBot(join(root, name)),
-	);
+	// root holding a home's `data/`. An *empty* directory is not one either: `mason new log` creates the name before it
+	// creates the halves, and a run killed in that window must not refuse every command about a directory mason made.
+	// `agent/` and `service/` are the split's own halves: their presence is the signal, empty or not. The older entries
+	// only count when they carry something, because `mason new log` creates its directory before its halves.
+	const found = ["agent", "service", ...HOME_ENTRIES].filter((name) => {
+		const path = join(root, name);
+		if (!existsSync(path) || isBot(path)) return false;
+		return name === "agent" || name === "service" || carriesFiles(path);
+	});
 	if (found.length === 0) return;
 	throw new Error(
 		`${root} holds a single home's halves at the root (${found.join(", ")}): the fleet layout keeps one directory ` +
 			`per bot under it, and \`common/\` beside them. Move them into one bot by hand — ` +
 			`\`mkdir ${join(root, "<name>")} && mv ${found.map((name) => join(root, name)).join(" ")} ${join(root, "<name>")}/\` ` +
 			`— or point MASON_HOME at ${root} to keep it as one home. Nothing was created.`,
+	);
+}
+
+/** Whether a path holds anything: a file always does, an empty directory never. */
+function carriesFiles(path: string): boolean {
+	try {
+		return readdirSync(path).length > 0;
+	} catch {
+		// A file answers ENOTDIR: it is one of the old entries, and the refusal is about it.
+		return true;
+	}
+}
+
+/**
+ * The inverse of `refuseLegacyRoot`: a *root* opened as one home.
+ *
+ * `~/.mason` is a root now, and a command that treats it as a home writes `agent/` and `service/` beside `common/` and the
+ * bots — after which every fleet command refuses, about directories the tool just made. `mason prompt` did exactly that,
+ * and the cost was permanent until somebody deleted the halves by hand. The check lives here because `ensureHouse` is the
+ * only writer, so every verb that could do it is covered by one refusal.
+ */
+export function refuseRootAsHome(home: string): void {
+	if (!existsSync(join(home, COMMON))) return;
+	const bots = readEntries(home).filter(
+		(entry) =>
+			entry.isDirectory() && entry.name !== COMMON && !entry.name.startsWith(".") && isBot(join(home, entry.name)),
+	);
+	if (bots.length === 0) return;
+	throw new Error(
+		`${home} is a mason root, not one home: it holds ${COMMON}/ and the bots ${bots.map((bot) => bot.name).join(", ")}. ` +
+			"Pick one with `-b <name>`, or set MASON_HOME to the home you mean. Nothing was created.",
 	);
 }
 

@@ -8,10 +8,11 @@
  * would actually run. It never prints a key, because a status line ends up in a paste.
  */
 import { readPiSettingsModel, resolveModelChoice } from "../src/server/common.ts";
-import { botPaths } from "../src/server/house.ts";
+import { housePaths } from "../src/server/house.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { listening } from "../src/server/podman.ts";
-import { readRoot, resolveBot, rootPath, takeBot } from "../src/server/root.ts";
+import { takeBot } from "../src/server/root.ts";
+import { FAUX_MODEL } from "../src/server/runtime.ts";
 
 export function usage(): string {
 	return `usage: mason status
@@ -27,26 +28,31 @@ export async function runStatus(argv: readonly string[]): Promise<number> {
 			console.log(usage());
 			return 0;
 		}
-		const root = readRoot(rootPath());
-		const target = resolveBot(root);
-		const house = botPaths(target);
+		// The same resolution `mason up`, `mason doctor` and `mason setup` use: `MASON_HOME` names one home directly, else
+		// the targeted bot under the root. Reading the root here made status the one verb that described a different home
+		// than the one being served.
+		const house = housePaths();
+		const name = house.fleet?.bot ?? house.home.split("/").at(-1) ?? house.home;
 		const choice = await resolveModelChoice(house);
 		const fallback = choice === undefined && house.fleet === undefined ? readPiSettingsModel() : undefined;
 		const model =
-			choice === undefined
-				? fallback === undefined
-					? "none"
-					: `${fallback.provider}/${fallback.modelId} (pi's settings.json)`
-				: `${choice.provider}/${choice.modelId}`;
-		const integrations: Record<string, Integration | undefined> = await readIntegrations(house)
-			.then((read) => read.integrations)
-			.catch(() => ({}));
+			process.env.PI_FAUX_MODEL === "1"
+				? `${FAUX_MODEL.provider}/${FAUX_MODEL.modelId} (PI_FAUX_MODEL=1; configured ${choice?.provider ?? "none"}/${choice?.modelId ?? "none"})`
+				: choice === undefined
+					? fallback === undefined
+						? "none"
+						: `${fallback.provider}/${fallback.modelId} (pi's settings.json)`
+					: `${choice.provider}/${choice.modelId}`;
+		// A file the boot would refuse is not an empty file: saying "0 integrations" for it hides the reason `mason up`
+		// will not start.
+		const integrations: Record<string, Integration | undefined> = (await readIntegrations(house)).integrations;
 		const names = Object.keys(integrations);
 		const connectors = names.filter((name) => integrations[name]?.connector !== undefined).length;
 		const port = Number(process.env.PORT ?? 8787);
-		const up = await listening("127.0.0.1", port);
+		const host = process.env.HOST ?? "127.0.0.1";
+		const up = await listening(host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host, port);
 		console.log(
-			`bot ${target.name} (${house.home}): model ${model}; ${names.length} integration${names.length === 1 ? "" : "s"}, ` +
+			`bot ${name} (${house.home}): model ${model}; ${names.length} integration${names.length === 1 ? "" : "s"}, ` +
 				`${connectors} connector${connectors === 1 ? "" : "s"}; mason ${up ? `listening on ${port}` : "not running"}`,
 		);
 		return 0;

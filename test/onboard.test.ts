@@ -191,7 +191,9 @@ describe("a fleet of two", () => {
 		await rm(join(directory, "common", "settings.json"));
 		const status = await mason(["status", "-b", "alice"], directory);
 		assert.equal(status.code, 0, status.stderr);
-		assert.match(status.stdout, /model none/);
+		// The faux switch is on in this test's environment, so the line names what a turn would run *and* what the store
+		// holds: the configured model is none, and pi's own store is never the fallback for a bot under a root.
+		assert.match(status.stdout, /configured none\/none/);
 		assert.doesNotMatch(status.stdout, /pi's settings\.json/);
 	});
 
