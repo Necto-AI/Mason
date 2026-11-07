@@ -35,6 +35,12 @@ interface Result {
 
 let failures = 0;
 
+/**
+ * Its own port, because this machine may be running a real bot on 8787: a scratch bot that finds another home's server
+ * there is a failed check, and it should be — that is the identity check working as intended.
+ */
+const freePort = String(20000 + Math.floor(Math.random() * 500));
+
 function check(ok: boolean, what: string, detail = ""): void {
 	if (ok) {
 		console.log(`  ok  ${what}`);
@@ -50,7 +56,7 @@ async function mason(
 	args: readonly string[],
 	extra: NodeJS.ProcessEnv = {},
 ): Promise<Result> {
-	const env: NodeJS.ProcessEnv = { ...process.env, ...extra, MASON_ROOT: directory, MASON_HOME: "" };
+	const env: NodeJS.ProcessEnv = { ...process.env, PORT: freePort, ...extra, MASON_ROOT: directory, MASON_HOME: "" };
 	delete env.MASON_BOT;
 	delete env.PI_PROVIDER;
 	delete env.PI_MODEL;
