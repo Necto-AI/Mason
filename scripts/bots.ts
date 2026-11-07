@@ -28,13 +28,18 @@ export function runBots(argv: readonly string[]): number {
 			return 0;
 		}
 		let current: string | undefined;
+		let why: string | undefined;
 		try {
 			current = resolveBot(root).name;
-		} catch {
-			// Several bots and no target: the list is still the answer, and the refusal that names them is one command away.
-			current = undefined;
+		} catch (error) {
+			// A typo in `-b` is not "no target": it is a bot that is not there, and every other verb refuses it by name.
+			// Several bots and no target is the case the list itself answers.
+			const message = error instanceof Error ? error.message : String(error);
+			if (process.env.MASON_BOT !== undefined && process.env.MASON_BOT !== "") throw error;
+			why = message;
 		}
 		for (const bot of root.bots) console.log(`${bot.name}\t${bot.home}${bot.name === current ? "\t(current)" : ""}`);
+		if (current === undefined && why !== undefined) console.log(`# no target: ${why}`);
 		return 0;
 	} catch (error) {
 		console.error(`[bots] ${error instanceof Error ? error.message : String(error)}`);

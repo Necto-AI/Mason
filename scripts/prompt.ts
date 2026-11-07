@@ -14,7 +14,7 @@
  * `--json` prints the same answer as data, for a diff or another program.
  */
 import { mkdtemp } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
@@ -24,6 +24,8 @@ import {
 	getCurrentSystemPrompt,
 	getCurrentTools,
 } from "@earendil-works/pi-ai/utils/transcript";
+import { housePaths } from "../src/server/house.ts";
+import { takeBot } from "../src/server/root.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 
 const FAUX_MODEL = { provider: "faux", modelId: "faux-1" } as const;
@@ -42,7 +44,10 @@ function parseArgs(argv: readonly string[]): Args {
 		if (arg === "--json") json = true;
 		else if (arg.startsWith("--home=")) home = arg.slice("--home=".length);
 		else if (arg.startsWith("--cwd=")) cwd = arg.slice("--cwd=".length);
-		else throw new Error(`unknown argument ${arg}; expected --home=<path>, --cwd=<path> or --json`);
+		else
+			throw new Error(
+				`unknown argument ${arg}; expected --home=<path>, --cwd=<path>, --json, or -b <bot> to pick one`,
+			);
 	}
 	return { home, cwd, json };
 }
@@ -89,37 +94,56 @@ async function rendered(runtime: AgentRuntime): Promise<Rendered> {
 	};
 }
 
-const args = parseArgs(process.argv.slice(2));
-const home = args.home ?? process.env.MASON_HOME ?? join(homedir(), ".mason");
-// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
-const dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
+/**
+ * Render one turn's prompt for the targeted bot and print it.
+ *
+ * The home is `--home`, else `MASON_HOME`, else the bot the root targets — the same resolution every other command uses.
+ * It used to be `~/.mason` when neither was set, which is a *root* in the fleet layout: `mason prompt` under `MASON_ROOT`
+ * ignored the root, and `ensureHouse` wrote `agent/` and `service/` at the live root, the one shape the fleet refuses.
+ */
+export async function runPrompt(argv: readonly string[]): Promise<number> {
+	let runtime: AgentRuntime | undefined;
+	try {
+		const args = parseArgs(takeBot(argv));
+		const home = housePaths(args.home).home;
+		// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
+		const dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
+		runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			houseHome: home,
+			dataDir,
+			storage: "memory",
+			modelAccess: fauxAccess(),
+			...(args.cwd === undefined ? {} : { workspaceDir: args.cwd }),
+			onReport: (error) => console.warn(`[prompt] a section failed and kept its text: ${String(error)}`),
+		});
 
-const runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
-	houseHome: home,
-	dataDir,
-	storage: "memory",
-	modelAccess: fauxAccess(),
-	...(args.cwd === undefined ? {} : { workspaceDir: args.cwd }),
-	onReport: (error) => console.warn(`[prompt] a section failed and kept its text: ${String(error)}`),
-});
+		const conversation = await runtime.conversation();
+		const settled = await (
+			await conversation.submit({ type: "input", content: "render the prompt" }, BACKGROUND_CONTEXT)
+		).wait(BACKGROUND_CONTEXT);
+		if (settled.status !== "done") throw new Error(`the render turn ended as ${settled.status}`);
 
-try {
-	const conversation = await runtime.conversation();
-	const settled = await (
-		await conversation.submit({ type: "input", content: "render the prompt" }, BACKGROUND_CONTEXT)
-	).wait(BACKGROUND_CONTEXT);
-	if (settled.status !== "done") throw new Error(`the render turn ended as ${settled.status}`);
+		const { sections, tools, prompt } = await rendered(runtime);
 
-	const { sections, tools, prompt } = await rendered(runtime);
-
-	if (args.json) {
-		console.log(JSON.stringify({ home, prompt, sections, tools }, null, "\t"));
-	} else {
-		console.log(`# the system prompt of ${home}`);
-		console.log(`# ${sections.length} sections, ${prompt.length} characters, ${tools.length} tools\n`);
-		for (const section of sections) console.log(section.text, "\n");
-		console.log(`# tools, in the order the request carries them:\n#   ${tools.map((tool) => tool.name).join(", ")}`);
+		if (args.json) {
+			console.log(JSON.stringify({ home, prompt, sections, tools }, null, "\t"));
+		} else {
+			console.log(`# the system prompt of ${home}`);
+			console.log(`# ${sections.length} sections, ${prompt.length} characters, ${tools.length} tools\n`);
+			for (const section of sections) console.log(section.text, "\n");
+			console.log(
+				`# tools, in the order the request carries them:\n#   ${tools.map((tool) => tool.name).join(", ")}`,
+			);
+		}
+		return 0;
+	} catch (error) {
+		console.error(`[prompt] ${error instanceof Error ? error.message : String(error)}`);
+		return 1;
+	} finally {
+		await runtime?.close();
 	}
-} finally {
-	await runtime.close();
+}
+
+if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+	process.exit(await runPrompt(process.argv.slice(2)));
 }

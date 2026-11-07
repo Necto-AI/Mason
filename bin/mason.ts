@@ -7,11 +7,10 @@
  * code. There are no new nouns here: what the panel and the token class used to serve is `curl /api/health` on one
  * side and the connector's own vocabulary on the other.
  *
- * `onboard` is the only composite, because a first run is exactly the moment the pieces have no order yet. It calls the
- * functions the scripts call, over the home this process resolves (`MASON_HOME`, else `~/.mason`, the real home): the
- * house is created as a fresh install or refused with its names, a connector entry that has a grant but no credential
- * yet gets one minted once, and the doors plus the next step are printed. It never writes an `integrations.json`
- * entry: the grant is the operator's decision, and `mason integration add` is where it starts.
+ * `onboard` is the only composite, because a first run is exactly the moment the pieces have no order yet. It is a
+ * dispatcher over the same functions: `init` when the root has no common store, `new` when it has no bot, `setup` when
+ * the bot has no connector, and a doctor at the end. It writes what those write, grants included — the wizard's own
+ * questions, never a hand-edited `integrations.json`.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -72,8 +71,9 @@ Commands (the npm scripts, mapped thin):
   mason eval                   run the behaviour scenarios
 
 The root is $MASON_ROOT, else ~/.mason; a bot is one directory under it, and $MASON_HOME names one home directly.
--b <name> (or MASON_BOT) picks the bot when the root holds several. The one unauthenticated door is /api/health;
-everything else speaks the connector's credential. Stop a running bot: SIGINT or SIGTERM.`);
+-b <name> (or MASON_BOT) picks the bot when the root holds several; it goes after the command, as
+\`mason status -b bob\`. The one unauthenticated door is /api/health; everything else speaks the connector's credential.
+Stop a running bot: SIGINT or SIGTERM.`);
 	process.exit(process.argv[2] === "--help" || process.argv[2] === "-h" ? 0 : 1);
 }
 

@@ -49,7 +49,16 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
-import { type BotTarget, expandHome, HOME_ENTRIES, readRoot, resolveBot } from "./root.ts";
+import {
+	BOT_NAME,
+	type BotTarget,
+	COMMON,
+	expandHome,
+	HOME_ENTRIES,
+	readRoot,
+	refuseRootAsHome,
+	resolveBot,
+} from "./root.ts";
 
 const run = promisify(execFile);
 
@@ -125,8 +134,33 @@ export function configureHouse(paths: HousePaths): HousePaths {
 export function housePaths(home?: string): HousePaths {
 	if (home !== undefined && home !== "") return layout(home);
 	const configured = process.env.MASON_HOME;
+	const targeted = process.env.MASON_BOT;
+	// Two ways to name a home at once: `-b bob` (exported as MASON_BOT) picks a bot under the root, `MASON_HOME` names one
+	// home directly. Preferring either silently serves the wrong transcript, so the conflict is the answer.
+	if (configured !== undefined && configured !== "" && targeted !== undefined && targeted !== "")
+		throw new Error(
+			`MASON_HOME=${configured} and MASON_BOT=${targeted} both name a home: MASON_HOME names one home directly and ` +
+				`-b picks a bot under the root. Unset one of them.`,
+		);
 	if (configured !== undefined && configured !== "") return layout(configured);
 	return botPaths(resolveBot(readRoot()));
+}
+
+/**
+ * A path that is a bot under a root, recognised from the path alone: its parent holds `common/` and it is one of the
+ * parent's bots.
+ *
+ * `MASON_HOME=<root>/alice` names the same home `-b alice` names, and the boot has to treat it as a fleet bot either way:
+ * a bot that sits under a root may not read pi's own `settings.json` for its model, or the same home reports one model
+ * through `mason doctor` and runs another. This is the lookup that makes the two spellings one home.
+ */
+function fleetOf(home: string): HousePaths["fleet"] {
+	const resolved = expandHome(home);
+	const parent = dirname(resolved);
+	const name = basename(resolved);
+	if (parent === resolved || !BOT_NAME.test(name) || !existsSync(join(parent, COMMON))) return undefined;
+	const root = readRoot(parent);
+	return root.bots.some((bot) => bot.name === name) ? { root: root.root, bot: name } : undefined;
 }
 
 /** One bot's home under a root, with the fleet it belongs to recorded so model resolution knows it may not read pi's. */
@@ -138,10 +172,12 @@ function layout(path: string): HousePaths {
 	const home = expandHome(path);
 	const agentDir = join(home, "agent");
 	const serviceDir = join(home, "service");
+	const fleet = fleetOf(home);
 	return {
 		home,
 		agentDir,
 		serviceDir,
+		...(fleet === undefined ? {} : { fleet }),
 		soul: join(serviceDir, "soul.md"),
 		profile: join(agentDir, "profile.md"),
 		logDir: join(agentDir, "log"),
@@ -242,6 +278,8 @@ export function refuseLegacyHome(paths: HousePaths): void {
  * home without `agent/` is an agent with no memory. A home that predates the split is refused before either is created.
  */
 export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promise<void> {
+	// A root is not a home: writing one's halves over it leaves every fleet command refusing about directories mason made.
+	refuseRootAsHome(paths.home);
 	refuseLegacyHome(paths);
 	for (const directory of layoutDirectories(paths)) {
 		// `mode` only applies to directories this call creates, so an existing directory is tightened explicitly: a home
@@ -398,6 +436,10 @@ export async function ensureRepository(agentDir: string): Promise<void> {
 		// No git on the host: the files are still there, which is the part that matters.
 		return;
 	}
+	// `git init` makes `.git` with the umask, which is 0755 on a default machine while everything around it is 0700. The
+	// parent already blocks traversal, and the home's own repository is still the one directory mason creates without the
+	// mode it gives the rest.
+	await chmod(join(agentDir, ".git"), 0o700).catch(() => {});
 	await commitAgentTree(agentDir, "The agent's memory starts here");
 }
 
