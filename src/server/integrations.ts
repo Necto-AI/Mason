@@ -25,10 +25,21 @@
  * between two turns of one build.
  */
 import { readFile } from "node:fs/promises";
-import { writeFileAtomic } from "./atomic.ts";
+import { join } from "node:path";
+import { withStoreLock, writeTextAtomic } from "./atomic.ts";
+import { commitStaged, hashFile, jsonText } from "./common.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
 import type { HousePaths } from "./house.ts";
 import { clearIntegrationStatus } from "./integration-status.ts";
+
+/**
+ * The one version this build writes into the file and reads back.
+ *
+ * A file with no `version` is `0.1`: every file written before the stamp existed has that shape, and refusing them would
+ * be a release that cannot boot the homes it was released into. Any other value is refused with the version this build
+ * reads, because a list shaped by a later release is a grant this one would guess at.
+ */
+export const INTEGRATIONS_VERSION = "0.1";
 
 /**
  * An integration's name: what a tool name is built from (`mcp__<name>__<tool>`), so lowercase letters, digits and
@@ -66,7 +77,7 @@ export interface Integration {
 	readonly [key: string]: unknown;
 }
 
-/** `service/integrations.json`. */
+/** `service/integrations.json`. The `version` is checked on every read and stamped on every write. */
 export interface Integrations {
 	readonly integrations: Record<string, Integration>;
 }
@@ -129,14 +140,22 @@ function parseFile(path: string, text: string): { file: Record<string, unknown>;
 		throw new Error(`${path} is not a JSON object: it holds one key, "integrations", mapping names to entries.`);
 	}
 	const file = parsed as Record<string, unknown>;
+	const version = file.version;
+	if (version !== undefined && version !== INTEGRATIONS_VERSION) {
+		throw new Error(
+			`${path}: "version" is ${JSON.stringify(version)}, and this mason reads "${INTEGRATIONS_VERSION}". A list ` +
+				"shaped by another release is a grant this one would guess at; write the file with the `mason setup` this " +
+				"release ships, or move the newer file aside and start it again.",
+		);
+	}
 	const declared = file.integrations;
 	if (declared === undefined) {
-		// `{}` is a file nobody has filled in yet. Other keys without `integrations` among them are a typo that would
-		// otherwise read as "no integrations": the silent loss this module exists to refuse.
-		if (Object.keys(file).length === 0) return { file, declared: {} };
-		throw new Error(
-			`${path} has no "integrations" key, only ${Object.keys(file).join(", ")}: nothing would be read from it.`,
-		);
+		// `{}` is a file nobody has filled in yet, and so is one that carries only the version stamp. Other keys without
+		// `integrations` among them are a typo that would otherwise read as "no integrations": the silent loss this module
+		// exists to refuse.
+		const other = Object.keys(file).filter((key) => key !== "version");
+		if (other.length === 0) return { file, declared: {} };
+		throw new Error(`${path} has no "integrations" key, only ${other.join(", ")}: nothing would be read from it.`);
 	}
 	if (typeof declared !== "object" || declared === null || Array.isArray(declared)) {
 		throw new Error(`${path}: "integrations" is not an object mapping names to entries.`);
@@ -297,6 +316,9 @@ function isHttpUrl(url: string): boolean {
 /**
  * Write one entry, keeping every other entry and every other key — including the ones inside the entry being replaced
  * that mason does not understand. Returns the entry as it was stored, which is what the command prints.
+ *
+ * The write stamps the version, keeps a timestamped copy of the file it replaces, and lands through a rename: this is the
+ * wizard's write, and a wizard that fails has to leave the file it found.
  */
 export async function writeIntegration(
 	paths: HousePaths,
@@ -304,18 +326,31 @@ export async function writeIntegration(
 	integration: Integration,
 ): Promise<Integration> {
 	const entry = validate(paths.integrations, name, integration);
-	const { file, integrations } = await load(paths.integrations);
-	await writeFileAtomic(paths.integrations, { ...file, integrations: ordered({ ...integrations, [name]: entry }) });
+	// Read inside the lock: two writers that each merged into the file they saw before the other wrote lost one entry.
+	await withStoreLock(paths.integrations, async () => {
+		const { file, integrations } = await load(paths.integrations);
+		const next = {
+			version: INTEGRATIONS_VERSION,
+			...file,
+			integrations: ordered({ ...integrations, [name]: entry }),
+		};
+		await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
+	});
 	return entry;
 }
 
 /** Removes one entry. `false` when there is none: a typo must not read as a successful removal. */
 export async function removeIntegration(paths: HousePaths, name: string): Promise<boolean> {
-	const { file, integrations } = await load(paths.integrations);
-	if (integrations[name] === undefined) return false;
-	const remaining = Object.fromEntries(Object.entries(integrations).filter(([key]) => key !== name));
-	await writeFileAtomic(paths.integrations, { ...file, integrations: remaining });
-	return true;
+	let removed = false;
+	await withStoreLock(paths.integrations, async () => {
+		const { file, integrations } = await load(paths.integrations);
+		if (integrations[name] === undefined) return;
+		const remaining = Object.fromEntries(Object.entries(integrations).filter(([key]) => key !== name));
+		const next = { version: INTEGRATIONS_VERSION, ...file, integrations: remaining };
+		await commitStaged([{ path: paths.integrations, text: jsonText(next) }]);
+		removed = true;
+	});
+	return removed;
 }
 
 /** Flips the one switch. `undefined` when there is no such entry, so the command can exit non-zero. */
@@ -354,4 +389,54 @@ export function setIntegrations(integrations: Record<string, Integration>): void
 
 export function currentIntegrations(): Record<string, Integration> {
 	return configured;
+}
+
+/**
+ * What the last boot read, so a later doctor can say the file moved under it.
+ *
+ * The file is read once at boot and a change is a restart (`docs/SPEC.md` §4.1d). That invariant is only useful if
+ * something can notice the change, so the boot records the hash it read in the server's half — never in `agent/` — and
+ * `mason doctor` compares it. A missing record is not staleness: it is a home that has not booted yet, which is exactly
+ * the state `mason onboard` leaves one in.
+ */
+export interface IntegrationBoot {
+	readonly version: string;
+	readonly bootedAt: string;
+	/** The sha256 of `integrations.json` when the boot read it; `null` when there was no file. */
+	readonly integrations: string | null;
+}
+
+/** Where the boot record lives: state, in the half no tool can read. */
+export function bootRecordPath(paths: HousePaths): string {
+	return join(paths.dataDir, "boot.json");
+}
+
+/** Write what this boot read. Best effort: a read-only home still serves, it just cannot answer staleness. */
+export async function recordIntegrationBoot(paths: HousePaths): Promise<void> {
+	const record: IntegrationBoot = {
+		version: INTEGRATIONS_VERSION,
+		bootedAt: new Date().toISOString(),
+		integrations: (await hashFile(paths.integrations)) ?? null,
+	};
+	await writeTextAtomic(bootRecordPath(paths), jsonText(record)).catch(() => undefined);
+}
+
+/** The last boot's record, or `undefined` when this home has not booted since the record existed. */
+export async function readIntegrationBoot(paths: HousePaths): Promise<IntegrationBoot | undefined> {
+	const text = await readFile(bootRecordPath(paths), "utf8").catch(() => undefined);
+	if (text === undefined) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (typeof parsed !== "object" || parsed === null) return undefined;
+		const record = parsed as { version?: unknown; bootedAt?: unknown; integrations?: unknown };
+		if (typeof record.bootedAt !== "string") return undefined;
+		if (record.integrations !== null && typeof record.integrations !== "string") return undefined;
+		return {
+			version: typeof record.version === "string" ? record.version : INTEGRATIONS_VERSION,
+			bootedAt: record.bootedAt,
+			integrations: record.integrations,
+		};
+	} catch {
+		return undefined;
+	}
 }

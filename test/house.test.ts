@@ -19,6 +19,7 @@ import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import {
 	capText,
+	currentHouse,
 	ensureHouse,
 	ensureRepository,
 	HOUSE_ENTRIES,
@@ -82,6 +83,30 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 	} finally {
 		if (previous === undefined) delete process.env.MASON_HOME;
 		else process.env.MASON_HOME = previous;
+	}
+});
+
+test("an empty MASON_HOME is unset, not the current directory", async () => {
+	const previousHome = process.env.MASON_HOME;
+	const previousRoot = process.env.MASON_ROOT;
+	const root = join(await tempDir("mason-house-empty-"), "root");
+	await mkdir(join(root, "alice", "agent"), { recursive: true });
+	process.env.MASON_HOME = "";
+	process.env.MASON_ROOT = root;
+	try {
+		// An empty variable is what a shell exports when a value is missing, and it must not turn the home into the cwd.
+		assert.notEqual(housePaths().home, process.cwd());
+		assert.equal(housePaths().home, join(root, "alice"), "an empty MASON_HOME leaves the root to decide");
+		assert.equal(
+			currentHouse().home,
+			join(homedir(), ".mason"),
+			"a render outside a runtime falls back to the default home",
+		);
+	} finally {
+		if (previousHome === undefined) delete process.env.MASON_HOME;
+		else process.env.MASON_HOME = previousHome;
+		if (previousRoot === undefined) delete process.env.MASON_ROOT;
+		else process.env.MASON_ROOT = previousRoot;
 	}
 });
 

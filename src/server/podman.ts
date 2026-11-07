@@ -175,6 +175,41 @@ export async function ps(composeFile: string, project: string, options: PodmanOp
 	return stdout.trim();
 }
 
+/** One container of a project, as podman names it and as it is now. */
+export interface ContainerState {
+	readonly name: string;
+	/** Podman's own word: `running`, `exited`, `created`, `paused`. */
+	readonly state: string;
+}
+
+/**
+ * The containers one compose project owns, up or not, asked by the label compose puts on every one of them.
+ *
+ * A stopped container is not absent from `podman ps -a`, and that difference is the one a doctor needs: "no container"
+ * is a home whose project was never started, while "exited" is a bot that was running and is not.
+ */
+export async function containerStates(
+	project: string,
+	options: PodmanOptions = {},
+): Promise<readonly ContainerState[]> {
+	const { stdout } = await (options.runner ?? spawnRunner)("podman", [
+		"ps",
+		"-a",
+		"--filter",
+		`label=com.docker.compose.project=${project}`,
+		"--format",
+		"{{.Names}}\t{{.State}}",
+	]);
+	return stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "")
+		.map((line) => {
+			const [name = "", ...state] = line.split("\t");
+			return { name, state: state.join("\t") };
+		});
+}
+
 /**
  * What the operator still has to do for the container to come back after a reboot, or `undefined` when nothing is owed.
  *

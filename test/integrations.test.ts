@@ -110,6 +110,34 @@ describe("the integration list on disk", () => {
 		assert.equal(stored.integrations.docs?.description, "The internal documentation server");
 	});
 
+	it("stamps the version on every write, and keeps the file it replaced beside it", async () => {
+		const paths = await temporaryHome();
+		await writeIntegration(paths, "github", github);
+		const first = JSON.parse(await readFile(paths.integrations, "utf8")) as { version?: string };
+		assert.equal(first.version, "0.1", "every wizard write stamps the file");
+
+		await writeIntegration(paths, "github", { ...github, description: "moved" });
+		const backups = (await readdir(paths.serviceDir)).filter(
+			(name) => name.startsWith("integrations.json.") && name.endsWith(".bak"),
+		);
+		assert.equal(backups.length, 1, "the file it replaced is one .bak beside it");
+		assert.match(await readFile(join(paths.serviceDir, backups[0] as string), "utf8"), /Issues and pull requests/);
+	});
+
+	it("refuses a version this build does not read, naming both versions", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(paths, JSON.stringify({ version: "9.9", integrations: {} }));
+		const message = await refusal(paths);
+		assert.match(message, /"version" is "9\.9"/);
+		assert.match(message, /reads "0\.1"/);
+	});
+
+	it("reads a file that carries only the version as an empty list", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(paths, JSON.stringify({ version: "0.1" }));
+		assert.deepEqual(await readIntegrations(paths), { integrations: {} });
+	});
+
 	it("refuses a file it cannot parse, naming the path rather than reading as empty", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(paths, '{"integrations": {');

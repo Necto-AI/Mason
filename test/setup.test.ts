@@ -264,12 +264,80 @@ describe("a connector that is already running somewhere else", () => {
 		// The one conversation this home knows about is the owner's, and the command says the list may need editing.
 		assert.deepEqual(grant?.user?.conversations, [{ externalConversationId: "denis", kind: "person" }]);
 		assert.deepEqual(grant?.commands, ["stop", "compact", "clear", "status"]);
-		assert.match(result.stdout, /edit connector\.user\.conversations/);
+		assert.match(result.stdout, /--conversations <ids>/);
 
 		const record = (await readInstalls(paths)).connectors.custom;
 		assert.equal(record?.source, `url:${url}`);
 		assert.equal(record?.image, undefined, "nothing is pulled for a connector mason does not run");
 		assert.equal(record?.started, false);
+	});
+
+	test("--conversations and --events are written through the grant writer, with no hand-written JSON", async () => {
+		const home = await tempHome();
+		// The hooks a grant may fire are the ones the boot defines: the retry hook, plus the routines the agent owns. A
+		// grant that names a hook nobody defines is refused before anything is written (the next test), so this one writes
+		// the routines first, the way a person would.
+		await mkdir(join(home, "agent"), { recursive: true });
+		await writeFile(
+			join(home, "agent", "routines.json"),
+			JSON.stringify([
+				{ name: "check-mail", intervalSeconds: 600, prompt: "Read the mail." },
+				{ name: "check-calendar", intervalSeconds: 600, prompt: "Read the calendar." },
+			]),
+		);
+		const url = "ws://127.0.0.1:9999/api/connector";
+		const result = await setup(
+			[
+				"--connector",
+				"custom",
+				"--url",
+				url,
+				"--owner",
+				"denis",
+				"--conversations",
+				"denis,-100200",
+				"--events",
+				"mail=check-mail, calendar=check-calendar",
+				"--yes",
+				"--no-start",
+			],
+			home,
+		);
+		assert.equal(result.code, 0, result.stderr || result.stdout);
+		const paths = housePaths(home);
+		const { integrations } = await readIntegrations(paths);
+		const grant = integrations.custom?.connector;
+		// A negative id is a room, anything else a person: the one distinction the wire carries, and what `kind` records.
+		assert.deepEqual(grant?.user?.conversations, [
+			{ externalConversationId: "denis", kind: "person" },
+			{ externalConversationId: "-100200", kind: "room" },
+		]);
+		assert.deepEqual(grant?.events?.hooks, { mail: "check-mail", calendar: "check-calendar" });
+		// The file the boot reads is the one the wizard wrote: a hand edit is still valid input, and this one needed none.
+		const raw = JSON.parse(await readFile(paths.integrations, "utf8")) as { version?: string };
+		assert.equal(raw.version, "0.1");
+	});
+
+	test("an event pair that is not kind=hook is refused before anything is written", async () => {
+		const home = await tempHome();
+		const result = await setup(
+			[
+				"--connector",
+				"custom",
+				"--url",
+				"ws://127.0.0.1:9999/api/connector",
+				"--owner",
+				"denis",
+				"--events",
+				"mail",
+				"--yes",
+			],
+			home,
+		);
+		assert.equal(result.code, 1);
+		assert.match(result.stderr, /"mail" is not kind=hook/);
+		const paths = housePaths(home);
+		assert.equal(await readFile(paths.integrations, "utf8").catch(() => undefined), undefined);
 	});
 
 	test("a url that is not a socket is refused before anything is written", async () => {

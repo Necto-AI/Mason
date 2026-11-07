@@ -8,21 +8,26 @@ One process, one bot, one person. mason runs continuously on a machine with Node
 
 ```sh
 npm install -g mason-agent
-mason setup
+mason onboard
 ```
 
-`mason setup` installs a connector: it offers the ones this release knows (`catalog/connectors.json`), asks what the one
-you pick needs, and writes the integration entry, its grant and its credential. A connector that runs as a container
-also gets a compose project, started with `restart: always` — the half of "it comes back after a reboot" a file can
-carry, with the other half (`podman-restart.service`, and linger) printed when it is missing. Then `mason up` serves the
-bot, and the connector connects when the socket is there.
+`mason onboard` is the first run in one command: it initialises the root (`~/.mason`, or `$MASON_ROOT`), asks for a
+provider, a model and a key — verified with one real completion before anything is written — creates the first bot, and
+installs its first connector. Then `mason up` serves it. `mason new <name>` adds a bot, `mason bots` lists them, `-b`
+picks one, and `mason doctor` proves a configuration with nine read-only checks.
+
+`mason setup` stays the day-2 connector command: it offers the ones this release knows (`catalog/connectors.json`), asks
+what the one you pick needs, and writes the integration entry, its grant and its credential. A connector that runs as a
+container also gets a compose project, started with `restart: always` — the half of "it comes back after a reboot" a file
+can carry, with the other half (`podman-restart.service`, and linger) printed when it is missing. The connector connects
+when the socket is there.
 
 Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a CI job drives the
 same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in console connector, with
 no Telegram at all.
 
-`mason onboard` is unchanged and still scriptable: it creates the home, mints a credential for a connector that has a
-grant and none, and prints the doors. The integration list is read once, at boot: changing it is a restart.
+Everything is scriptable: `--yes` takes the flags and asks nothing, and the integration list is read once, at boot, so
+changing it is a restart.
 
 ## What a stranger reaches
 
@@ -32,9 +37,8 @@ There is no owner token and no panel: a person speaks through a connector, and a
 
 ## The commands the installed package answers
 
-`mason up`, `mason setup`, `mason chat`, `mason onboard`, `mason integration …`, `mason connector …`, `mason prompt`,
-`mason surface`,
-`mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
+`mason onboard`, `mason init`, `mason new`, `mason bots`, `mason doctor`, `mason status`, `mason up`, `mason setup`,
+`mason chat`, `mason integration …`, `mason connector …`, `mason prompt`, `mason surface`, `mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
 work from a source checkout with `npm run dev`, whose tests run with `npm test`.
 
 ## How a release goes out
