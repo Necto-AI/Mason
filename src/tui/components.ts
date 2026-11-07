@@ -486,8 +486,6 @@ export class StatusList extends Body {
  * the same thing here as everywhere else.
  */
 export class NoteView extends Body {
-	onContinue?: () => void;
-	onCancel?: () => void;
 	private readonly lines: readonly string[];
 
 	constructor(lines: readonly string[]) {
@@ -503,8 +501,6 @@ export class NoteView extends Body {
 		);
 	}
 
-	handleInput(data: string): void {
-		if (matchesKey(data, "enter") || typedChar(data) === " ") this.onContinue?.();
-		else if (matchesKey(data, "escape")) this.onCancel?.();
-	}
+	/** A page reads; it does not act. The keys that leave it belong to the screen that showed it. */
+	handleInput(): void {}
 }

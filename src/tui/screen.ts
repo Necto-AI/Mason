@@ -52,15 +52,20 @@ export interface Question {
 export interface Page {
 	/** Already styled by the caller; a page is prose, not a form. */
 	readonly lines: readonly string[];
-	readonly rows?: readonly StatusRow[];
 	readonly note?: string;
+}
+
+/** A key and what it does here: the footer draws the label, so no screen has to derive one from a keycode. */
+export interface KeyHint {
+	readonly key: string;
+	readonly label: string;
 }
 
 /** A live list of steps: the application writes rows into it as the operations they describe change state. */
 export interface Progress {
 	update(rows: readonly StatusRow[], note?: string): void;
-	/** Resolve with the first of `keys` the person presses. `enter` and `escape` are always among them. */
-	key(keys: readonly string[]): Promise<string>;
+	/** Show the keys that matter now, and resolve with the first one pressed. */
+	key(hints: readonly KeyHint[]): Promise<string>;
 	close(): void;
 }
 
@@ -100,8 +105,10 @@ export const CANCEL = "!cancel";
 export class ScriptedScreen implements Screen {
 	readonly columns: number;
 	readonly rows: number;
-	/** Every question in the order it was asked, with the kind that asked it and what it was prefilled with. */
+	/** Every question in the order it was asked, with the kind that asked it, what it was prefilled with, and its prose. */
 	readonly asked: Array<{
+		/** The prose above the question, when it had any: the summary a decision is made against. */
+		readonly preface?: readonly string[];
 		readonly id: string;
 		readonly kind: string;
 		readonly title: string;
@@ -140,13 +147,21 @@ export class ScriptedScreen implements Screen {
 		return this.closed;
 	}
 
-	private take(id: string, kind: string, title: string, value?: string, choices?: readonly string[]): ScriptedAnswer {
+	private take(
+		id: string,
+		kind: string,
+		title: string,
+		value?: string,
+		choices?: readonly string[],
+		preface?: readonly string[],
+	): ScriptedAnswer {
 		this.asked.push({
 			id,
 			kind,
 			title,
 			...(value === undefined ? {} : { value }),
 			...(choices === undefined ? {} : { choices }),
+			...(preface === undefined ? {} : { preface }),
 		});
 		const queued = this.queues.get(id);
 		if (queued !== undefined && queued.length > 0) return queued.shift() as ScriptedAnswer;
@@ -171,6 +186,7 @@ export class ScriptedScreen implements Screen {
 			title,
 			options.value,
 			choices.map((choice) => choice.value),
+			options.preface,
 		);
 		if (typeof answer !== "string")
 			throw new Error(
@@ -213,11 +229,11 @@ export class ScriptedScreen implements Screen {
 			update: (next) => {
 				this.progressRows.set(id, next);
 			},
-			key: async (keys) => {
+			key: async (hints) => {
 				const answer = this.script[`${id}.key`];
 				if (typeof answer === "string") return answer;
 				// The last key offered is the one that gives up, so an unscripted flow never hangs a test.
-				return keys[keys.length - 1] ?? "enter";
+				return hints[hints.length - 1]?.key ?? "enter";
 			},
 			close: () => {},
 		};

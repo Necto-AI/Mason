@@ -14,7 +14,7 @@
  * header. A narrow window narrows the content; it does not re-flow the frame, because a layout that changes shape at 69
  * columns is a layout that has to be designed twice.
  */
-import { type Component, Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Container, truncateToWidth } from "@earendil-works/pi-tui";
 import { type Glyphs, type Paint, spread } from "./style.ts";
 
 /** Where the person is: what this screen is, and how far along the flow it sits. */
@@ -92,9 +92,8 @@ class Header implements Component {
 
 /** `●●○○○○`: filled for what is behind, hollow for what is ahead. Read left to right, never animated. */
 function progressDots(context: Context, paint: Paint, glyphs: Glyphs): string {
-	void glyphs;
-	const filled = paint.accent("●");
-	const hollow = paint.dim("○");
+	const filled = paint.accent(glyphs.dot);
+	const hollow = paint.dim(glyphs.dotAhead);
 	return Array.from({ length: context.total }, (_, index) => (index < context.index ? filled : hollow)).join(" ");
 }
 
@@ -170,7 +169,4 @@ export class Frame {
 	}
 
 	/** A one-line caption, wrapped: what the review and the completion screens are made of. */
-	static lines(text: string, width: number, style: (value: string) => string): string[] {
-		return wrapTextWithAnsi(text, Math.max(1, width)).map((line) => style(line));
-	}
 }

@@ -20,13 +20,14 @@
  */
 import { existsSync } from "node:fs";
 import { userInfo } from "node:os";
+import { CONTROL_OPS } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
 import { commonReady, readCommonAuth, readCommonSettings } from "../src/server/common.ts";
 import { CONNECTOR_PREFIX } from "../src/server/connectors.ts";
 import { type DoctorCheck, runDoctor } from "../src/server/doctor.ts";
 import { botPaths, type HousePaths } from "../src/server/house.ts";
 import { readInstalls } from "../src/server/install-state.ts";
-import { readIntegrations } from "../src/server/integrations.ts";
+import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { checkPodman, listening } from "../src/server/podman.ts";
 import { modelIds, openProviders, type ProviderAccess, providerIds, verifyCompletion } from "../src/server/provider.ts";
 import { BOT_NAME, botHome, COMMON, type MasonRoot, readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
@@ -110,12 +111,26 @@ export interface OnboardingOptions {
 	readonly handoff?: () => Promise<number>;
 }
 
-/** The prompter the operations get: every question was answered before the first write, so any of them is a bug. */
+/**
+ * The prompter the operations get: the plan answered everything before the first write, so a question now is a bug.
+ *
+ * The one exception is an *optional* question, which the plan answered by not answering it — an empty `HTTPS_PROXY`, no
+ * conversations of its own. That is the same answer `scriptedPrompter` gives a `--yes` run, so the two paths agree; a
+ * required question, or a pick, is a question the plan should have collected, and it fails as a bug in this file.
+ */
 export function answeredPrompter(): Prompter {
 	const refuse = (): never => {
 		throw new MissingAnswer("the wizard already answered this before it wrote anything: this is a bug in the flow");
 	};
-	return { pick: refuse, text: refuse, confirm: async (_question, fallback) => fallback, close: () => {} };
+	return {
+		pick: refuse,
+		text: async (_question, options = {}) => {
+			if (options.required === true) refuse();
+			return options.fallback ?? "";
+		},
+		confirm: async (_question, fallback) => fallback,
+		close: () => {},
+	};
 }
 
 /**
@@ -451,10 +466,16 @@ async function provider(ctx: Context): Promise<Direction> {
 async function agent(ctx: Context): Promise<Direction> {
 	const { screen, draft, root, env } = ctx;
 	const { paint } = look(ctx);
-	const suggested = draft.agent?.name ?? ctx.flags.bot ?? suggestedName();
+	// A root that already holds one bot is a root this run is continuing, so its name is the default: asking again with a
+	// blank answer and the login name would quietly install a second home beside the first.
+	const only = root.bots.length === 1 ? root.bots[0] : undefined;
+	const suggested = draft.agent?.name ?? ctx.flags.bot ?? only?.name ?? suggestedName();
 	const name = await screen.text("agent.name", "What should this agent be called?", {
 		value: suggested,
-		hint: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`,
+		hint:
+			only !== undefined && only.name === suggested
+				? `this root already has ${only.name}: continuing finishes what it needs`
+				: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`,
 		...(ctx.flags.bot === undefined ? {} : { flag: `-b ${ctx.flags.bot}` }),
 		validate: botNameProblem,
 	});
@@ -475,6 +496,22 @@ async function agent(ctx: Context): Promise<Direction> {
 	}
 	ctx.draft.agent = { name };
 	return NEXT;
+}
+
+/**
+ * The connector a home already grants, when it grants exactly one.
+ *
+ * A second run is a run about a home that exists, and that home's grant is the answer it already gave: offering it as the
+ * default means a resume is enter-enter-enter rather than a choice that silently rewrites it.
+ */
+async function grantedKind(ctx: Context): Promise<string | undefined> {
+	const name = ctx.draft.agent?.name ?? ctx.flags.bot;
+	if (name === undefined) return undefined;
+	const { integrations } = await readIntegrations(
+		botPaths({ root: ctx.root.root, name, home: botHome(ctx.root.root, name) }),
+	).catch(() => ({ integrations: {} as Record<string, Integration> }));
+	const granted = Object.keys(integrations).filter((key) => integrations[key]?.connector !== undefined);
+	return granted.length === 1 ? granted[0] : undefined;
 }
 
 /** What a catalog connector's grant says, in words, before the person is asked to grant it. */
@@ -504,9 +541,13 @@ async function connector(ctx: Context): Promise<Direction> {
 		});
 		return NEXT;
 	}
+	const granted = draft.connector === undefined ? await grantedKind(ctx) : draft.connector.kind;
 	const kind = await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
-		...(draft.connector === undefined ? {} : { value: draft.connector.kind }),
-		hint: "the console is built in; a catalog connector runs as a container beside mason",
+		...(granted === undefined ? {} : { value: granted }),
+		hint:
+			granted === undefined
+				? "the console is built in; a catalog connector runs as a container beside mason"
+				: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
 	});
 	if (kind === CONSOLE) {
 		ctx.draft.connector = {
@@ -654,6 +695,25 @@ async function connector(ctx: Context): Promise<Direction> {
 	return NEXT;
 }
 
+/**
+ * What a connector's grant allows, as the review reads it back.
+ *
+ * The catalog is the ceiling for a connector mason runs, and the protocol's own control set is the ceiling for the
+ * console. A `custom` connector is granted the owner's conversations and every control, because setup has nothing else to
+ * narrow it with: saying so is better than an empty line.
+ */
+async function grantedLines(kind: string): Promise<string[]> {
+	const controls = CONTROL_OPS.map((command) => `/${command}`).join(" ");
+	if (kind === CONSOLE) return [`the terminal's words, with ${controls}`];
+	if (kind === "custom") return [`the conversations it names, with ${controls}`];
+	const entry = await catalogEntry(kind).catch(() => undefined);
+	if (entry === undefined) return [];
+	return [
+		`${entry.connector.capabilities.join(", ")} replies`,
+		entry.connector.commands.map((command) => `/${command}`).join(" "),
+	];
+}
+
 /** The catalog's connectors, the built-in console, and a connector that is already running somewhere else. */
 async function connectorChoices(): Promise<readonly Choice[]> {
 	const { connectors } = await readCatalog();
@@ -679,6 +739,9 @@ async function review(ctx: Context): Promise<Direction> {
 	const name = draft.agent?.name ?? "";
 	const home = name === "" ? "(unchosen)" : short(botHome(root.root, name), env);
 	const settings = draft.provider === undefined ? await ctx.io.settings(root.root) : undefined;
+	// The provider screen has something to ask only when the store does not answer it, or when a flag already did: an
+	// entry that leads to a note saying "nothing to ask" is a dead end dressed as a choice.
+	const canChangeProvider = draft.provider !== undefined || !(await ctx.io.ready(root.root));
 	const connectorPlan = draft.connector;
 	const lines: string[] = [
 		"Nothing has been written yet. This is what will be.",
@@ -712,6 +775,10 @@ async function review(ctx: Context): Promise<Direction> {
 		connectorPairs.push(["events", events.map(([event, hook]) => `${event} → ${hook}`).join(", ")]);
 	if (connectorPlan?.container === true)
 		connectorPairs.push(["starts", connectorPlan.start ? "now, and after a reboot" : "no: written and left down"]);
+	// What the grant allows, on the screen that asks for it: the connector step explained it before the answers, and the
+	// review is where a person reads the whole thing back.
+	const may = connectorPlan === undefined ? [] : await grantedLines(connectorPlan.kind);
+	if (may.length > 0) connectorPairs.push(["may", may.join("; ")]);
 	lines.push(...rows(paint, "Connector", connectorPairs));
 	lines.push(
 		...rows(paint, "Install", [
@@ -727,23 +794,19 @@ async function review(ctx: Context): Promise<Direction> {
 	);
 	// Two screens in a short window, one in a tall one: a plan longer than the window would put the decision below the
 	// fold, and a person cannot be asked a question they cannot see. The scroll view still scrolls the summary.
-	const fits = pageAndChoicesFit(screen, lines, 5);
+	const choices = [
+		{ value: "apply", label: "install it", description: "four steps, then the checks" },
+		...(canChangeProvider ? [{ value: "provider", label: "change the provider or model" }] : []),
+		{ value: "agent", label: "change the agent name" },
+		{ value: "connector", label: "change the connector" },
+		{ value: "cancel", label: "leave without writing anything" },
+	];
+	const fits = pageAndChoicesFit(screen, lines, choices.length);
 	if (!fits) await screen.note("review.read", "The plan", { lines, note: "continue decides what to do with it" });
-	const action = await screen.select(
-		"review.action",
-		"Apply this plan?",
-		[
-			{ value: "apply", label: "install it", description: "four steps, then the checks" },
-			{ value: "provider", label: "change the provider or model" },
-			{ value: "agent", label: "change the agent name" },
-			{ value: "connector", label: "change the connector" },
-			{ value: "cancel", label: "leave without writing anything" },
-		],
-		{
-			...(fits ? { preface: lines } : {}),
-			hint: "escape goes back to the connector; nothing is written until you choose install it",
-		},
-	);
+	const action = await screen.select("review.action", "Apply this plan?", choices, {
+		...(fits ? { preface: lines } : {}),
+		hint: "escape goes back to the connector; nothing is written until you choose install it",
+	});
 	if (action === "cancel") return CANCEL;
 	if (action === "apply") return NEXT;
 	return { go: "jump", to: action === "provider" ? "provider" : action === "agent" ? "agent" : "connector" };
@@ -755,8 +818,8 @@ interface ApplyStep {
 	readonly label: string;
 	/** Said when the disk already answers it. */
 	readonly done?: string;
-	/** Said when it fails: what is on disk now. */
-	readonly committed: string;
+	/** Said when it fails: what is on disk now, read off what the operation itself printed. */
+	committed(log: readonly string[]): string;
 	run(): Promise<void>;
 }
 
@@ -768,7 +831,10 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 		steps.push({
 			id: "store",
 			label: "provider and model",
-			committed: "Nothing was written: the store goes in as one commit, after the provider answers",
+			committed: (log) =>
+				log.some((line) => line.includes("wrote") && line.includes("settings.json"))
+					? "The store was written"
+					: "Nothing was written: the store goes in as one commit, after the provider answers",
 			run: async () => {
 				const code = await io.init(initArgs(draft), root.root, answeredPrompter());
 				if (code !== 0) throw new Error("the provider did not answer, so nothing was stored");
@@ -780,7 +846,10 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 			id: "agent",
 			label: "agent home",
 			...(existsSync(botHome(root.root, name)) ? { done: "already there, kept" } : {}),
-			committed: "Nothing was written: a home is created whole",
+			committed: (log) =>
+				log.some((line) => line.includes("created bot"))
+					? "The home was created"
+					: "Nothing was written: a home is created whole",
 			run: async () => {
 				const code = await io.create(name, root.root);
 				if (code !== 0) throw new Error("the home was not created");
@@ -795,7 +864,10 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 					? "connector, credential and container"
 					: "connector, credential and project"
 				: "connector and credential",
-			committed: "The grant and the credential were written before anything was started",
+			committed: (log) =>
+				log.some((line) => line.includes("wrote the grant") || line.includes("minted connector credential"))
+					? "The grant and the credential were written before anything was started; mason doctor reads what is there"
+					: "Nothing was written",
 			run: async () => {
 				const code = await io.setup(setupArgs(connectorPlan), house(), answeredPrompter());
 				if (code !== 0) throw new Error("the connector was not installed");
@@ -805,7 +877,7 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 		steps.push({
 			id: "doctor",
 			label: "checks",
-			committed: "The install itself is complete: only the checks did not run",
+			committed: () => "The install itself is complete: only the checks did not run",
 			run: async () => {
 				draft.checks = await io.doctor(house());
 			},
@@ -848,7 +920,7 @@ export function capture(sink: (line: string) => void): () => void {
 export function redact(line: string): string {
 	const bare = line.replace(/^\[\w+\]\s*/, "").trim();
 	if (bare.startsWith(CONNECTOR_PREFIX) || /^[A-Za-z0-9_-]{43,}$/.test(bare))
-		return "a credential was minted: it went into the connector's compose file and is never shown here";
+		return "a credential was minted: mason setup prints it once, and this screen does not keep it";
 	if (bare === "this is the only time it is printed.") return "";
 	return bare;
 }
@@ -921,7 +993,10 @@ async function apply(ctx: Context): Promise<Direction> {
 		screen.busy(false);
 		if (failure === undefined) break;
 		progress.update(rowsNow(), `${glyphs.fail} ${failure.step.label} failed`);
-		const key = await progress.key(["r", "enter"]);
+		const key = await progress.key([
+			{ key: "r", label: "retry what failed" },
+			{ key: "enter", label: "stop here" },
+		]);
 		if (key !== "r") break;
 		// Only the failed step runs again: everything above it is on disk, and the rows say so.
 		states.set(failure.step.id, "wait");
@@ -935,7 +1010,7 @@ async function apply(ctx: Context): Promise<Direction> {
 			"",
 			...tail(logs.get(failure.step.id) ?? []).map((line) => paint.dim(line)),
 			"",
-			paint.dim(failure.step.committed),
+			paint.dim(failure.step.committed(logs.get(failure.step.id) ?? [])),
 			"mason doctor reads the result, and running mason onboard again picks up where this stopped.",
 		],
 		note: "continue to the summary",
@@ -993,6 +1068,11 @@ async function done(ctx: Context): Promise<Direction> {
 			],
 		]),
 	];
+	if (draft.connector?.container === false && draft.connector.kind !== CONSOLE)
+		lines.push(
+			paint.dim(`it needs a credential: mason connector add ${draft.connector.kind} --replace prints one, once`),
+			"",
+		);
 	if (!up) lines.push(paint.dim(`next: mason up -b ${name}, then mason chat -b ${name}`), "");
 	if (server !== undefined && !server.ok && up === false) lines.push(paint.dim(server.detail), "");
 	// The same rule the review has: a summary longer than the window would put the decision below the fold.
@@ -1029,7 +1109,7 @@ type Step = (ctx: Context) => Promise<Direction>;
 const STEPS: Record<StepId, Step> = { welcome, provider, agent, connector, review, apply, done };
 
 /** The section each step's screens carry in the frame: the question is the body's first line, this is above it. */
-export const SECTIONS: Record<StepId, string> = {
+const SECTIONS: Record<StepId, string> = {
 	welcome: "Welcome",
 	provider: "Model and provider",
 	agent: "Agent",

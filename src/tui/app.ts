@@ -20,7 +20,6 @@ import {
 	ScrollView,
 	type Terminal,
 	TuiAltScreen,
-	type ViewportTUI,
 	VStack,
 } from "@earendil-works/pi-tui";
 import {
@@ -32,8 +31,9 @@ import {
 	StatusList,
 	type StatusRow,
 	TextField,
+	typedChar,
 } from "./components.ts";
-import { CHROME_ROWS, type Context, Frame, type Hint } from "./frame.ts";
+import { CHROME_ROWS, type Context, Frame, type Hint, MARGIN } from "./frame.ts";
 import { Cancelled, type Page, type Progress, type Question, type Screen, type Where } from "./screen.ts";
 import { type Glyphs, type Paint, terminalStyle } from "./style.ts";
 
@@ -42,8 +42,11 @@ const BACK: Hint = { key: "esc", label: "back" };
 const QUIT: Hint = { key: "ctrl+c", label: "quit" };
 
 /** The footer every screen carries, in one order: what continues, what goes back, what stops. */
-function hints(action: string): readonly Hint[] {
-	return [{ ...ENTER, label: action }, BACK, QUIT];
+function hints(action: "select" | "continue" | "scroll"): readonly Hint[] {
+	// A page that does not fit says the arrows scroll it and enter still continues: both are true at once, and a footer
+	// that names only the keys that fit is a footer that hides the one the person needs.
+	if (action === "scroll") return [{ key: "up/down", label: "scroll" }, { ...ENTER, label: "continue" }, BACK, QUIT];
+	return [{ ...ENTER, label: action === "select" ? "select" : action }, BACK, QUIT];
 }
 
 /** A running operation repaints on a timer of its own: a spinner that waits for the next keypress is not a spinner. */
@@ -58,7 +61,7 @@ export interface TerminalScreenOptions {
 }
 
 export class TerminalScreen implements Screen {
-	private readonly tui: ViewportTUI;
+	private readonly tui: TuiAltScreen;
 	private readonly frame: Frame;
 	private readonly terminal: Terminal;
 	private stopBusy: (() => void) | undefined;
@@ -121,6 +124,8 @@ export class TerminalScreen implements Screen {
 	where(context: Where): void {
 		this.location = { ...this.location, ...context };
 		this.frame.setContext(this.location);
+		// Forced: the header and the step count are the flow's whereabouts, and they are stale the moment they change.
+		this.tui.requestRender(true);
 	}
 
 	/** Mount a body and give it the keyboard. Nothing else is mounted, so a screen cannot render under another one. */
@@ -221,17 +226,33 @@ export class TerminalScreen implements Screen {
 			const lines = [this.frame.style.paint.heading(title), "", ...page.lines];
 			if (page.note !== undefined && page.note !== "") lines.push("", this.frame.style.paint.bold(page.note));
 			const view = new NoteView(lines);
-			const body =
-				page.rows === undefined ? view : stack([new StatusList(this.geometry(), page.rows), spacer(), view]);
-			view.onContinue = () => {
-				this.clear();
-				resolve();
-			};
-			view.onCancel = () => {
-				this.clear();
-				reject(new Cancelled());
-			};
-			this.show(title, hints("continue"), body, view);
+			// The keys are the screen's, not the page's: a page is the one screen that can be longer than the window, and the
+			// arrows have to reach the scroll view rather than be swallowed by the thing being scrolled.
+			const stop = this.tui.addInputListener((data) => {
+				if (matchesKey(data, "enter") || typedChar(data) === " ") {
+					stop();
+					this.clear();
+					resolve();
+					return { consume: true };
+				}
+				if (matchesKey(data, "escape")) {
+					stop();
+					this.clear();
+					reject(new Cancelled());
+					return { consume: true };
+				}
+				// A page is not an editor, so the arrows scroll it: the alt screen leaves them alone by default, because
+				// every other screen on it has a field that wants them.
+				if (matchesKey(data, "down")) {
+					this.tui.scrollBy(1);
+					return { consume: true };
+				}
+				if (!matchesKey(data, "up")) return undefined;
+				this.tui.scrollBy(-1);
+				return { consume: true };
+			});
+			const overflows = view.render(this.columns - 2 * MARGIN).length > this.rows - CHROME_ROWS;
+			this.show(title, overflows ? hints("scroll") : hints("continue"), view, null);
 		});
 	}
 
@@ -254,14 +275,12 @@ export class TerminalScreen implements Screen {
 				// Forced: an operation line is progress, and progress that arrives after the next keypress is not.
 				this.tui.requestRender(true);
 			},
-			key: async (keys) => {
-				waiter.keys = keys;
-				this.frame.setHints(
-					keys.map(
-						(key): Hint => ({ key: key === "enter" ? "enter" : key, label: key === "enter" ? "stop" : key }),
-					),
-				);
-				this.tui.requestRender();
+			key: async (hints) => {
+				waiter.keys = hints.map((hint) => hint.key);
+				this.frame.setHints(hints.map((hint): Hint => ({ key: hint.key, label: hint.label })));
+				// Forced: these hints are the only thing telling the person what to press, so they are on screen before
+				// the wait for the press starts.
+				this.tui.requestRender(true);
 				return await new Promise<string>((resolve) => {
 					waiter.resolve = resolve;
 				});
@@ -297,8 +316,4 @@ function stack(children: readonly Component[]): Component {
 	const container = new Container();
 	for (const child of children) container.addChild(child);
 	return container;
-}
-
-function spacer(): Component {
-	return { render: () => [""], invalidate: () => {} };
 }

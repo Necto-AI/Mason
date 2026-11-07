@@ -50,7 +50,7 @@ export class FakeTerminal implements Terminal {
 		this.input?.(data);
 	}
 
-	/** Resize, and tell the application: what a terminal does when the window changes. */
+	/** Resize, the way a window manager does: the next render asks the terminal for its size and gets the new one. */
 	resize(columns: number, rows: number): void {
 		this.columns = columns;
 		this.rows = rows;
@@ -200,12 +200,4 @@ export function screenText(
 	const screen = new Screen(size.columns, size.rows);
 	for (const write of writes) screen.feed(write);
 	return screen.text();
-}
-
-/** The same, as a block of text, which is what a report and a failure message both want. */
-export function screenAsText(
-	writes: readonly string[],
-	size: { readonly columns: number; readonly rows: number },
-): string {
-	return screenText(writes, size).join("\n");
 }

@@ -41,6 +41,9 @@ export interface Glyphs {
 	readonly cursor: string;
 	readonly rule: string;
 	readonly mask: string;
+	/** The two halves of a progress dot: where the flow has been, and where it is going. */
+	readonly dot: string;
+	readonly dotAhead: string;
 	/** The frames a running operation cycles through. */
 	readonly spinner: readonly string[];
 }
@@ -105,6 +108,8 @@ export function glyphs(utf8: boolean): Glyphs {
 			cursor: ">",
 			rule: "-",
 			mask: "*",
+			dot: "*",
+			dotAhead: ".",
 			spinner: ["|", "/", "-", "\\"],
 		};
 	return {
@@ -118,6 +123,8 @@ export function glyphs(utf8: boolean): Glyphs {
 		cursor: "›",
 		rule: "─",
 		mask: "•",
+		dot: "●",
+		dotAhead: "○",
 		spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 	};
 }
@@ -139,11 +146,6 @@ export const plainStyle: { readonly paint: Paint; readonly glyphs: Glyphs } = {
 /** Display columns of a string, ignoring the escapes it carries. */
 export function widthOf(text: string): number {
 	return visibleWidth(text);
-}
-
-/** One line, padded with spaces to `width` columns. Never truncates: a caller that must fit truncates first. */
-export function padRight(text: string, width: number): string {
-	return text + " ".repeat(Math.max(0, width - widthOf(text)));
 }
 
 /** `left` and `right` on one line of exactly `width` columns, or `left` alone when they would collide. */

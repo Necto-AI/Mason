@@ -75,6 +75,7 @@ async function runScript(
 	name: string,
 	args: readonly string[],
 	directory: string,
+	extra: Readonly<Record<string, string>> = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
 	try {
 		const { stdout, stderr } = await run(
@@ -82,7 +83,7 @@ async function runScript(
 			["--experimental-strip-types", join(root, "scripts", `${name}.ts`), ...args],
 			{
 				cwd: root,
-				env: childEnv(directory),
+				env: childEnv(directory, extra),
 				maxBuffer: 8 * 1024 * 1024,
 			},
 		);
@@ -168,6 +169,19 @@ describe("a fleet of two", () => {
 		assert.match(viaEnv.stdout, /model faux\/faux-1/);
 		assert.match(viaEnv.stdout, /1 integration, 1 connector/);
 		assert.match(viaEnv.stdout, /mason not running/);
+	});
+
+	test("a script run names the bot it just created, not the one its environment was carrying", async () => {
+		const directory = await tempRoot();
+		// The wrapper exports MASON_BOT from `-b` before the child starts, so this is the path that cannot lean on it: the
+		// script is run directly, `-b` is the script's own flag, and the environment says a bot this root does not hold.
+		const created = await runScript("onboard", ["--yes", "-b", "alice", "--connector", "console"], directory, {
+			MASON_BOT: "bob",
+		});
+		assert.equal(created.code, 0, created.stderr);
+		const listed = await mason(["bots"], directory);
+		assert.match(listed.stdout, /^alice\t/m);
+		assert.doesNotMatch(listed.stdout, /bob/, "the environment named a bot this root does not hold");
 	});
 
 	test("the npm path takes -b too: the scripts parse the flag they advertise", async () => {
