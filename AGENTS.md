@@ -58,12 +58,10 @@ tool or entry kind is invisible until the whitelist says so.
 - `npm run connector -- list | add <connector> [--replace] | revoke <id>` — the credential a connector opens its socket with (`scripts/connector.ts`). The credential is printed once and stored as a hash in `service/config.json`, read on every connection, so a revoke lands on the next connection rather than the next restart. The grant is the entry's `connector` block in `service/integrations.json`: the faces, the one `user.owner` actor (whose words are the owner's), its conversations and capabilities, the event `kind` → routine map, and `commands` (out of the closed set `stop`, `compact`, `clear`, `status`). A credential for an entry with no `connector` block is refused — it would open a socket with nothing on it.
 - `npm run integration -- add <name> --url <mcp-url> --description <line> [--replace] | remove <name> | enable <name> | disable <name> | list` — the services the agent reaches (`scripts/integration.ts`, `src/server/integrations.ts`), in `service/integrations.json`. An entry may carry a tools face (an MCP endpoint over Streamable HTTP, with the one line the model is told about it) and a `connector` grant. A fresh `add` switches it on, while a `--replace` moves the endpoint and leaves the switch and the grant as they were. There is no trigger face any more (#104): a service wakes mason with `mason/fire` over the connector's socket, and what that socket may spend is its grant, written into the file by hand. The file is read once at boot, so a change is a restart, and it says so. An integration the boot cannot reach loses its tools, and the loss is reported on `mason/control` `status` and at boot, unless the entry is `required` — then the boot refuses.
 
-- `mason onboard` / `mason init` / `mason new <name>` / `mason bots` / `mason doctor` / `mason status` — the root and its
-  bots (`scripts/onboard.ts`, `init.ts`, `new.ts`, `bots.ts`, `doctor.ts`, `status.ts`): `onboard` initialises the root,
-  creates the first bot, installs its first connector and ends in a doctor; `init` asks for a provider, a model and a key
-  and sends one real completion before writing anything; `new` is one home, its soul and seeded skills, its first
-  connector; `doctor` is nine read-only checks, one repair command per failure, exit 1 on any failure. A second run of
-  any of them asks nothing the files already answer.
+- `mason onboard` / `init` / `new <name>` / `bots` / `doctor` / `status` — the root and its bots (`scripts/onboard.ts`,
+  `init.ts`, `new.ts`, `bots.ts`, `doctor.ts`, `status.ts`). `onboard` is the first run end to end: root, first bot, first
+  connector, doctor. `init` verifies one real completion before it writes. `doctor` is nine read-only checks, one repair
+  command per failure, exit 1 on any failure. A second run asks nothing the files answer.
 - `mason setup` / `mason chat` — the day-2 connector and the first conversation (`scripts/setup.ts`, `scripts/chat.ts`): offers the connectors this release
   knows (`catalog/connectors.json`, parsed by `src/server/catalog.ts`, where an unknown key is a refusal), asks what the
   chosen one needs, writes the grant through the writer the boot reads, mints one credential, renders
