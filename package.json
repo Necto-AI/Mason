@@ -13,6 +13,12 @@
 	"scripts": {
 		"dev": "node --experimental-strip-types src/server/main.ts",
 		"dev:stack": "node --experimental-strip-types scripts/dev-stack.ts",
+		"onboard": "node --experimental-strip-types scripts/onboard.ts",
+		"init": "node --experimental-strip-types scripts/init.ts",
+		"new": "node --experimental-strip-types scripts/new.ts",
+		"bots": "node --experimental-strip-types scripts/bots.ts",
+		"doctor": "node --experimental-strip-types scripts/doctor.ts",
+		"status": "node --experimental-strip-types scripts/status.ts",
 		"test": "node --experimental-strip-types --test test/*.test.ts",
 		"test:packages": "node --experimental-strip-types --experimental-sqlite --test packages/protocol/test/*.test.ts packages/connector/test/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
