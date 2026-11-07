@@ -447,7 +447,9 @@ async function install(
 	} else if (previous?.source !== undefined && previous.source !== plan_.source) {
 		// The url lives in the install record, not the grant: a second run with a different `--url` moves it, and a run that
 		// did that silently was a wizard reporting success while the connector kept dialling the old address.
-		console.log(`[setup] "${plan_.name}" is already granted; its address moves: ${previous.source} -> ${plan_.source}`);
+		console.log(
+			`[setup] "${plan_.name}" is already granted; its address moves: ${previous.source} -> ${plan_.source}`,
+		);
 	} else {
 		console.log(`[setup] "${plan_.name}" is already granted in ${paths.integrations}; the grant is unchanged`);
 	}

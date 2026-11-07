@@ -51,11 +51,7 @@ function check(ok: boolean, what: string, detail = ""): void {
 }
 
 /** One CLI run, with the environment a first run has: a scratch root, the offline model, and no inherited target. */
-async function mason(
-	directory: string,
-	args: readonly string[],
-	extra: NodeJS.ProcessEnv = {},
-): Promise<Result> {
+async function mason(directory: string, args: readonly string[], extra: NodeJS.ProcessEnv = {}): Promise<Result> {
 	const env: NodeJS.ProcessEnv = { ...process.env, PORT: freePort, ...extra, MASON_ROOT: directory, MASON_HOME: "" };
 	delete env.MASON_BOT;
 	delete env.PI_PROVIDER;
@@ -118,14 +114,20 @@ async function main(): Promise<void> {
 	// 3. The root is a fleet: `common/` and bots, and no halves at the root itself.
 	const entries = await readdir(directory);
 	check(entries.includes("common"), "the root holds common/", entries.join(", "));
-	check(!entries.includes("agent") && !entries.includes("service"), "the root holds no home halves", entries.join(", "));
+	check(
+		!entries.includes("agent") && !entries.includes("service"),
+		"the root holds no home halves",
+		entries.join(", "),
+	);
 
 	// 4. Which bot a command targets.
 	const bots = await mason(directory, ["bots"], { HOME: home });
 	check(bots.code === 0 && /\(current\)/.test(bots.stdout), "bots names the one bot as current", bots.stdout);
 
 	// 5. A second bot, then the refusal a fleet needs.
-	const second = await mason(directory, ["new", "bob", "--yes", "--connector", "console", "--no-start"], { HOME: home });
+	const second = await mason(directory, ["new", "bob", "--yes", "--connector", "console", "--no-start"], {
+		HOME: home,
+	});
 	check(second.code === 0, "new bob exits 0", second.stderr || second.stdout);
 	const two = await mason(directory, ["bots"], { HOME: home });
 	check(two.code === 0 && !/\(current\)/.test(two.stdout), "with two bots nothing is current", two.stdout);
@@ -155,7 +157,9 @@ async function main(): Promise<void> {
 	let log = "";
 	server.stdout.on("data", (chunk: Buffer) => (log += chunk.toString()));
 	server.stderr.on("data", (chunk: Buffer) => (log += chunk.toString()));
-	const ready = await waitFor(async () => (await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => undefined))?.ok === true);
+	const ready = await waitFor(
+		async () => (await fetch(`http://127.0.0.1:${port}/api/health`).catch(() => undefined))?.ok === true,
+	);
 	check(ready, "mason up answers /api/health", log);
 	if (ready) {
 		const health = (await (await fetch(`http://127.0.0.1:${port}/api/health`)).json()) as { home?: string };
@@ -177,9 +181,13 @@ async function main(): Promise<void> {
 		onReport: () => {},
 	});
 	try {
-		const chat = await mason(directory, ["chat", "-b", "bob", "--once", "Say the word ok.", "--url", `ws://127.0.0.1:${chatPort}/api/connector`], {
-			HOME: home,
-		});
+		const chat = await mason(
+			directory,
+			["chat", "-b", "bob", "--once", "Say the word ok.", "--url", `ws://127.0.0.1:${chatPort}/api/connector`],
+			{
+				HOME: home,
+			},
+		);
 		check(chat.code === 0, "a turn over the console connector exits 0", chat.stderr || chat.stdout);
 		check(/first run/.test(chat.stdout) === false && chat.stdout.trim().length > 0, "the turn answered", chat.stdout);
 	} finally {
