@@ -19,7 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { localDaemon } from "@earendil-works/pi-env";
 import {
 	type CommonRuntime,
@@ -36,6 +36,7 @@ import { HOUSE_ENTRIES, type HousePaths } from "./house.ts";
 import { type ConnectorInstalls, readInstalls } from "./install-state.ts";
 import { readIntegrationBoot, readIntegrations } from "./integrations.ts";
 import { bootPolicyFix, checkPodman, containerStates, listening, type PodmanOptions } from "./podman.ts";
+import { FAUX_MODEL } from "./runtime.ts";
 
 /** One line of the report: what was checked, what was found, and the one command that repairs a failure. */
 export interface DoctorCheck {
@@ -49,6 +50,8 @@ export interface DoctorCheck {
 export interface HealthAnswer {
 	readonly ok: boolean;
 	readonly detail: string;
+	/** The home the answering server says it serves, when it says: what makes "is this bot's server up" a question. */
+	readonly home?: string;
 }
 
 export interface DoctorOptions {
@@ -66,9 +69,17 @@ async function fetchHealth(url: string): Promise<HealthAnswer> {
 	try {
 		const response = await fetch(url, { signal: AbortSignal.timeout(1500) });
 		const body = (await response.text()).trim();
+		const parsed = ((): { status?: unknown; home?: unknown } => {
+			try {
+				return JSON.parse(body) as { status?: unknown; home?: unknown };
+			} catch {
+				return {};
+			}
+		})();
 		return {
-			ok: response.status === 200 && body.includes('"ok"'),
+			ok: response.status === 200 && parsed.status === "ok",
 			detail: `${response.status} ${body.slice(0, 80)}`,
+			...(typeof parsed.home === "string" ? { home: parsed.home } : {}),
 		};
 	} catch (error) {
 		return { ok: false, detail: error instanceof Error ? error.message : String(error) };
@@ -91,7 +102,7 @@ export async function runDoctor(options: DoctorOptions): Promise<readonly Doctor
 	checks.push(checkHome(house));
 	checks.push(await checkModel(house, env));
 	checks.push(await checkRuntime(house));
-	checks.push(await checkServer(env, options.health ?? fetchHealth));
+	checks.push(await checkServer(house, env, options.health ?? fetchHealth));
 	let installs: ConnectorInstalls | undefined;
 	let installsError: string | undefined;
 	try {
@@ -135,7 +146,10 @@ function checkHome(house: HousePaths): DoctorCheck {
 			name: "home",
 			ok: false,
 			detail: `${house.home} is missing agent/ or service/`,
-			repair: "run `mason onboard` to create the home",
+			repair:
+				house.fleet === undefined
+					? "run `mason onboard` to create the home"
+					: `run \`mason onboard -b ${house.fleet.bot}\` to finish this bot's home`,
 		};
 	return { name: "home", ok: true, detail: `${house.home} (agent/, service/)` };
 }
@@ -170,10 +184,14 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 	}
 	const ref = `${choice.provider}/${choice.modelId}`;
 	const from = choice.source === "bot" ? " from the bot's settings.json" : "";
-	if (choice.source === "env") return { name: "model", ok: true, detail: `${ref} from PI_PROVIDER/PI_MODEL` };
-	if (choice.key !== undefined) return { name: "model", ok: true, detail: `${ref}${from}, key stored` };
-	if (choice.provider === "faux" || env.PI_FAUX_MODEL === "1")
+	// The switch is not the store: `PI_FAUX_MODEL=1` makes the turn run the offline provider whatever the file names, so it
+	// can neither satisfy "this provider has a key" nor let the check report a model the boot will not use.
+	const offline = env.PI_FAUX_MODEL === "1";
+	const runs = offline ? `PI_FAUX_MODEL=1: the turn runs ${FAUX_MODEL.provider}/${FAUX_MODEL.modelId}; ` : "";
+	if (choice.source === "env") return { name: "model", ok: true, detail: `${runs}${ref} from PI_PROVIDER/PI_MODEL` };
+	if (choice.provider === "faux")
 		return { name: "model", ok: true, detail: `${ref}${from}, the offline provider needs no key` };
+	if (choice.key !== undefined) return { name: "model", ok: true, detail: `${runs}${ref}${from}, key stored` };
 	// A home addressed directly has no common store to check: its key is the one pi's own store or the provider's
 	// environment answers with, and this build reads neither.
 	if (choice.source === "bot" && house.fleet === undefined)
@@ -182,7 +200,7 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 	return {
 		name: "model",
 		ok: false,
-		detail: `${ref}${from} has no key in ${where}`,
+		detail: `${runs}${ref}${from} has no key in ${where}`,
 		repair: "run `mason init` to verify and store one",
 	};
 }
@@ -199,7 +217,8 @@ async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 				name: "runtime",
 				ok: false,
 				detail: error instanceof Error ? error.message : String(error),
-				repair: "run `mason init` to write a runtime this build reads",
+				// `mason init` refuses to overwrite a file it cannot read, so naming it was a repair that could not repair.
+				repair: "fix or delete common/runtime.json, then run `mason doctor` again",
 			};
 		}
 	}
@@ -209,7 +228,7 @@ async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 					name: "runtime",
 					ok: false,
 					detail: "the ssh runtime names no host",
-					repair: "write common/runtime.json by hand, or run `mason init`",
+					repair: "add a host to common/runtime.json, or delete it to run locally",
 				}
 			: {
 					name: "runtime",
@@ -231,22 +250,34 @@ async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 
 /** The server: nothing listening is "not started", and a listening server has to answer. */
 async function checkServer(
+	house: HousePaths,
 	env: NodeJS.ProcessEnv,
 	health: (url: string) => Promise<HealthAnswer>,
 ): Promise<DoctorCheck> {
 	const port = Number(env.PORT ?? 8787);
 	const host = env.HOST ?? "127.0.0.1";
-	if (!(await listening("127.0.0.1", port)))
-		return { name: "server", ok: true, detail: `nothing is listening on ${port} yet (mason up starts it)` };
-	const answer = await health(`http://127.0.0.1:${port}/api/health`);
-	return answer.ok
-		? { name: "server", ok: true, detail: `listening on ${host}:${port}, /api/health answers` }
-		: {
-				name: "server",
-				ok: false,
-				detail: `/api/health did not answer: ${answer.detail}`,
-				repair: `check what is bound to ${port}, then run \`mason up\``,
-			};
+	// A wildcard bind answers loopback; any other address is the one to dial. Probing 127.0.0.1 whatever `HOST` said made a
+	// server bound to a concrete LAN address read as "not started" — and check 4 unable to fail for it.
+	const dial = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+	if (!(await listening(dial, port)))
+		return { name: "server", ok: true, detail: `nothing is listening on ${dial}:${port} yet (mason up starts it)` };
+	const answer = await health(`http://${dial}:${port}/api/health`);
+	if (!answer.ok)
+		return {
+			name: "server",
+			ok: false,
+			detail: `/api/health did not answer: ${answer.detail}`,
+			repair: `check what is bound to ${port}, then run \`mason up\``,
+		};
+	// A port is not an identity: a scratch bot's doctor used to report the live bot on 8787 as its own server.
+	if (answer.home !== undefined && resolve(answer.home) !== resolve(house.home))
+		return {
+			name: "server",
+			ok: false,
+			detail: `${dial}:${port} answers, but it serves ${answer.home}, not ${house.home}`,
+			repair: "run `mason up` for this home on its own PORT, or stop the server that owns the port",
+		};
+	return { name: "server", ok: true, detail: `listening on ${dial}:${port}, /api/health answers for this home` };
 }
 
 /** podman and a compose provider, only for a bot that runs one. */
@@ -334,6 +365,12 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 			repair: `fix ${house.integrations} by hand, then run \`mason doctor\` again`,
 		};
 	}
+	if (!existsSync(house.integrations))
+		return {
+			name: "integrations",
+			ok: true,
+			detail: `${house.integrations} is absent: no integration is configured`,
+		};
 	const boot = await readIntegrationBoot(house);
 	if (boot === undefined)
 		return { name: "integrations", ok: true, detail: `${house.integrations} parses (not booted yet)` };

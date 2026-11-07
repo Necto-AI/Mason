@@ -95,6 +95,8 @@ export interface ConversationState {
 export interface AgentRuntime {
 	readonly harness: Harness;
 	readonly rootId: ConversationId;
+	/** The home this boot serves: what `/api/health` answers with, so a port can say which bot it belongs to. */
+	readonly home: string;
 	/** Where this process's state lives; the agent's home by default, not the directory it was started from. */
 	readonly dataDir: string;
 	readonly hooks: HooksManager;
@@ -130,7 +132,7 @@ export interface OpenAgentRuntimeOptions {
 	/** Model access built by the caller (tests script the faux provider); default `resolveModelAccess`. */
 	readonly modelAccess?: ResolvedModel;
 	readonly workspaceDir?: string;
-	/** Where `~/.mason` is; tests point it at a temporary directory. */
+	/** The home this boot serves, one bot's directory under a root; tests point it at a temporary directory. */
 	readonly houseHome?: string;
 	/** `memory` keeps everything in RAM: tests and throwaway runs. */
 	readonly storage?: "sqlite" | "memory";
@@ -163,7 +165,8 @@ export interface OpenAgentRuntimeOptions {
 	readonly settings?: HarnessSettings;
 }
 
-const FAUX_MODEL: AgentModelRef = { provider: "faux", modelId: "faux-1" };
+/** The offline provider's one model: what a boot runs under `PI_FAUX_MODEL=1`, said by doctor and status too. */
+export const FAUX_MODEL: AgentModelRef = { provider: "faux", modelId: "faux-1" };
 
 /**
  * Where auto-compaction starts: how much of the window a conversation may fill before the harness summarizes its old
@@ -380,6 +383,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		return {
 			harness,
 			rootId: root.id,
+			home: house.home,
 			dataDir,
 			hooks,
 			env: envManager,
