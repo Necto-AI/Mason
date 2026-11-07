@@ -1,11 +1,11 @@
 /**
  * `bin/mason.ts` — the installed package's one command.
  *
- * Every command here is executed exactly as an operator types it, from the source the npm scripts run, and every home
- * is a temporary directory passed in `MASON_HOME`: the real one is never read, let alone written. What is pinned is
- * what survives a review of the subcommand set: usage names the closed set and none of the retired nouns, `onboard`
- * creates a house and mints a connector's credential exactly once, and a home from before the split is refused with
- * its names and nothing created.
+ * Every command here is executed exactly as an operator types it, from the source the npm scripts run, and every root is
+ * a temporary directory passed in `MASON_ROOT`: the real one is never read, let alone written. What is pinned is what
+ * survives a review of the subcommand set — usage names the closed set and none of the retired nouns, `-b` becomes
+ * `MASON_BOT` for every verb, a root with no bot refuses with the command that creates one, and a root whose halves sit
+ * at the root is refused with its names and nothing created.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -16,32 +16,35 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { listConnectorCredentials } from "../src/server/connectors.ts";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "bin", "mason.ts");
 
-const homes: string[] = [];
+const roots: string[] = [];
 after(async () => {
-	for (const home of homes) await rm(home, { recursive: true, force: true });
+	for (const directory of roots) await rm(directory, { recursive: true, force: true });
 });
 
-async function tempHome(): Promise<string> {
-	const home = await mkdtemp(join(tmpdir(), "mason-bin-home-"));
-	homes.push(home);
-	return home;
+async function tempRoot(): Promise<string> {
+	const directory = await mkdtemp(join(tmpdir(), "mason-bin-root-"));
+	roots.push(directory);
+	return directory;
 }
 
-/** Run `mason …` the way a person does, against one temporary home. A non-zero exit is a result, not an error. */
-async function mason(args: readonly string[], home: string): Promise<{ code: number; stdout: string; stderr: string }> {
+/** Run `mason …` the way a person does, against one temporary root. A non-zero exit is a result, not an error. */
+async function mason(
+	args: readonly string[],
+	directory: string,
+	extra: Readonly<Record<string, string>> = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
 	try {
-		const { stdout } = await run(process.execPath, ["--experimental-strip-types", script, ...args], {
+		const { stdout, stderr } = await run(process.execPath, ["--experimental-strip-types", script, ...args], {
 			cwd: root,
-			env: { ...process.env, MASON_HOME: home },
+			env: { ...process.env, MASON_ROOT: directory, MASON_HOME: "", ...extra },
 			maxBuffer: 8 * 1024 * 1024,
 		});
-		return { code: 0, stdout, stderr: "" };
+		return { code: 0, stdout, stderr };
 	} catch (error) {
 		const failure = error as { code?: number; stdout?: string; stderr?: string };
 		return { code: failure.code ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
@@ -49,11 +52,16 @@ async function mason(args: readonly string[], home: string): Promise<{ code: num
 }
 
 test("usage() names the closed subcommand set, and none of the retired nouns", async () => {
-	const result = await mason([], await tempHome());
+	const result = await mason([], await tempRoot());
 	assert.equal(result.code, 1, "no command is usage, and usage is a refusal");
 	for (const command of [
-		"mason up",
 		"mason onboard",
+		"mason init",
+		"mason new",
+		"mason bots",
+		"mason doctor",
+		"mason status",
+		"mason up",
 		"mason setup",
 		"mason chat",
 		"mason integration",
@@ -64,75 +72,57 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	]) {
 		assert.match(result.stdout, new RegExp(command.replace(" ", "\\s+")));
 	}
-	for (const retired of ["doctor", "token", "team", "person"]) {
+	for (const retired of ["token", "team", "person", "panel"]) {
 		assert.doesNotMatch(result.stdout, new RegExp(`\\b${retired}\\b`), `${retired} went with the prune`);
 	}
 });
 
 test("a command the set does not know is a refusal, not a default", async () => {
-	const result = await mason(["frotz"], await tempHome());
+	const result = await mason(["frotz"], await tempRoot());
 	assert.equal(result.code, 1);
 	assert.match(result.stdout, /usage: mason/);
 });
 
-test("onboard() creates a fresh home, prints the doors, and asks for a connector it cannot mint", async () => {
-	const home = await tempHome();
-	const result = await mason(["onboard"], home);
-	assert.equal(result.code, 0);
-	assert.match(result.stdout, /no connector is granted yet/, "there is nothing to mint for yet");
-	assert.match(result.stdout, /mason integration add/, "the next commands, not a blank file");
-	assert.match(result.stdout, /\/api\/health/, "the one unauthenticated door");
-	assert.match(result.stdout, /mason up/);
-	assert.equal(existsSync(join(home, "service", "soul.md")), true, "the house was created");
-	assert.equal(existsSync(join(home, "agent", "skills", "ocr", "SKILL.md")), true, "the shipped skills were seeded");
-	assert.equal(existsSync(join(home, "service", "config.json")), false, "no credential minted when refused to");
+test("a root with no bot refuses, and names the command that creates one", async () => {
+	const directory = await tempRoot();
+	const bots = await mason(["bots"], directory);
+	assert.equal(bots.code, 0);
+	assert.match(bots.stdout, /no bots under/);
+	assert.match(bots.stdout, /mason onboard/);
+
+	const doctor = await mason(["doctor"], directory);
+	assert.equal(doctor.code, 1);
+	assert.match(doctor.stderr, /has no bot yet/);
+	assert.match(doctor.stderr, /mason onboard/);
 });
 
-test("onboard() mints one credential for an entry with a grant and none, then mints nothing twice", async () => {
-	const home = await tempHome();
-	await mkdir(join(home, "service"), { recursive: true });
-	await writeFile(
-		join(home, "service", "integrations.json"),
-		JSON.stringify(
-			{
-				integrations: {
-					"external-chat": {
-						enabled: true,
-						connector: { user: { owner: "u-1" } },
-					},
-				},
-			},
-			null,
-			"\t",
-		),
-		{ mode: 0o600 },
-	);
-	const first = await mason(["onboard"], home);
-	assert.equal(first.code, 0);
-	assert.match(first.stdout, /masonc_/, "the credential itself, printed once");
-	const credentials = await listConnectorCredentials(home);
-	assert.equal(credentials.length, 1);
-
-	const second = await mason(["onboard"], home);
-	assert.equal(second.code, 0);
-	assert.doesNotMatch(second.stdout, /masonc_/, "the credential only ever prints once");
-	assert.match(second.stdout, /has a connector credential/, "what exists is named, not replaced");
-	assert.equal((await listConnectorCredentials(home)).length, 1, "onboard is idempotent");
-});
-
-test("onboard() refuses a home from before the split, on its names, creating nothing", async () => {
-	const home = await tempHome();
-	await writeFile(join(home, "profile.md"), "# Denis\n", "utf8");
-	const result = await mason(["onboard"], home);
+test("a root whose halves sit at the root is refused on its names, creating nothing", async () => {
+	const directory = await tempRoot();
+	await writeFile(join(directory, "profile.md"), "# Denis\n", "utf8");
+	const result = await mason(["bots"], directory);
 	assert.equal(result.code, 1);
-	assert.match(result.stderr, /predates the split/);
+	assert.match(result.stderr, /holds a single home's halves at the root/);
 	assert.match(result.stderr, /profile\.md/);
-	assert.equal(existsSync(join(home, "agent")), false, "Nothing was created.");
+	assert.match(result.stderr, /MASON_HOME/);
+	assert.equal(existsSync(join(directory, "common")), false, "nothing was created");
+});
+
+test("a fleet command refuses MASON_HOME, which names one home and not a root", async () => {
+	const directory = await tempRoot();
+	const home = join(directory, "home");
+	await mkdir(home, { recursive: true });
+	const result = await mason(["bots"], directory, { MASON_HOME: home });
+	assert.equal(result.code, 1);
+	assert.match(result.stderr, /MASON_HOME names one home/);
+	assert.match(result.stderr, /MASON_ROOT/);
 });
 
 test("a mapped command runs the same script the npm script runs", async () => {
-	const home = await tempHome();
-	const result = await mason(["integration", "list"], home);
-	assert.equal(result.code, 0);
-	assert.match(result.stdout, /no integrations/, "the integration script's own words, not a new one's");
+	const directory = await tempRoot();
+	const result = await mason(["integration", "list"], directory);
+	// The integration script resolves a home, and a root with no bot refuses — the refusal is the script's own, not a new
+	// one's, which is what "mapped thin" means.
+	assert.equal(result.code, 1);
+	assert.match(result.stderr, /has no bot yet/);
+	assert.doesNotMatch(result.stderr, /\n\s+at /, "one sentence, not a stack trace");
 });

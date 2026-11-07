@@ -216,7 +216,19 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		};
 		socket.on("message", collect);
 		socket.on("close", earlyClose);
-		const auth = await authenticateConnector(request, home, currentIntegrations());
+		// A store mason cannot read is a refusal, not a crash: `attach` is called from a socket handler with no one to
+		// catch it, so a throw here used to be an unhandled rejection that took the server down and left the socket open
+		// with its early listeners attached.
+		let auth: Awaited<ReturnType<typeof authenticateConnector>>;
+		try {
+			auth = await authenticateConnector(request, home, currentIntegrations());
+		} catch (error) {
+			socket.off("message", collect);
+			socket.off("close", earlyClose);
+			log(`[connector] refused a socket: ${error instanceof Error ? error.message : String(error)}`);
+			socket.close(1011, "the store this server reads is unreadable");
+			return;
+		}
 		socket.off("message", collect);
 		socket.off("close", earlyClose);
 		if (closedEarly) return;

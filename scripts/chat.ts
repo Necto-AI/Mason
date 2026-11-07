@@ -209,8 +209,9 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 		return 0;
 	}
 
-	const paths = housePaths();
+	let paths: HousePaths;
 	try {
+		paths = housePaths();
 		if (await ensureConsole(paths))
 			console.log(dim(`[chat] granted the built-in "${CONSOLE}" connector in ${paths.integrations}`));
 	} catch (error) {
