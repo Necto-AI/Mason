@@ -221,6 +221,15 @@ export function replyOutput(
 	};
 	return {
 		start(deliveryId, text) {
+			const already = shown.get(deliveryId);
+			// A dropped socket comes back as a new session with the same delivery id and the words written so far, and that
+			// prefix is on the screen: only the rest is new. Anything else is the start of a line.
+			if (already !== undefined && text.startsWith(already)) {
+				remember(deliveryId, text);
+				const rest = text.slice(already.length);
+				if (rest !== "") write(rest);
+				return;
+			}
 			remember(deliveryId, text);
 			write(`${cyan("mason: ")}${text}`);
 		},
