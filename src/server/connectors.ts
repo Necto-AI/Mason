@@ -8,11 +8,9 @@
  * it: which external actor is the owner's, which external conversations may be spoken in, which event kinds fire which
  * routine, and which controls it may spend on `mason/control`.
  *
- * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
- * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
- * a kind that maps to no routine is refused. A face the entry does not grant is
- * named in `inactive` with a reason rather than dropped, because a connector silently missing half its behaviour is the
- * bug nobody finds.
+ * Everything here is a **ceiling**, never a wish. The session the connector reads at the handshake is this file and
+ * nothing else: an actor that is not the owner is refused, a target that is not listed is refused, a kind that maps to no
+ * routine is refused.
  *
  * The file is validated where every integration is validated (`integrations.ts`), so a grant that cannot work refuses
  * the boot instead of leaving a connector with fewer powers than its operator believes it has.
@@ -27,14 +25,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import {
-	CAPABILITIES,
-	type Capability,
-	CONTROL_OPS,
-	type ControlOp,
-	type ExternalActor,
-	type ExternalConversation,
-} from "mason-protocol";
+import { type Actor, CAPABILITIES, type Capability, CONTROL_OPS, type ControlOp, type Target } from "mason-protocol";
 import { originAllowed, readConfig, updateConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
 
@@ -42,7 +33,7 @@ import type { Integration } from "./integrations.ts";
 export const CONNECTOR_PREFIX = "masonc_";
 
 /**
- * The user face as the operator granted it: the owner, the rooms, and the content it may claim.
+ * The user face as the operator granted it: the owner, and the content it may claim.
  *
  * One person, one bot: the grant names the single external actor whose words are the owner's, and every other actor is
  * refused. Absent means the connector may carry words nobody attributed — a notice, a forwarded thing — and no voice.
@@ -50,7 +41,6 @@ export const CONNECTOR_PREFIX = "masonc_";
 export interface ConnectorUserGrant {
 	/** The external actor id that speaks for the person this bot works for. */
 	readonly owner?: string;
-	readonly conversations: readonly ExternalConversation[];
 	/** The content this connector may claim, when the operator narrowed it. Absent means "whatever it advertises". */
 	readonly capabilities?: readonly Capability[];
 }
@@ -63,6 +53,12 @@ export interface ConnectorEventGrant {
 /** One connector's grants, as `integrations.json` holds them. */
 export interface ConnectorGrant {
 	readonly user?: ConnectorUserGrant;
+	/**
+	 * The places this connector may be sent to, as the operator declared them. The model names one as
+	 * `<connector>/<target>`; a target absent from this list is refused at delivery, never silently rerouted. Absent
+	 * means the connector has nowhere to be sent to and is only ever answered where it wrote first.
+	 */
+	readonly targets?: readonly Target[];
 	readonly events?: ConnectorEventGrant;
 	/**
 	 * The controls this connector's socket may spend on `mason/control`, out of the protocol's closed vocabulary. Absent
@@ -117,14 +113,15 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
 	const commands = readCommands(where, name, raw.commands);
-	const hasFace = user !== undefined || events !== undefined;
+	const targets = readTargets(where, name, raw.targets);
+	const hasFace = user !== undefined || events !== undefined || targets !== undefined;
 	if (!hasFace) {
 		throw new Error(
 			refusal(
 				where,
 				name,
-				'has a "connector" that grants no face: a user face, an events face or both is what a connector is, and the ' +
-					'entry\'s "mcp" server is not one of them',
+				'has a "connector" that grants nothing: a user face, an events face or a list of targets is what a connector ' +
+					'is, and the entry\'s "mcp" server is not one of them',
 			),
 		);
 	}
@@ -132,6 +129,7 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 		...(user === undefined ? {} : { user }),
 		...(events === undefined ? {} : { events }),
 		...(commands === undefined ? {} : { commands }),
+		...(targets === undefined ? {} : { targets }),
 	};
 }
 
@@ -179,24 +177,33 @@ export const RETIRED_GRANT_KEYS = ["state", "trustMarkers", "policy"] as const;
  */
 export const RETIRED_USER_KEYS = ["actors", "unattributed", "approver"] as const;
 
+/**
+ * The keys a connector block carried when mason kept a room per connector.
+ *
+ * `rooms` are gone: one person, one bot, and the places a connector may be sent to are targets in the grant. Refused
+ * rather than ignored, for the same reason as everything else here: a file that still lists a room is a file whose
+ * operator believes mason knows the room.
+ */
+export const RETIRED_CONNECTOR_KEYS = ["user.conversations", "conversations"] as const;
+
 function readUser(where: string, name: string, value: unknown): ConnectorUserGrant | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "connector.user" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
-	const retired = RETIRED_USER_KEYS.filter((key) => raw[key] !== undefined);
+	const retired = [...RETIRED_USER_KEYS, "conversations"].filter((key) => raw[key] !== undefined);
 	if (retired.length > 0) {
 		throw new Error(
 			refusal(
 				where,
 				name,
 				`has a retired "connector.user.${retired[0]}": mason works for one person, so a user face names one ` +
-					'"owner" actor and no mapping, no unattributed switch and no approver. Delete that key by hand',
+					'"owner" actor and no mapping, no unattributed switch, no approver and no list of rooms. A place this ' +
+					'connector may be sent to is a "connector.targets" entry. Delete that key by hand',
 			),
 		);
 	}
-	const conversations = readConversations(where, name, raw.conversations);
 	const capabilities = readCapabilities(where, name, raw.capabilities);
 	const owner = raw.owner;
 	if (owner !== undefined && (typeof owner !== "string" || owner.trim() === "")) {
@@ -210,41 +217,76 @@ function readUser(where: string, name: string, value: unknown): ConnectorUserGra
 	}
 	return {
 		...(owner === undefined ? {} : { owner: owner as string }),
-		conversations,
 		...(capabilities === undefined ? {} : { capabilities }),
 	};
 }
 
-function readConversations(where: string, name: string, value: unknown): ExternalConversation[] {
-	if (value === undefined) return [];
+/**
+ * The places this connector may be sent to. A target is an id the model writes and a label a person reads, plus what
+ * that channel can render: a notification channel does not carry files, and saying so here is what lets a reply fail
+ * with a sentence instead of arriving as a broken message.
+ *
+ * The ids are the model's vocabulary, so they are narrow on purpose: lowercase, no spaces, no slash — a slash is what
+ * separates the connector from the target in an address.
+ */
+function readTargets(where: string, name: string, value: unknown): Target[] | undefined {
+	if (value === undefined) return undefined;
 	if (!Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "connector.user.conversations" that is not a list'));
+		throw new Error(refusal(where, name, 'has a "connector.targets" that is not a list'));
 	}
-	return value.map((entry, index) => {
+	const targets: Target[] = [];
+	for (const entry of value) {
 		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-			throw new Error(refusal(where, name, `has a conversation ${index} that is not an object`));
+			throw new Error(refusal(where, name, "has a target that is not an object"));
 		}
 		const raw = entry as Record<string, unknown>;
-		const id = raw.externalConversationId;
-		if (typeof id !== "string" || id.trim() === "") {
+		const id = raw.id;
+		if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
 			throw new Error(
-				refusal(where, name, `has a conversation ${index} with no "externalConversationId": it is the room`),
+				refusal(
+					where,
+					name,
+					`has a target whose "id" is not [a-z0-9-]: ${JSON.stringify(id)}. It is what the model writes after ` +
+						`"${name}/", so it is one word`,
+				),
 			);
 		}
-		const kind = raw.kind;
-		if (kind !== "person" && kind !== "room") {
-			throw new Error(refusal(where, name, `has a conversation "${id}" whose "kind" is not "person" or "room"`));
+		if (targets.some((target) => target.id === id)) {
+			throw new Error(refusal(where, name, `names the target "${id}" twice`));
 		}
-		const title = raw.title;
-		if (title !== undefined && typeof title !== "string") {
-			throw new Error(refusal(where, name, `has a conversation "${id}" with a "title" that is not a string`));
+		const label = raw.label;
+		if (typeof label !== "string" || label.trim() === "") {
+			throw new Error(refusal(where, name, `has a target "${id}" with no "label": it is what a person reads`));
 		}
-		return {
-			externalConversationId: id,
-			kind,
-			...(title === undefined ? {} : { title }),
-		};
-	});
+		targets.push({
+			id,
+			label: label.trim(),
+			capabilities: readTargetCapabilities(where, name, id, raw.capabilities),
+		});
+	}
+	return targets;
+}
+
+function readTargetCapabilities(where: string, name: string, id: string, value: unknown): Capability[] {
+	if (value === undefined) return [...CAPABILITIES];
+	if (!Array.isArray(value)) {
+		throw new Error(refusal(where, name, `has a target "${id}" whose "capabilities" is not a list`));
+	}
+	const capabilities: Capability[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string" || !(CAPABILITIES as readonly string[]).includes(entry)) {
+			throw new Error(
+				refusal(
+					where,
+					name,
+					`declares the capability ${JSON.stringify(entry)} on the target "${id}", which mason does not have: ` +
+						`the whole set is ${CAPABILITIES.join(", ")}`,
+				),
+			);
+		}
+		capabilities.push(entry as Capability);
+	}
+	return capabilities;
 }
 
 /**
@@ -308,17 +350,23 @@ export function connectorGrantFor(
 }
 
 /**
- * The one actor the handshake answers with: the advertised actor whose id is the grant's `owner`, as the connector
- * advertised it, or nothing.
+ * Why an append may not name this actor, or `undefined` when it may.
  *
- * The wire stays a list because it always was one, and the answer stays the connector's own record — its own id, its own
- * display name — so mason never invents an actor the medium would not recognise. Empty means the connector advertised no
- * such id, and then every submission that names an actor is refused.
+ * The whole of the admission rule, in one place: an actor that is the grant's `owner` is the person mason works for, an
+ * absent actor is a message nobody attributed, and any other actor is a stranger — refused, because a bot with one
+ * owner has no room for a second voice and silently accepting one would put a stranger's words in the owner's mouth.
  */
-export function grantedActors(user: ConnectorUserGrant, advertised: readonly ExternalActor[]): ExternalActor[] {
-	if (user.owner === undefined) return [];
-	const actor = advertised.find((candidate) => candidate.externalActorId === user.owner);
-	return actor === undefined ? [] : [actor];
+export function ownerRefusal(grant: ConnectorGrant, actor: Actor | undefined): string | undefined {
+	if (actor === undefined) return undefined;
+	const owner = grant.user?.owner;
+	if (owner === undefined) return `this entry names no owner, so an actor cannot speak through it (${actor.id})`;
+	if (actor.id !== owner) return `"${actor.id}" is not the actor this entry calls its owner`;
+	return undefined;
+}
+
+/** Whether a target id is one this entry's grant lists: the whole of what the model may name. */
+export function targetGranted(grant: ConnectorGrant, id: string): Target | undefined {
+	return grant.targets?.find((target) => target.id === id);
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */

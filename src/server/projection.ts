@@ -18,8 +18,9 @@ import {
 	HOOK_ENTRY_KIND,
 	isDeliveryReminder,
 	isReflectionAsk,
+	NOTICE_ENTRY_KIND,
 	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
+	SEND_TOOL,
 	splitAuthor,
 } from "../shared/contract.ts";
 import { replyRecordOf, textOfBlocks } from "./replies.ts";
@@ -93,10 +94,10 @@ function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
 /**
  * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
- * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them, neither
- * when a routine fired. A reply is the `app.reply` entry `reply` commits, which is the delivery itself: the assistant
- * message that carried the call contributes nothing, so a message appears once whether it was streamed or committed.
- * Tool results are read for failure alone, never forwarded.
+ * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them. A send is
+ * the `app.reply` entry `send` commits, which is the delivery itself: the assistant message that carried the call
+ * contributes nothing, so a message appears once whether it was streamed or committed. An event is a row of its own,
+ * because a wake nobody can see is a wake nobody can explain. Tool results are read for failure alone, never forwarded.
  *
  * The round in flight contributes the same shape, streaming: a reply appears as the model writes it, exactly as it will
  * stand once committed. A streaming reply whose entry has already landed is skipped — the entry is the truth, and two
@@ -131,15 +132,32 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	// person would otherwise have to interpret.
 	let spoke = true;
 	for (const entry of entries) {
-		if (entry.kind === "pi.user" || entry.kind === HOOK_ENTRY_KIND || entry.kind === CONNECTOR_ENTRY_KIND) {
+		if (entry.kind === HOOK_ENTRY_KIND) {
+			// An event is the reader's business; a routine's timer is not. A wake that names a kind says so, and a wake
+			// that does not is a schedule — the message it sent is the row, and the schedule is the schedule's business.
+			const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
+			if (typeof kind === "string" && kind !== "") {
+				items.push({ kind: "event", id: String(entry.id), name: kind });
+				spoke = false;
+			}
+			continue;
+		}
+		if (entry.kind === NOTICE_ENTRY_KIND) {
+			// The medium talking about itself: a channel that was muted, a delivery that the network refused. It is not a
+			// turn and it never woke one, so it is a row and not a message from anybody.
+			const text = (entry.data as { text?: unknown } | undefined)?.text;
+			if (typeof text === "string" && !isBlank(text)) {
+				items.push({ kind: "notice", id: `medium:${entry.id}`, text });
+			}
+			continue;
+		}
+		if (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) {
 			const spoken = textOfMessage(messageOf(entry)).trim();
 			// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder, in
 			// either shape a local turn and a fired turn get, and the reflection ask at the end of a long turn.
 			const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(spoken) || isReflectionAsk(spoken));
 			if (!gate) spoke = false;
-			// A hook trigger contributes nothing: a proactive turn is the message it sent, and the schedule that woke it
-			// is not part of the conversation.
-			if (entry.kind !== HOOK_ENTRY_KIND && spoken !== "" && !gate) {
+			if (spoken !== "" && !gate) {
 				const { text, author } = splitAuthor(spoken);
 				items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
 			}
@@ -219,8 +237,8 @@ function streamingItems(
 			string,
 			unknown
 		>;
-		if (call.name === REPLY_TOOL) {
-			const text = typeof args.message === "string" ? args.message : "";
+		if (call.name === SEND_TOOL) {
+			const text = typeof args.text === "string" ? args.text : "";
 			if (isBlank(text)) continue;
 			const deliveryId = `reply:${call.id}`;
 			// The entry has landed, so the committed row is the message; a streaming copy beside it would be the same

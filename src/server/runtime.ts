@@ -28,17 +28,12 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { readCommonRuntime, readPiSettingsModel, resolveModelChoice, sshTargetFromRuntime } from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
+import { EventLog } from "./events-log.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
-import {
-	currentIntegrations,
-	type Integration,
-	readIntegrations,
-	recordIntegrationBoot,
-	setIntegrations,
-} from "./integrations.ts";
+import { currentIntegrations, readIntegrations, recordIntegrationBoot, setIntegrations } from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
@@ -100,6 +95,8 @@ export interface AgentRuntime {
 	/** Where this process's state lives; the agent's home by default, not the directory it was started from. */
 	readonly dataDir: string;
 	readonly hooks: HooksManager;
+	/** Every event a connector raised, one line per event: the sink, whether or not a routine woke. */
+	readonly events: EventLog;
 	readonly env: RuntimeEnvManager;
 	/** What the integrations' MCP servers offer right now: the catalog `mcp_search` reads. */
 	readonly mcp: McpCatalog;
@@ -288,7 +285,14 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		opened.push(() => hooks.close());
 		// The supervisor's retry is code, not a routine: the agent does not edit it, and nothing schedules it.
 		hooks.define(RETRY_HOOK);
-		assertConnectorHooksHaveHooks(currentIntegrations(), hooks, house.integrations);
+		// The events that wake nothing are written down here, in the home's data half. It is mason's state, not the
+		// agent's memory: a line the agent could rewrite is a line nobody can trust.
+		const events = new EventLog({
+			dir: join(dataDir, "events"),
+			log: (line: string) => console.log(line),
+		});
+		const dropped = events.prune();
+		if (dropped > 0) console.log(`[events] ${dropped} day(s) of the event log were past retention`);
 
 		const storage =
 			options.storageOverride ??
@@ -386,6 +390,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			home: house.home,
 			dataDir,
 			hooks,
+			events,
 			env: envManager,
 			mcp,
 			workspaceDir,
@@ -517,35 +522,4 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 		// No modes on this filesystem; nothing to set.
 	}
 	return storage;
-}
-
-/**
- * A connector's `kind` → hook map is a name in a file, so a build that does not define the hook must refuse rather than
- * start: a kind that maps to a hook nobody defined is a fire that silently does nothing.
- *
- * Only enabled integrations are checked: a disabled one's socket opens nothing, and a name is not a reason to keep an
- * integration the operator switched off from ever being switched on again. The message names the file, the integration
- * and the hook, because all three are what a person has to change.
- */
-function assertConnectorHooksHaveHooks(
-	integrations: Record<string, Integration>,
-	hooks: HooksManager,
-	path: string,
-): void {
-	for (const [name, integration] of Object.entries(integrations)) {
-		if (!integration.enabled) continue;
-		const named = [
-			...Object.entries(integration.connector?.events?.hooks ?? {}).map(([kind, hook]) => ({
-				where: `the kind "${kind}"`,
-				hook,
-			})),
-		];
-		for (const entry of named) {
-			if (hooks.has(entry.hook)) continue;
-			throw new Error(
-				`${path}: integration "${name}" has ${entry.where} that fires "${entry.hook}", which is not a hook. A ` +
-					"delivery there would fire nothing, so the server does not start with one.",
-			);
-		}
-	}
 }
