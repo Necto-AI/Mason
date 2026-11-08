@@ -1,10 +1,12 @@
 /**
  * Connectors: the grants a service holds, and the credential it opens its socket with.
  *
- * A connector is one external process with up to three faces — it carries people's words, lends tools, reports events —
- * and it is the same entry in `service/integrations.json` that already described a tools endpoint and a trigger. The
- * `connector` block is what the operator grants it: which external actor is the owner's, which external conversations may
- * be spoken in, which event kinds fire which routine, and which controls it may spend on `mason/control`.
+ * A connector is one external process with up to two faces — it carries people's words and reports events — and it is
+ * the same entry in `service/integrations.json` that owns the MCP server mason calls. The socket grants words and events;
+ * tools are not a face. They are the entry's `mcp`, reached by mason in the other direction, and the reason a connector
+ * that advertises one is told its url rather than told it may use it. The `connector` block is what the operator grants
+ * it: which external actor is the owner's, which external conversations may be spoken in, which event kinds fire which
+ * routine, and which controls it may spend on `mason/control`.
  *
  * Everything here is a **ceiling**, never a wish. The connector advertises its faces at the handshake and the answer is
  * the intersection with this file: an actor that is not the owner is refused, a conversation that is not listed is refused,
@@ -20,7 +22,7 @@
  * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — that file ends up
  * in bug reports — and read on every upgrade request, so a revoke lands on the next connection rather than on the next
  * restart. It opens `/api/connector` and the attachment upload, and nothing else. The credential for mason's own MCP
- * calls is the other direction: it is configured on the tools face (`tools.credential`) and never leaves the server
+ * calls is the other direction: it is configured on the entry's MCP server (`mcp.credential`) and never leaves the server
  * except on that call.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -90,14 +92,10 @@ function refusal(where: string, name: string, message: string): string {
  * One entry's `connector` block, checked and normalised, or `undefined` when the entry declares no connector.
  *
  * A block with no face at all is refused: it would issue a credential that opens a socket with nothing on it, which is
- * the shape of a half-finished configuration nobody notices until the connector asks why it is silent.
+ * the shape of a half-finished configuration nobody notices until the connector asks why it is silent. An entry's MCP
+ * server is not a face and does not count here: a connector that only wants to learn its own url is not a connector.
  */
-export function readConnectorGrant(
-	where: string,
-	name: string,
-	value: unknown,
-	hasToolsFace: boolean,
-): ConnectorGrant | undefined {
+export function readConnectorGrant(where: string, name: string, value: unknown): ConnectorGrant | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "connector" that is not an object'));
@@ -119,14 +117,14 @@ export function readConnectorGrant(
 	const user = readUser(where, name, raw.user);
 	const events = readEvents(where, name, raw.events);
 	const commands = readCommands(where, name, raw.commands);
-	const hasFace = user !== undefined || events !== undefined || hasToolsFace;
+	const hasFace = user !== undefined || events !== undefined;
 	if (!hasFace) {
 		throw new Error(
 			refusal(
 				where,
 				name,
-				'has a "connector" that grants no face: a user face, an events face or a tools face (the entry\'s own ' +
-					'"tools") is what a connector is',
+				'has a "connector" that grants no face: a user face, an events face or both is what a connector is, and the ' +
+					'entry\'s "mcp" server is not one of them',
 			),
 		);
 	}

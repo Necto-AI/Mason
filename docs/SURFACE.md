@@ -19,7 +19,7 @@ connector presents a credential mason issued for it.
 
 ## Extensions a boot installs
 
-coding-tools, prompt, delivery, then `mcp` when an enabled entry has a tools face, and `codemode` always.
+coding-tools, prompt, delivery, then `mcp` when an enabled entry has an MCP server, and `codemode` always.
 
 The tool list is pinned by the prompt test, because the prompt is where it is announced. No MCP tool schema is ever
 in it: a service's tools are reached from a script.

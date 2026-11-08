@@ -80,7 +80,7 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 			telegram: {
 				enabled: true,
 				description: "the team chat",
-				tools: { url: "http://127.0.0.1:9/mcp", credential: "connector-issued-for-mason" },
+				mcp: { url: "http://127.0.0.1:9/mcp", credential: "connector-issued-for-mason" },
 				connector: {
 					// The controls this socket may spend: the protocol's whole closed set, granted by the operator.
 					commands: ["stop", "compact", "clear", "status"],

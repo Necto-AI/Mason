@@ -6,9 +6,9 @@
  * model can do between two messages of one conversation. Editing the file is a restart, and the command says so every
  * time it writes.
  *
- * It edits the tools face — the one that reaches an MCP endpoint. What a connector may do on its socket is its
- * `connector` block, which is edited in the file by hand: the grant, its `commands` and its policy are
- * a person's permission decisions, and `npm run connector` mints the credential for them, not the grant. There is no
+ * It edits the entry's MCP server — the endpoint over Streamable HTTP that lends the bot tools. What a connector may do
+ * on its socket is its `connector` block, which is edited in the file by hand: the grant, its `commands` and its policy
+ * are a person's permission decisions, and `npm run connector` mints the credential for them, not the grant. There is no
  * secret here any more, because the signed event door is gone (#104).
  */
 import { housePaths } from "../src/server/house.ts";
@@ -31,7 +31,7 @@ try {
 function usage(): never {
 	console.log(`usage:
   npm run integration -- list
-  npm run integration -- add <name> --url <url> --description "<text>" [--replace]
+  npm run integration -- add <name> --mcp-url <url> --description "<text>" [--replace]
   npm run integration -- remove <name>
   npm run integration -- enable <name>
   npm run integration -- disable <name>
@@ -40,7 +40,7 @@ function usage(): never {
   the list is ${house.integrations} (0600, in the server's half) and is read once at boot: a change applies on restart.
   add refuses a name that is already there unless --replace is passed, and a name is lowercase letters, digits and dashes.
   a connector's grant and its commands belong to the panel (its connectors page); \`npm run connector\` issues the
-  credential. This command only moves the tools endpoint.`);
+  credential. This command only moves the MCP endpoint.`);
 	process.exit(command === undefined || command === "--help" ? 0 : 1);
 }
 
@@ -55,18 +55,17 @@ async function list(): Promise<void> {
 	if (names.length === 0) console.log(`no integrations (${house.integrations} is empty or absent)`);
 	for (const name of names) {
 		const integration = integrations[name];
-		const tools = integration.tools === undefined ? "no tools" : integration.tools.url;
+		const mcp = integration.mcp === undefined ? "no mcp" : integration.mcp.url;
 		const connector =
 			integration.connector === undefined
 				? "no connector"
 				: `connector (${[
 						integration.connector.user === undefined ? "" : "user",
 						integration.connector.events === undefined ? "" : "events",
-						integration.tools === undefined ? "" : "tools",
 					]
 						.filter((face) => face !== "")
 						.join(", ")})${controlsOf(integration)}`;
-		console.log(`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${tools}  ${connector}`);
+		console.log(`${name.padEnd(16)}  ${integration.enabled ? "enabled " : "disabled"}  ${mcp}  ${connector}`);
 	}
 }
 
@@ -79,7 +78,7 @@ function controlsOf(integration: { readonly connector?: { readonly commands?: re
 async function add(): Promise<void> {
 	const name = args[0];
 	if (name === undefined) usage();
-	const url = option("--url");
+	const url = option("--mcp-url");
 	const description = option("--description");
 	if (url === undefined || description === undefined) usage();
 	const { integrations } = await readIntegrations(house);
@@ -91,14 +90,14 @@ async function add(): Promise<void> {
 	const written = await writeIntegration(house, name, {
 		...existing,
 		// A replace moves the endpoint and rewrites the description. The switch and the connector grant are what the
-		// integration *is*, not where its tools come from, so they stay as they were.
+		// integration *is*, not where its MCP server lives, so they stay as they were.
 		enabled: existing?.enabled ?? true,
 		description,
-		tools: { ...existing?.tools, url },
+		mcp: { ...existing?.mcp, url },
 	});
 	console.log(`wrote ${written.enabled ? "enabled" : "disabled"} ${name} to ${house.integrations}`);
 	console.log(`  ${description}`);
-	console.log(`  tools at ${url}`);
+	console.log(`  mcp at ${url}`);
 	console.log("The list is read once at boot: start the server again for this to take effect.");
 }
 

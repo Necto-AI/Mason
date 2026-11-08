@@ -297,7 +297,7 @@ describe("the handshake", () => {
 	it("names a face the entry does not grant as inactive, and refuses a call on it", async () => {
 		const served = await serveConnector();
 		try {
-			// A tools face the entry does have, and an events face the alarm entry does not — two sides of the same rule.
+			// An MCP server the entry does have, and an events face the alarm entry does not — two sides of the same rule.
 			const connected = await connectConnector(served, {
 				name: "alarm-only",
 				credential: await mint(served, "alarm-only"),

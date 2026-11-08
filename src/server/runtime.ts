@@ -62,7 +62,7 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 
 /**
  * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,
- * then what this boot built for itself — `mcp` when it reached a tools face, `codemode` always.
+ * then what this boot built for itself — `mcp` when an entry has an MCP server, `codemode` always.
  *
  * It is exported because it is the answer to a question a test asks: a stored selection is repaired with exactly these,
  * and a list written down a second time in a test would go on passing after a base extension was added to the array.
@@ -101,7 +101,7 @@ export interface AgentRuntime {
 	readonly dataDir: string;
 	readonly hooks: HooksManager;
 	readonly env: RuntimeEnvManager;
-	/** What the integrations' tools faces offer right now: the catalog `mcp_search` reads. */
+	/** What the integrations' MCP servers offer right now: the catalog `mcp_search` reads. */
 	readonly mcp: McpCatalog;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
@@ -248,10 +248,10 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// What this boot read, so `mason doctor` can say the file moved under it. Best effort: a home without a writable data
 	// directory still serves, it just cannot answer "restart to apply".
 	await recordIntegrationBoot(house);
-	// The tools face of every enabled integration, reached here and nowhere else. What the servers offer is a catalog, not
+	// The MCP server of every enabled integration, reached here and nowhere else. What the servers offer is a catalog, not
 	// a tool list: `mcp` registers three stable tools that ask the servers what they have now, so a container that
 	// restarts, redeploys or redefines a tool mid-conversation moves nothing the prompt is built from. A boot with no
-	// tools face connects nothing and installs nothing.
+	// server connects nothing and installs nothing.
 	const mcp = await openMcpCatalog({
 		integrations: currentIntegrations(),
 		...(options.mcpTransport === undefined ? {} : { openTransport: options.mcpTransport }),
