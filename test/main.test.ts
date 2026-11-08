@@ -175,7 +175,7 @@ describe("the status line a chat reads", () => {
 		return {
 			name,
 			enabled: health.enabled ?? true,
-			hasTools: true,
+			hasMcp: true,
 			connected: health.connected ?? false,
 			tools: health.connected === true ? 2 : 0,
 			error: health.error ?? null,

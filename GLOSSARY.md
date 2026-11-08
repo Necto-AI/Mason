@@ -15,8 +15,8 @@ One deployed mason: one identity, one home, one conversation, one set of tools. 
 _Avoid_: agent, instance, assistant (an *agent* in pi's sense is a conversation's resolved prompt and tool set)
 
 **interface**:
-A role a connector plays when it reaches a person: a chat, or another user-facing surface. It is not a separate kind of
-thing beside a connector, and mason has no interface type.
+A role a connector plays when it reaches a person: a chat, or another user-facing surface. Not a separate kind of thing,
+and mason has no interface type.
 _Avoid_: frontend, UI (for the abstract thing), channel
 
 **sibling**:
@@ -47,7 +47,7 @@ routines, the workspace.
 _Avoid_: user data, workspace (the workspace is one directory inside it)
 
 **service-owned files**:
-The part of the home the bot never sees: soul, credentials, integration secrets, the database, keys.
+The part of the home the bot never sees: soul, credentials, the MCP keys, the database, keys.
 _Avoid_: config, internal state
 
 **soul**:
@@ -130,7 +130,7 @@ _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
 **delivery**:
 One outbound act that reaches the turn's origin connector and records the same reply in the transcript. The model calls
-`reply`; it does not choose a vendor's message tool.
+`reply`, never a vendor's message tool.
 _Avoid_: message, notification (each names one shape of it)
 
 **reply**:
@@ -145,16 +145,26 @@ twice.
 _Avoid_: message id, request id
 
 **outbox**:
-The committed replies a connector has not acknowledged yet, read from the transcript rather than from a second store. A
-reply is owed until an `app.delivery` entry says what became of it, and an `uncertain` one is never retried.
+The committed replies a connector has not acknowledged yet, read from the transcript, not a second store. A reply is
+owed until an `app.delivery` entry says what became of it, and an `uncertain` one is never retried.
 _Avoid_: queue, retry buffer
 
-## Connectors
+## Integrations and connectors
+
+**integration**:
+One entry in `service/integrations.json`: a service mason may reach, with an MCP server, a connector grant, or both. Only
+an entry with a grant has a connector.
+_Avoid_: service, app, plugin
+
+**MCP server**:
+The endpoint an integration points at, over Streamable HTTP, that lends the bot tools. Mason is the client and holds the
+credential the server issued it, never the one it issued the connector.
+_Avoid_: tool surface, tools face
 
 **connector**:
-An external participant that talks to mason through any combination of three faces: user, tools, and events. A
-connector is not a mason module, and one kind of connector does not exist per face.
-_Avoid_: integration (the former name), plugin, client, app
+An external process mason admitted on `/api/connector`: it carries a person's words and reports events, with the
+credential minted for its integration. Two faces, user and events; tools are the entry's MCP server.
+_Avoid_: integration (that is the entry), plugin, client, app
 
 **user face**:
 The connector face that carries a person's submissions and the agent's replies, streamed and final.
@@ -167,15 +177,11 @@ _Avoid_: webhook, trigger, source, listener
 
 **payload**:
 The data a fire carries. It reaches the model fenced as untrusted data and never becomes an instruction.
-_Avoid_: envelope (the signed body that carried a payload, removed with the event door), event body, message
-
-**tool surface**:
-The tools one connector lends the bot through MCP. The model reaches them through `codemode`, never as declared tools.
-_Avoid_: tool list, MCP server (that is the process, not the surface), plugin API
+_Avoid_: envelope (removed with the event door), event body, message
 
 **connector credential**:
-The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. It is
-stored as a hash in `service/config.json`, read on every connection, and it is the only credential mason issues.
+The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. Stored as
+a hash in `service/config.json`, read on every connection, and the only credential mason issues.
 _Avoid_: token, API key, session
 
 **content id**:
@@ -184,10 +190,10 @@ never a shared path, and an id is served only to the connector that uploaded it.
 _Avoid_: attachment id, file token
 
 **tool catalog**:
-What one service offers *now*: each tool's own name, description, JSON Schema and approval marker, read from the server
-and never registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never
-offered it, so a server that redeploys does not move the prompt.
-_Avoid_: tool list, tool surface (that is the face's name, not its contents), MCP tools (that is what a catalog holds)
+What one MCP server offers *now*: each tool's own name, description, JSON Schema and approval marker, read and never
+registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never offered
+it, so a server that redeploys does not move the prompt.
+_Avoid_: tool list, tools face (that is the entry's server, not its contents), MCP tools (that is what a catalog holds)
 
 ## The conversation
 

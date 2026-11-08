@@ -644,12 +644,12 @@ async function withIntegrations(integrations: Record<string, Integration>, run: 
 const GITHUB: Integration = {
 	enabled: true,
 	description: "Issues and pull requests for the team's repositories",
-	tools: { url: "http://mason-github:8082/mcp" },
+	mcp: { url: "http://mason-github:8082/mcp" },
 };
 const DOCS: Integration = {
 	enabled: true,
 	description: "The team's handbook and runbooks",
-	tools: { url: "http://mason-docs:8080/mcp" },
+	mcp: { url: "http://mason-docs:8080/mcp" },
 };
 
 /**
@@ -657,14 +657,14 @@ const DOCS: Integration = {
  * description here is all the model has until `tool_search` finds one. Name and purpose only — no health (it changes
  * between turns), no tool names, no schemas.
  */
-test("the integrations section is one sorted name and purpose per enabled tool face, and the way to reach them", async () => {
+test("the integrations section is one sorted name and purpose per enabled MCP server, and the way to reach them", async () => {
 	await withIntegrations(
 		{
 			github: GITHUB,
 			docs: DOCS,
-			// An entry with no tools face is not a tool: nothing about it belongs in the tool list's section.
+			// An entry with no MCP server is not a tool: nothing about it belongs in the tool list's section.
 			activity: { enabled: true, description: "Never a tool" },
-			old: { enabled: false, description: "Turned off", tools: { url: "http://mason-old:8080/mcp" } },
+			old: { enabled: false, description: "Turned off", mcp: { url: "http://mason-old:8080/mcp" } },
 		},
 		async () => {
 			const rendered = await renderSection(sectionOf("integrations"));
@@ -681,20 +681,20 @@ test("the integrations section is one sorted name and purpose per enabled tool f
 			assert.doesNotMatch(
 				rendered ?? "",
 				/Never a tool|Turned off/,
-				"a disabled entry and one with no tools face are absent",
+				"a disabled entry and one with no MCP server are absent",
 			);
 			assert.doesNotMatch(rendered ?? "", /mcp__|issues_create|8082/, "no tool names, no urls, no schemas");
 		},
 	);
 });
 
-test("the integrations section is absent when no integration is enabled with a tools face", async () => {
+test("the integrations section is absent when no integration is enabled with an MCP server", async () => {
 	for (const integrations of [
 		{},
 		{
-			old: { enabled: false, description: "Off", tools: { url: "http://mason-old:8080/mcp" } } satisfies Integration,
+			old: { enabled: false, description: "Off", mcp: { url: "http://mason-old:8080/mcp" } } satisfies Integration,
 		},
-		{ activity: { enabled: true, description: "No tools face" } satisfies Integration },
+		{ activity: { enabled: true, description: "No MCP server" } satisfies Integration },
 	] as Record<string, Integration>[]) {
 		await withIntegrations(integrations, async () => {
 			assert.equal(
