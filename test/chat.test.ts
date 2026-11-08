@@ -227,6 +227,20 @@ describe("mason chat", () => {
 			"the screen has the whole answer, in order, once",
 		);
 
+		// A dropped socket comes back as a new session under the same delivery id, starting the stream again with the words
+		// written so far. That prefix is already on the screen; printing it again puts a marker in the middle of a sentence.
+		printed.length = 0;
+		output.start("reply:3", "Hello, I was");
+		output.delta("reply:3", " about to say");
+		output.start("reply:3", "Hello, I was about to say something whole");
+		output.delta("reply:3", ".");
+		output.final("reply:3", "Hello, I was about to say something whole.");
+		assert.equal(
+			plain(),
+			"mason: Hello, I was about to say something whole.\n",
+			"a restarted stream continues the line it was on",
+		);
+
 		printed.length = 0;
 		output.start("reply:2", "a streamed answer");
 		output.final("reply:2", "a streamed answer");
@@ -274,8 +288,14 @@ describe("mason chat", () => {
 			});
 			let stdout = "";
 			let stderr = "";
+			// When each piece of the answer reached the screen: a whole answer in one write is a turn that never streamed,
+			// and every assertion below would pass on it without exercising the code this test is about.
+			let headAt: number | undefined;
+			let tailAt: number | undefined;
 			child.stdout.on("data", (chunk: Buffer) => {
 				stdout += chunk.toString();
+				if (headAt === undefined && stdout.includes("sentence number 0 of the answer.")) headAt = Date.now();
+				if (tailAt === undefined && stdout.includes("sentence number 11 of the answer.")) tailAt = Date.now();
 			});
 			child.stderr.on("data", (chunk: Buffer) => {
 				stderr += chunk.toString();
@@ -296,6 +316,11 @@ describe("mason chat", () => {
 			const code = await exited;
 			assert.equal(code, 0, stderr);
 
+			assert.ok(headAt !== undefined && tailAt !== undefined, `the whole answer arrived: ${stdout}`);
+			assert.ok(
+				(tailAt as number) - (headAt as number) > 100,
+				`the answer arrived in pieces, ${String((tailAt as number) - (headAt as number))}ms apart: ${stdout}`,
+			);
 			assert.ok(
 				stdout.includes("sentence number 0 of the answer."),
 				`the answer begins at its beginning: ${stdout}`,
