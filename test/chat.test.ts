@@ -22,6 +22,7 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { replyOutput } from "../scripts/chat.ts";
 import { REPLY_TOOL } from "../src/shared/contract.ts";
 import { household } from "./support/chat.ts";
 
@@ -153,6 +154,158 @@ describe("mason chat", () => {
 			assert.match(stdout, /\[stop\] handled: stopped/, "the control reached mason");
 			assert.match(stdout, /\[status\] handled: idle/, "and the turn settled rather than finishing late");
 			assert.doesNotMatch(stdout, /too late/, "the turn was stopped before it answered");
+		} finally {
+			await served.close();
+		}
+	});
+
+	test("a stream stopped halfway says the words on the screen were withdrawn", async () => {
+		// The other end of the guard: a stream whose turn ends before it is final is a withdrawal, and the notice is the
+		// only thing that tells a person the half-written answer above it did not survive.
+		const { home, serve } = await household("mason-chat-stop-stream-");
+		const answer = Array.from({ length: 30 }, (_, index) => `word number ${index} of a long answer.`).join(" ");
+		// Slow enough that the stop lands while the reply is still being written, not before the stream begins.
+		const served = await serve(slowReplyTurn(answer, 200), { tokensPerSecond: 60 });
+		try {
+			const child = spawn(process.execPath, ["--experimental-strip-types", script, "--url", served.url], {
+				cwd: root,
+				env: { ...process.env, MASON_HOME: home },
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			let stdout = "";
+			let stderr = "";
+			child.stdout.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
+			child.stderr.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+			const exited = new Promise<number>((resolve) => {
+				child.on("exit", (code) => {
+					resolve(code ?? 1);
+				});
+			});
+			const deadline = Date.now() + 10_000;
+			while (!stdout.includes("connected") && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.match(stdout, /connected/, stderr);
+			child.stdin.write("say something long\n");
+			// Wait for words on the screen rather than a fixed sleep: the stream is what has to be interrupted.
+			const streaming = Date.now() + 10_000;
+			while (!/word number \d/.test(stdout) && Date.now() < streaming)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.match(stdout, /word number \d/, "the reply was streaming");
+			child.stdin.write("/stop\n");
+			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			child.stdin.write("/exit\n");
+			assert.equal(await exited, 0, stderr);
+			assert.match(stdout, /the reply was withdrawn/, `the stopped stream was withdrawn: ${stdout}`);
+			assert.doesNotMatch(stdout, /word number 29/, "the answer never finished");
+		} finally {
+			await served.close();
+		}
+	});
+
+	test("a streamed answer is written whole: the start's words, the deltas, the tail the stream never reached", () => {
+		// The three shapes a streamed delivery takes on a terminal, and the one thing each must not do: begin mid-sentence
+		// (the words in `start` are the opening of the message), stop where the stream stopped (the stream is a prefix of
+		// the message, not all of it), or print the same answer twice (a delivery that lands after its stream was
+		// withdrawn is the message that stream was showing).
+		const printed: string[] = [];
+		// The same contract `console.log` has: a line is written with its newline, and a blank string is a blank line.
+		const output = replyOutput(
+			(text) => printed.push(text),
+			(text) => printed.push(`${text}\n`),
+		);
+		const plain = (): string => printed.join("").replace(/\x1b\[[0-9;]*m/g, "");
+		output.start("reply:1", "Hello — I'm mason, and I");
+		output.delta("reply:1", " have just come up");
+		output.final("reply:1", "Hello — I'm mason, and I have just come up, and this is the rest of it.");
+		assert.equal(
+			plain(),
+			"mason: Hello — I'm mason, and I have just come up, and this is the rest of it.\n",
+			"the screen has the whole answer, in order, once",
+		);
+
+		printed.length = 0;
+		output.start("reply:2", "a streamed answer");
+		output.final("reply:2", "a streamed answer");
+		assert.equal(plain(), "mason: a streamed answer\n", "a stream that reached the end closes the line");
+
+		printed.length = 0;
+		output.start("reply:3", "half an answer");
+		output.cancel("reply:3", "the reply was withdrawn before it was final");
+		output.final("reply:3", "half an answer");
+		assert.equal(
+			plain(),
+			"mason: half an answer\n[chat] the reply was withdrawn: the reply was withdrawn before it was final\n\n",
+			"the notice is on its own line, and the words are not printed again",
+		);
+
+		printed.length = 0;
+		output.start("reply:4", "half an answer");
+		output.cancel("reply:4", "stopped");
+		output.final("reply:4", "the whole answer");
+		assert.equal(
+			plain().split("the whole answer").length - 1,
+			1,
+			`a final the screen does not have is printed once: ${plain()}`,
+		);
+
+		printed.length = 0;
+		output.final("reply:5", "no stream at all");
+		assert.equal(plain(), "mason: no stream at all\n", "a delivery that never streamed arrives whole");
+	});
+
+	test("a streamed answer is on screen once, whole, and never announced as withdrawn", async () => {
+		// The shape that made a person see the same paragraph twice: the reply is written in pieces (`start` carries the
+		// text so far, the deltas the rest), the assistant message leaves the live state as it commits — which is the
+		// handover to the tool, not the end of the delivery — and the final lands a moment later. A console that prints
+		// only deltas begins mid-sentence; one that forgets a cancelled delivery prints the answer a second time.
+		const { home, serve } = await household("mason-chat-stream-");
+		const answer = Array.from({ length: 12 }, (_, index) => `sentence number ${index} of the answer.`).join(" ");
+		// Paced, so the stream exists: with no pace the whole tool call is pushed in one tick and nothing streams.
+		const served = await serve(replyTurn(answer), { tokensPerSecond: 300 });
+		try {
+			const child = spawn(process.execPath, ["--experimental-strip-types", script, "--url", served.url], {
+				cwd: root,
+				env: { ...process.env, MASON_HOME: home },
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			let stdout = "";
+			let stderr = "";
+			child.stdout.on("data", (chunk: Buffer) => {
+				stdout += chunk.toString();
+			});
+			child.stderr.on("data", (chunk: Buffer) => {
+				stderr += chunk.toString();
+			});
+			const exited = new Promise<number>((resolve) => {
+				child.on("exit", (code) => {
+					resolve(code ?? 1);
+				});
+			});
+			const deadline = Date.now() + 10_000;
+			while (!stdout.includes("connected") && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			child.stdin.write("tell me something long\n");
+			const answered = Date.now() + 15_000;
+			while (!stdout.includes("sentence number 11 of the answer.") && Date.now() < answered)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			child.stdin.write("/exit\n");
+			const code = await exited;
+			assert.equal(code, 0, stderr);
+
+			assert.ok(
+				stdout.includes("sentence number 0 of the answer."),
+				`the answer begins at its beginning: ${stdout}`,
+			);
+			assert.equal(
+				stdout.split("sentence number 11 of the answer.").length - 1,
+				1,
+				`the answer is on screen once: ${stdout}`,
+			);
+			assert.doesNotMatch(stdout, /withdrawn/, "a reply that lands was never withdrawn");
 		} finally {
 			await served.close();
 		}

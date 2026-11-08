@@ -32,8 +32,13 @@ export interface ServedChat {
 export interface Household {
 	readonly home: string;
 	readonly paths: HousePaths;
-	/** Starts the server with these scripted model steps. One per test: the faux provider's queue is single-use. */
-	serve(steps: readonly FauxResponseStep[]): Promise<ServedChat>;
+	/**
+	 * Starts the server with these scripted model steps. One per test: the faux provider's queue is single-use.
+	 *
+	 * `tokensPerSecond` paces the stream, and nothing streams without it: with no pace the whole tool call is pushed in one
+	 * tick, so the live view the door watches never shows a partial reply.
+	 */
+	serve(steps: readonly FauxResponseStep[], options?: { readonly tokensPerSecond?: number }): Promise<ServedChat>;
 }
 
 /** A home with the console entry already granted, and nothing else in it. */
@@ -45,7 +50,7 @@ export async function household(prefix: string): Promise<Household> {
 	return {
 		home: paths.home,
 		paths,
-		async serve(steps) {
+		async serve(steps, options = {}) {
 			const server = await startServer({
 				port: 0,
 				hostname: "127.0.0.1",
@@ -53,7 +58,7 @@ export async function household(prefix: string): Promise<Household> {
 				dataDir: join(directory, "data"),
 				workspaceDir: join(directory, "workspace"),
 				houseHome: paths.home,
-				modelAccess: fauxAccess(steps),
+				modelAccess: fauxAccess(steps, options.tokensPerSecond),
 				onReport: () => {},
 			});
 			return {
