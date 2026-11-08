@@ -1,14 +1,20 @@
 /**
  * Attachments, as content ids and authenticated HTTP.
  *
- * Bytes never cross the JSON-RPC socket and never sit in an argument as base64: a shared filesystem path is not a remote
- * protocol, and a 40 MB message is not a JSON-RPC frame. Mason hands back an id, the connector references that id, and
+ * Bytes never cross the contract and never sit in an argument as base64: a shared filesystem path is not a remote
+ * protocol, and a 40 MB message is not a method argument. Mason hands back an id, the connector references that id, and
  * the bytes go up over that connector's own credentialed endpoint.
  *
  * The mechanics a connector would otherwise reimplement badly live here: the headers, the size cap, the expiry, and the
  * fact that an error is a coded refusal rather than a mystery status.
  */
-import type { AttachmentUploadResult, ProtocolErrorData } from "mason-protocol";
+import type { AttachmentUploadResult } from "mason-protocol";
+
+/** The body of a refusal: mason's code and the sentence a person reads, when the endpoint sent one. */
+export interface Refusal {
+	readonly code: string;
+	readonly message: string;
+}
 
 export interface AttachmentClient {
 	/** Put bytes in mason's store and get the id to reference. */
@@ -21,9 +27,9 @@ export interface AttachmentClient {
 /** A refusal from the transfer endpoint, with the status and mason's code when it sent one. */
 export class AttachmentError extends Error {
 	readonly status: number;
-	readonly data: ProtocolErrorData | undefined;
+	readonly data: Refusal | undefined;
 
-	constructor(status: number, message: string, data?: ProtocolErrorData) {
+	constructor(status: number, message: string, data?: Refusal) {
 		super(message);
 		this.name = "AttachmentError";
 		this.status = status;
@@ -74,13 +80,13 @@ export function createAttachmentClient(options: AttachmentClientOptions): Attach
 }
 
 async function refusal(response: Response): Promise<AttachmentError> {
-	let data: ProtocolErrorData | undefined;
+	let data: Refusal | undefined;
 	let message = `the transfer endpoint answered ${response.status}`;
 	try {
 		const body = (await response.json()) as Record<string, unknown>;
 		if (typeof body.message === "string") message = body.message;
 		if (typeof body.code === "string" && typeof body.message === "string") {
-			data = body as unknown as ProtocolErrorData;
+			data = body as unknown as Refusal;
 		}
 	} catch {
 		// A body that is not JSON is a refusal with the status and nothing else, which is still a refusal.

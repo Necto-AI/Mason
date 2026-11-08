@@ -5,7 +5,7 @@
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
 	"version": "0.1.0",
-	"description": "The TypeScript SDK for a mason connector: the WebSocket runtime, negotiation, durable deduplication and outbound replay, attachments, MCP helpers, and the fake-Mason conformance suite.",
+	"description": "The TypeScript SDK for a mason connector: one Chord host, the durable journal, the delivery ledger, attachments, MCP helpers, and the fake-mason conformance suite.",
 	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -41,14 +41,16 @@
 	"sideEffects": false,
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"WIRE.md"
 	],
 	"scripts": {
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"build": "tsc -p tsconfig.build.json"
 	},
 	"dependencies": {
-		"mason-protocol": "0.1.0"
+		"mason-protocol": "0.1.0",
+		"@earendil-works/chord": "1.5.0"
 	},
 	"engines": {
 		"node": ">=22.6"
