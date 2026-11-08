@@ -277,7 +277,6 @@ export const LimitsSchema = obj({
 	attachmentBytes: int(),
 	attachmentTtlMs: int(),
 });
-export type Limits = Static<typeof LimitsSchema>;
 
 /**
  * The handshake, as state: what this connector is granted, readable as soon as its reference to `mason.peer` is ready.
@@ -371,10 +370,3 @@ export interface AttachmentUploadResult {
 	readonly size: number;
 	readonly expiresAt?: number;
 }
-
-/** The schema of one member, for a host that declares it rather than importing the contract's internals. */
-export const SCHEMAS: Readonly<Record<string, Schema>> = {
-	append: AppendSchema,
-	deliver: DeliverSchema,
-	session: SessionSchema,
-};
