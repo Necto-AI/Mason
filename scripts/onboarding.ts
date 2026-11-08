@@ -57,7 +57,8 @@ export interface ConnectorPlan {
 	readonly url?: string;
 	readonly env: Readonly<Record<string, string>>;
 	readonly owner?: string;
-	readonly conversations: readonly string[];
+	/** The places the connector may be sent to, as `id` or `id=label`. */
+	readonly targets: readonly string[];
 	readonly events: Events;
 	/** Whether setup runs a container for it: the console and a `custom` connector run somewhere else. */
 	readonly container: boolean;
@@ -127,7 +128,7 @@ export interface OnboardingOptions {
  * The prompter the operations get: the plan answered everything before the first write, so a question now is a bug.
  *
  * The one exception is an *optional* question, which the plan answered by not answering it — an empty `HTTPS_PROXY`, no
- * conversations of its own. That is the same answer `scriptedPrompter` gives a `--yes` run, so the two paths agree; a
+ * targets of its own. That is the same answer `scriptedPrompter` gives a `--yes` run, so the two paths agree; a
  * required question, or a pick, is a question the plan should have collected, and it fails as a bug in this file.
  */
 export function answeredPrompter(): Prompter {
@@ -233,7 +234,7 @@ function setupArgs(connector: ConnectorPlan): string[] {
 	if (connector.url !== undefined) args.push("--url", connector.url);
 	for (const [name, value] of Object.entries(connector.env)) args.push("--env", `${name}=${value}`);
 	if (connector.owner !== undefined && connector.owner !== "") args.push("--owner", connector.owner);
-	if (connector.conversations.length > 0) args.push("--conversations", connector.conversations.join(","));
+	if (connector.targets.length > 0) args.push("--targets", connector.targets.join(","));
 	const events = Object.entries(connector.events).map(([kind, hook]) => `${kind}=${hook}`);
 	if (events.length > 0) args.push("--events", events.join(","));
 	if (connector.container && !connector.start) args.push("--no-start");
@@ -606,7 +607,7 @@ async function connector(ctx: Context): Promise<Direction> {
 			kind,
 			description: "The terminal, built in: talk to the bot with no Telegram at all",
 			env: {},
-			conversations: [],
+			targets: [],
 			events: {},
 			container: false,
 			start: false,
@@ -635,13 +636,13 @@ async function connector(ctx: Context): Promise<Direction> {
 			...(previous?.owner === undefined ? {} : { value: previous.owner }),
 			flag: "--owner <id>",
 		});
-		const conversations = advanced
+		const targets = advanced
 			? splitIds(
-					await screen.text("connector.conversations", "Which conversations may it carry?", {
-						hint: "the ids it sends for its rooms and people, comma separated; empty means the owner's",
-						...(previous === undefined ? {} : { value: previous.conversations.join(", ") }),
+					await screen.text("connector.targets", "Which places may it be sent to?", {
+						hint: "one per place it can reach, comma separated as id or id=label; empty means nowhere",
+						...(previous === undefined ? {} : { value: previous.targets.join(", ") }),
 						required: false,
-						flag: "--conversations <id,id>",
+						flag: "--targets <id,id=label>",
 					}),
 				)
 			: [];
@@ -673,7 +674,7 @@ async function connector(ctx: Context): Promise<Direction> {
 			url,
 			env: {},
 			owner,
-			conversations,
+			targets,
 			events,
 			container: false,
 			start: false,
@@ -706,11 +707,9 @@ async function connector(ctx: Context): Promise<Direction> {
 		const optional = variable.optional === true;
 		const chats = variable.name.endsWith("_CHATS");
 		const question = chats
-			? "Which conversations may it carry?"
+			? "Which places may it be sent to, and how does it answer for them?"
 			: variable.prompt.charAt(0).toUpperCase() + variable.prompt.slice(1);
-		const hint = chats
-			? "chat ids or @usernames, comma separated: the rooms and people it may answer in"
-			: variable.prompt;
+		const hint = chats ? "chat ids or @usernames, comma separated: the places it may be sent to" : variable.prompt;
 		const answer =
 			variable.secret === true
 				? await screen.secret(`connector.env.${variable.name}`, question, {
@@ -749,7 +748,7 @@ async function connector(ctx: Context): Promise<Direction> {
 		description: entry.description,
 		env: answers,
 		owner,
-		conversations: chats,
+		targets: chats,
 		events: {},
 		container: true,
 		start,
@@ -770,7 +769,7 @@ const controlList = (commands: readonly string[]): string => commands.map((comma
  */
 async function grantFace(kind: string): Promise<{ readonly face: string; readonly controls: string }> {
 	if (kind === CONSOLE) return { face: "the terminal's words", controls: controlList(CONTROL_OPS) };
-	if (kind === "custom") return { face: "the conversations it names", controls: controlList(CONTROL_OPS) };
+	if (kind === "custom") return { face: "the places it names", controls: controlList(CONTROL_OPS) };
 	const entry = await catalogEntry(kind).catch(() => undefined);
 	if (entry === undefined) return { face: "nothing yet", controls: "nothing yet" };
 	return {
@@ -835,8 +834,8 @@ async function review(ctx: Context): Promise<Direction> {
 	const connectorPairs: Array<readonly [string, string]> = [["type", connectorPlan?.kind ?? "(unchosen)"]];
 	if (connectorPlan?.url !== undefined) connectorPairs.push(["url", connectorPlan.url]);
 	if (connectorPlan?.owner !== undefined) connectorPairs.push(["owner", connectorPlan.owner]);
-	if ((connectorPlan?.conversations.length ?? 0) > 0)
-		connectorPairs.push(["chats", (connectorPlan?.conversations ?? []).join(", ")]);
+	if ((connectorPlan?.targets.length ?? 0) > 0)
+		connectorPairs.push(["send to", (connectorPlan?.targets ?? []).join(", ")]);
 	const events = Object.entries(connectorPlan?.events ?? {});
 	if (events.length > 0)
 		connectorPairs.push(["events", events.map(([event, hook]) => `${event} → ${hook}`).join(", ")]);
@@ -1212,7 +1211,7 @@ export function preseed(flags: { readonly init: readonly string[]; readonly setu
 			...(setup.url === undefined ? {} : { url: setup.url, kind: "custom" }),
 			env: Object.fromEntries(setup.env),
 			...(setup.owner === undefined ? {} : { owner: setup.owner }),
-			conversations: setup.conversations === undefined ? [] : splitIds(setup.conversations),
+			targets: setup.targets === undefined ? [] : splitIds(setup.targets),
 			events: typeof events === "string" ? {} : events,
 			container: (setup.connector ?? "") !== "" && setup.connector !== CONSOLE && setup.connector !== "custom",
 			start: setup.start,

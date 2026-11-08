@@ -19,6 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { localDaemon } from "@earendil-works/pi-env";
 import {
@@ -32,6 +33,7 @@ import {
 } from "./common.ts";
 import { composePath, readComposeCredential } from "./connector-compose.ts";
 import { listConnectorCredentials } from "./connectors.ts";
+import { parseRoutines, type RoutineConfig } from "./hooks.ts";
 import { HOUSE_ENTRIES, type HousePaths } from "./house.ts";
 import { type ConnectorInstalls, readInstalls } from "./install-state.ts";
 import { readIntegrationBoot, readIntegrations } from "./integrations.ts";
@@ -424,6 +426,7 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 			ok: true,
 			detail: `${house.integrations} is absent: no integration is configured`,
 		};
+	const sinking = await sinkingKinds(house);
 	const boot = await readIntegrationBoot(house);
 	if (boot === undefined)
 		return { name: "integrations", ok: true, detail: `${house.integrations} parses (not booted yet)` };
@@ -435,7 +438,45 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 			detail: `${house.integrations} changed since the boot at ${boot.bootedAt}`,
 			repair: "restart to apply: `mason up`",
 		};
-	return { name: "integrations", ok: true, detail: `${house.integrations} parses, unchanged since the last boot` };
+	const detail = `${house.integrations} parses, unchanged since the last boot`;
+	return {
+		name: "integrations",
+		ok: true,
+		// Info, never a failure: a granted kind whose routine is absent or switched off is a connector writing into the
+		// event log, which is a deliberate sink (#156) and not a broken home. Doctor says so because the alternative is an
+		// operator waiting for a wake that will never come.
+		detail: sinking.length === 0 ? detail : `${detail}; ${sinking.join("; ")}`,
+	};
+}
+
+/**
+ * The granted kinds that wake nothing: a mapping to a routine `agent/routines.json` does not define, or defines with
+ * `enabled: false`.
+ *
+ * Read-only and best effort. A file that will not parse is the boot's refusal, not this check's — doctor is about what a
+ * person has to fix by hand.
+ */
+async function sinkingKinds(house: HousePaths): Promise<string[]> {
+	const { integrations } = await readIntegrations(house).catch(() => ({ integrations: {} as Record<string, never> }));
+	let routines: RoutineConfig[] = [];
+	try {
+		routines = parseRoutines(await readFile(join(house.agentDir, "routines.json"), "utf8"));
+	} catch {
+		return [];
+	}
+	const live = new Set(routines.filter((routine) => routine.enabled !== false).map((routine) => routine.name));
+	const sinking: string[] = [];
+	for (const [name, integration] of Object.entries(integrations).sort(([left], [right]) =>
+		left.localeCompare(right),
+	)) {
+		if (integration?.enabled !== true) continue;
+		for (const [kind, routine] of Object.entries(integration.connector?.events?.hooks ?? {}).sort(([left], [right]) =>
+			left.localeCompare(right),
+		)) {
+			if (!live.has(routine)) sinking.push(`${name}: kind ${kind} wakes nothing (no live routine "${routine}")`);
+		}
+	}
+	return sinking;
 }
 
 /** The connector names a bot's integrations grant, sorted; empty when nothing can reach it. */

@@ -30,16 +30,31 @@ export interface EventHookConfig {
 	 * interval has a slot that long, and re-arming cannot double-fire inside it.
 	 */
 	intervalMs?: number;
+	/**
+	 * What an event does to a turn already running: `steer` interrupts it, `followUp` queues behind it. It is the
+	 * routine's own choice, read from `agent/routines.json`, because it decides how a particular wake treats a
+	 * particular turn — a page that must be seen now, a log summary that can wait.
+	 */
+	whenBusy?: "steer" | "followUp";
 	promptTemplate: string;
 	lastFiredAt?: string;
 	fireCount: number;
 }
 
-/** One routine as `agent/routines.json` carries it: a name, a wall-clock interval, and the prompt the timer fires. */
+/**
+ * One routine as `agent/routines.json` carries it: a name, the prompt a wake sends, and how it behaves.
+ *
+ * `intervalSeconds` is optional on purpose. A routine with one is a timer; a routine without one is only ever woken by
+ * an event whose kind the operator's grant maps to it, and a timer nothing asked for is not a default worth making.
+ */
 export interface RoutineConfig {
 	name: string;
-	intervalSeconds: number;
+	intervalSeconds?: number;
 	prompt: string;
+	/** `steer` or `followUp` against a running turn. Absent is `followUp`: a wake waits its turn unless it says otherwise. */
+	whenBusy?: "steer" | "followUp";
+	/** Absent is `true`. A switched-off routine keeps its grant mapping and stops waking the bot. */
+	enabled?: boolean;
 }
 
 /** The id the run supervisor's retry lifecycle hook occupies (`RETRY_HOOK_ID` in `run-retry.ts`); the file cannot take it. */
@@ -69,17 +84,32 @@ export function parseRoutines(text: string): RoutineConfig[] {
 			throw new Error(`"${routine.name}" is kept for the run supervisor's retry lifecycle hook`);
 		}
 		seen.add(routine.name);
+		// A routine without an interval is woken by an event and only by an event: no timer, and nothing to validate.
 		if (
-			typeof routine.intervalSeconds !== "number" ||
-			!Number.isInteger(routine.intervalSeconds) ||
-			routine.intervalSeconds < 30
+			routine.intervalSeconds !== undefined &&
+			(typeof routine.intervalSeconds !== "number" ||
+				!Number.isInteger(routine.intervalSeconds) ||
+				routine.intervalSeconds < 30)
 		) {
 			throw new Error(`"${routine.name}" has an intervalSeconds that is not an integer of at least 30`);
 		}
 		if (typeof routine.prompt !== "string" || routine.prompt === "") {
 			throw new Error(`"${routine.name}" has an empty prompt`);
 		}
-		return { name: routine.name, intervalSeconds: routine.intervalSeconds, prompt: routine.prompt };
+		const whenBusy = routine.whenBusy;
+		if (whenBusy !== undefined && whenBusy !== "steer" && whenBusy !== "followUp") {
+			throw new Error(`"${routine.name}" has a whenBusy that is not "steer" or "followUp"`);
+		}
+		if (routine.enabled !== undefined && typeof routine.enabled !== "boolean") {
+			throw new Error(`"${routine.name}" has an "enabled" that is not true or false`);
+		}
+		return {
+			name: routine.name,
+			...(routine.intervalSeconds === undefined ? {} : { intervalSeconds: routine.intervalSeconds }),
+			prompt: routine.prompt,
+			...(whenBusy === undefined ? {} : { whenBusy }),
+			...(routine.enabled === undefined ? {} : { enabled: routine.enabled }),
+		};
 	});
 }
 
@@ -134,8 +164,8 @@ export interface FireOptions {
 	 */
 	readonly kind?: string;
 	/**
-	 * Where the event came from, when the sender could name a conversation. It is what a reply targets: a fire that
-	 * carries an origin is a fire whose answer has a reader, and one that does not is recorded with nobody reached.
+	 * Where the event came from, when the sender could name an address. It is what a send targets: an event that carries
+	 * an origin is one whose answer has a reader, and one that does not is recorded with nobody reached.
 	 */
 	readonly origin?: Origin;
 }
@@ -143,8 +173,9 @@ export interface FireOptions {
 /**
  * What every fired hook's input opens with, so the turn it starts is recognisable from the text alone.
  *
- * The model sees it — a proactive turn has to read as one — and so does every reader that has only the conversation's
- * messages to go on: the delivery gate, and `reply` itself, which tells a hooked turn with no origin from a person's.
+ * The model sees it — a proactive turn has to read as one — and so does a reader with only the conversation's messages
+ * to go on. Routing is not this text's: `send` reads the input's kind and origin, and an `app.hook` without one is a
+ * hook's turn.
  */
 export function routineMarker(name: string): string {
 	return `[ROUTINE: ${name}]`;
@@ -226,7 +257,7 @@ export class HooksManager {
 			this.#hooks.delete(id);
 		}
 		for (const routine of routines) {
-			const intervalMs = routine.intervalSeconds * 1_000;
+			const intervalMs = routine.intervalSeconds === undefined ? undefined : routine.intervalSeconds * 1_000;
 			const current = this.#hooks.get(routine.name);
 			// A definition this manager already held is the only one a re-read can reset: on the first load the persisted
 			// slot came from the previous process's schedule, and there is nothing to compare it against — the boot scan
@@ -243,8 +274,11 @@ export class HooksManager {
 				id: routine.name,
 				name: routine.name,
 				description: "",
-				enabled: true,
-				intervalMs,
+				// `enabled` and `whenBusy` are the file's, not the persisted state's: the agent edits one file and every
+				// part of a routine's behaviour is in it.
+				enabled: routine.enabled ?? true,
+				...(intervalMs === undefined ? {} : { intervalMs }),
+				...(routine.whenBusy === undefined ? {} : { whenBusy: routine.whenBusy }),
 				promptTemplate: routine.prompt,
 				...(state.lastFiredAt === undefined ? {} : { lastFiredAt: state.lastFiredAt }),
 				fireCount: state.fireCount ?? current?.fireCount ?? 0,
@@ -319,6 +353,7 @@ export class HooksManager {
 	async fire(id: string, options: FireOptions = {}): Promise<Submission> {
 		if (this.#closed) throw new Error("Hooks manager is closed");
 		const hook = this.#require(id);
+
 		const payload = options.payload;
 		const kind = options.kind;
 		const origin = options.origin;
@@ -339,15 +374,13 @@ export class HooksManager {
 						: {
 								origin: {
 									connector: origin.connector,
-									externalConversationId: origin.externalConversationId,
-									...(origin.externalMessageId === undefined
-										? {}
-										: { externalMessageId: origin.externalMessageId }),
-									...(origin.externalActorId === undefined ? {} : { externalActorId: origin.externalActorId }),
+									ref: origin.ref,
+									...(origin.messageId === undefined ? {} : { messageId: origin.messageId }),
+									...(origin.actor === undefined ? {} : { actor: origin.actor }),
 								},
 							}),
 				}),
-				whenBusy: whenBusyFor("hook"),
+				whenBusy: hook.whenBusy ?? whenBusyFor("hook"),
 				requestId: options.requestId ?? gestureRequestId(hook.id),
 			},
 			BACKGROUND_CONTEXT,
@@ -514,7 +547,8 @@ export class HooksManager {
 			for (const hook of this.#hooks.values()) {
 				const persisted = this.#state[hook.id] ?? {};
 				state[hook.id] = {
-					enabled: hook.enabled,
+					// A routine's switch is `agent/routines.json`'s; only a hook defined in code has its state persisted.
+					...(this.#routines.has(hook.id) ? {} : { enabled: hook.enabled }),
 					fireCount: hook.fireCount,
 					...(hook.lastFiredAt === undefined
 						? persisted.lastFiredAt === undefined

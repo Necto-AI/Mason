@@ -9,7 +9,7 @@
 		{ "text": "What do you know about my preferences? One line." }
 	],
 	"expect": {
-		"calls": { "reply": { "min": 2 }, "write": { "min": 1 } },
+		"calls": { "send": { "min": 2 }, "write": { "min": 1 } },
 		"written": ["terse"],
 		"text": ["terse"],
 		"maxInputTokens": 24000

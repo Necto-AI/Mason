@@ -68,10 +68,10 @@ describe("a first run with the console connector", () => {
 		const paths = housePaths(home);
 		const { integrations } = await readIntegrations(paths);
 		assert.equal(integrations.console?.enabled, true);
-		assert.deepEqual(integrations.console?.connector?.user, {
-			owner: "local",
-			conversations: [{ externalConversationId: "terminal", kind: "person" }],
-		});
+		assert.deepEqual(integrations.console?.connector?.user, { owner: "local" });
+		assert.deepEqual(integrations.console?.connector?.targets, [
+			{ id: "terminal", label: "the terminal this bot runs in", capabilities: ["text", "markdown"] },
+		]);
 		assert.deepEqual(integrations.console?.connector?.commands, ["stop", "compact", "clear", "status"]);
 
 		// The token is printed once and stored as a hash: the file must not hold the credential itself.
@@ -99,7 +99,10 @@ describe("a first run with the console connector", () => {
 			enabled: true,
 			description: "my own line",
 			mcp: { url: "http://127.0.0.1:8082/mcp", note: "a key mason has never heard of" },
-			connector: { user: { owner: "8811", conversations: [{ externalConversationId: "8811", kind: "person" }] } },
+			connector: {
+				user: { owner: "8811" },
+				targets: [{ id: "8811", label: "the DM with Denis", capabilities: ["text"] }],
+			},
 		};
 		await mkdir(paths.serviceDir, { recursive: true, mode: 0o700 });
 		await writeFile(paths.integrations, JSON.stringify({ integrations: { telegram } }));
@@ -261,10 +264,10 @@ describe("a connector that is already running somewhere else", () => {
 		const { integrations } = await readIntegrations(paths);
 		const grant = integrations.custom?.connector;
 		assert.equal(grant?.user?.owner, "denis");
-		// The one conversation this home knows about is the owner's, and the command says the list may need editing.
-		assert.deepEqual(grant?.user?.conversations, [{ externalConversationId: "denis", kind: "person" }]);
+		// The one place this home knows about is the owner's, and the command says the list may need editing.
+		assert.deepEqual(grant?.targets, [{ id: "denis", label: "denis", capabilities: ["text", "markdown"] }]);
 		assert.deepEqual(grant?.commands, ["stop", "compact", "clear", "status"]);
-		assert.match(result.stdout, /--conversations <ids>/);
+		assert.match(result.stdout, /--targets <ids>/);
 
 		const record = (await readInstalls(paths)).connectors.custom;
 		assert.equal(record?.source, `url:${url}`);
@@ -307,11 +310,14 @@ describe("a connector that is already running somewhere else", () => {
 		const paths = housePaths(home);
 		const { integrations } = await readIntegrations(paths);
 		const grant = integrations.custom?.connector;
-		// A negative id is a room, anything else a person: the one distinction the wire carries, and what `kind` records.
-		assert.deepEqual(grant?.user?.conversations, [
-			{ externalConversationId: "denis", kind: "person" },
-			{ externalConversationId: "-100200", kind: "room" },
-		]);
+		// One target per chat the connector asked for, with the chat id as its label.
+		assert.deepEqual(
+			grant?.targets?.map((target) => [target.id, target.label]),
+			[
+				["denis", "denis"],
+				["100200", "-100200"],
+			],
+		);
 		assert.deepEqual(grant?.events?.hooks, { mail: "check-mail", calendar: "check-calendar" });
 		// The file the boot reads is the one the wizard wrote: a hand edit is still valid input, and this one needed none.
 		const raw = JSON.parse(await readFile(paths.integrations, "utf8")) as { version?: string };

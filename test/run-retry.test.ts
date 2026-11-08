@@ -31,7 +31,7 @@ function viewOf(
 }
 
 /** The origin a person's words through a connector carry, and the shape a retry has to hand back. */
-const TELEGRAM = { connector: "telegram", externalConversationId: "-1001234" };
+const TELEGRAM = { connector: "telegram", ref: "team" };
 
 const base = { handledErrorId: undefined, attempts: 0, maxAttempts: 3, delaysMs: [15_000, 60_000, 300_000] };
 

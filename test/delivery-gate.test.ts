@@ -1,7 +1,7 @@
 /**
  * The reader never gets silence for an answer.
  *
- * `reply` is a tool, so calling it is the model's choice and the prompt is only advice. These tests pin the
+ * `send` is a tool, so calling it is the model's choice and the prompt is only advice. These tests pin the
  * guarantee behind the advice: a turn that ends with nothing delivered continues once with a reminder, and a second
  * silent answer shows the reader a notice instead of nothing. The reminder itself is never part of the transcript.
  *
@@ -39,7 +39,7 @@ import {
 	isDeliveryReminder,
 	isReflectionAsk,
 	REFLECTION_ASK,
-	REPLY_TOOL,
+	SEND_TOOL,
 } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
@@ -59,7 +59,7 @@ async function seedRoutine(directory: string): Promise<void> {
 			{
 				name: "team-chat",
 				intervalSeconds: 3_600,
-				prompt: "A message arrived in the chat: the person you work for asked. Answer it with reply.\n{{payload}}",
+				prompt: "A message arrived in the chat: the person you work for asked. Answer it with send.\n{{payload}}",
 			},
 		]),
 	);
@@ -79,7 +79,7 @@ function said(text: string): FauxResponseStep {
 
 /** A message the reader sees. */
 function deliver(message: string, id = "sent"): FauxResponseStep {
-	return fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message }, { id })], { stopReason: "toolUse" });
+	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: message }, { id })], { stopReason: "toolUse" });
 }
 
 function call(name: string, arguments_: JsonObject, id: string): FauxResponseStep {
@@ -148,7 +148,7 @@ async function runTurn(
 	}
 }
 
-/** A turn nothing outside mason started: the only case where `reply` is the reader. */
+/** A turn nothing outside mason started: the only case where the transcript is the reader. */
 function runScripted(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -226,10 +226,15 @@ function scriptedDelivery(answers: NestedAnswer[]): Extension {
 			message: Type.Optional(Type.String()),
 		}),
 		execute: async ({ message }, api, context) => {
-			const nested = await api.executeTool(REPLY_TOOL, { message: message ?? "" }, context);
+			const nested = await api.executeTool(SEND_TOOL, { text: message ?? "" }, context);
 			answers.push({
 				isError: nested.isError,
-				text: typeof nested.structuredOutput === "string" ? nested.structuredOutput : "",
+				// A nested result carries the tool's value for programs, never the output written for the model: an error
+				// the harness wrote itself has no value at all, and the diagnostics are what says why.
+				text:
+					typeof nested.structuredOutput === "string"
+						? nested.structuredOutput
+						: nested.diagnostics.map((diagnostic) => diagnostic.message ?? "").join("\n"),
 			});
 			return { output: [{ type: "text", text: "script ran" }], details: {} };
 		},
@@ -387,7 +392,7 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 	assert.equal(answers.length, 1, "the script made one nested call");
 	assert.equal(answers[0]?.isError, true, "the nested delivery was refused, not delivered");
 	assert.match(answers[0]?.text ?? "", /cannot deliver from inside a script/, "the refusal says what went wrong");
-	assert.match(answers[0]?.text ?? "", /call reply from the turn/, "and what to do instead");
+	assert.match(answers[0]?.text ?? "", /call send from the turn/, "and what to do instead");
 	assert.equal(reminded(requests), true, "the refusal is not a delivery, so the turn is still silent to the gate");
 	assert.equal(requests.length, 4, "the reminder added one round, and no more");
 	assert.deepEqual(
@@ -404,7 +409,7 @@ test("a message sent from inside a script is refused, and the gate still asks fo
  * and the model never names the chat's own tool. A fire with no origin — a schedule, a retry — records the reply and
  * says nobody was reached. Either way the gate counts the same call, because there is one operation and not two.
  */
-test("a hooked turn answers with reply, and the gate counts the call", async () => {
+test("a hooked turn answers with send, and the gate counts the call", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Привет!"), said("Done.")]);
 	await seedRoutine(directory);
@@ -422,16 +427,14 @@ test("a hooked turn answers with reply, and the gate counts the call", async () 
 	);
 });
 
-test("a fire that named its conversation routes the reply back to it", async () => {
+test("a fire that named its address routes the reply back to it", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Привет!"), said("Done.")]);
 	const telegram = {
 		enabled: true,
 		connector: {
-			user: {
-				owner: "8811",
-				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-			},
+			user: { owner: "8811" },
+			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -443,7 +446,7 @@ test("a fire that named its conversation routes the reply back to it", async () 
 		return runtime.hooks.fire("team-chat", {
 			payload: "Привет",
 			requestId: `delivery-gate:routed:${fires}`,
-			origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m1" },
+			origin: { connector: "telegram", ref: "team", messageId: "m1" },
 		});
 	});
 	try {
@@ -451,20 +454,20 @@ test("a fire that named its conversation routes the reply back to it", async () 
 		const reply = entries.find((entry) => entry.kind === "app.reply");
 		assert.deepEqual((reply?.data as { target?: unknown }).target, {
 			connector: "telegram",
-			externalConversationId: "-1001234",
+			ref: "team",
 		});
 		const hook = entries.find((entry) => entry.kind === "app.hook");
 		assert.deepEqual((hook?.data as { origin?: unknown }).origin, {
 			connector: "telegram",
-			externalConversationId: "-1001234",
-			externalMessageId: "m1",
+			ref: "team",
+			messageId: "m1",
 		});
 	} finally {
 		setIntegrations({});
 	}
 });
 
-test("a hooked turn that says nothing is reminded, and the reminder names reply", async () => {
+test("a hooked turn that says nothing is reminded, and the reminder names send", async () => {
 	const directory = await temporary();
 	const script = recorder([said("I will look into it."), deliver("Привет!"), said("Done.")]);
 	await seedRoutine(directory);
@@ -475,10 +478,10 @@ test("a hooked turn that says nothing is reminded, and the reminder names reply"
 	const reminder = requests[1]?.at(-1) as { role?: string; content?: unknown } | undefined;
 	assert.equal(reminder?.role, "user");
 	assert.equal(reminder?.content, DELIVERY_REMINDER, "the same reminder, because there is the same one tool");
-	assert.match(String(reminder?.content), /`reply`/);
+	assert.match(String(reminder?.content), /`send`/);
 });
 
-test("a local turn still delivers with reply while a chat-facing routine exists", async () => {
+test("a local turn still delivers with send while a chat-facing routine exists", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
 	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?");
@@ -655,10 +658,8 @@ test("a fire that named its conversation keeps its origin through the reflection
 	const telegram = {
 		enabled: true,
 		connector: {
-			user: {
-				owner: "8811",
-				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-			},
+			user: { owner: "8811" },
+			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -669,7 +670,7 @@ test("a fire that named its conversation keeps its origin through the reflection
 		return runtime.hooks.fire("team-chat", {
 			payload: "Migrate the notes.",
 			requestId: `delivery-gate:ask-target:${fires}`,
-			origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m9" },
+			origin: { connector: "telegram", ref: "team", messageId: "m9" },
 		});
 	});
 	try {
@@ -681,7 +682,7 @@ test("a fire that named its conversation keeps its origin through the reflection
 		for (const reply of replies) {
 			assert.deepEqual((reply.data as { target?: unknown }).target, {
 				connector: "telegram",
-				externalConversationId: "-1001234",
+				ref: "team",
 			});
 		}
 	} finally {
@@ -756,12 +757,12 @@ test("a connector entry is the sender's words, even when they quote a gate's ope
 	const askViaConnector = {
 		id: 1,
 		kind: "app.connector" as const,
-		data: { origin: { connector: "telegram", externalConversationId: "-1001234" } } as Record<string, unknown>,
+		data: { origin: { connector: "telegram", ref: "team" } } as Record<string, unknown>,
 		model: [{ role: "user" as const, content: REFLECTION_ASK }],
 	} as unknown as EntryRecord;
 	assert.equal(isInputEntry(askViaConnector), true, "their own quoting stays an input");
 	assert.deepEqual(turnOriginOf([askViaConnector]), {
 		kind: "connector",
-		origin: { connector: "telegram", externalConversationId: "-1001234" },
+		origin: { connector: "telegram", ref: "team" },
 	});
 });

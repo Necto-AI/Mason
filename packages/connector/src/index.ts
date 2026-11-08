@@ -1,44 +1,41 @@
 /**
  * `mason-connector` — the TypeScript SDK for one external connector.
  *
- * A connector is a process that may carry people's words, lend tools, and report events. This package owns the parts
- * that are the same for every connector and wrong in the same way when each one writes them itself: the socket, the
- * handshake, the durable journal, the dedup ledger, attachments, and the approval marker. It does not own vendor
- * behaviour, and it makes no policy decision: what a connector may do is mason's operator's answer, not the SDK's.
+ * A connector is a Chord host that opens one socket to mason. This package owns the parts that are the same for every
+ * connector and wrong in the same way when each one writes them itself: the host, the link, the durable journal, the
+ * dedup ledger, attachments, and the approval marker. It does not own vendor behaviour, and it makes no policy decision:
+ * what a connector may do is mason's operator's answer, not the SDK's.
  */
 
 export type {
 	Capability,
 	ContentBlock,
-	ControlParams,
+	ControlOp,
 	ControlResult,
 	DeliveryAck,
-	DeliveryDeltaParams,
-	DeliveryFinalParams,
-	DeliveryStartParams,
 	ErrorCode,
-	ExternalActor,
-	ExternalConversation,
-	FacesDeclaration,
-	HelloRequest,
-	HelloResult,
-	InteractionAck,
-	InteractionAnswerParams,
-	InteractionAnswerResult,
-	InteractionRequestParams,
-	Limits,
 	Origin,
-	ProtocolErrorData,
-	SubmissionMode,
-	SubmitParams,
+	Session,
+	Target,
 } from "mason-protocol";
 export {
 	APPROVAL,
 	APPROVAL_META_KEY,
 	CAPABILITIES,
-	METHOD,
+	CONTRACT,
+	CONTROL_OPS,
+	chordCodeFor,
+	connectorHost,
+	ERROR_CODE,
+	errorCodeOf,
+	MASON_HOST,
+	MasonConnector,
+	MasonPeer,
+	masonError,
 	PROTOCOL_MAJOR,
-	PROTOCOL_MINOR,
+	parseSendAddress,
+	SUBMISSION_MODES,
+	sendAddress,
 } from "mason-protocol";
 export {
 	type AttachmentClient,
@@ -52,25 +49,18 @@ export {
 	type ConnectorConfig,
 	type ConnectorHandlers,
 	type ConnectorStatus,
+	type ControlInput,
 	createConnector,
-	type FireInput,
-	helloRequest,
+	type Delivery,
+	type EventInput,
 	type InboundOutcome,
+	type LinkFactory,
 	type Logger,
-	type Session,
+	type NoticeInput,
+	type SubmissionInput,
 	silentLogger,
 } from "./connector.ts";
-export { protocolErrorOf, protocolFailure, type RpcMessage } from "./jsonrpc.ts";
-export {
-	type Link,
-	type LinkFactory,
-	linkOver,
-	linkPair,
-	nodeWebSocketLink,
-	type WebSocketConstructor,
-	type WebSocketLike,
-	webSocketLink,
-} from "./link.ts";
+export { nodeWebSocketLink, type WebSocketConstructor } from "./link.ts";
 export {
 	approvalMeta,
 	declareTool,
@@ -80,4 +70,3 @@ export {
 	type ToolDeclaration,
 } from "./mcp.ts";
 export { type ConnectorStore, LEDGER_KEEP, NAMESPACE, type StoreEntry } from "./store.ts";
-export { PeerError, PeerTimeout, RpcPeer } from "./transport.ts";

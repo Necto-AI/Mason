@@ -107,8 +107,8 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
     { "hook": { "name": "Morning brief", "description": "Check today's calendar.", "payload": "" } }
   ],
   "expect": {
-    "calls": { "reply": { "min": 1, "max": 1 }, "read": { "min": 1 } },
-    "before": [{ "tool": "read", "then": "reply" }],
+    "calls": { "send": { "min": 1, "max": 1 }, "read": { "min": 1 } },
+    "before": [{ "tool": "read", "then": "send" }],
     "text": ["3"],
     "maxInputTokens": 10000
   }

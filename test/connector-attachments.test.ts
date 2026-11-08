@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { ATTACHMENT_BYTES } from "../src/server/attachments.ts";
-import { CONNECTOR_ENTRY_KIND, REPLY_TOOL } from "../src/shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
 import { connectConnector, entriesOf, serveConnector, until } from "./support/connector.ts";
 
 const BYTES = new TextEncoder().encode("a photograph, allegedly");
@@ -94,7 +94,7 @@ describe("a submission with a file", () => {
 	it("reaches the model as an image block and as a path a tool can open", async () => {
 		const served = await serveConnector({
 			steps: [
-				fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "nice photo" })], { stopReason: "toolUse" }),
+				fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "nice photo" })], { stopReason: "toolUse" }),
 				fauxAssistantMessage(fauxText("done")),
 			],
 		});
@@ -106,8 +106,7 @@ describe("a submission with a file", () => {
 					name: "shot.png",
 				});
 				const outcome = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811" },
+					origin: { ref: "team", actor: { id: "8811" } },
 					content: [
 						{ type: "text", text: "what is this" },
 						{ type: "file", contentId: upload.contentId, name: "shot.png" },
@@ -146,8 +145,7 @@ describe("a submission with a file", () => {
 			const connected = await connectConnector(served);
 			try {
 				const outcome = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811" },
+					origin: { ref: "team", actor: { id: "8811" } },
 					content: [{ type: "file", contentId: "cnt_00000000000000000000000000000000" }],
 				});
 				assert.equal(outcome.status, "accepted");
