@@ -218,7 +218,7 @@ function scripted(): ResolvedModel {
 	const models = createModels();
 	models.setProvider(faux.provider);
 	faux.setResponses([
-		fauxAssistantMessage([fauxToolCall("reply", { message: "ok" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxToolCall("send", { text: "ok" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxText("sent")),
 	]);
 	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };

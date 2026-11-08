@@ -11,7 +11,7 @@
 	],
 	"expect": {
 		"calls": {
-			"reply": {
+			"send": {
 				"min": 1,
 				"max": 1
 			}

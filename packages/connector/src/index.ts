@@ -22,19 +22,19 @@ export {
 	APPROVAL,
 	APPROVAL_META_KEY,
 	CAPABILITIES,
-	CONTROL_OPS,
 	CONTRACT,
+	CONTROL_OPS,
+	chordCodeFor,
+	connectorHost,
 	ERROR_CODE,
+	errorCodeOf,
 	MASON_HOST,
 	MasonConnector,
 	MasonPeer,
-	PROTOCOL_MAJOR,
-	SUBMISSION_MODES,
-	chordCodeFor,
-	connectorHost,
-	errorCodeOf,
 	masonError,
+	PROTOCOL_MAJOR,
 	parseSendAddress,
+	SUBMISSION_MODES,
 	sendAddress,
 } from "mason-protocol";
 export {
@@ -57,8 +57,8 @@ export {
 	type LinkFactory,
 	type Logger,
 	type NoticeInput,
-	silentLogger,
 	type SubmissionInput,
+	silentLogger,
 } from "./connector.ts";
 export { nodeWebSocketLink, type WebSocketConstructor } from "./link.ts";
 export {

@@ -8,20 +8,20 @@
  * What it is not: mason. The conformance suite checks the connector's side of the contract, and a real mason checks
  * mason's. Both are needed, and neither substitutes for the other.
  */
-import { createHost, type Host, type Link, memoryLinkPair, type Ref } from "@earendil-works/chord";
+import { createHost, type Host, type Link, memoryLinkPair } from "@earendil-works/chord";
 import {
 	type ConnectorRef,
 	type ControlOp,
 	type ControlResult,
+	connectorHost,
 	type DeliveryAck,
 	ERROR_CODE,
 	MasonConnector,
 	MasonPeer,
-	SessionSchema,
-	type Session,
-	type Target,
-	connectorHost,
 	masonError,
+	type Session,
+	SessionSchema,
+	type Target,
 } from "mason-protocol";
 import type { Fetcher } from "../attachments.ts";
 
@@ -75,10 +75,11 @@ export interface FakeMason {
 	loseNextAck(): void;
 	/** Spend a budget class, so the next call in it is refused. */
 	exhaust(budget: "submissions" | "events" | "controls" | "attachments"): void;
-	deliver(params: { readonly deliveryId: string; readonly blocks: readonly unknown[]; readonly target?: string }):
-		| Promise<DeliveryAck | undefined>
-		| DeliveryAck
-		| undefined;
+	deliver(params: {
+		readonly deliveryId: string;
+		readonly blocks: readonly unknown[];
+		readonly target?: string;
+	}): Promise<DeliveryAck | undefined> | DeliveryAck | undefined;
 }
 
 const DEFAULT_LIMITS: Session["limits"] = {
@@ -309,7 +310,12 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		readonly blocks: readonly unknown[];
 		readonly target?: string;
 	}): Promise<DeliveryAck | undefined> | DeliveryAck | undefined {
-		const record: DeliveryRecord = { deliveryId: params.deliveryId, args: params as never, sentAt: now(), attempts: 0 };
+		const record: DeliveryRecord = {
+			deliveryId: params.deliveryId,
+			args: params as never,
+			sentAt: now(),
+			attempts: 0,
+		};
 		deliveries.push(record);
 		return send(record);
 	}
@@ -329,7 +335,10 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 			try {
 				// Mason re-`get`s the object every time: a held reference goes `gone` when the link drops. Bounded,
 				// because a connector that has not finished its handshake would otherwise hold the outbox open.
-				const ref = (await withDeadline(host.get(MasonConnector, { connector: name }), DELIVERY_WAIT_MS)) as unknown as ConnectorRef;
+				const ref = (await withDeadline(
+					host.get(MasonConnector, { connector: name }),
+					DELIVERY_WAIT_MS,
+				)) as unknown as ConnectorRef;
 				const ack = await withDeadline(Promise.resolve(ref.deliver(record.args as never)), DELIVERY_WAIT_MS);
 				record.ack = ack as DeliveryAck;
 				return record.ack;
@@ -345,7 +354,12 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 			}
 		})();
 		inFlight.set(record.deliveryId, call);
-		return lose ? (void call, undefined) : call;
+		if (lose) {
+			// The answer is dropped and the call is left running: the state a lost frame cannot be distinguished from.
+			void call;
+			return undefined;
+		}
+		return call;
 	}
 
 	/** The transfer endpoint, served in memory: the same headers and statuses mason's route answers with. */
@@ -399,4 +413,3 @@ function json(status: number, body: unknown): Response {
 function describe(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
-

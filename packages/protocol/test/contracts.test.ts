@@ -5,19 +5,19 @@ import { compile } from "@earendil-works/pi-schema";
 import {
 	AckSchema,
 	AppendSchema,
-	CONTRACTS,
 	CONTRACT,
+	CONTRACTS,
 	ControlResultSchema,
-	DeliverSchema,
-	ERROR_CODE,
-	type PeerRef,
-	PROTOCOL_MAJOR,
-	SessionSchema,
 	chordCodeFor,
 	connectorHost,
+	DeliverSchema,
+	ERROR_CODE,
 	errorCodeOf,
 	masonError,
+	type PeerRef,
+	PROTOCOL_MAJOR,
 	parseSendAddress,
+	SessionSchema,
 	sendAddress,
 } from "../src/index.ts";
 
@@ -47,11 +47,13 @@ test("the two contracts are the two names, placed where the protocol says", () =
 		CONTRACTS.map((contract) => contract.name),
 		[CONTRACT.peer, CONTRACT.connector],
 	);
-	const peer = CONTRACTS[0];
-	const connector = CONTRACTS[1];
-	assert.equal(peer?.name, "mason.peer");
-	assert.deepEqual(peer?.def.host, { name: "mason" });
-	assert.deepEqual(connector?.def.host, { prefix: "connector:", key: "connector" });
+	const placements = CONTRACTS.map((contract) => {
+		const def = contract.def as { host?: unknown };
+		return def.host;
+	});
+	assert.equal(CONTRACTS[0]?.name, "mason.peer");
+	assert.deepEqual(placements[0], { name: "mason" });
+	assert.deepEqual(placements[1], { prefix: "connector:", key: "connector" });
 	assert.equal(PROTOCOL_MAJOR, 1);
 });
 
@@ -81,7 +83,11 @@ test("the shape the type says and the shape the schema validates are one shape",
 		origin: { ref: "chat-1" },
 	};
 	assert.equal(compile(AppendSchema).check(submission), true);
-	assert.equal(compile(AppendSchema).check({ ...submission, type: "reply" }), false, "an append is one of three things");
+	assert.equal(
+		compile(AppendSchema).check({ ...submission, type: "reply" }),
+		false,
+		"an append is one of three things",
+	);
 
 	const delivery = { deliveryId: "d-1", blocks: [{ type: "text", text: "hi" }], target: "dm" };
 	assert.equal(compile(DeliverSchema).check(delivery), true);

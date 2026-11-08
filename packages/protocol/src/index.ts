@@ -15,8 +15,31 @@
  *
  * This module is the only place the two sides share a spelling. Nothing here imports mason.
  */
-import { type AnyContract, ChordError, type ChordErrorCode, hostFamily, hostNamed, method, remote, type RemoteContract } from "@earendil-works/chord";
-import { type Schema, type Static, arr, bool, int, lit, map, num, obj, opt, str, union, unknown } from "@earendil-works/pi-schema";
+import {
+	type AnyContract,
+	ChordError,
+	type ChordErrorCode,
+	hostFamily,
+	hostNamed,
+	method,
+	type RemoteContract,
+	remote,
+} from "@earendil-works/chord";
+import {
+	arr,
+	bool,
+	int,
+	lit,
+	map,
+	num,
+	obj,
+	opt,
+	type Schema,
+	type Static,
+	str,
+	union,
+	unknown,
+} from "@earendil-works/pi-schema";
 
 /** The major version. Two peers that disagree about it cannot talk, and Chord refuses the link rather than degrading. */
 export const PROTOCOL_MAJOR = 1;
