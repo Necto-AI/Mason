@@ -130,6 +130,8 @@ export async function connectorHome(options: { readonly noOwner?: boolean; reado
 	readonly secondCredential?: string;
 	/** A credential for the entry whose connector is switched off: minting succeeds, opening the socket does not. */
 	readonly offCredential?: string;
+	/** A credential for the entry that grants events and no `user`: it opens a socket that may not carry words. */
+	readonly alarmCredential?: string;
 }> {
 	const directory = await temporaryDirectory();
 	const paths = housePaths(join(directory, "house"));
@@ -140,9 +142,19 @@ export async function connectorHome(options: { readonly noOwner?: boolean; reado
 	const { credential } = await mintConnectorCredential(paths.home, "telegram");
 	// A credential for the entry that is switched off: minting one is allowed, and what it opens is the test.
 	const off = await mintConnectorCredential(paths.home, "off");
-	if (options.second !== true) return { paths, directory, credential, offCredential: off.credential };
+	// A credential for the entry with no `user` face, so a test can prove the face is the first ceiling and not the actor.
+	const alarm = await mintConnectorCredential(paths.home, "alarm-only");
+	const alarmCredential = alarm.credential;
+	if (options.second !== true) return { paths, directory, credential, offCredential: off.credential, alarmCredential };
 	const second = await mintConnectorCredential(paths.home, "slack");
-	return { paths, directory, credential, offCredential: off.credential, secondCredential: second.credential };
+	return {
+		paths,
+		directory,
+		credential,
+		offCredential: off.credential,
+		alarmCredential,
+		secondCredential: second.credential,
+	};
 }
 
 /**

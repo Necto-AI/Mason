@@ -500,19 +500,19 @@ enabled; a kind the grant does not name is `mason.kind_not_permitted`. `notice` 
 
 Every append is deduplicated durably, and the record is not a second store: a submission and an event are claimed through
 the transcript (`connector:<connector>:submission:<id>` / `:fire:<id>`), and an event is also deduplicated by the event
-log, because an event whose routine is absent never becomes an entry. A resend is answered `{"outcome": "duplicate"}`
+log, because an absent routine makes no entry. A resend is answered `{"outcome": "duplicate"}`
 and creates no second operation, before or after a restart. Content is typed blocks: text and markdown become the message
 unprefixed, and a file block is read from the attachment store and written into the agent's `workspace/inbox/`, with
 images also passed as image blocks.
 
 **One send, and an outbox that survives a restart.** `send` commits an `app.reply` entry — the delivery id is
 `reply:<callId>` — and the outbox (`src/server/connector.ts`) calls `deliver` on `mason.connector` for every committed
-reply whose address has no `app.delivery` entry yet, in entry order, under a ten-second deadline. The address is the
-turn's origin, or a `<connector>/<target>` the model named; a target the grant does not hold is refused with a sentence,
-never silently delivered somewhere else. The acknowledgement is written down whatever it says: `delivered` and
+reply with no `app.delivery` entry yet, in entry order, under a 15-second deadline on the `deliver` call and a 10-second
+one on binding the reference. The address is the turn's origin, or a `<connector>/<target>` the model named; a target the
+grant does not hold is refused with a sentence, never rerouted. The acknowledgement is written down: `delivered` and
 `duplicate` settle it, `uncertain` is recorded and never retried, `rejected` is recorded with its detail. A send that was
 never acknowledged stays owed and is resent after a reconnect under the same id, where the connector's own ledger answers
-`duplicate` or `uncertain`. One send, one destination: no fan-out and no second copy by another path. A turn nobody wrote
+`duplicate` or `uncertain`. One send, one destination: no fan-out, no second copy by another path. A turn nobody wrote
 to records the send and says nobody was reached instead of claiming a delivery.
 
 **Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a

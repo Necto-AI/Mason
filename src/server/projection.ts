@@ -3,7 +3,7 @@
  *
  * This module is the wire boundary, and the only place that decides what crosses it. Everything the model does —
  * reasoning, tool calls, tool arguments, tool output, usage, the raw entries — stays here, on the server. What leaves
- * is the conversation as a person reads it: their own words, the messages the agent chose to send (`reply`),
+ * is the conversation as a person reads it: their own words, the messages the agent chose to send (`send`),
  * and a coarse notice when a run failed.
  *
  * The rule is a whitelist, not a filter: a transcript item exists only because something here names it. A new entry
@@ -133,12 +133,13 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	let spoke = true;
 	for (const entry of entries) {
 		if (entry.kind === HOOK_ENTRY_KIND) {
-			// An event is the reader's business; a routine's timer is not. A wake that names a kind says so, and a wake
-			// that does not is a schedule — the message it sent is the row, and the schedule is the schedule's business.
+			// A fire is a turn that owed the person words, whether it names a kind or is a routine's timer: an event is the
+			// reader's business and says so as a row of its own, and a routine's message is the row — but a fire that sent
+			// nothing is a silence, and the schedule is the schedule's business either way.
+			spoke = false;
 			const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
 			if (typeof kind === "string" && kind !== "") {
 				items.push({ kind: "event", id: String(entry.id), name: kind });
-				spoke = false;
 			}
 			continue;
 		}

@@ -98,11 +98,7 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 	const raw = value as Record<string, unknown>;
 	// The keys the approval apparatus owned. They were required once, so every file written before the cut carries one,
 	// and reading past them would leave an operator believing a rule still runs.
-	// Both spellings of the room list are retired: `user.conversations` under the face, and a top-level `conversations`
-	// that a file written before the split may still carry. Read past either and an operator believes mason knows a room.
-	const retired = [...RETIRED_GRANT_KEYS, ...RETIRED_CONNECTOR_KEYS.filter((key) => !key.startsWith("user."))].filter(
-		(key) => raw[key] !== undefined,
-	);
+	const retired = RETIRED_GRANT_KEYS.filter((key) => raw[key] !== undefined);
 	if (retired.length > 0) {
 		throw new Error(
 			refusal(
@@ -110,6 +106,19 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 				name,
 				`has a retired "connector.${retired[0]}": there is no approval step and no state mirror any more, so the ` +
 					"grant is its faces and its commands. Delete that key by hand",
+			),
+		);
+	}
+	// The room list was removed in the same cut and it went somewhere: both spellings a file may still carry it in are
+	// refused, and the refusal names `targets` rather than an approval step that had nothing to do with it.
+	const rooms = RETIRED_CONNECTOR_KEYS.filter((key) => !key.startsWith("user.") && raw[key] !== undefined);
+	if (rooms.length > 0) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				`has a retired "connector.${rooms[0]}": the room list became "connector.targets", one entry per place ` +
+					"this connector may be sent to. Delete that key by hand",
 			),
 		);
 	}
@@ -365,11 +374,6 @@ export function ownerRefusal(grant: ConnectorGrant, actor: Actor | undefined): s
 	if (owner === undefined) return `this entry names no owner, so an actor cannot speak through it (${actor.id})`;
 	if (actor.id !== owner) return `"${actor.id}" is not the actor this entry calls its owner`;
 	return undefined;
-}
-
-/** Whether a target id is one this entry's grant lists: the whole of what the model may name. */
-export function targetGranted(grant: ConnectorGrant, id: string): Target | undefined {
-	return grant.targets?.find((target) => target.id === id);
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */

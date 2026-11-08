@@ -290,6 +290,7 @@ describe("the integration list on disk", () => {
 			["actors", { "8811": "Denis" }],
 			["unattributed", true],
 			["approver", "8811"],
+			["conversations", []],
 		] as const) {
 			await writeRaw(
 				paths,
@@ -305,6 +306,19 @@ describe("the integration list on disk", () => {
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
 			assert.match(refused, /by hand/, key);
+		}
+
+		// The room list was carried in two spellings. The one outside the face is the same removal and its own refusal: it
+		// names `targets`, because a place this connector may be sent to is an entry in the grant now, not a room.
+		for (const [connector, retiredPath] of [
+			[{ user: { owner: "8811" }, conversations: [] }, "connector.conversations"],
+			[{ user: { owner: "8811", conversations: [] } }, "connector.user.conversations"],
+		] as const) {
+			await writeRaw(paths, JSON.stringify({ integrations: { telegram: { enabled: true, connector } } }));
+			const refused = await refusal(paths);
+			assert.match(refused, new RegExp(retiredPath.replaceAll(".", "\\.")), retiredPath);
+			assert.match(refused, /targets/, retiredPath);
+			assert.match(refused, /by hand/, retiredPath);
 		}
 
 		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries

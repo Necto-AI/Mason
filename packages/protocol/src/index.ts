@@ -25,21 +25,7 @@ import {
 	type RemoteContract,
 	remote,
 } from "@earendil-works/chord";
-import {
-	arr,
-	bool,
-	int,
-	lit,
-	map,
-	num,
-	obj,
-	opt,
-	type Schema,
-	type Static,
-	str,
-	union,
-	unknown,
-} from "@earendil-works/pi-schema";
+import { arr, bool, int, lit, map, num, obj, opt, type Static, str, union, unknown } from "@earendil-works/pi-schema";
 
 /** The major version. Two peers that disagree about it cannot talk, and Chord refuses the link rather than degrading. */
 export const PROTOCOL_MAJOR = 1;

@@ -34,7 +34,7 @@ export interface Door {
 
 export const DOORS: readonly Door[] = [
 	{ path: "/api/health", kind: "public", why: "the liveness probe: one word, so a dead process is distinguishable" },
-	{ path: CONNECTOR_PATH, kind: "connector", why: "the connector's JSON-RPC socket, authenticated at the upgrade" },
+	{ path: CONNECTOR_PATH, kind: "connector", why: "the connector's Chord socket, authenticated at the upgrade" },
 	{
 		path: `${CONNECTOR_PATH}/attachments`,
 		kind: "connector",

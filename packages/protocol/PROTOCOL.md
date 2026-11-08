@@ -75,6 +75,11 @@ every id it answered, in its own store, because the restart that loses the answe
 A refusal is a Chord error whose `reason` is one of mason's codes. Chord carries `code`, `message` and `reason` across a
 link and drops everything else, which is why the code rides in `reason` and why nothing branches on `details`.
 
+One credential opens everything and a failed check is not a code on this socket: an upgrade it does not open is a
+connection closed with a reason, refused before any contract is served. The table below is what a call that was heard is
+refused with; `mason.not_authenticated` is the answer of the one HTTP path, the attachment upload, which has a status
+line to put it in.
+
 | code | meaning |
 |---|---|
 | `mason.face_not_granted` | this entry does not grant the face the append needs |
@@ -83,7 +88,7 @@ link and drops everything else, which is why the code rides in `reason` and why 
 | `mason.rate_limited` | the minute's budget for this class is spent; try later |
 | `mason.queue_overflow` | the turn is busy and the append asked to be refused rather than queued |
 | `mason.invalid_request` | the call is not a call this side makes |
-| `mason.not_authenticated` | the credential did not open the socket |
+| `mason.not_authenticated` | the credential did not open the attachment upload |
 
 ## Attachments
 

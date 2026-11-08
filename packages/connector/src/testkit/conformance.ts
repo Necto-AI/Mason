@@ -18,6 +18,7 @@ import {
 	type ConnectorHandlers,
 	createConnector,
 	type Delivery,
+	type InboundOutcome,
 } from "../connector.ts";
 import type { ConnectorStore } from "../store.ts";
 import { MemoryStore } from "../store-memory.ts";
@@ -61,6 +62,11 @@ export interface ConformanceContext {
 export interface ConformanceCase {
 	readonly name: string;
 	readonly needs?: ReadonlyArray<"targets" | "kinds" | "commands" | "owner">;
+	/**
+	 * A grant this case is measured against instead of the one the fixture's faces describe. A case about a face the
+	 * operator did not grant cannot be staged with a fixture that declares it, and the door's refusals are its subject.
+	 */
+	readonly grant?: Partial<FakeMasonGrants>;
 	run(context: ConformanceContext): Promise<void>;
 }
 
@@ -103,7 +109,7 @@ export async function runConformance(
 		}
 		let context: ConformanceContext | undefined;
 		try {
-			context = await open(fixture);
+			context = await open(fixture, testCase.grant);
 			await withTimeout(testCase, context, options.timeoutMs ?? 5_000);
 			passed.push(testCase.name);
 		} catch (error) {
@@ -137,8 +143,11 @@ async function withTimeout(testCase: ConformanceCase, context: ConformanceContex
 }
 
 /** Build the connector the way a real connector is built, with every handler wrapped so the suite can see it. */
-export async function open(fixture: ConformanceFixture): Promise<ConformanceContext> {
-	const mason = createFakeMason({ connector: fixture.name, granted: grantsOf(fixture) });
+export async function open(
+	fixture: ConformanceFixture,
+	grant: Partial<FakeMasonGrants> = {},
+): Promise<ConformanceContext> {
+	const mason = createFakeMason({ connector: fixture.name, granted: { ...grantsOf(fixture), ...grant } });
 	mason.start();
 
 	const observed: Observed = { deliveries: [], sessions: [], closed: [] };
@@ -274,6 +283,31 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				equal(outcome.status, "refused", "a forged actor");
 				equal(outcome.status === "refused" ? outcome.code : undefined, "mason.actor_unknown", "the refusal code");
 				equal(mason.submissions.length, 0, "a refused submission places nothing");
+			},
+		},
+		{
+			name: "submission/an entry that grants no user refuses words",
+			needs: ["owner"],
+			grant: { owner: null },
+			async run({ connector, mason }) {
+				// The face itself is the first ceiling: an entry the operator gave events and no `user` may be spoken through
+				// by nobody, and the refusal is the door's rather than the connector's guess at what it holds.
+				const outcome = await connector.submit({
+					content: [{ type: "text", text: "somebody typed this" }],
+					origin: { ref: "chat-1" },
+					appendId: "no-face-1",
+				});
+				equal(outcome.status, "refused", "a submission to an entry that grants no user");
+				equal(
+					outcome.status === "refused" ? outcome.code : undefined,
+					"mason.face_not_granted",
+					"the refusal code",
+				);
+				equal(mason.submissions.length, 0, "a refused submission places nothing");
+				// The face it does hold is untouched: a notice is still a row the connector may write.
+				const written = await connector.notice({ text: "the alarm was silenced", appendId: "no-face-2" });
+				equal(written.status, "accepted", "a notice from an entry with no user");
+				equal(mason.notices.length, 1, "notices mason recorded");
 			},
 		},
 		{
@@ -416,6 +450,29 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				equal(outcome.status, "pending", "a call refused for budget");
 				await waitFor(() => mason.submissions.length === 1, "the retry landed", 3_000);
 				equal(mason.submissions[0]?.appendId, "budget-1", "the id the retry carried");
+			},
+		},
+		{
+			name: "budget/a notice spends the submission budget",
+			async run({ connector, mason }) {
+				const limit = connector.status().session?.limits.submissionsPerMinute ?? 0;
+				if (limit < 2) fail("budget", "a submissions budget with no room to spend it");
+				// A notice is words in the transcript, so the door charges it to the same minute as a submission. Mixing the
+				// two is what proves the one budget covers both: the last call finds the minute spent either way.
+				let last: InboundOutcome | undefined;
+				for (let index = 0; index <= limit; index += 1) {
+					last =
+						index % 2 === 0
+							? await connector.submit({
+									content: [{ type: "text", text: `m${index}` }],
+									appendId: `budget-mixed-${index}`,
+								})
+							: await connector.notice({ text: `notice ${index}`, appendId: `budget-mixed-${index}` });
+				}
+				equal(last?.status, "pending", "the call that found the minute spent");
+				equal(mason.submissions.length + mason.notices.length, limit, "calls the fake mason accepted");
+				// A budget is a verdict, not a broken link: the connector keeps the socket it was refused on.
+				equal(mason.connected, true, "the link the refusal came over");
 			},
 		},
 		{

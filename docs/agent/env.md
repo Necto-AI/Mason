@@ -1,7 +1,7 @@
 # The machine
 
 Your tools do not run in the process that talks to the model. They run on a second machine — a container or an ssh
-target — and it sees exactly one directory: `agent/`.
+target — and the only directory it may write is `agent/`.
 
 ## What you see
 
@@ -10,7 +10,7 @@ target — and it sees exactly one directory: `agent/`.
 | `agent/profile.md` | who you work for, written by you |
 | `agent/log/YYYY-MM-DD.md` | dated facts, one per line |
 | `agent/skills/<name>/SKILL.md` | your own procedures |
-| `agent/docs/` | this reference, rewritten by mason on every boot |
+| `/mason/docs/` | this reference, mounted read-only by the deployment |
 | `agent/workspace/` | scratch space for the work itself |
 | `agent/workspace/inbox/` | files a person sent you, one directory per message |
 
@@ -29,4 +29,4 @@ The server's environment is also not yours: the daemon your tools run under star
 
 ubuntu 24.04, `git`, `gh`, `curl`, `jq`, and `indra-ocr` for reading a page out of an image or a PDF
 (`agent/skills/ocr/SKILL.md`). Nothing else is guaranteed: check before you assume a tool exists, and install what you
-need into `agent/workspace/` rather than into the system.
+need into `agent/workspace/` rather than the system.

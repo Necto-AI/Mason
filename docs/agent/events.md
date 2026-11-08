@@ -8,7 +8,7 @@ and mason decides whether that is worth a turn.
 The connector sends a fire over its socket, and mason writes it down as a hook entry: the kind, the payload, and the
 origin when the sender named one. If the entry's grant maps that kind to a routine (`kind -> routine` in
 `service/integrations.json`), the routine's prompt is the turn's instruction and the payload arrives under it as data.
-A kind the grant names but no routine answers is still written down, and wakes nothing.
+A kind with no routine is still written down, and wakes nothing.
 
 ## How to read what arrives
 
@@ -32,7 +32,7 @@ A routine is a timer of yours, in `agent/routines.json`: a name, the prompt it f
 | key | what it does |
 |---|---|
 | `intervalSeconds` | the period; omitted, the routine is only ever woken by an event |
-| `enabled` | `false` keeps the definition and stops the timer |
+| `enabled` | `false` keeps the definition; no timer, no event wake |
 | `whenBusy` | `steer` or `followUp`, when the timer comes due mid-turn |
 
 You create, change and retire one by editing that file. The next boot scan rereads it, so a change lands at the next

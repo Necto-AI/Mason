@@ -173,8 +173,9 @@ export interface FireOptions {
 /**
  * What every fired hook's input opens with, so the turn it starts is recognisable from the text alone.
  *
- * The model sees it — a proactive turn has to read as one — and so does every reader that has only the conversation's
- * messages to go on: the delivery gate, and `reply` itself, which tells a hooked turn with no origin from a person's.
+ * The model sees it — a proactive turn has to read as one — and so does a reader with only the conversation's messages
+ * to go on. Routing is not this text's: `send` reads the input's kind and origin, and an `app.hook` without one is a
+ * hook's turn.
  */
 export function routineMarker(name: string): string {
 	return `[ROUTINE: ${name}]`;

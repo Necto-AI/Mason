@@ -11,7 +11,7 @@
  * visible in the transcript, the budget is small and it resets on success or on anything the user submits, and a
  * connector's fire naming `retry-failed-run` stays the manual way out.
  *
- * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so `reply` in it
+ * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so a `send` in it
  * reaches the person who was waiting rather than committing to a transcript nobody in the chat can see (#83). And a
  * person who writes after the failure supersedes it — their turn leads, so the pending re-fire is dropped instead of
  * steering the instruction to resume into the turn they are watching.
