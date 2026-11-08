@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createConnector, nodeWebSocketLink } from "mason-connector";
 import { MemoryStore } from "mason-connector/store/memory";
@@ -259,6 +260,9 @@ describe("a streaming origin", () => {
 					onDeliveryDelta: (params) => {
 						frames.push({ method: "delta", params: params as unknown as Record<string, unknown> });
 					},
+					onDeliveryCancel: (deliveryId) => {
+						frames.push({ method: "cancel", params: { deliveryId } as unknown as Record<string, unknown> });
+					},
 					onDelivery: (params): DeliveryAck => {
 						frames.push({ method: "final", params: params as unknown as Record<string, unknown> });
 						return { status: "delivered" };
@@ -283,6 +287,13 @@ describe("a streaming origin", () => {
 				assert.equal(methods.filter((method) => method === "start").length, 1);
 				assert.ok(methods.includes("delta"), `the stream carried a delta: ${methods.join(",")}`);
 				assert.equal(methods.filter((method) => method === "final").length, 1);
+				// A reply that lands is never withdrawn: the assistant message leaving the live state as it commits is the
+				// handover to the tool, not the end of the delivery.
+				assert.deepEqual(
+					frames.filter((frame) => frame.method === "cancel"),
+					[],
+					`a delivered reply was cancelled: ${JSON.stringify(frames)}`,
+				);
 				// The stream is progress and the final is the message: start plus every delta is a prefix of what the final
 				// carries, never a second copy of it. A connector renders the final and uses the frames only to feel live.
 				const started = String((frames[0]?.params.blocks as Array<{ text: string }>)[0]?.text);
@@ -460,6 +471,121 @@ describe("a reply nobody can reach", () => {
 			}
 		} finally {
 			await served.close();
+		}
+	});
+});
+
+describe("a stream that will never be final", () => {
+	// The console writes the words of `start` and each delta, then either closes the line on the final or says the words
+	// were withdrawn. Both halves of that guard are here: the reply tool answering without committing, and a failed
+	// attempt giving way to a retry.
+	const streamed = async (steps: readonly FauxResponseStep[]) => {
+		const served = await serveConnector({ steps, tokensPerSecond: 300 });
+		const frames: Array<{ method: string; deliveryId: string }> = [];
+		const connector = createConnector({
+			name: "telegram",
+			version: "test",
+			url: served.url,
+			credential: served.credential,
+			faces: fullFaces({
+				user: {
+					actors: [{ externalActorId: "8811" }],
+					conversations: [{ externalConversationId: "-1001234", kind: "room" }],
+					capabilities: ["text", "streaming"],
+				},
+			}),
+			store: new MemoryStore(),
+			link: nodeWebSocketLink(WebSocket as never),
+			heartbeatMs: 0,
+			handlers: {
+				onDeliveryStart: (params) => {
+					frames.push({ method: "start", deliveryId: String(params.deliveryId) });
+				},
+				onDeliveryDelta: (params) => {
+					frames.push({ method: "delta", deliveryId: String(params.deliveryId) });
+				},
+				onDeliveryCancel: (params) => {
+					frames.push({ method: "cancel", deliveryId: String((params as { deliveryId?: unknown }).deliveryId) });
+				},
+				onDelivery: (params): DeliveryAck => {
+					frames.push({ method: "final", deliveryId: String(params.deliveryId) });
+					return { status: "delivered" };
+				},
+			},
+		});
+		await connector.start();
+		const say = async (text: string) =>
+			connector.submit({
+				origin: { connector: "telegram", externalConversationId: "-1001234" },
+				actor: { externalActorId: "8811" },
+				content: [{ type: "text", text }],
+			});
+		const stop = async (): Promise<void> => {
+			await connector.stop();
+			await served.close();
+		};
+		return { frames, say, stop };
+	};
+
+	it("is withdrawn when the reply tool answers without recording one", async () => {
+		// A target no integration reaches: `reply` says so in one sentence and commits nothing, and the tool result that
+		// carries the sentence is what lands. The words the model already streamed are not coming back.
+		const long = Array.from({ length: 10 }, (_, index) => `word number ${index} of a doomed draft.`).join(" ");
+		const run = await streamed([
+			fauxAssistantMessage(
+				[fauxToolCall(REPLY_TOOL, { message: long, to: { connector: "nowhere", conversation: "-1" } })],
+				{
+					stopReason: "toolUse",
+				},
+			),
+			// The turn carries on to a reply that does land, so the end of the turn cannot be what settles the dead stream.
+			fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "the answer that arrives" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage(fauxText("sent")),
+		]);
+		try {
+			await run.say("tell me something");
+			await until(() => run.frames.some((frame) => frame.method === "final"), "the answer that lands", 15_000);
+			const cancelAt = run.frames.findIndex((frame) => frame.method === "cancel");
+			assert.ok(cancelAt !== -1, `the dead stream was withdrawn: ${JSON.stringify(run.frames)}`);
+			const landedAt = run.frames.findIndex((frame) => frame.method === "final");
+			assert.ok(cancelAt < landedAt, `the withdrawal came before the answer: ${JSON.stringify(run.frames)}`);
+			assert.equal(run.frames.filter((frame) => frame.method === "cancel").length, 1);
+			assert.ok(
+				run.frames.some((frame) => frame.method === "delta"),
+				`the stream had started: ${JSON.stringify(run.frames)}`,
+			);
+		} finally {
+			await run.stop();
+		}
+	});
+
+	it("is withdrawn when a failed attempt gives way to a retry", async () => {
+		const first = Array.from({ length: 10 }, (_, index) => `first try ${index}.`).join(" ");
+		const second = Array.from({ length: 10 }, (_, index) => `second try ${index}.`).join(" ");
+		const run = await streamed([
+			// The attempt that fails *is* the one streaming: the args of its `reply` call reach the live message, and the
+			// failure means no assistant message ever commits, so no tool runs and no entry follows.
+			fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: first })], {
+				stopReason: "error",
+				errorMessage: "overloaded",
+			}),
+			fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: second })], { stopReason: "toolUse" }),
+			fauxAssistantMessage(fauxText("sent")),
+		]);
+		try {
+			await run.say("tell me something");
+			await until(() => run.frames.some((frame) => frame.method === "final"), "the replacement", 15_000);
+			// The failed attempt's words are dead the moment it fails, not when the turn ends: a withdrawal that lands
+			// after the replacement has been read is the bug this is here to catch.
+			const cancelAt = run.frames.findIndex((frame) => frame.method === "cancel");
+			assert.ok(cancelAt !== -1, `the failed attempt was withdrawn: ${JSON.stringify(run.frames)}`);
+			const replacementAt = run.frames.findIndex((frame) => frame.method === "final");
+			assert.ok(cancelAt < replacementAt, `the withdrawal came before the answer: ${JSON.stringify(run.frames)}`);
+			assert.equal(run.frames.filter((frame) => frame.method === "cancel").length, 1);
+		} finally {
+			await run.stop();
 		}
 	});
 });
