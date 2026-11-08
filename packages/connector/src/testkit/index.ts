@@ -1,8 +1,8 @@
 export {
-	ConformanceFailure,
 	type ConformanceCase,
 	type ConformanceContext,
 	type ConformanceFaces,
+	ConformanceFailure,
 	type ConformanceFixture,
 	type ConformanceOptions,
 	type ConformanceResult,

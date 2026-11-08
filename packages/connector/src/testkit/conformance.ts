@@ -122,11 +122,7 @@ function hasFace(fixture: ConformanceFixture, face: "targets" | "kinds" | "comma
 	return Array.isArray(value) && value.length > 0;
 }
 
-async function withTimeout(
-	testCase: ConformanceCase,
-	context: ConformanceContext,
-	timeoutMs: number,
-): Promise<void> {
+async function withTimeout(testCase: ConformanceCase, context: ConformanceContext, timeoutMs: number): Promise<void> {
 	const timer = new Promise<never>((_, reject) => {
 		const handle = setTimeout(
 			() => reject(new ConformanceFailure(testCase.name, `no verdict in ${timeoutMs} ms`)),
@@ -254,7 +250,11 @@ export function conformanceCases(): readonly ConformanceCase[] {
 					appendId: "fixed-1",
 				});
 				equal(first.status, "accepted", "submission outcome");
-				await connector.submit({ content: [{ type: "text", text: "one" }], origin: { ref: "chat-1" }, appendId: "fixed-1" });
+				await connector.submit({
+					content: [{ type: "text", text: "one" }],
+					origin: { ref: "chat-1" },
+					appendId: "fixed-1",
+				});
 				equal(mason.submissions.length, 1, "submissions mason recorded");
 				equal(mason.submissions[0]?.ref, "chat-1", "the address the append carried");
 			},
@@ -392,7 +392,10 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			needs: ["targets"],
 			async run({ connector, mason }) {
 				mason.exhaust("submissions");
-				const outcome = await connector.submit({ content: [{ type: "text", text: "once the minute is over" }], appendId: "budget-1" });
+				const outcome = await connector.submit({
+					content: [{ type: "text", text: "once the minute is over" }],
+					appendId: "budget-1",
+				});
 				equal(outcome.status, "pending", "a call refused for budget");
 				await waitFor(() => mason.submissions.length === 1, "the retry landed", 3_000);
 				equal(mason.submissions[0]?.appendId, "budget-1", "the id the retry carried");
@@ -403,7 +406,10 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			needs: ["targets"],
 			async run({ mason, connector }) {
 				mason.kill("the link went away");
-				const outcome = await connector.submit({ content: [{ type: "text", text: "while you were out" }], appendId: "journaled-1" });
+				const outcome = await connector.submit({
+					content: [{ type: "text", text: "while you were out" }],
+					appendId: "journaled-1",
+				});
 				if (outcome.status === "refused") fail("journal", `the call was refused: ${outcome.code}`);
 				await waitFor(() => mason.submissions.length === 1, "the journaled call was replayed", 2_000);
 				equal(mason.submissions[0]?.appendId, "journaled-1", "the id the replay carried");
@@ -413,7 +419,10 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			name: "attachments/an upload comes back as a content id",
 			async run({ connector }) {
 				const bytes = new Uint8Array([1, 2, 3, 4]);
-				const uploaded = await connector.attachments.upload(bytes, { mimeType: "application/octet-stream", name: "a.bin" });
+				const uploaded = await connector.attachments.upload(bytes, {
+					mimeType: "application/octet-stream",
+					name: "a.bin",
+				});
 				if (uploaded.contentId.length === 0) fail("attachments", "no content id came back");
 				equal(uploaded.size, 4, "uploaded size");
 			},
@@ -429,7 +438,11 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				);
 				if (!(refused instanceof AttachmentError)) fail("attachments", "an oversized file was not refused");
 				equal(refused.status, 413, "the refusal status");
-				equal(mason.attachmentPosts(), before, "uploads that reached mason: the cap is the client's, before a byte");
+				equal(
+					mason.attachmentPosts(),
+					before,
+					"uploads that reached mason: the cap is the client's, before a byte",
+				);
 			},
 		},
 	];

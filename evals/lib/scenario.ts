@@ -117,7 +117,7 @@ export function check(trace: Trace, expected: Expected, writtenText: string): Ch
 		add(`written.${pattern}`, new RegExp(pattern, "im").test(writtenText));
 	}
 	if (expected.maxTools !== undefined) {
-		const work = trace.toolCalls.filter((call) => call.name !== "reply").length;
+		const work = trace.toolCalls.filter((call) => call.name !== "send").length;
 		add("maxTools", work <= expected.maxTools, `${work} work call(s) <= ${expected.maxTools}`);
 	}
 	if (expected.maxInputTokens !== undefined) {

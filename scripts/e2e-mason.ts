@@ -16,7 +16,7 @@
  *
  * The script is a JSON array; each element is one assistant message:
  *
- *     [{"text": "working on it"}, {"tool": "reply", "args": {"message": "done"}}]
+ *     [{"text": "working on it"}, {"tool": "send", "args": {"text": "done"}}]
  *
  * The process stays up until it is killed. `SIGTERM` closes the server and the runtime and exits 0, which is how the
  * caller's teardown ends a run.

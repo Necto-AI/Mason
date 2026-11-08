@@ -24,6 +24,13 @@ export type WebSocketConstructor = new (url: string, options?: unknown) => WebSo
  * ```
  */
 export function nodeWebSocketLink(WebSocketImpl: WebSocketConstructor): LinkFactory {
-	return (url, init): Link =>
-		webSocketLink(new WebSocketImpl(url, { headers: { authorization: `Bearer ${init.credential}` } }));
+	return (url, init): Link => {
+		const socket = new WebSocketImpl(url, { headers: { authorization: `Bearer ${init.credential}` } });
+		const link = webSocketLink(socket);
+		// Chord listens for `close` and not for `error`, and a refused connection is an `error`: without this the link
+		// stays open in the eyes of everything waiting on it, and a command that could never connect waits forever
+		// instead of saying so. The credential is not in the message on purpose — a socket error is logged by people.
+		socket.addEventListener("error", () => link.close("the connection failed"));
+		return link;
+	};
 }

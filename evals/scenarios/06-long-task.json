@@ -69,7 +69,7 @@
 	],
 	"expect": {
 		"calls": {
-			"reply": {
+			"send": {
 				"min": 3
 			},
 			"read": {

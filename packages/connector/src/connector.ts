@@ -16,21 +16,20 @@
  * - **Reconnect is the recovery mechanism.** The host keeps one link to mason; a new link re-holds every reference, and
  *   the journal is replayed over it.
  */
-import { createHost, type Host, type Link, type Ref } from "@earendil-works/chord";
+import { createHost, type Host, type Link } from "@earendil-works/chord";
 import {
-	ERROR_CODE,
-	type ConnectorRef,
 	type ContentBlock,
 	type ControlOp,
 	type ControlResult,
+	connectorHost,
 	type DeliverArgs,
 	type DeliveryAck,
+	ERROR_CODE,
 	errorCodeOf,
 	MasonConnector,
 	MasonPeer,
 	type PeerRef,
 	type Session,
-	connectorHost,
 } from "mason-protocol";
 import { type AttachmentClient, createAttachmentClient, type Fetcher } from "./attachments.ts";
 import { type ConnectorStore, LEDGER_KEEP, NAMESPACE } from "./store.ts";
@@ -77,6 +76,8 @@ export interface ConnectorConfig {
 	/** How a link to mason is opened. `nodeWebSocketLink(WebSocket)` is the Node one; a test supplies a pair. */
 	readonly link: LinkFactory;
 	readonly reconnect?: { readonly initialMs?: number; readonly maxMs?: number; readonly factor?: number };
+	/** How long `start` waits for mason to answer before it fails: the first connection only. Default 5 s. */
+	readonly firstConnectionMs?: number;
 	/** Base URL for the attachment endpoints when it differs from the socket's origin. */
 	readonly httpBase?: string;
 	/** Substitute the transfer endpoint: the conformance suite serves attachments from memory. */
@@ -106,7 +107,11 @@ export interface ConnectorStatus {
 /** A person's words, on their way to mason. Durable: the act survives a restart and is resent until mason claims it. */
 export interface SubmissionInput {
 	readonly content: readonly ContentBlock[];
-	readonly origin?: { readonly ref: string; readonly messageId?: string };
+	readonly origin?: {
+		readonly ref: string;
+		readonly messageId?: string;
+		readonly actor?: { id: string; name?: string };
+	};
 	readonly mode?: "followUp" | "steer" | "reject";
 	readonly capabilities?: readonly string[];
 	readonly appendId?: string;
@@ -115,7 +120,7 @@ export interface SubmissionInput {
 /** An unsolicited service event. Same durability, different act: it never becomes a person's conversation. */
 export interface EventInput {
 	readonly kind: string;
-	readonly payload?: Readonly<Record<string, unknown>>;
+	readonly payload?: unknown;
 	readonly summary?: string;
 	readonly origin?: { readonly ref: string; readonly messageId?: string };
 	readonly appendId?: string;
@@ -195,6 +200,8 @@ export function createConnector(config: ConnectorConfig): Connector {
 	};
 
 	let peer: PeerRef | undefined;
+	/** The link this connection runs on, so `drop` ends the link rather than the host it lives in. */
+	let currentLink: Link | undefined;
 	let session: Session | undefined;
 	let stopping = false;
 	let connections = 0;
@@ -236,7 +243,22 @@ export function createConnector(config: ConnectorConfig): Connector {
 	async function start(): Promise<Session> {
 		if (session !== undefined && peer !== undefined) return session;
 		stopping = false;
-		return connect();
+		// The first connection is the only one with a deadline: it answers "is mason there", where a later drop has a
+		// session to come back to and a loop that is already retrying. A url nobody answers is a sentence, not a hang.
+		const wait = config.firstConnectionMs ?? 5_000;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				lastError = `no answer within ${wait} ms`;
+				currentLink?.close(lastError);
+				reject(new Error(lastError));
+			}, wait);
+		});
+		try {
+			return await Promise.race([connect(), deadline]);
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
 	}
 
 	async function stop(): Promise<void> {
@@ -250,13 +272,17 @@ export function createConnector(config: ConnectorConfig): Connector {
 		await config.store.close();
 	}
 
+	/**
+	 * Force the link down, the way a supervisor or a test would.
+	 *
+	 * The link, not the host: a closed host is a host that never comes back, and the point of a drop is that the
+	 * reconnect loop handles it. The next connection opens a new link and accepts the new upstream.
+	 */
 	function drop(reason = "dropped"): void {
+		const link = currentLink;
+		if (link === undefined) return;
 		lastError = reason;
-		peer = undefined;
-		void host.close().then(
-			() => undefined,
-			() => undefined,
-		);
+		link.close(reason);
 	}
 
 	/**
@@ -268,9 +294,19 @@ export function createConnector(config: ConnectorConfig): Connector {
 	async function connect(): Promise<Session> {
 		const link = config.link(config.url, { credential: config.credential });
 		connections += 1;
+		currentLink = link;
 		link.onClose((reason) => onClosed(reason));
 		host.connect(link, { principal });
-		const held = (await host.get(MasonPeer, {})) as unknown as PeerRef;
+		let held: PeerRef;
+		try {
+			held = (await host.get(MasonPeer, {})) as unknown as PeerRef;
+		} catch (error) {
+			// The first connection says whether mason is there at all. A refusal here is the answer a command prints, not
+			// something to retry in the dark: a supervisor restarts a process, and a person reads a sentence.
+			lastError = describe(error);
+			link.close(lastError);
+			throw error;
+		}
 		const state = held.session.value;
 		peer = held;
 		session = state;
@@ -289,6 +325,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 	function onClosed(reason: string): void {
 		if (peer === undefined) return;
 		peer = undefined;
+		currentLink = undefined;
 		lastError = reason;
 		try {
 			handlers.onClosed?.(reason);
@@ -410,7 +447,11 @@ export function createConnector(config: ConnectorConfig): Connector {
 		const outcome = await send("control", requestId, args);
 		if (outcome.status === "refused") return { handled: false, op: input.op, reply: outcome.reason };
 		if (outcome.status === "pending") {
-			return { handled: false, op: input.op, reply: "not sent yet: mason is unreachable, and the request is queued" };
+			return {
+				handled: false,
+				op: input.op,
+				reply: "not sent yet: mason is unreachable, and the request is queued",
+			};
 		}
 		return outcome.value as ControlResult;
 	}
@@ -475,7 +516,10 @@ export function createConnector(config: ConnectorConfig): Connector {
 		if (nextSeq !== undefined) return;
 		seeding ??= (async () => {
 			const all = await config.store.entries<Journaled>(NAMESPACE.outbox);
-			nextSeq = Math.max(nextSeq ?? 0, all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0));
+			nextSeq = Math.max(
+				nextSeq ?? 0,
+				all.reduce((highest, entry) => Math.max(highest, entry.value.seq), 0),
+			);
 		})();
 		await seeding;
 	}
@@ -558,4 +602,3 @@ function httpOrigin(url: string): string {
 	const parsed = new URL(url);
 	return `${parsed.protocol === "wss:" ? "https:" : "http:"}//${parsed.host}`;
 }
-
