@@ -758,7 +758,11 @@ describe("the command", () => {
 		// is not touched at all.
 		const untouched = new ScriptedScreen({});
 		const previous = process.env.PI_FAUX_MODEL;
+		const port = process.env.PORT;
 		process.env.PI_FAUX_MODEL = "1";
+		// A port nothing listens on, for the same reason every child process in this repo gets one: `doctor` asks 8787, and
+		// a mason running on this machine would answer it and be reported as another home's server.
+		process.env.PORT = "1";
 		try {
 			const scripted = await runOnboard(["--yes", "--connector", "console", "-b", "bot"], {
 				root: await tempRoot(),
@@ -770,6 +774,8 @@ describe("the command", () => {
 		} finally {
 			if (previous === undefined) delete process.env.PI_FAUX_MODEL;
 			else process.env.PI_FAUX_MODEL = previous;
+			if (port === undefined) delete process.env.PORT;
+			else process.env.PORT = port;
 		}
 	});
 });

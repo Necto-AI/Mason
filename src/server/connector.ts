@@ -1037,13 +1037,20 @@ export class ConnectorSession {
 	 *
 	 * The id is the one the committed entry will carry — `reply:<callId>` — so the final is the same delivery and a
 	 * connector never sees two. `start` carries the text written so far and each `delta` only the suffix, which is what an
-	 * appending receiver needs. A call that disappears without an entry was withdrawn before it was final: `cancel`.
+	 * appending receiver needs. A call that disappears without an entry — the tool answered without committing one, a
+	 * failed attempt gave way to a retry, or the turn ended — was withdrawn before it was final: `cancel`.
 	 */
 	#streamReply(view: ConversationView): void {
 		if (!this.#capabilities.includes("streaming")) return;
 		const origin = turnOriginOf((view.entries ?? []) as readonly EntryRecord[]);
 		if (origin.kind !== "connector" || origin.origin.connector !== this.name) return;
-		const live = (view.docs["pi.live"] as { generation?: { message?: unknown } } | undefined)?.generation?.message;
+		const generation = (view.docs["pi.live"] as { generation?: { message?: unknown; retry?: unknown } } | undefined)
+			?.generation;
+		// A failed attempt waiting to retry has already dropped its message: whatever it streamed is not coming back, so this
+		// is the one moment in a running turn where the words on the screen are known to be dead. The replacement attempt
+		// clears `retry` before it writes, which is why this reads "cancel now" and never "wait".
+		const retrying = generation?.retry !== undefined;
+		const live = generation?.message;
 		const calls = Array.isArray((live as { content?: unknown } | undefined)?.content)
 			? ((live as { content: unknown[] }).content as Array<{
 					type?: unknown;
@@ -1061,6 +1068,17 @@ export class ConnectorSession {
 				.filter((entry) => entry.kind === REPLY_ENTRY_KIND)
 				.map((entry) => replyRecordOf(entry)?.deliveryId),
 		);
+		// A tool call leaves the live message twice in a healthy turn, and neither is a withdrawal: once when the assistant
+		// message is committed and the reply entry follows as the tool runs, once when the turn ends having delivered it. So
+		// a call the live message no longer carries is not evidence by itself; what makes the entry impossible is the tool
+		// answering without committing a reply, a failed attempt giving way to a retry, or the turn ending mid-write.
+		const answered = new Set(
+			((view.entries ?? []) as readonly EntryRecord[])
+				.filter((entry) => entry.kind === "pi.tool-result")
+				.map((entry) => (entry as { model?: Array<{ toolCallId?: unknown }> }).model?.[0]?.toolCallId)
+				.filter((callId): callId is string => typeof callId === "string"),
+		);
+		const running = isBusy(view);
 		for (const [id, stream] of [...this.#streaming]) {
 			// The entry landed: the final carries the rest, and a cancel here would withdraw a delivery that is about to be
 			// sent.
@@ -1070,6 +1088,9 @@ export class ConnectorSession {
 			}
 			const stillWriting = calls.some((part) => part.type === "toolCall" && part.id === stream.callId);
 			if (stillWriting) continue;
+			// Still running, this call has not answered yet, and no retry has replaced it: that is the handover to the tool,
+			// not the end of the delivery, so the stream is left alone.
+			if (running && !retrying && !answered.has(stream.callId)) continue;
 			this.#streaming.delete(id);
 			this.#sendNotification(METHOD.deliveryCancel, {
 				deliveryId: id,

@@ -190,6 +190,81 @@ const dim = (text: string): string => `\x1b[2m${text}\x1b[22m`;
 const cyan = (text: string): string => `\x1b[36m${text}\x1b[39m`;
 
 /**
+ * What the console writes for one streamed reply.
+ *
+ * The protocol says `start` carries the words written so far and each `delta` only the rest, so a receiver that writes
+ * just the deltas begins every streamed answer mid-sentence — the words in `start` are the opening of the message, not a
+ * header. And a delivery that lands after its stream was withdrawn is *the same message*: the words are already on the
+ * screen, a terminal cannot take them back, and printing them again is the one thing a person reads as "it said that
+ * twice". So the text is kept per delivery, and the final either closes the line or prints a delivery the screen does
+ * not have.
+ */
+export function replyOutput(
+	write: (text: string) => void,
+	line: (text: string) => void,
+): {
+	start(deliveryId: string, text: string): void;
+	delta(deliveryId: string, text: string): void;
+	cancel(deliveryId: string, reason: string): void;
+	final(deliveryId: string, text: string): void;
+} {
+	/**
+	 * The words on the screen for each delivery. A final drops its own entry; a withdrawn stream keeps its text, because a
+	 * final for the same id still has to know what the screen already shows. Only a final can clear one, so the handful
+	 * that never come back are bounded rather than leaking for the life of the console.
+	 */
+	const shown = new Map<string, string>();
+	const remember = (deliveryId: string, text: string): void => {
+		shown.delete(deliveryId);
+		shown.set(deliveryId, text);
+		if (shown.size > 32) shown.delete(shown.keys().next().value as string);
+	};
+	return {
+		start(deliveryId, text) {
+			const already = shown.get(deliveryId);
+			// A dropped socket comes back as a new session with the same delivery id and the words written so far, and that
+			// prefix is on the screen: only the rest is new. Anything else is the start of a line.
+			if (already !== undefined && text.startsWith(already)) {
+				remember(deliveryId, text);
+				const rest = text.slice(already.length);
+				if (rest !== "") write(rest);
+				return;
+			}
+			remember(deliveryId, text);
+			write(`${cyan("mason: ")}${text}`);
+		},
+		delta(deliveryId, text) {
+			remember(deliveryId, (shown.get(deliveryId) ?? "") + text);
+			write(text);
+		},
+		cancel(_deliveryId, reason) {
+			// On its own line: the notice arrives while a half-written sentence is still on the screen.
+			line(`\n${dim(`[chat] the reply was withdrawn: ${reason}`)}`);
+		},
+		final(deliveryId, text) {
+			const streamed = shown.get(deliveryId);
+			shown.delete(deliveryId);
+			if (streamed === undefined || streamed.trim() === "") {
+				// Nothing was streamed: the whole answer arrives at once, which is what a non-streaming turn does.
+				line(`${cyan("mason: ")}${text}`);
+				return;
+			}
+			// The stream is only a *prefix* of the message: it stops where the model stopped writing, and the final carries
+			// the rest. Closing the line here would drop whatever the stream did not reach.
+			if (text.startsWith(streamed)) {
+				const rest = text.slice(streamed.length);
+				if (rest !== "") write(rest);
+				line("");
+				return;
+			}
+			// The words on screen are not this message — a retried answer, or one that was withdrawn and replaced. The
+			// delivered text is what a person reads, so it is printed, once, under its own marker.
+			line(`${cyan("mason: ")}${text}`);
+		},
+	};
+}
+
+/**
  * The command. Returns an exit code rather than calling `process.exit`, so a test can drive `--once` in-process and
  * `--chat` from setup can call it without a second process.
  *
@@ -233,7 +308,8 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 	/** Set while a `--once` run waits: a socket that closes before it was ever open is mason not running, not a resend. */
 	let closed: ((reason: string) => void) | undefined;
 	let connected = false;
-	const streaming = new Map<string, string>();
+	/** Where a streamed reply is written; `--once` has none, because a command that prints one answer does not stream it. */
+	const output = args.once === undefined ? replyOutput((text) => process.stdout.write(text), console.log) : undefined;
 	const connector = createConnector({
 		name: CONSOLE,
 		version: "0.1.0",
@@ -264,33 +340,22 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 				}
 			},
 			onDeliveryStart(params) {
-				streaming.set(params.deliveryId, "");
-				// The words arrive as they are written, which is the point of the streaming capability: a long turn in a
-				// terminal shows its shape instead of a spinner.
-				if (args.once === undefined) process.stdout.write(cyan("mason: "));
+				output?.start(params.deliveryId, textOf(params.blocks));
 			},
 			onDeliveryDelta(params) {
-				const text = textOf(params.blocks);
-				streaming.set(params.deliveryId, (streaming.get(params.deliveryId) ?? "") + text);
-				if (args.once === undefined) process.stdout.write(text);
+				output?.delta(params.deliveryId, textOf(params.blocks));
 			},
 			onDeliveryCancel(deliveryId, reason) {
-				streaming.delete(deliveryId);
-				if (args.once === undefined) console.log(dim(`\n[chat] the reply was withdrawn: ${reason}`));
+				output?.cancel(deliveryId, reason);
 			},
 			onDelivery(delivery) {
 				const text = textOf(delivery.blocks);
-				const streamed = streaming.get(delivery.deliveryId);
-				streaming.delete(delivery.deliveryId);
 				if (args.once !== undefined) {
 					console.log(text);
 					delivered?.(text);
 					delivered = undefined;
-				} else if (streamed === undefined || streamed.trim() === "") {
-					// Nothing was streamed: the whole answer arrives at once, which is what a non-streaming turn does.
-					console.log(`${cyan("mason: ")}${text}`);
 				} else {
-					console.log("");
+					output?.final(delivery.deliveryId, text);
 				}
 				return { deliveryId: delivery.deliveryId, status: "delivered" };
 			},
