@@ -257,7 +257,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 					"this entry holds no user grant: it may not carry a person's words",
 				);
 			}
-			spend("submissions", limits.submissionsPerMinute);
 			// The owner rule the real door applies: an actor that is not the granted one is refused, and so is any actor
 			// when the grant names none. The conformance suite's forged-actor case is this line, which is why it is one.
 			const actor = args.origin?.actor?.id;
@@ -265,18 +264,16 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 				throw masonError(ERROR_CODE.actorUnknown, `"${actor}" is not the actor this entry calls its owner`);
 			}
 		}
-		if (args.type === "event") {
-			spend("events", limits.firesPerMinute);
-			if (!(granted.kinds ?? []).includes(args.kind ?? "")) {
-				throw masonError(ERROR_CODE.kindNotPermitted, `"${args.kind}" is not a kind this entry's grant names`);
-			}
+		if (args.type === "event" && !(granted.kinds ?? []).includes(args.kind ?? "")) {
+			throw masonError(ERROR_CODE.kindNotPermitted, `"${args.kind}" is not a kind this entry's grant names`);
 		}
+		// Dedupe first, and free: the door answers a resend before it charges anything, and a retry that cost a sender its
+		// minute would fail twice. A notice and a submission both spend the same budget, because both put words in the
+		// transcript; an event has its own.
 		const key = `${args.type}:${args.appendId}`;
-		// A notice is words in the transcript, so the door charges it to the submission budget; the duplicate is free,
-		// because the row it would add is already there.
-		const duplicate = seen.has(key);
-		if (!duplicate && args.type === "notice") spend("submissions", limits.submissionsPerMinute);
-		if (duplicate) return { outcome: "duplicate" as const };
+		if (seen.has(key)) return { outcome: "duplicate" as const };
+		if (args.type === "event") spend("events", limits.firesPerMinute);
+		else spend("submissions", limits.submissionsPerMinute);
 		seen.add(key);
 		if (args.type === "submission") {
 			const text = (args.content ?? [])

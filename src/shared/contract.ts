@@ -3,7 +3,7 @@
  * transcript, the queue, the agent's status, and the entry kinds it is made of.
  *
  * There is no wire contract here: an interface is a connector and speaks `packages/protocol`. This file holds what is
- * still shared in TypeScript: the entry kinds, the reply tool's name, the two continuations a gate adds to a turn, and
+ * still shared in TypeScript: the entry kinds, the send tool's name, the two continuations a gate adds to a turn, and
  * the shapes the projection builds. Nothing consumes the projection yet; sibling is where it crosses.
  */
 

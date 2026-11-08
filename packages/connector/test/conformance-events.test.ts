@@ -14,8 +14,8 @@ test("an events-only connector passes the published conformance suite", async ()
 		"the event cases ran",
 	);
 	assert.ok(
-		result.passed.some((name) => name.startsWith("submission/")),
-		"an alarm may still hand mason a person's words",
+		result.passed.includes("grant/an entry that grants no user refuses words"),
+		"the no-user refusal ran, because this fixture's grant names an owner",
 	);
 	assert.ok(
 		result.skipped.some((name) => name.startsWith("delivery/")),

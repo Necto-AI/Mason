@@ -8,7 +8,7 @@ and mason decides whether that is worth a turn.
 The connector sends a fire over its socket, and mason writes it down as a hook entry: the kind, the payload, and the
 origin when the sender named one. If the entry's grant maps that kind to a routine (`kind -> routine` in
 `service/integrations.json`), the routine's prompt is the turn's instruction and the payload arrives under it as data.
-A kind with no routine is still written down, and wakes nothing.
+A kind with no routine behind it is written down and wakes nothing.
 
 ## How to read what arrives
 
