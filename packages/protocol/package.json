@@ -5,7 +5,7 @@
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
 	"version": "0.1.0",
-	"description": "The mason connector protocol, v1: language-neutral JSON Schema plus the TypeScript view of the same shapes.",
+	"description": "The mason connector protocol, v1: two Chord contracts and the shapes they carry.",
 	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -16,13 +16,11 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
-		"./schema": "./schemas/protocol.v1.json",
 		"./package.json": "./package.json"
 	},
 	"sideEffects": false,
 	"files": [
 		"dist",
-		"schemas",
 		"PROTOCOL.md",
 		"README.md"
 	],
@@ -32,5 +30,9 @@
 	},
 	"engines": {
 		"node": ">=22.6"
+	},
+	"dependencies": {
+		"@earendil-works/chord": "1.5.0",
+		"@earendil-works/pi-schema": "1.5.0"
 	}
 }

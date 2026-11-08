@@ -12,7 +12,7 @@ import { chat } from "./fixtures/chat.ts";
  * The two claims the README makes about a restart: two connector instances, one store file, and in between them nothing
  * but what reached the disk.
  *
- * The store is the only thing carried over. Everything a connector keeps in memory — its socket, its in-flight map, the
+ * The store is the only thing carried over. Everything a connector keeps in memory — its link, its in-flight map, the
  * set of ids it has seen — is gone, which is exactly why the journal and the ledger have to live in the store. The two
  * instances share this process because that is what a test can do; the state they share is only the file.
  */
@@ -27,17 +27,11 @@ async function withFixture(
 	const mason = createFakeMason({
 		connector: chat.name,
 		granted: {
-			user: {
-				...(chat.faces.user?.actors?.[0]?.externalActorId === undefined
-					? {}
-					: { owner: chat.faces.user.actors[0].externalActorId }),
-				conversations: chat.faces.user?.conversations ?? [],
-				capabilities: chat.faces.user?.capabilities ?? ["text"],
-			},
-			tools: { url: "https://chat.internal/mcp" },
-			events: { "chat.message": "chat-message" },
+			owner: "owner-1",
+			targets: chat.faces.targets ?? [],
+			kinds: chat.faces.kinds ?? [],
+			commands: chat.faces.commands ?? [],
 		},
-		capabilities: chat.faces.user?.capabilities ?? ["text"],
 	});
 	mason.start();
 	const path = join(dir, "connector.db");
@@ -48,19 +42,17 @@ async function withFixture(
 		const connector = createConnector({
 			name: chat.name,
 			version: "1.0.0",
-			url: mason.url,
+			url: "http://mason.test/api/connector",
 			credential: "test-credential",
 			store,
 			link: mason.link,
 			fetch: mason.fetch,
-			requestTimeoutMs: 1_000,
+			readyTimeout: 1_000,
 			reconnect: { initialMs: 1, maxMs: 5 },
-			heartbeatMs: 0,
-			faces: { user: chat.faces.user, tools: chat.faces.tools, events: { kinds: ["chat.message"] } },
 			handlers: {
-				onDelivery(params) {
-					sends.push(params.deliveryId.length);
-					return { status: "delivered", external: { id: params.deliveryId } };
+				onDelivery(delivery) {
+					sends.push(delivery.deliveryId.length);
+					return { status: "delivered" };
 				},
 			},
 		});
@@ -76,17 +68,14 @@ async function withFixture(
 	}
 }
 
-const origin = { connector: "chat", externalConversationId: "-1001234" };
-
 test("a call journaled before a restart is replayed once by the next process", async () => {
 	await withFixture(async ({ mason, open }) => {
 		const first = await open();
 		mason.kill("the process is going away");
 		const outcome = await first.connector.submit({
-			origin,
-			actor: { externalActorId: "u-8811" },
+			origin: { ref: "chat-1" },
 			content: [{ type: "text", text: "while you were out" }],
-			submissionId: "restart-1",
+			appendId: "restart-1",
 		});
 		assert.equal(outcome.status, "pending");
 		await first.connector.stop();
@@ -96,7 +85,7 @@ test("a call journaled before a restart is replayed once by the next process", a
 		try {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			assert.equal(mason.submissions.length, 1, "the journaled call was replayed by the new process");
-			assert.equal(mason.submissions[0]?.submissionId, "restart-1");
+			assert.equal(mason.submissions[0]?.appendId, "restart-1");
 		} finally {
 			await second.connector.stop();
 		}
@@ -108,7 +97,7 @@ test("a delivery settled before a restart is a duplicate after it, and nobody is
 		const first = await open();
 		const ack = await mason.deliver({
 			deliveryId: "restart-delivery",
-			origin,
+			target: "dm",
 			blocks: [{ type: "text", text: "hello" }],
 		});
 		assert.equal(ack?.status, "delivered");
@@ -119,7 +108,7 @@ test("a delivery settled before a restart is a duplicate after it, and nobody is
 		try {
 			const again = await mason.deliver({
 				deliveryId: "restart-delivery",
-				origin,
+				target: "dm",
 				blocks: [{ type: "text", text: "hello" }],
 			});
 			assert.equal(again?.status, "duplicate");

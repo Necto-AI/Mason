@@ -23,25 +23,29 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 /** The two packages, by the names a consumer installs them under. */
 const PACKAGES = ["mason-protocol", "mason-connector"] as const;
 
-const FIXTURE = `import { runConformance } from "mason-connector/testkit";
+const FIXTURE = `import { CONTRACTS } from "mason-protocol";
+import { runConformance } from "mason-connector/testkit";
 
 const chat = {
 	name: "external-chat",
 	version: "0.1.0",
 	faces: {
-		user: {
-			actors: [{ externalActorId: "u-1", displayName: "Denis" }],
-			conversations: [{ externalConversationId: "-100", kind: "room" }],
-			capabilities: ["text", "files", "approvals", "streaming"],
-		},
-		tools: { url: "https://external.internal/mcp" },
-		events: { "chat.message": "chat-message" },
+		targets: [
+			{ id: "dm", label: "the direct conversation", capabilities: ["text", "markdown", "files"] },
+			{ id: "alerts", label: "the alerts channel", capabilities: ["text"] },
+		],
+		kinds: ["chat.message"],
+		commands: ["stop", "compact", "clear", "status"],
 	},
-	state: ["status"],
 };
 
-const toolsOnly = { name: "external-calculator", version: "0.1.0", faces: { tools: { url: "https://calc.internal/mcp" } } };
-const eventsOnly = { name: "external-alarm", version: "0.1.0", faces: { events: { "alarm.ringing": "alarm-ringing" } } };
+const toolsOnly = { name: "external-calculator", version: "0.1.0", faces: {} };
+const eventsOnly = { name: "external-alarm", version: "0.1.0", faces: { kinds: ["alarm.ringing", "alarm.silenced"] } };
+
+if (CONTRACTS.map((contract) => contract.name).join(",") !== "mason.peer,mason.connector") {
+	console.error("the published contracts are not the two the protocol names");
+	process.exit(1);
+}
 
 const results = [];
 for (const fixture of [chat, toolsOnly, eventsOnly]) {
@@ -100,11 +104,10 @@ async function main(): Promise<void> {
 			if (stray.length > 0) throw new Error(`a published package ships source: ${stray.join(", ")}`);
 		});
 
-		await step("the schemas travel with the protocol package", async () => {
-			const schema = join(project, "node_modules", "mason-protocol", "schemas", "protocol.v1.json");
-			const document = JSON.parse(await readFile(schema, "utf8")) as { $id?: string };
-			if (document.$id !== "https://mason.dev/connector/protocol.v1.json") {
-				throw new Error("the published schema is not the normative document");
+		await step("the normative document travels with the protocol package", async () => {
+			const prose = await readFile(join(project, "node_modules", "mason-protocol", "PROTOCOL.md"), "utf8");
+			if (!prose.includes("# The connector contract, v1")) {
+				throw new Error("the published package does not carry the protocol's prose");
 			}
 		});
 
