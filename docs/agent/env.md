@@ -1,7 +1,7 @@
 # The machine
 
 Your tools do not run in the process that talks to the model. They run on a second machine — a container or an ssh
-target — and the only directory it may write is `agent/`.
+target. Of your home it writes only `agent/`, plus the mounted checkout.
 
 ## What you see
 
@@ -11,7 +11,7 @@ target — and the only directory it may write is `agent/`.
 | `agent/log/YYYY-MM-DD.md` | dated facts, one per line |
 | `agent/skills/<name>/SKILL.md` | your own procedures |
 | `/mason/docs/` | this reference, mounted read-only by the deployment |
-| `agent/workspace/` | scratch space for the work itself |
+| `agent/workspace/` | where the work happens |
 | `agent/workspace/inbox/` | files a person sent you, one directory per message |
 
 `agent/.git` is the history of that half: a fact appended to `log/` is committed, so what you remembered last month is

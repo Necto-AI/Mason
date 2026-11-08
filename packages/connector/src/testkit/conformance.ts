@@ -25,7 +25,10 @@ import { MemoryStore } from "../store-memory.ts";
 import { createFakeMason, type FakeMason, type FakeMasonGrants } from "./fake-mason.ts";
 
 export interface ConformanceFaces {
-	/** The actor this medium speaks as, when the grant names one. The suite's forged-actor case needs it. */
+	/**
+	 * The actor this medium speaks as. `""` is the entry whose grant names no `user` at all: it may raise events, write
+	 * notices and answer controls, and it may not carry a person's words.
+	 */
 	readonly owner?: string;
 	/** The places this medium can be sent to, as the operator would declare them. */
 	readonly targets?: readonly Target[];
@@ -61,10 +64,11 @@ export interface ConformanceContext {
 
 export interface ConformanceCase {
 	readonly name: string;
+	/** The faces the fixture must declare for this case to mean anything. A case about a face's absence does not use it. */
 	readonly needs?: ReadonlyArray<"targets" | "kinds" | "commands" | "owner">;
 	/**
-	 * A grant this case is measured against instead of the one the fixture's faces describe. A case about a face the
-	 * operator did not grant cannot be staged with a fixture that declares it, and the door's refusals are its subject.
+	 * A grant this case is measured against instead of the one the fixture's faces describe. A case whose subject is a
+	 * refusal cannot be staged with a fixture that declares the face, and the refusal is the door's to make.
 	 */
 	readonly grant?: Partial<FakeMasonGrants>;
 	run(context: ConformanceContext): Promise<void>;
@@ -202,7 +206,9 @@ export async function open(
 
 function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 	return {
-		owner: fixture.faces.owner ?? "owner-1",
+		// `owner: ""` is the fixture that declares no user face, which is `null` to the fake: absent is not the same
+		// statement as "nobody", and a fixture that says nobody is testing the door's first refusal.
+		owner: fixture.faces.owner === "" ? null : (fixture.faces.owner ?? "owner-1"),
 		targets: fixture.faces.targets ?? [],
 		kinds: fixture.faces.kinds ?? [],
 		commands: fixture.faces.commands ?? [],
@@ -286,8 +292,7 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
-			name: "submission/an entry that grants no user refuses words",
-			needs: ["owner"],
+			name: "grant/an entry that grants no user refuses words",
 			grant: { owner: null },
 			async run({ connector, mason }) {
 				// The face itself is the first ceiling: an entry the operator gave events and no `user` may be spoken through

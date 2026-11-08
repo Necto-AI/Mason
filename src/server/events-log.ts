@@ -87,7 +87,7 @@ export class EventLog {
 		}
 	}
 
-	/** Every line this log can see, oldest first: what a test reads back, and what `count` is built from. */
+	/** Every line this log can see, oldest first: what a test reads back. */
 	lines(): EventLine[] {
 		const lines: EventLine[] = [];
 		for (const file of this.#files()) {
