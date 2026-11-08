@@ -15,7 +15,7 @@ import {
 	DELIVERY_ENTRY_KIND,
 	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
+	SEND_TOOL,
 	splitAuthor,
 } from "../src/shared/contract.ts";
 
@@ -61,7 +61,7 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Check the deploy." }]),
-				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "reply" }] }]),
+				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "send" }] }]),
 				assistant(3, [
 					{ type: "thinking", thinking: "The token is hunter2." },
 					call("bash", { command: "curl -H 'authorization: Bearer hunter2' example.invalid" }, "leaky"),
@@ -70,7 +70,7 @@ describe("the transcript the client is sent", () => {
 				result(4, "leaky", "response included hunter2", false),
 				assistant(5, [
 					{ type: "text", text: "Notes again." },
-					call(REPLY_TOOL, { message: "The deploy is healthy." }, "sent"),
+					call(SEND_TOOL, { text: "The deploy is healthy." }, "sent"),
 				]),
 				result(6, "sent", "delivered", false),
 				replyEntry(7, "reply:sent", "The deploy is healthy."),
@@ -195,7 +195,7 @@ describe("the transcript the client is sent", () => {
 				"pi.live": {
 					generation: {
 						attempt: 1,
-						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sen" }, "m1")] },
+						message: { role: "assistant", content: [call(SEND_TOOL, { text: "Half a sen" }, "m1")] },
 					},
 				},
 			}),
@@ -208,7 +208,7 @@ describe("the transcript the client is sent", () => {
 				"pi.live": {
 					generation: {
 						attempt: 1,
-						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sentence." }, "m1")] },
+						message: { role: "assistant", content: [call(SEND_TOOL, { text: "Half a sentence." }, "m1")] },
 					},
 				},
 			}),
@@ -260,7 +260,7 @@ describe("the transcript the client is sent", () => {
 					4,
 					[
 						{ type: "text", text: "Kept: two lines in the log." },
-						call(REPLY_TOOL, { message: "Kept two lines." }, "m1"),
+						call(SEND_TOOL, { text: "Kept two lines." }, "m1"),
 					],
 					{
 						stopReason: "toolUse",
@@ -282,7 +282,7 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Anything new?" }]),
-				assistant(2, [{ type: "text", text: "Notes." }, call(REPLY_TOOL, { message: "Nothing new." }, "m1")], {
+				assistant(2, [{ type: "text", text: "Notes." }, call(SEND_TOOL, { text: "Nothing new." }, "m1")], {
 					stopReason: "toolUse",
 				}),
 				result(3, "m1", "delivered"),

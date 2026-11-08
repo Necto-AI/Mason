@@ -158,7 +158,7 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 	// `codemode` is built per boot, so it is not in the base list, and it is the last tool a request carries. Growing
 	// this list is a decision of its own: a tool is a declaration in every request, and a capability the model may use
 	// without asking a script for it.
-	assert.deepEqual([...declared, "codemode"], ["read", "write", "edit", "bash", "reply", "codemode"]);
+	assert.deepEqual([...declared, "codemode"], ["read", "write", "edit", "bash", "send", "codemode"]);
 });
 
 test("the codemode section is a count and three ways to look a tool up, not a catalogue", async () => {
@@ -171,7 +171,7 @@ test("the codemode section is a count and three ways to look a tool up, not a ca
 	const rendered =
 		(await renderSection(
 			CODEMODE_SECTION,
-			promptInput({ agent: { callable: [{ name: "bash" }, { name: "reply" }, { name: "mcp_call" }] } }),
+			promptInput({ agent: { callable: [{ name: "bash" }, { name: "send" }, { name: "mcp_call" }] } }),
 		)) ?? "";
 	assert.match(rendered, /<codemode>\n3 tools can be called from a script/, "the count is the prompt's one number");
 	assert.match(rendered, /`ALL_TOOLS` names them/, "the list is a global, not a paragraph");
@@ -192,7 +192,7 @@ test("the tone section is rules about a reply, not a banned-word list", async ()
 	const rendered = await renderSection(sectionOf("tone"));
 	assert.equal(rendered, `<tone>\n${TONE}\n</tone>`, "tagged like its neighbours");
 	assert.match(TONE, /Never name a tool/, "the model says what it found, not which tool found it");
-	assert.match(TONE, /say you did not check it/, "an unverified claim says so in its own sentence");
+	assert.match(TONE, /say you did not check it/i, "an unverified claim says so in its own sentence");
 	assert.match(TONE, /Do not offer to do what you can do/, "doing it beats offering it");
 	assert.doesNotMatch(TONE, /be concise|avoid|never say|banned/i, "brevity comes from the turn, not from a word list");
 	assert.ok(TONE.length < 700, `the tone section is ${TONE.length} characters`);
@@ -752,6 +752,9 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		"cwd",
 		"skills",
 		"profile",
+		// The reference the agent reads about this machine, and what it holds: nothing a connector or a routine can add
+		// to the prompt, because a document grows without a token costing anything until the agent opens it.
+		"docs",
 		// What exists beyond the tool list, and then the tools a script can call: a capability and the way to reach it
 		// sit next to each other, and both before the two rules about the turn's ending.
 		"integrations",
@@ -766,16 +769,25 @@ test("the prompt is one registry: no other extension brings a section, and the o
 });
 
 /**
- * pi's own default prompt carries a `docs` section pointing at its README and `docs/` tree, so a coding agent can read
- * how to change its own extensions and skills. mason's agent is not meant to have that: its prompt names the files it
- * may read (its skills), and nothing about the machinery that runs it.
+ * The one `docs` section points at mason's own reference on the tool machine and at nothing else.
+ *
+ * pi's default prompt carries a `docs` section naming its README and `docs/` tree, so a coding agent can read how to
+ * change its own extensions. mason's agent is not that agent: it may read how this machine works, and not how the
+ * machinery that runs it is built. The distinction is the path, so the path is what this test reads.
  */
-test("the prompt never points the agent at pi's docs or at its own source", async () => {
-	const rendered = (await Promise.all(PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection))))
-		.filter((text) => text !== undefined)
-		.join("\n");
-	assert.ok(rendered.length > 0);
-	assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
-	assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
-	assert.ok(!promptSectionKeys().includes("docs"), "no docs section exists to be filled later");
+test("the docs section points at the reference on the machine, never at pi's docs or the agent's own source", async () => {
+	await withHouseHome(async () => {
+		const rendered = (await Promise.all(PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection))))
+			.filter((text) => text !== undefined)
+			.join("\n");
+		assert.ok(rendered.length > 0);
+		assert.match((await renderSection(sectionOf("docs"))) ?? "", /agent\/docs\//);
+		assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
+		assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
+		// Every docs path the prompt names is inside the agent's own half of the home. A relative `docs/` is the shape pi's
+		// section uses, and the shape that would resolve inside the package the model is running from.
+		for (const path of rendered.match(/`[^`]*\/docs[^`]*`/g) ?? []) {
+			assert.match(path, /`agent\/docs/, `a docs path the agent is given is in its own half of the home: ${path}`);
+		}
+	});
 });
