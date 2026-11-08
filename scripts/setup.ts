@@ -18,8 +18,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Capability, ControlOp, ExternalConversation } from "mason-protocol";
-import { CONTROL_OPS } from "mason-protocol";
+import { type Capability, CONTROL_OPS, type ControlOp, type Target } from "mason-protocol";
 import { catalogEntry, readCatalog } from "../src/server/catalog.ts";
 import { composePath, projectName, readComposeCredential, writeCompose } from "../src/server/connector-compose.ts";
 import { type ConnectorGrant, listConnectorCredentials, mintConnectorCredential } from "../src/server/connectors.ts";
@@ -58,8 +57,8 @@ export interface SetupArgs {
 	readonly url?: string;
 	readonly env: ReadonlyMap<string, string>;
 	readonly owner?: string;
-	/** A `url:` connector's conversations, comma separated. Absent means ask. */
-	readonly conversations?: string;
+	/** A `url:` connector's targets, comma separated as `id` or `id=label`. Absent means ask. */
+	readonly targets?: string;
 	/** A `url:` connector's event kinds, `kind=hook` pairs comma separated. Absent means ask. */
 	readonly events?: string;
 	readonly start: boolean;
@@ -78,7 +77,7 @@ export function usage(): string {
   --url <ws-url>       a connector already running somewhere else; implies --connector custom
   --env NAME=value     one answer a connector needs; repeatable, and it answers a question so nothing is asked
   --owner <id>         who owns this chat: the id the connector will send for the person mason works for
-  --conversations <ids>  a url: connector's conversations, comma separated (default: the owner's)
+  --targets <id,id=label>  a url: connector's send targets (default: one per chat the connector asks for)
   --events <kind=hook>   a url: connector's event kinds, comma separated (default: none)
   --no-start           write everything and leave the container down
   --yes                take every flag it has and ask nothing; what CI and a script use
@@ -100,7 +99,7 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 	let connector: string | undefined;
 	let url: string | undefined;
 	let owner: string | undefined;
-	let conversations: string | undefined;
+	let targets: string | undefined;
 	let events: string | undefined;
 	let start = true;
 	let yes = false;
@@ -128,8 +127,9 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 			case "--owner":
 				owner = value();
 				break;
+			case "--targets":
 			case "--conversations":
-				conversations = value();
+				targets = value();
 				break;
 			case "--events":
 				events = value();
@@ -168,7 +168,7 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 		...(connector === undefined ? {} : { connector }),
 		...(url === undefined ? {} : { url }),
 		...(owner === undefined ? {} : { owner }),
-		...(conversations === undefined ? {} : { conversations }),
+		...(targets === undefined ? {} : { targets }),
 		...(events === undefined ? {} : { events }),
 		env,
 		start,
@@ -203,9 +203,12 @@ interface Choice {
 }
 
 /**
- * What the grant says for a catalog connector: the owner, the conversations the chat answer names, and the ceiling the
- * catalog declares. A negative chat id is a group or a channel and anything else is a person — the only distinction the
- * Telegram wire carries, and the one `kind` exists to record.
+ * What the grant says for a catalog connector: the owner, the places it may be sent to, and the ceiling the catalog
+ * declares.
+ *
+ * The chats the connector asks for become targets, because a target is mason's word for "somewhere you may send to" and
+ * a chat id is the medium's. The id the model writes is derived from it and the label is the id itself, which is all a
+ * setup run knows about a chat.
  */
 function catalogGrant(
 	entry: { readonly capabilities: readonly Capability[]; readonly commands: readonly ControlOp[] },
@@ -213,26 +216,25 @@ function catalogGrant(
 	chats: readonly string[],
 ): ConnectorGrant {
 	return {
-		user: {
-			owner,
-			conversations: conversationsOf(owner, chats),
-			capabilities: [...entry.capabilities],
-		},
+		user: { owner, capabilities: [...entry.capabilities] },
+		targets: targetsOf(chats.length === 0 ? [owner] : chats, entry.capabilities),
 		commands: [...entry.commands],
 	};
 }
 
-/**
- * One conversation of a grant. A negative id is a group or a channel and anything else is a person — the only
- * distinction the Telegram wire carries, and the one `kind` exists to record.
- */
-function conversation(id: string): ExternalConversation {
-	return { externalConversationId: id, kind: id.startsWith("-") ? "room" : "person" };
+/** One target per chat, with an id the model can write and the chat id as the label. */
+function targetsOf(ids: readonly string[], capabilities: readonly Capability[]): readonly Target[] {
+	return ids.map((id) => ({ id: targetId(id), label: id, capabilities: [...capabilities] }));
 }
 
-/** The list a grant names: the answers, or the owner's own room when nothing was answered. */
-function conversationsOf(owner: string, ids: readonly string[]): readonly ExternalConversation[] {
-	return (ids.length === 0 ? [owner] : ids).map(conversation);
+/** The angle brackets an address cannot carry: lowercase, digits and dashes, starting with one of the first two. */
+export function targetId(raw: string): string {
+	const slug = raw
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
+	return /^[a-z0-9]/.test(slug) ? slug : `t-${slug}`.replace(/-+$/, "");
 }
 
 /** `a, b, c` as the ids a grant names, trimmed and without the empties a trailing comma leaves. */
@@ -339,16 +341,16 @@ async function plan(args: SetupArgs, prompter: Prompter, paths: HousePaths): Pro
 		// connector that can never open a socket.
 		requireInstallable(parseSource(`url:${url}`));
 		const owner = args.owner ?? (await prompter.text(OWNER_QUESTION, OWNER));
-		// The grant a connector mason does not run is still written here, not by hand (#147): its owner, the conversations
+		// The grant a connector mason does not run is still written here, not by hand (#147): its owner, the targets
 		// it will send, and the kinds it may fire. The wizard asks each one, and each has a flag, so a script answers the
 		// same questions a person does.
 		const conversations =
-			args.conversations !== undefined
-				? splitIds(args.conversations)
+			args.targets !== undefined
+				? splitIds(args.targets)
 				: splitIds(
 						await prompter.text(CONVERSATIONS_QUESTION, {
 							hint: "the ids it will send for its rooms and people, as it sends them; empty means the owner's",
-							flag: "--conversations <id,id>",
+							flag: "--targets <id,id=label>",
 							fallback: "",
 							required: false,
 						}),
@@ -373,7 +375,10 @@ async function plan(args: SetupArgs, prompter: Prompter, paths: HousePaths): Pro
 			name,
 			description: `A connector already running at ${url}`,
 			grant: {
-				user: { owner, conversations: conversationsOf(owner, conversations) },
+				user: { owner },
+				// A connector with no chat named still gets one target: its owner. A grant with no place to send is a
+				// bot that can never answer, and the wizard's job is a home that works before it is edited.
+				targets: targetsOf(conversations.length === 0 ? [owner] : conversations, ["text", "markdown"]),
 				...(Object.keys(events).length === 0 ? {} : { events: { hooks: events } }),
 				commands: [...CONTROL_OPS],
 			},
@@ -609,9 +614,9 @@ export async function runSetup(
 		else
 			console.log(
 				`[setup] next: give the credential above to the connector at ${args.url ?? "its url"}. Its grant names ` +
-					`${plan_.grant.user?.conversations.length ?? 0} conversation(s) and ` +
+					`${plan_.grant.targets?.length ?? 0} target(s) and ` +
 					`${Object.keys(plan_.grant.events?.hooks ?? {}).length} event kind(s): change either with ` +
-					`\`mason setup --connector ${plan_.name} --url ${args.url ?? "<url>"} --conversations <ids> ` +
+					`\`mason setup --connector ${plan_.name} --url ${args.url ?? "<url>"} --targets <ids> ` +
 					"--events <kind=hook>`",
 			);
 		if (outcome.credential !== undefined)

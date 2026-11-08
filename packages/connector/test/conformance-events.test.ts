@@ -10,11 +10,15 @@ test("an events-only connector passes the published conformance suite", async ()
 		[],
 	);
 	assert.ok(
-		result.passed.some((name) => name.startsWith("fire/")),
-		"the fire cases ran",
+		result.passed.some((name) => name.startsWith("event/")),
+		"the event cases ran",
+	);
+	assert.ok(
+		result.passed.includes("grant/an entry that grants no user refuses words"),
+		"the no-user refusal ran, because this fixture's grant names an owner",
 	);
 	assert.ok(
 		result.skipped.some((name) => name.startsWith("delivery/")),
-		"an alarm has no reader, so nothing is delivered to it",
+		"an alarm has no target, so nothing is delivered to it",
 	);
 });

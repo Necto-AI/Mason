@@ -96,7 +96,7 @@ describe("execution targets", () => {
 		faux.setResponses([
 			// The turn answers through `reply`, so it settles `done` instead of ending undelivered.
 			fauxAssistantMessage(
-				[fauxText("Nothing to report."), fauxToolCall("reply", { message: "Nothing to report." }, { id: "r" })],
+				[fauxText("Nothing to report."), fauxToolCall("send", { text: "Nothing to report." }, { id: "r" })],
 				{ stopReason: "toolUse" },
 			),
 			fauxAssistantMessage(fauxText("Nothing else to report.")),

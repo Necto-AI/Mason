@@ -78,7 +78,7 @@ describe("a first run, on disk", () => {
 			"connector.kind": "custom",
 			"connector.url": "ws://127.0.0.1:8083/api/connector",
 			"connector.owner": "@denis",
-			"connector.conversations": "@denis",
+			"connector.targets": "@denis",
 			"connector.events": "",
 			"review.action": "apply",
 			"done.action": "finish",

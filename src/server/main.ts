@@ -102,7 +102,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
 		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
 	});
-	// The connector door: one JSON-RPC socket per connector, the reply outbox. Opened before the
+	// The connector door: one Chord socket per connector, the send outbox. Opened before the
 	// listener so a delivery cannot be owed before there is anything to send it with.
 	const connectors = await createConnectorDoor({
 		runtime,
@@ -119,7 +119,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			response.end("internal error");
 		});
 	});
-	// One socket server behind the listener: a connector's JSON-RPC door, and nothing else in a browser speaks to mason.
+	// One socket server behind the listener: a connector's Chord door, and nothing else in a browser speaks to mason.
 	// `noServer` because the path in the upgrade request decides whether there is a door at all, and a path that is not
 	// the connector's opens none.
 	const connectorSockets = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });

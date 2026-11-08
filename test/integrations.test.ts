@@ -260,11 +260,11 @@ describe("the integration list on disk", () => {
 			JSON.stringify({ integrations: { github: { ...github, connector: { commands: ["stop"] } } } }),
 		);
 		const message = await refusal(paths);
-		assert.match(message, /grants no face/);
+		assert.match(message, /grants nothing/);
 		assert.match(message, /is not one of them/);
 	});
 
-	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
+	it("reads a user face that names one owner and the places it may be sent to, and refuses the keys a room needed", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
@@ -272,13 +272,17 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "8811", conversations: [] } },
+						connector: { user: { owner: "8811" }, targets: [{ id: "team", label: "the team chat" }] },
 					},
 				},
 			}),
 		);
-		const booted = (await readIntegrations(paths)).integrations.telegram?.connector?.user;
-		assert.equal(booted?.owner, "8811");
+		const booted = (await readIntegrations(paths)).integrations.telegram?.connector;
+		assert.equal(booted?.user?.owner, "8811");
+		assert.deepEqual(
+			booted?.targets?.map((target) => [target.id, target.label]),
+			[["team", "the team chat"]],
+		);
 
 		// Each retired key is a file whose reader believes it still decides who may speak (#126). The refusal names the key
 		// rather than reading past a setting that no longer exists.
@@ -286,6 +290,7 @@ describe("the integration list on disk", () => {
 			["actors", { "8811": "Denis" }],
 			["unattributed", true],
 			["approver", "8811"],
+			["conversations", []],
 		] as const) {
 			await writeRaw(
 				paths,
@@ -293,7 +298,7 @@ describe("the integration list on disk", () => {
 					integrations: {
 						telegram: {
 							enabled: true,
-							connector: { user: { owner: "8811", conversations: [], [key]: retired } },
+							connector: { user: { owner: "8811", [key]: retired } },
 						},
 					},
 				}),
@@ -301,6 +306,19 @@ describe("the integration list on disk", () => {
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(`connector\\.user\\.${key}`), key);
 			assert.match(refused, /by hand/, key);
+		}
+
+		// The room list was carried in two spellings. The one outside the face is the same removal and its own refusal: it
+		// names `targets`, because a place this connector may be sent to is an entry in the grant now, not a room.
+		for (const [connector, retiredPath] of [
+			[{ user: { owner: "8811" }, conversations: [] }, "connector.conversations"],
+			[{ user: { owner: "8811", conversations: [] } }, "connector.user.conversations"],
+		] as const) {
+			await writeRaw(paths, JSON.stringify({ integrations: { telegram: { enabled: true, connector } } }));
+			const refused = await refusal(paths);
+			assert.match(refused, new RegExp(retiredPath.replaceAll(".", "\\.")), retiredPath);
+			assert.match(refused, /targets/, retiredPath);
+			assert.match(refused, /by hand/, retiredPath);
 		}
 
 		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries
@@ -312,7 +330,7 @@ describe("the integration list on disk", () => {
 					integrations: {
 						telegram: {
 							enabled: true,
-							connector: { user: { owner: "8811", conversations: [] }, [key]: [] },
+							connector: { user: { owner: "8811" }, [key]: [] },
 						},
 					},
 				}),
@@ -329,7 +347,7 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "  ", conversations: [] } },
+						connector: { user: { owner: "  " } },
 					},
 				},
 			}),
@@ -426,7 +444,8 @@ describe("the integration command", () => {
 						mcp: { url: "http://mason-github:8082/mcp", required: true },
 						connector: {
 							commands: ["stop"],
-							user: { owner: "8811", conversations: [{ externalConversationId: "8811", kind: "person" }] },
+							user: { owner: "8811" },
+							targets: [{ id: "8811", label: "the DM with Denis" }],
 						},
 					},
 				},
@@ -462,7 +481,7 @@ describe("the integration command", () => {
 				integrations: {
 					github: {
 						...github,
-						connector: { user: { owner: "8811", conversations: [] } },
+						connector: { user: { owner: "8811" }, targets: [{ id: "dm", label: "a DM" }] },
 					},
 				},
 			}),

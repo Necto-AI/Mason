@@ -13,9 +13,11 @@ import { projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
 	DELIVERY_ENTRY_KIND,
+	HOOK_ENTRY_KIND,
+	NOTICE_ENTRY_KIND,
 	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
+	SEND_TOOL,
 	splitAuthor,
 } from "../src/shared/contract.ts";
 
@@ -61,7 +63,7 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Check the deploy." }]),
-				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "reply" }] }]),
+				entry(2, "pi.system", [{ role: "system", content: "", toolsAdded: [{ name: "send" }] }]),
 				assistant(3, [
 					{ type: "thinking", thinking: "The token is hunter2." },
 					call("bash", { command: "curl -H 'authorization: Bearer hunter2' example.invalid" }, "leaky"),
@@ -70,7 +72,7 @@ describe("the transcript the client is sent", () => {
 				result(4, "leaky", "response included hunter2", false),
 				assistant(5, [
 					{ type: "text", text: "Notes again." },
-					call(REPLY_TOOL, { message: "The deploy is healthy." }, "sent"),
+					call(SEND_TOOL, { text: "The deploy is healthy." }, "sent"),
 				]),
 				result(6, "sent", "delivered", false),
 				replyEntry(7, "reply:sent", "The deploy is healthy."),
@@ -195,7 +197,7 @@ describe("the transcript the client is sent", () => {
 				"pi.live": {
 					generation: {
 						attempt: 1,
-						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sen" }, "m1")] },
+						message: { role: "assistant", content: [call(SEND_TOOL, { text: "Half a sen" }, "m1")] },
 					},
 				},
 			}),
@@ -208,7 +210,7 @@ describe("the transcript the client is sent", () => {
 				"pi.live": {
 					generation: {
 						attempt: 1,
-						message: { role: "assistant", content: [call(REPLY_TOOL, { message: "Half a sentence." }, "m1")] },
+						message: { role: "assistant", content: [call(SEND_TOOL, { text: "Half a sentence." }, "m1")] },
 					},
 				},
 			}),
@@ -228,6 +230,48 @@ describe("the transcript the client is sent", () => {
 			]),
 		);
 		assert.deepEqual(transcript, [{ kind: "user", id: "1", text: "Do the thing." }]);
+	});
+
+	it("says a routine's silent fire is a silence, not a turn that never happened", () => {
+		// A routine's `app.hook` carries no `kind`: there is no event row to stand in for the fire, so the fire is the
+		// turn, and a turn that ended without a message owes the person the same notice as any other.
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, HOOK_ENTRY_KIND, [{ role: "user", content: "[ROUTINE: Morning brief]" }], {
+					data: { hookId: "morning-brief", hookName: "Morning brief", firedAt: "2026-10-20T09:00:00.000Z" },
+				}),
+				assistant(2, [{ type: "thinking", thinking: "nothing worth a message" }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
+		]);
+	});
+
+	it("shows the event a fire carried, and still says the fire spoke to nobody", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, HOOK_ENTRY_KIND, [{ role: "user", content: "a message arrived" }], {
+					data: { hookId: "team-chat", hookName: "a chat message", kind: "chat.message" },
+				}),
+				assistant(2, [{ type: "thinking", thinking: "nothing to answer" }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "event", id: "1", name: "chat.message" },
+			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
+		]);
+	});
+
+	it("shows a notice the medium wrote about itself", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, NOTICE_ENTRY_KIND, [], {
+					data: { appendId: "note-1", connector: "telegram", text: "the channel was muted for an hour" },
+				}),
+			]),
+		);
+		assert.deepEqual(transcript, [{ kind: "notice", id: "medium:1", text: "the channel was muted for an hour" }]);
 	});
 
 	it("says the agent finished without a message, rather than leaving the turn blank", () => {
@@ -260,7 +304,7 @@ describe("the transcript the client is sent", () => {
 					4,
 					[
 						{ type: "text", text: "Kept: two lines in the log." },
-						call(REPLY_TOOL, { message: "Kept two lines." }, "m1"),
+						call(SEND_TOOL, { text: "Kept two lines." }, "m1"),
 					],
 					{
 						stopReason: "toolUse",
@@ -282,7 +326,7 @@ describe("the transcript the client is sent", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Anything new?" }]),
-				assistant(2, [{ type: "text", text: "Notes." }, call(REPLY_TOOL, { message: "Nothing new." }, "m1")], {
+				assistant(2, [{ type: "text", text: "Notes." }, call(SEND_TOOL, { text: "Nothing new." }, "m1")], {
 					stopReason: "toolUse",
 				}),
 				result(3, "m1", "delivered"),
