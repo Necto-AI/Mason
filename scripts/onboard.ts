@@ -21,6 +21,7 @@ import { readIntegrations } from "../src/server/integrations.ts";
 import { type BotTarget, botNames, readRoot, refuseHomeEnv, resolveBot, rootPath } from "../src/server/root.ts";
 import { runInit } from "./init.ts";
 import { namesConnector, runNew } from "./new.ts";
+import { type OnboardingOptions, runOnboarding } from "./onboarding.ts";
 import { runSetup } from "./setup.ts";
 import { MissingAnswer } from "./wizard.ts";
 
@@ -113,7 +114,14 @@ export function parseArgs(argv: readonly string[]): OnboardArgs {
 /** The command. Returns an exit code rather than calling `process.exit`, so a test can run the flow in-process. */
 export async function runOnboard(
 	argv: readonly string[],
-	options: { readonly root?: string; readonly doctor?: boolean } = {},
+	options: {
+		readonly root?: string;
+		readonly doctor?: boolean;
+		/** Injected by a test: the wizard's screens and its operations, so the whole flow runs without a terminal. */
+		readonly onboarding?: Omit<OnboardingOptions, "bot" | "init" | "setup" | "root">;
+		/** Injected by a test: whether this run has a terminal, which is the one thing a test process never has. */
+		readonly interactive?: boolean;
+	} = {},
 ): Promise<number> {
 	let args: OnboardArgs;
 	try {
@@ -128,6 +136,17 @@ export async function runOnboard(
 	}
 	try {
 		refuseHomeEnv();
+		// A terminal and no `--yes` is the wizard: same commands, asked rather than passed. Everything below is the
+		// scripted path, unchanged — `--yes`, a pipe, and a test all take it.
+		const interactive = options.interactive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
+		if (!args.yes && interactive && options.doctor !== false)
+			return await runOnboarding({
+				...(args.bot === undefined ? {} : { bot: args.bot }),
+				init: args.init,
+				setup: args.setup,
+				...(options.root === undefined ? {} : { root: options.root }),
+				...options.onboarding,
+			});
 		// `--yes` answers the connector question too: a scripted first run that stalls on "which connector?" has answered
 		// nothing, and the half-created root it left behind used to be discovered after the bot was written.
 		const setupArgs =
@@ -157,7 +176,9 @@ export async function runOnboard(
 				const code = await runNew([named, ...setupArgs], { root: root.root, doctor: false });
 				if (code !== 0) return code;
 				root = readRoot(root.root);
-				bot = resolveBot(root);
+				// By name: the bot this run just created, not whatever MASON_BOT or "the only bot" would say about a root
+				// this process only now learned the shape of.
+				bot = resolveBot(root, { bot: named });
 				created = true;
 			} else {
 				bot = resolveBot(root, { bot: named });
@@ -168,7 +189,7 @@ export async function runOnboard(
 			const code = await runNew(["bot", ...setupArgs], { root: root.root, doctor: false });
 			if (code !== 0) return code;
 			root = readRoot(root.root);
-			bot = resolveBot(root);
+			bot = resolveBot(root, { bot: "bot" });
 			created = true;
 		} else {
 			console.error(

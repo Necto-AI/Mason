@@ -64,7 +64,16 @@ export function namesConnector(setup: readonly string[]): boolean {
 /** The command. Returns an exit code rather than calling `process.exit`, so a test can run the flow in-process. */
 export async function runNew(
 	argv: readonly string[],
-	options: { readonly root?: string; readonly doctor?: boolean } = {},
+	options: {
+		readonly root?: string;
+		readonly doctor?: boolean;
+		/**
+		 * Whether this command installs the first connector. `mason new` does; the onboarding wizard does not, because it
+		 * has already collected that connector's answers and installs it as a step of its own, and two installs of the same
+		 * connector in one run would be one too many.
+		 */
+		readonly setup?: boolean;
+	} = {},
 ): Promise<number> {
 	const args = parseArgs(argv);
 	if (args.help) {
@@ -92,12 +101,14 @@ export async function runNew(
 		await ensureHouse(paths, DEFAULT_SOUL);
 		await ensureRepository(paths.agentDir);
 		console.log(`[new] created bot "${name}" at ${home}`);
-		const setup =
-			args.setup.includes("--yes") && !namesConnector(args.setup)
-				? [...args.setup, "--connector", "console"]
-				: args.setup;
-		const code = await runSetup(setup, { house: paths });
-		if (code !== 0) return code;
+		if (options.setup !== false) {
+			const setup =
+				args.setup.includes("--yes") && !namesConnector(args.setup)
+					? [...args.setup, "--connector", "console"]
+					: args.setup;
+			const code = await runSetup(setup, { house: paths });
+			if (code !== 0) return code;
+		}
 		if (options.doctor === false) return 0;
 		const checks = await runDoctor({ house: paths });
 		for (const check of checks) console.log(`[new] ${formatCheck(check)}`);

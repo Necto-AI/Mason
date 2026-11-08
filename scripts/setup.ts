@@ -138,7 +138,9 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 				const answer = value();
 				const separator = answer.indexOf("=");
 				if (separator <= 0) throw new Error(`--env takes NAME=value, not "${answer}"`);
-				env.set(answer.slice(0, separator), answer.slice(separator + 1));
+				// `NAME=` is how a script says "no answer", which is the same thing as not passing the flag: the connector's
+				// question is still open, and setup asks it.
+				if (answer.slice(separator + 1) !== "") env.set(answer.slice(0, separator), answer.slice(separator + 1));
 				break;
 			}
 			case "--no-start":
@@ -234,7 +236,7 @@ function conversationsOf(owner: string, ids: readonly string[]): readonly Extern
 }
 
 /** `a, b, c` as the ids a grant names, trimmed and without the empties a trailing comma leaves. */
-function splitIds(text: string): string[] {
+export function splitIds(text: string): string[] {
 	return text
 		.split(",")
 		.map((id) => id.trim())
@@ -264,9 +266,10 @@ async function assertKnownHooks(paths: HousePaths, events: Record<string, string
  * `kind=hook, kind=hook` as the events face's map.
  *
  * Parsed before anything is written, like the url beside it: a pair with no `=` would otherwise become a kind named
- * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message.
+ * `kind=hook` and a fire nobody can send, and the refusal names the pair so the typo is the message. `where` is the flag
+ * the text came from, so the message can name the one the person typed.
  */
-function parseEvents(text: string, where: string): Record<string, string> {
+export function parseEvents(text: string, where: string): Record<string, string> {
 	const hooks: Record<string, string> = {};
 	for (const pair of splitIds(text)) {
 		const separator = pair.indexOf("=");
@@ -294,7 +297,7 @@ interface Plan {
 }
 
 /** Mason's port: the one `mason up` binds, so a container is told where the socket it dials answers. */
-function masonPort(): number {
+export function masonPort(): number {
 	return Number(process.env.PORT ?? 8787);
 }
 

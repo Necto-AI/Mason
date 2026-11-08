@@ -60,7 +60,8 @@ tool or entry kind is invisible until the whitelist says so.
 
 - `mason onboard` / `init` / `new <name>` / `bots` / `doctor` / `status` — the root and its bots (`scripts/onboard.ts`,
   `init.ts`, `new.ts`, `bots.ts`, `doctor.ts`, `status.ts`). `onboard` is the first run end to end: root, first bot, first
-  connector, doctor. `init` verifies one real completion before it writes. `doctor` is nine read-only checks, one repair
+  connector, doctor. With a terminal it is the wizard (`scripts/onboarding.ts`, `src/tui/`); `--yes` and a pipe take the
+  dispatcher, so a script is never asked anything. `init` verifies one real completion before it writes. `doctor` is nine read-only checks, one repair
   command per failure, exit 1 on any failure. A second run asks nothing the files answer.
 - `mason setup` / `mason chat` — the day-2 connector and the first conversation (`scripts/setup.ts`, `scripts/chat.ts`): offers the connectors this release
   knows (`catalog/connectors.json`, parsed by `src/server/catalog.ts`, where an unknown key is a refusal), asks what the
