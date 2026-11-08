@@ -18,7 +18,7 @@
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, type PromptSection, section } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { readDocsIndex } from "./docs.ts";
+import { DOCS_MOUNT, readDocsIndex, SHIPPED_DOCS_DIR } from "./docs.ts";
 import { CODEMODE_SECTION } from "./extensions/codemode.ts";
 import { discoverSkills, renderSkills } from "./extensions/skills.ts";
 import { capText, currentHouse, readHouseFile } from "./house.ts";
@@ -74,10 +74,10 @@ export const TONE = `Write as a colleague would message them: plain sentences, y
  * The delivery invariant, in every turn: words reach the reader through one call and never as prose, so anything the
  * model writes outside it is working notes nobody reads.
  *
- * The call is `reply`, and it is the same call everywhere — the transcript, a chat, a schedule. What differs is where it
- * goes, and the model does not choose that: mason reads the turn's origin from the transcript and targets it. So this
- * section names one operation and the rule that keeps it one: never another medium's tool, and a named target only when
- * there is no origin to answer.
+ * The call is `send`, and it is the same call everywhere — the transcript, a chat, a schedule. Where it goes is the
+ * turn's origin, read from the transcript, so the model does not choose that; what it may choose is a target, and only
+ * when nothing wrote to the turn. This section names one operation and the rule that keeps it one: never another
+ * medium's tool.
  */
 export const DELIVERY_INVARIANT = `Nothing you write in a turn reaches them: words reach them through \`send\`, and everything else is a
 working note. A send goes back wherever the turn came from — the connector that carried the words, or the transcript —
@@ -102,7 +102,7 @@ next turn. Before it ends: read \`agent/profile.md\` and add what you learned ab
 \`agent/log/YYYY-MM-DD.md\` for what must not be forgotten; and write a skill only when a procedure repeated, its
 description under 60 characters. The log line is the rule and the skill is the exception. Retire a skill by naming what
 absorbed it, never silently. All of it lands inside \`agent/\`, and \`service/soul.md\` is the operator's file. If nothing
-was worth keeping, that is one line in the reply.`;
+was worth keeping, that is one line in the send.`;
 
 /**
  * What the model is told about the services it can reach: a name and one line for a tool server, an address for every
@@ -149,14 +149,14 @@ function renderIntegrations(): string | undefined {
  * the rule for what stays resident instead is **a rule stays in the prompt if the turn is already broken by the time
  * the agent would go and read it.**
  */
-export const DOCS_GROUNDING = `\`agent/docs/README.md\` is the reference, and not your memory: read the page your question is about when unsure how something here works.`;
+export const DOCS_GROUNDING = `\`/mason/docs/README.md\` is the read-only reference, not your memory: read its page when unsure how something here works.`;
 
 /**
  * What the index lists: every page seeded into the home, README first, and a `connectors/` page only for a connector this
  * home is actually granted. A page about a chat that was never installed is a page the agent would read and find nothing
  * to do with.
  */
-export async function docsIndex(docsDir = currentHouse().docsDir): Promise<string[]> {
+export async function docsIndex(docsDir = SHIPPED_DOCS_DIR): Promise<string[]> {
 	const granted = new Set(
 		Object.entries(currentIntegrations())
 			.filter(([, integration]) => integration.enabled && integration.connector !== undefined)
@@ -170,7 +170,7 @@ export async function docsIndex(docsDir = currentHouse().docsDir): Promise<strin
 			const ofConnector = /^connectors\/(.+)\.md$/.exec(page.path);
 			return ofConnector === null || granted.has(ofConnector[1] ?? "");
 		})
-		.map((page) => `agent/docs/${page.path}: ${page.title}`);
+		.map((page) => `${DOCS_MOUNT}/${page.path}: ${page.title}`);
 }
 
 /** What the profile section says when there is no profile yet: the first-run interview, not an empty header. */

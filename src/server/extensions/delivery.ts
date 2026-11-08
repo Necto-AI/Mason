@@ -205,13 +205,13 @@ const REMINDED = "delivery.reminded";
 /**
  * The reader never gets silence for an answer.
  *
- * `reply` is a tool, so calling it is the model's choice, and the prompt that asks for it is advice. This gate is what
+ * `send` is a tool, so calling it is the model's choice, and the prompt that asks for it is advice. This gate is what
  * makes it happen: when a turn is about to end with nothing delivered, the run continues with one reminder, and the
  * model gets one more chance to say what it meant to say. Once per turn, because the reminder is itself a `pi.user`
  * entry and the next generation can see it; a second silent answer is left to the projection, which shows a notice
  * rather than nothing.
  *
- * "Delivered" is the same call `reply` makes: one operation, so the gate and the tool cannot disagree about what
+ * "Delivered" is the same call `send` makes: one operation, so the gate and the tool cannot disagree about what
  * reaching the reader means.
  */
 function turnDelivered(messages: readonly Message[]): boolean {
@@ -294,7 +294,7 @@ function askedAlready(turn: readonly Message[]): boolean {
  * The mechanism is the delivery gate's, one counter over: `beforeRequest` reads the turn's progress and memoizes it,
  * `onYield` continues the run with one ask. Not a timer, not a background fork, not a second model: the work is the
  * turn's own context, and the same generation answers it. The ask is a `pi.user` entry, so the projection drops it and
- * the reader sees only the reply that says what was kept.
+ * the reader sees only the message that says what was kept.
  *
  * The guards are the ask's wording, and what code can enforce of them is enforced here: writes are the agent's own tools
  * on its own half of the home, so a file outside `agent/` is refused by the tool machine's mount rather than by this

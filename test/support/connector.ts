@@ -128,6 +128,8 @@ export async function connectorHome(options: { readonly noOwner?: boolean; reado
 	readonly credential: string;
 	/** Set when the file carries the second user-face entry. */
 	readonly secondCredential?: string;
+	/** A credential for the entry whose connector is switched off: minting succeeds, opening the socket does not. */
+	readonly offCredential?: string;
 }> {
 	const directory = await temporaryDirectory();
 	const paths = housePaths(join(directory, "house"));
@@ -136,9 +138,11 @@ export async function connectorHome(options: { readonly noOwner?: boolean; reado
 	await writeFile(join(paths.agentDir, "routines.json"), ROUTINES);
 	await writeFile(paths.integrations, JSON.stringify(integrationsFile(options)), { mode: 0o600 });
 	const { credential } = await mintConnectorCredential(paths.home, "telegram");
-	if (options.second !== true) return { paths, directory, credential };
+	// A credential for the entry that is switched off: minting one is allowed, and what it opens is the test.
+	const off = await mintConnectorCredential(paths.home, "off");
+	if (options.second !== true) return { paths, directory, credential, offCredential: off.credential };
 	const second = await mintConnectorCredential(paths.home, "slack");
-	return { paths, directory, credential, secondCredential: second.credential };
+	return { paths, directory, credential, offCredential: off.credential, secondCredential: second.credential };
 }
 
 /**

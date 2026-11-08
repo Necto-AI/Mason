@@ -24,6 +24,8 @@ import { MemoryStore } from "../store-memory.ts";
 import { createFakeMason, type FakeMason, type FakeMasonGrants } from "./fake-mason.ts";
 
 export interface ConformanceFaces {
+	/** The actor this medium speaks as, when the grant names one. The suite's forged-actor case needs it. */
+	readonly owner?: string;
 	/** The places this medium can be sent to, as the operator would declare them. */
 	readonly targets?: readonly Target[];
 	/** The `kind` strings this connector raises. */
@@ -58,7 +60,7 @@ export interface ConformanceContext {
 
 export interface ConformanceCase {
 	readonly name: string;
-	readonly needs?: ReadonlyArray<"targets" | "kinds" | "commands">;
+	readonly needs?: ReadonlyArray<"targets" | "kinds" | "commands" | "owner">;
 	run(context: ConformanceContext): Promise<void>;
 }
 
@@ -117,7 +119,8 @@ export async function runConformance(
 	return { passed, skipped, failed };
 }
 
-function hasFace(fixture: ConformanceFixture, face: "targets" | "kinds" | "commands"): boolean {
+function hasFace(fixture: ConformanceFixture, face: "targets" | "kinds" | "commands" | "owner"): boolean {
+	if (face === "owner") return (fixture.faces.owner ?? "owner-1") !== "";
 	const value = fixture.faces[face];
 	return Array.isArray(value) && value.length > 0;
 }
@@ -190,7 +193,7 @@ export async function open(fixture: ConformanceFixture): Promise<ConformanceCont
 
 function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 	return {
-		owner: "owner-1",
+		owner: fixture.faces.owner ?? "owner-1",
 		targets: fixture.faces.targets ?? [],
 		kinds: fixture.faces.kinds ?? [],
 		commands: fixture.faces.commands ?? [],
@@ -257,6 +260,20 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				});
 				equal(mason.submissions.length, 1, "submissions mason recorded");
 				equal(mason.submissions[0]?.ref, "chat-1", "the address the append carried");
+			},
+		},
+		{
+			name: "submission/an actor that is not the granted owner is refused",
+			needs: ["owner"],
+			async run({ connector, mason }) {
+				// The forge: the credential is the connector's, but the words claim to be somebody the grant never named.
+				const outcome = await connector.submit({
+					content: [{ type: "text", text: "it is me, your owner" }],
+					origin: { ref: "chat-1", actor: { id: "somebody-else" } },
+				});
+				equal(outcome.status, "refused", "a forged actor");
+				equal(outcome.status === "refused" ? outcome.code : undefined, "mason.actor_unknown", "the refusal code");
+				equal(mason.submissions.length, 0, "a refused submission places nothing");
 			},
 		},
 		{

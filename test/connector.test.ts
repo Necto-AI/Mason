@@ -297,20 +297,18 @@ describe("the session", () => {
 		}
 	});
 
-	it("is refused for a credential whose entry is not enabled", async () => {
-		const served = await serveConnector();
+	it("is refused for a credential whose entry is switched off, and the same socket opens for one that is not", async () => {
+		const home = await connectorHome();
+		const served = await serveConnector({ home });
 		try {
-			// The home carries an entry called `off` with its connector switched off, and one credential: the socket has to
-			// close rather than open with nothing on it.
-			const socket = new WebSocket(served.url, {
-				headers: { authorization: `Bearer ${served.credential}` },
-			});
-			const closed = await new Promise<boolean>((resolve) => {
-				socket.on("open", () => socket.close());
-				socket.on("close", () => resolve(true));
-				socket.on("error", () => resolve(true));
-			});
-			assert.equal(closed, true);
+			// A credential minted for the entry called `off`, whose connector is disabled: minting is allowed — it is the
+			// grant that decides — and the socket has to close rather than open with nothing on it.
+			const refused = await opens(served.url, home.offCredential ?? "");
+			assert.equal(refused, false, "a switched-off entry opened a socket");
+
+			// The same door, the credential of an entry that is on: this is what makes the case above about admission
+			// rather than about sockets that never open.
+			assert.equal(await opens(served.url, home.credential), true, "an enabled entry was refused");
 		} finally {
 			await served.close();
 		}
@@ -381,3 +379,23 @@ describe("budgets", () => {
 		}
 	});
 });
+
+/**
+ * Whether a socket with this credential stays open.
+ *
+ * A refused upgrade closes, and so does a socket that opened because this test closed it: the distinction is the point, so
+ * the answer is "it was still open a moment after the handshake", not "it emitted close at some time".
+ */
+async function opens(url: string, credential: string): Promise<boolean> {
+	const socket = new WebSocket(url, { headers: { authorization: `Bearer ${credential}` } });
+	return new Promise<boolean>((resolve) => {
+		const settle = (value: boolean): void => {
+			socket.removeAllListeners();
+			socket.close();
+			resolve(value);
+		};
+		socket.on("open", () => setTimeout(() => settle(socket.readyState === socket.OPEN), 150));
+		socket.on("close", () => settle(false));
+		socket.on("error", () => settle(false));
+	});
+}

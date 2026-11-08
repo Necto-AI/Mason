@@ -70,6 +70,12 @@ services:
       # this directory is the only part of the agent's home that container may write, which is the whole point of the
       # mount being a directory of its own.
       - mason-inbox:/home/mason/.mason/agent/workspace/inbox
+      # The reference the agent reads about this machine, at the path the prompt names (`src/server/docs.ts`). Read-only,
+      # and that is the mechanism rather than a preference: the agent this text corrects is the process that could
+      # otherwise rewrite it, and a page it wrote would be read back as the machine's own truth. Copied from the
+      # repository, which is what the mason image builds from, so both sides are one release.
+      - ../docs/agent:/mason/docs:ro
+
       # A checkout the agent works in on behalf of a person, at its host path so that every path in a report, an issue
       # and a prompt means the same thing on the host and in the container. Read-write: the worker commits, branches and
       # pushes. Defaults to the clinical-compass checkout on the deploy host; set REPO_DIR in `deploy/.env` to move it,

@@ -781,13 +781,13 @@ test("the docs section points at the reference on the machine, never at pi's doc
 			.filter((text) => text !== undefined)
 			.join("\n");
 		assert.ok(rendered.length > 0);
-		assert.match((await renderSection(sectionOf("docs"))) ?? "", /agent\/docs\//);
+		assert.match((await renderSection(sectionOf("docs"))) ?? "", /\/mason\/docs\//);
 		assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
 		assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
 		// Every docs path the prompt names is inside the agent's own half of the home. A relative `docs/` is the shape pi's
 		// section uses, and the shape that would resolve inside the package the model is running from.
 		for (const path of rendered.match(/`[^`]*\/docs[^`]*`/g) ?? []) {
-			assert.match(path, /`agent\/docs/, `a docs path the agent is given is in its own half of the home: ${path}`);
+			assert.match(path, /`\/mason\/docs/, `a docs path the agent is given is the read-only mount: ${path}`);
 		}
 	});
 });

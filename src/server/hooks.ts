@@ -352,6 +352,7 @@ export class HooksManager {
 	async fire(id: string, options: FireOptions = {}): Promise<Submission> {
 		if (this.#closed) throw new Error("Hooks manager is closed");
 		const hook = this.#require(id);
+
 		const payload = options.payload;
 		const kind = options.kind;
 		const origin = options.origin;

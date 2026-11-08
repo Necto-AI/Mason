@@ -97,7 +97,6 @@ export const ERROR_CODE = {
 	faceNotGranted: "mason.face_not_granted",
 	actorUnknown: "mason.actor_unknown",
 	kindNotPermitted: "mason.kind_not_permitted",
-	targetUnknown: "mason.target_unknown",
 	rateLimited: "mason.rate_limited",
 	queueOverflow: "mason.queue_overflow",
 	invalidRequest: "mason.invalid_request",
