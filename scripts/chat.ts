@@ -201,22 +201,31 @@ const cyan = (text: string): string => `\x1b[36m${text}\x1b[39m`;
  */
 export function replyOutput(
 	write: (text: string) => void,
-	line: (text: string) => void = (text) => void process.stdout.write(`${text}\n`),
+	line: (text: string) => void,
 ): {
 	start(deliveryId: string, text: string): void;
 	delta(deliveryId: string, text: string): void;
 	cancel(deliveryId: string, reason: string): void;
 	final(deliveryId: string, text: string): void;
 } {
-	/** The words on the screen for each delivery, in order: per-session scratch, dropped when the delivery lands. */
+	/**
+	 * The words on the screen for each delivery. A final drops its own entry; a withdrawn stream keeps its text, because a
+	 * final for the same id still has to know what the screen already shows. Only a final can clear one, so the handful
+	 * that never come back are bounded rather than leaking for the life of the console.
+	 */
 	const shown = new Map<string, string>();
+	const remember = (deliveryId: string, text: string): void => {
+		shown.delete(deliveryId);
+		shown.set(deliveryId, text);
+		if (shown.size > 32) shown.delete(shown.keys().next().value as string);
+	};
 	return {
 		start(deliveryId, text) {
-			shown.set(deliveryId, text);
+			remember(deliveryId, text);
 			write(`${cyan("mason: ")}${text}`);
 		},
 		delta(deliveryId, text) {
-			shown.set(deliveryId, (shown.get(deliveryId) ?? "") + text);
+			remember(deliveryId, (shown.get(deliveryId) ?? "") + text);
 			write(text);
 		},
 		cancel(_deliveryId, reason) {
