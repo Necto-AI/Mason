@@ -8,20 +8,22 @@
  */
 
 /**
- * The names the server and the client have to spell the same way: the one tool whose call is a reply, and the entry
+ * The names the server and the client have to spell the same way: the one tool whose call is a send, and the entry
  * kinds the transcript is made of. Spelled once here, so a rename cannot land on one side of the wire only.
  *
- * `reply` is mason's own operation, not a vendor's: it targets the origin a turn came from — the connector that carried
+ * `send` is mason's own operation, not a vendor's: it addresses the origin a turn came from — the connector that carried
  * the words — and the transcript itself when there is none. No prompt names a vendor tool, and the projection reads the
- * entry the reply commits rather than the call that made it.
+ * entry the send commits rather than the call that made it.
  */
-export const REPLY_TOOL = "reply";
+export const SEND_TOOL = "send";
 /** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
 /** A person's words that arrived through a connector, carrying the origin a reply goes back to. */
 export const CONNECTOR_ENTRY_KIND = "app.connector";
-/** One committed reply: the outbox record, and what the reader sees as a delivered message. */
+/** One committed send: the outbox record, and what the reader sees as a delivered message. */
 export const REPLY_ENTRY_KIND = "app.reply";
+/** The medium talking about itself: written down for the reader, and it starts no turn. */
+export const NOTICE_ENTRY_KIND = "app.notice";
 /** What became of one reply: the acknowledgement, durable, so a restart neither resends nor forgets it. */
 export const DELIVERY_ENTRY_KIND = "app.delivery";
 
@@ -31,10 +33,10 @@ export const DELIVERY_ENTRY_KIND = "app.delivery";
  * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry that
  * reads as one: the reader never sees the reminder, only the answer it produces.
  *
- * One reminder, because there is one operation: `reply` reaches whoever the turn came from, and a turn nobody is
+ * One reminder, because there is one operation: `send` reaches whoever the turn came from, and a turn nobody is
  * waiting on says so in its result rather than being answered in another tool's name.
  */
-export const DELIVERY_REMINDER = `${deliveryReminderOpening(REPLY_TOOL)} Send the answer now with \`${REPLY_TOOL}\`, in the words the reader should see.`;
+export const DELIVERY_REMINDER = `[delivery] That turn ended without a \`${SEND_TOOL}\` call, so nothing reached the reader: not your answer, not your notes, nothing at all. Send the answer now with \`${SEND_TOOL}\`, in the words the reader should see.`;
 
 /**
  * What the reflection gate asks when a turn of ten tool rounds or more ends: the work is kept, or it is gone.
@@ -70,12 +72,6 @@ const DELIVERY_REMINDER_OPENING =
 
 const REFLECTION_ASK_OPENING = /^\[reflection\] That turn took ten tool rounds or more, so keep what it produced:/;
 
-/** The sentence the reminder opens with: what did not happen, in the name of the tool that did not happen with. */
-function deliveryReminderOpening(tool: string): string {
-	return `[delivery] That turn ended without a \`${tool}\` call, so nothing reached the reader: not your answer, not
-your notes, nothing at all.`;
-}
-
 export type HookSummary = {
 	id: string;
 	name: string;
@@ -99,11 +95,8 @@ export type AgentStatus = {
 };
 
 /**
- * How long a name in a stored prefix may be. Long enough for "Александра Петрова", short enough to read as
- * `[from <name>]` in a prompt.
- *
- * It lives here because the prefix's own pattern is what enforces it: the name mason wrote into a message and the name
- * the parser reads back have to be the same length, so the two cannot drift into disagreeing about what a prefix is.
+ * How long a name in a stored prefix may be: long as "Александра Петрова", short enough to read as `[from <name>]`. It
+ * lives here because the prefix's own pattern enforces it, and the name written and the name parsed cannot drift.
  */
 export const NAME_MAX = 40;
 
@@ -129,13 +122,15 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
  * One row of the reader's transcript.
  *
  * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`reply`), and a coarse notice when a run failed. A trigger leaves no row of its own — a proactive turn is the message it sent, and the schedule that fired it is the schedule's business.
- * Reasoning, tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and
- * a trace endpoint can expose them later, deliberately and separately.
+ * (`send`), an event that arrived and woke a turn, the medium talking about itself, and a coarse notice when a run
+ * failed. A routine's timer leaves no row: a proactive turn is the message it sent. Reasoning, tool calls, tool
+ * arguments and tool output never cross the wire — they are the model's working notes, and a trace endpoint can expose
+ * them later, deliberately and separately.
  */
 export type TranscriptItem =
 	| { kind: "user"; id: string; text: string; author?: string; at?: number }
 	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
+	| { kind: "event"; id: string; name: string }
 	| { kind: "notice"; id: string; text: string };
 
 /** A submission the reader queued and can still withdraw, labelled for them rather than for the machine. */

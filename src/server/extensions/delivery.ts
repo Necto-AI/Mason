@@ -1,18 +1,17 @@
 /**
- * `reply`: the one channel through which a turn's words reach a reader.
+ * `send`: the one channel through which a turn's words reach a reader.
  *
  * Routing is mason's, not the model's. A turn knows its origin from the transcript — the `app.connector` or `app.hook`
- * entry that started it — and the tool addresses the reply there. There is no vendor tool to name and no prompt that
+ * entry that started it — and the tool addresses the send there. There is no vendor tool to name and no prompt that
  * names one: a chat, the transcript and a schedule are the same call, and only the destination differs.
  *
  * Three outcomes, and the result says which:
  *
  * - **delivered** — the transcript is the reader; the entry the call commits *is* the delivery.
- * - **queued** — a connector is the reader; the entry is the durable outbox, and the socket sends it, resends it after a
+ * - **queued** — a connector is the reader; the entry is the durable outbox, and the link delivers it, resends it after a
  *   reconnect, and records the acknowledgement. Saying "delivered" here would be a promise this process cannot keep.
- * - **nobody reached** — a hooked turn with no origin that named no target. The work is recorded and the model is told
- *   that no person has it, which is the truth; a message nobody received is the worst outcome the arrangement exists to
- *   avoid.
+ * - **nobody reached** — an event with no origin that named no address. The work is recorded and the model is told that
+ *   no person has it, which is the truth; a message nobody received is the worst outcome the arrangement exists to avoid.
  *
  * `replay` is explicit, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would commit
  * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
@@ -22,12 +21,13 @@
  * about what it leaves behind: the delivery gate, and the reflection gate that asks a turn of ten tool rounds or more
  * what it kept. One continuation each, in the turn that did the work, and no second model.
  *
- * A **nested** call — `tools.reply()` inside a code-mode script — is refused: its result goes back to the script instead
+ * A **nested** call — `tools.send()` inside a code-mode script — is refused: its result goes back to the script instead
  * of into the transcript, so nothing reaches the reader while the script is told it did. The entry is the delivery, and
  * a script cannot write one that a reader sees; the refusal says what to do instead.
  */
 import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
+import { parseSendAddress, sendAddress } from "mason-protocol";
 import { Type } from "typebox";
 import {
 	DELIVERY_REMINDER,
@@ -35,35 +35,29 @@ import {
 	isReflectionAsk,
 	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
-	REPLY_TOOL,
+	SEND_TOOL,
 } from "../../shared/contract.ts";
 import { currentIntegrations } from "../integrations.ts";
 import {
+	addressOfOrigin,
 	type ReplyRecord,
-	type ReplyTarget,
-	reachableTarget,
+	reachableAddress,
 	readTurnOrigin,
+	type SendAddress,
 	type TurnOrigin,
-	targetOfOrigin,
 } from "../replies.ts";
 import { nestedRefusal } from "./nested.ts";
 
-const ReplyParams = Type.Object({
-	message: Type.String({
+const SendParams = Type.Object({
+	text: Type.String({
 		minLength: 1,
 		description: "What the reader sees, written in full — this text is the message, not a note about it",
 	}),
 	to: Type.Optional(
-		Type.Object(
-			{
-				connector: Type.String({ description: "the connector to send to, as the operator names it" }),
-				conversation: Type.String({ description: "the external conversation id on that connector" }),
-			},
-			{
-				description:
-					"Where to send when this turn has no origin — a scheduled routine naming the chat it reports to. Omit it to answer whoever started the turn.",
-			},
-		),
+		Type.String({
+			description:
+				'Where to send when this turn has no origin, as "<connector>/<target>" out of the addresses you were told about — a scheduled routine naming the chat it reports to. Omit it to answer whoever started the turn.',
+		}),
 	),
 });
 
@@ -72,17 +66,17 @@ const ReplyParams = Type.Object({
  * an error result into a rejection (`vendor/pi/packages/durable/src/codemode/codemode.ts:280-291`), so the text has to
  * say the call rejects — a script that read it as advice would carry on believing the reader had been written to.
  */
-const REPLY_NESTED_REFUSAL =
-	"reply cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call reply from the turn.";
+const SEND_NESTED_REFUSAL =
+	"send cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call send from the turn.";
 
-/** What the model is told when nothing that carries words started this turn and it named no target. */
+/** What the model is told when nothing that carries words started this turn and it named no address. */
 const NOBODY_REACHED =
-	"recorded, but nobody was reached: this turn came from an event hook with no conversation behind it and no target was named, so the message is in the transcript and no person was sent it. To reach someone, call reply again with {to:{connector, conversation}} naming a configured user-face connector and one of its permitted conversations.";
+	'recorded, but nobody was reached: this turn came from an event with no address behind it and no target was named, so the message is in the transcript and no person was sent it. To reach someone, call send again with {to:"<connector>/<target>"} naming one of the addresses you were told about.';
 
-/** Where a reply goes, and whether the recording of it is also a delivery. */
-interface ChosenTarget {
-	readonly target?: ReplyTarget;
-	/** A hooked turn with no origin: the words are recorded, and no medium carries them. */
+/** Where a send goes, and whether the recording of it is also a delivery. */
+interface ChosenAddress {
+	readonly address?: SendAddress;
+	/** An event with no origin: the words are recorded, and no medium carries them. */
 	readonly nobodyReached?: true;
 }
 
@@ -99,27 +93,26 @@ function textOf(message: Message): string {
 		.join("");
 }
 
-export const replyTool = defineTool({
-	name: REPLY_TOOL,
-	description:
-		"Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A reply goes back where the turn came from — the connector that carried the words, or the transcript itself — so never try to reach a chat by another tool's name. When the turn came from an event hook with no conversation behind it, name the target with {to:{connector, conversation}}, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.",
-	parameters: ReplyParams,
+export const sendTool = defineTool({
+	name: SEND_TOOL,
+	description: `Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A send goes back where the turn came from — the connector that carried the words, or the transcript itself — so never try to reach a chat by another tool's name. When the turn came from an event with no address behind it, name one with to: "<connector>/<target>", out of the addresses the prompt lists, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.`,
+	parameters: SendParams,
 	replay: "unsafe",
-	execute: async ({ message, to }, api, context) => {
-		const nested = nestedRefusal(api, REPLY_NESTED_REFUSAL);
+	execute: async ({ text, to }, api, context) => {
+		const nested = nestedRefusal(api, SEND_NESTED_REFUSAL);
 		if (nested !== undefined) return nested;
 		const origin = await readTurnOrigin(api, context);
-		const chosen = chooseTarget(origin, to);
+		const chosen = chooseAddress(origin, to);
 		if ("reason" in chosen) return { output: [{ type: "text", text: chosen.reason }] };
-		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text: message }];
+		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text }];
 		const record: ReplyRecord = {
 			deliveryId: `reply:${api.callId}`,
 			blocks,
-			...(chosen.target === undefined ? {} : { target: chosen.target }),
+			...(chosen.address === undefined ? {} : { address: chosen.address }),
 			...(origin.kind !== "local" && origin.origin !== undefined ? { origin: origin.origin } : {}),
 		};
-		// The commit is the delivery, and the commit is what makes it durable: a local reply is read out of this entry,
-		// and a connector reply is sent from it by the outbox, which records the acknowledgement as its own entry.
+		// The commit is the delivery, and the commit is what makes it durable: a local send is read out of this entry,
+		// and a connector send is delivered from it by the outbox, which records the acknowledgement as its own entry.
 		await api.commit(
 			(tx) =>
 				tx.appendEntry(api.conversationId, {
@@ -128,12 +121,13 @@ export const replyTool = defineTool({
 					data: {
 						deliveryId: record.deliveryId,
 						blocks,
-						...(record.target === undefined
+						...(record.address === undefined
 							? {}
 							: {
 									target: {
-										connector: record.target.connector,
-										externalConversationId: record.target.externalConversationId,
+										connector: record.address.connector,
+										...(record.address.target === undefined ? {} : { target: record.address.target }),
+										...(record.address.ref === undefined ? {} : { ref: record.address.ref }),
 									},
 								}),
 						...(record.origin === undefined
@@ -141,13 +135,9 @@ export const replyTool = defineTool({
 							: {
 									origin: {
 										connector: record.origin.connector,
-										externalConversationId: record.origin.externalConversationId,
-										...(record.origin.externalMessageId === undefined
-											? {}
-											: { externalMessageId: record.origin.externalMessageId }),
-										...(record.origin.externalActorId === undefined
-											? {}
-											: { externalActorId: record.origin.externalActorId }),
+										ref: record.origin.ref,
+										...(record.origin.messageId === undefined ? {} : { messageId: record.origin.messageId }),
+										...(record.origin.actor === undefined ? {} : { actor: record.origin.actor }),
 									},
 								}),
 					},
@@ -155,45 +145,55 @@ export const replyTool = defineTool({
 			context,
 		);
 		const outcome = chosen.nobodyReached === true ? NOBODY_REACHED : outcomeText(record);
-		return { output: [{ type: "text", text: outcome }], details: { length: message.length } };
+		return { output: [{ type: "text", text: outcome }], details: { length: text.length } };
 	},
 });
 
 /** What the model is told the call did, in one sentence it can act on. */
 function outcomeText(record: ReplyRecord): string {
-	if (record.target === undefined) {
+	if (record.address === undefined) {
 		return record.origin === undefined
 			? "delivered to the transcript"
-			: "delivered to the transcript: this turn's origin is a connector, but the reply was addressed here";
+			: "delivered to the transcript: this turn's origin is a connector, but the send was addressed here";
 	}
-	return `queued for delivery to ${record.target.connector} "${record.target.externalConversationId}"`;
+	// A target the model named reads back as the address it wrote, so a mistake is visible in the same words it used. An
+	// address that came from the turn's origin is the connector alone: the `ref` is opaque, and printing it as if it were
+	// a target would teach a name nothing accepts.
+	const where =
+		record.address.target === undefined
+			? record.address.connector
+			: sendAddress(record.address.connector, record.address.target);
+	return `queued for delivery to ${where}`;
 }
 
 /**
- * Where the reply goes, or why it cannot go anywhere.
+ * Where the send goes, or why it cannot go anywhere.
  *
- * The origin decides unless the model named a target: a routine has no origin, and an explicit target that the operator
- * did not grant is refused rather than silently redirected to a room the connector may not speak in.
+ * The origin decides unless the model named an address: a routine has no origin, and an address the operator did not
+ * grant is refused rather than silently redirected to a target the connector may not be sent to.
  */
-function chooseTarget(
-	origin: TurnOrigin,
-	to: { readonly connector: string; readonly conversation: string } | undefined,
-): ChosenTarget | { readonly reason: string } {
-	if (to !== undefined) {
-		const target: ReplyTarget = { connector: to.connector, externalConversationId: to.conversation };
-		const reachable = reachableTarget(currentIntegrations(), target);
+function chooseAddress(origin: TurnOrigin, to: string | undefined): ChosenAddress | { readonly reason: string } {
+	if (to !== undefined && to.trim() !== "") {
+		const parsed = parseSendAddress(to.trim());
+		if (parsed === undefined) {
+			return {
+				reason: `cannot deliver: "${to}" is not an address. Write it as "<connector>/<target>", out of the list above.`,
+			};
+		}
+		const address: SendAddress = { connector: parsed.connector, target: parsed.target };
+		const reachable = reachableAddress(currentIntegrations(), address);
 		if (!reachable.ok) return { reason: `cannot deliver: ${reachable.reason}` };
-		return { target };
+		return { address };
 	}
-	// A person's words through a connector and a fire that named its conversation are the same destination: both carry an
-	// origin, and the reply goes back to it.
+	// A person's words through a connector and an event that named its address are the same destination: both carry an
+	// origin, and the send goes back to it.
 	const carried = origin.kind === "local" ? undefined : origin.origin;
 	if (carried !== undefined) {
-		const target = targetOfOrigin(carried);
-		const reachable = reachableTarget(currentIntegrations(), target);
-		// A connector that was switched off mid-turn is not a destination; the reply is still the turn's answer, so the call
+		const address = addressOfOrigin(carried);
+		const reachable = reachableAddress(currentIntegrations(), address);
+		// A connector that was switched off mid-turn is not a destination; the send is still the turn's answer, so the call
 		// fails with a sentence the model can act on rather than silently landing somewhere nobody reads.
-		return reachable.ok ? { target } : { reason: `cannot deliver: ${reachable.reason}` };
+		return reachable.ok ? { address } : { reason: `cannot deliver: ${reachable.reason}` };
 	}
 	if (origin.kind === "local") return {};
 	return { nobodyReached: true };
@@ -215,7 +215,7 @@ const REMINDED = "delivery.reminded";
  * reaching the reader means.
  */
 function turnDelivered(messages: readonly Message[]): boolean {
-	const delivering = new Set([REPLY_TOOL]);
+	const delivering = new Set([SEND_TOOL]);
 	for (const message of messages) {
 		if (message.role !== "assistant") continue;
 		const content = (message as { content?: unknown }).content;
@@ -317,6 +317,6 @@ export const reflectionGate = hook(GenerationTask, {
 
 export const Delivery = defineExtension({
 	name: "delivery",
-	tools: [replyTool],
+	tools: [sendTool],
 	hooks: [deliveryGate, reflectionGate],
 });
