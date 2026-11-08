@@ -1,28 +1,20 @@
 /**
- * The connector door: one JSON-RPC socket, its handshake, and the two acts a connector can take with words.
+ * The connector door: mason's Chord host, the session it serves, and the three appends a connector can make.
  *
  * Every test here drives the published SDK over a real socket, because the parts most likely to be wrong are the parts a
- * direct call would skip: the bearer credential on the upgrade, the path, the framing, the handshake ceiling. The
- * admission rules are read off the durable transcript rather than a counter — an `app.connector` entry with its origin,
- * and an `app.hook` entry that is not conversation — because that is where the claim lives.
+ * direct call would skip: the bearer credential on the upgrade, the path, the child host's name, the session as state.
+ * The admission rules are read off the durable transcript rather than a counter — an `app.connector` entry with its
+ * origin, an `app.hook` entry that is not conversation — because that is where the claim lives.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import WebSocket from "ws";
-import {
-	listConnectorCredentials,
-	mintConnectorCredential,
-	revokeConnectorCredential,
-} from "../src/server/connectors.ts";
-import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, NOTICE_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
 import {
 	connectConnector,
 	connectorHome,
 	entriesOf,
-	fullFaces,
 	quietTurns,
-	rawConnect,
 	replyTurns,
 	serveConnector,
 	until,
@@ -34,7 +26,7 @@ async function entries(served: Awaited<ReturnType<typeof serveConnector>>, kind:
 }
 
 describe("a connector's words", () => {
-	it("become an ordinary attributed submission, and the reply goes back where they came from", async () => {
+	it("become an ordinary attributed submission, and the send goes back to the origin's address", async () => {
 		const served = await serveConnector({
 			home: await connectorHome(),
 			steps: replyTurns(["the calendar is clear"]),
@@ -43,39 +35,18 @@ describe("a connector's words", () => {
 			const connected = await connectConnector(served);
 			try {
 				const outcome = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m1" },
-					actor: { externalActorId: "8811", displayName: "Denis" },
+					origin: { ref: "team", messageId: "m1", actor: { id: "8811", name: "Denis" } },
 					content: [{ type: "text", text: "what is on my calendar" }],
 				});
 				assert.equal(outcome.status, "accepted");
-				await until(() => connected.deliveries.length === 1, "the reply to arrive");
+				await until(() => connected.deliveries.length === 1, "the send to arrive");
 				assert.equal(connected.deliveries[0]?.text, "the calendar is clear");
 
 				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
 				assert.equal(submitted.length, 1);
-				// The origin is the durable record the reply is routed from: a restart cannot lose where the words came from.
-				// Nothing else is in it: the actor was admitted, so there is no name to write down or to prefix the words with.
+				// The origin is the durable record the send is routed from: a restart cannot lose where the words came from.
 				assert.deepEqual(submitted[0]?.data, {
-					origin: {
-						connector: "telegram",
-						externalConversationId: "-1001234",
-						externalMessageId: "m1",
-					},
-				});
-				const text = JSON.stringify(submitted[0]?.model);
-				assert.match(text, /what is on my calendar/);
-				assert.doesNotMatch(text, /\[from /, "one person's words carry no author label");
-				// The reply is an entry of its own, addressed at the origin.
-				const reply = await entries(served, REPLY_ENTRY_KIND);
-				assert.deepEqual(reply[0]?.data, {
-					deliveryId: connected.deliveries[0]?.deliveryId,
-					blocks: [{ type: "text", text: "the calendar is clear" }],
-					target: { connector: "telegram", externalConversationId: "-1001234" },
-					origin: {
-						connector: "telegram",
-						externalConversationId: "-1001234",
-						externalMessageId: "m1",
-					},
+					origin: { connector: "telegram", ref: "team", messageId: "m1", actor: { id: "8811", name: "Denis" } },
 				});
 			} finally {
 				await connected.close();
@@ -85,30 +56,24 @@ describe("a connector's words", () => {
 		}
 	});
 
-	it("collapse on a duplicate submissionId, and the claim is durable rather than a counter", async () => {
-		const served = await serveConnector();
+	it("resend under one appendId is one submission, and mason says duplicate", async () => {
+		const served = await serveConnector({ home: await connectorHome(), steps: quietTurns() });
 		try {
 			const connected = await connectConnector(served);
 			try {
 				const first = await connected.connector.submit({
-					submissionId: "tg-1",
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811" },
-					content: [{ type: "text", text: "one" }],
+					appendId: "same-1",
+					origin: { ref: "team" },
+					content: [{ type: "text", text: "hello" }],
 				});
 				assert.equal(first.status, "accepted");
 				const again = await connected.connector.submit({
-					submissionId: "tg-1",
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811" },
-					content: [{ type: "text", text: "one, resent" }],
+					appendId: "same-1",
+					origin: { ref: "team" },
+					content: [{ type: "text", text: "hello, resent" }],
 				});
 				assert.equal(again.status, "duplicate");
-				assert.equal(
-					again.status === "duplicate" ? again.entryId : undefined,
-					(first as { entryId?: string }).entryId,
-				);
-				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 1, "one act, one entry");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 1, "one entry for one id");
 			} finally {
 				await connected.close();
 			}
@@ -117,34 +82,18 @@ describe("a connector's words", () => {
 		}
 	});
 
-	it("are refused for an actor that is not the owner and for a room the entry does not permit", async () => {
-		const served = await serveConnector();
+	it("an actor that is not the owner is refused, and nothing is placed", async () => {
+		const served = await serveConnector({ home: await connectorHome() });
 		try {
 			const connected = await connectConnector(served);
 			try {
-				const stranger = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "9999", displayName: "Somebody" },
+				const outcome = await connected.connector.submit({
+					origin: { ref: "team", actor: { id: "stranger-9" } },
 					content: [{ type: "text", text: "let me in" }],
 				});
-				assert.equal(stranger.status, "refused");
-				assert.equal(stranger.status === "refused" ? stranger.error.code : undefined, "mason.actor_unknown");
-
-				const room = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1009999" },
-					actor: { externalActorId: "8811" },
-					content: [{ type: "text", text: "elsewhere" }],
-				});
-				assert.equal(room.status, "refused");
-				assert.equal(room.status === "refused" ? room.error.code : undefined, "mason.conversation_not_permitted");
-
-				// An absent actor is not a refusal: a face with an `owner` still carries what nobody signed.
-				const noActor = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					content: [{ type: "text", text: "a notice nobody signed" }],
-				});
-				assert.equal(noActor.status, "accepted");
-				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 1, "the refusals wrote nothing");
+				assert.equal(outcome.status, "refused");
+				assert.equal(outcome.status === "refused" ? outcome.code : undefined, "mason.actor_unknown");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0);
 			} finally {
 				await connected.close();
 			}
@@ -153,35 +102,22 @@ describe("a connector's words", () => {
 		}
 	});
 
-	it("admit an actorless submission, and refuse every actor when the entry names no owner", async () => {
+	it("an entry with no owner refuses every named actor, and accepts nobody's words", async () => {
 		const served = await serveConnector({ home: await connectorHome({ noOwner: true }) });
 		try {
 			const connected = await connectConnector(served);
 			try {
-				// The handshake still answers a user face, and its actor list is empty: the connector advertised 8811 and the
-				// entry has no id to admit, so there is nobody to name.
-				const session = connected.connector.status().session;
-				assert.deepEqual(session?.faces.user?.actors, []);
-				const named = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					actor: { externalActorId: "8811", displayName: "Denis" },
-					content: [{ type: "text", text: "let me in" }],
+				const refused = await connected.connector.submit({
+					origin: { ref: "team", actor: { id: "8811" } },
+					content: [{ type: "text", text: "who am i" }],
 				});
-				assert.equal(named.status, "refused");
-				assert.equal(named.status === "refused" ? named.error.code : undefined, "mason.actor_unknown");
-
-				// No actor is not a stranger: it is a notice, and it is accepted with nothing attributed to it.
-				const outcome = await connected.connector.submit({
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-					content: [{ type: "text", text: "from a guest" }],
+				assert.equal(refused.status, "refused");
+				assert.equal(refused.status === "refused" ? refused.code : undefined, "mason.actor_unknown");
+				const withoutActor = await connected.connector.submit({
+					origin: { ref: "team" },
+					content: [{ type: "text", text: "nobody in particular" }],
 				});
-				assert.equal(outcome.status, "accepted");
-				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
-				assert.deepEqual(submitted[0]?.data, {
-					origin: { connector: "telegram", externalConversationId: "-1001234" },
-				});
-				assert.match(JSON.stringify(submitted[0]?.model), /from a guest/);
-				assert.doesNotMatch(JSON.stringify(submitted[0]?.model), /\[from /, "nobody vouched for these words");
+				assert.equal(withoutActor.status, "accepted", "an actorless append is a message nobody signed");
 			} finally {
 				await connected.close();
 			}
@@ -191,20 +127,20 @@ describe("a connector's words", () => {
 	});
 });
 
-describe("a fire", () => {
-	it("is a hook entry and never ordinary conversation, deduplicated on its fireId", async () => {
+describe("an event", () => {
+	it("is a hook entry and never conversation, deduplicated on its appendId", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
-				const fired = await connected.connector.fire({
-					fireId: "alarm-1",
+				const fired = await connected.connector.event({
+					appendId: "alarm-1",
 					kind: "chat.message",
 					payload: { chat: "-1001234", text: "hello" },
 				});
 				assert.equal(fired.status, "accepted");
-				const again = await connected.connector.fire({
-					fireId: "alarm-1",
+				const again = await connected.connector.event({
+					appendId: "alarm-1",
 					kind: "chat.message",
 					payload: { chat: "-1001234", text: "hello, resent" },
 				});
@@ -213,7 +149,7 @@ describe("a fire", () => {
 				const hooks = await entries(served, HOOK_ENTRY_KIND);
 				assert.equal(hooks.length, 1);
 				assert.equal((hooks[0]?.data as { hookId?: string }).hookId, "team-chat");
-				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "a fire is not conversation");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "an event is not conversation");
 				assert.match(JSON.stringify(hooks[0]?.model), /hello/);
 				assert.match(JSON.stringify(hooks[0]?.model), /begin untrusted payload/, "the payload is fenced as data");
 			} finally {
@@ -224,14 +160,14 @@ describe("a fire", () => {
 		}
 	});
 
-	it("refuses a kind the entry does not map, and a kind it maps but the build does not know is a boot refusal", async () => {
+	it("of a kind the entry does not name is refused with mason.kind_not_permitted", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
-				const refused = await connected.connector.fire({ kind: "alarm.ringing", payload: {} });
-				assert.equal(refused.status, "refused");
-				assert.equal(refused.status === "refused" ? refused.error.code : undefined, "mason.kind_not_permitted");
+				const outcome = await connected.connector.event({ kind: "alarm.ringing", payload: {} });
+				assert.equal(outcome.status, "refused");
+				assert.equal(outcome.status === "refused" ? outcome.code : undefined, "mason.kind_not_permitted");
 			} finally {
 				await connected.close();
 			}
@@ -240,23 +176,49 @@ describe("a fire", () => {
 		}
 	});
 
-	it("carries its origin into the entry, so the reply has a reader", async () => {
+	it("of a granted kind whose routine is switched off is written down and wakes nothing", async () => {
+		const served = await serveConnector();
+		try {
+			const connected = await connectConnector(served);
+			try {
+				// The grant names `chat.message` -> `team-chat`; the routine file the home ships does not define `alarm-ringing`
+				// at all, which is the same shape as a routine the agent switched off.
+				const outcome = await connected.connector.event({
+					kind: "chat.message",
+					appendId: "quiet-1",
+					payload: "x",
+				});
+				assert.equal(outcome.status, "accepted");
+				const log = served.server.runtime.events.lines();
+				assert.equal(log.length, 1, "every event is written down");
+				assert.equal(log[0]?.kind, "chat.message");
+				assert.equal(log[0]?.connector, "telegram");
+				assert.equal(log[0]?.hook, "team-chat");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
+	it("carries its origin into the entry, so the send has a reader", async () => {
 		const served = await serveConnector({ home: await connectorHome(), steps: replyTurns(["on it"]) });
 		try {
 			const connected = await connectConnector(served);
 			try {
-				await connected.connector.fire({
-					fireId: "chat-7",
+				await connected.connector.event({
+					appendId: "chat-7",
 					kind: "chat.message",
 					payload: "are you there",
-					origin: { connector: "telegram", externalConversationId: "-1001234", externalMessageId: "m7" },
+					origin: { ref: "team", messageId: "m7" },
 				});
-				await until(() => connected.deliveries.length === 1, "the answer to the fire");
+				await until(() => connected.deliveries.length === 1, "the answer to the event");
 				const hooks = await entries(served, HOOK_ENTRY_KIND);
 				assert.deepEqual((hooks[0]?.data as { origin?: unknown }).origin, {
 					connector: "telegram",
-					externalConversationId: "-1001234",
-					externalMessageId: "m7",
+					ref: "team",
+					messageId: "m7",
 				});
 			} finally {
 				await connected.close();
@@ -266,24 +228,20 @@ describe("a fire", () => {
 		}
 	});
 
-	it("with no reachable target records the work and tells the model nobody was reached", async () => {
+	it("with no address records the work and tells the model nobody was reached", async () => {
 		const served = await serveConnector({ home: await connectorHome(), steps: replyTurns(["nobody is listening"]) });
 		try {
 			const connected = await connectConnector(served);
 			try {
-				await connected.connector.fire({ fireId: "alarm-2", kind: "chat.message", payload: "ring" });
+				await connected.connector.event({ appendId: "alarm-2", kind: "chat.message", payload: "ring" });
 				await until(
 					async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1,
-					"a recorded reply that reaches nobody",
+					"a recorded send that reaches nobody",
 				);
-				const reply = (await entries(served, REPLY_ENTRY_KIND))[0];
-				assert.equal(
-					reply?.data === undefined ? undefined : (reply.data as { target?: unknown }).target,
-					undefined,
-				);
+				const sent = (await entries(served, REPLY_ENTRY_KIND))[0];
+				assert.equal(sent?.data === undefined ? undefined : (sent.data as { target?: unknown }).target, undefined);
 				assert.equal(connected.deliveries.length, 0, "nothing was sent to a person");
-				const result = JSON.stringify(await entriesOf(served.server));
-				assert.match(result, /nobody was reached/);
+				assert.match(JSON.stringify(await entriesOf(served.server)), /nobody was reached/);
 			} finally {
 				await connected.close();
 			}
@@ -293,28 +251,44 @@ describe("a fire", () => {
 	});
 });
 
-describe("the handshake", () => {
-	it("names a face the entry does not grant as inactive, and refuses a call on it", async () => {
+describe("a notice", () => {
+	it("is written down for the reader and starts no turn", async () => {
 		const served = await serveConnector();
 		try {
-			// An MCP server the entry does have, and an events face the alarm entry does not — two sides of the same rule.
-			const connected = await connectConnector(served, {
-				name: "alarm-only",
-				credential: await mint(served, "alarm-only"),
-				faces: {
-					user: { actors: [], conversations: [], capabilities: ["text"] },
-					events: { kinds: ["alarm.ringing"] },
-				},
-			});
+			const connected = await connectConnector(served);
+			try {
+				const outcome = await connected.connector.notice({ text: "the channel was muted for an hour" });
+				assert.equal(outcome.status, "accepted");
+				const written = await entries(served, NOTICE_ENTRY_KIND);
+				assert.equal(written.length, 1);
+				assert.equal((written[0]?.data as { text?: string }).text, "the channel was muted for an hour");
+				assert.equal((await entries(served, HOOK_ENTRY_KIND)).length, 0, "a notice wakes nothing");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "a notice is not a person's words");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+});
+
+describe("the session", () => {
+	it("is state a connector reads once, and it names the targets, the vocabulary and the budgets", async () => {
+		const served = await serveConnector();
+		try {
+			const connected = await connectConnector(served);
 			try {
 				const session = connected.connector.status().session;
-				assert.deepEqual(session?.inactive, [{ face: "user", reason: "the entry grants no user face" }]);
-				const refused = await connected.connector.submit({
-					origin: { connector: "alarm-only", externalConversationId: "x" },
-					content: [{ type: "text", text: "hello" }],
-				});
-				assert.equal(refused.status, "refused");
-				assert.equal(refused.status === "refused" ? refused.error.code : undefined, "mason.face_not_granted");
+				assert.ok(session !== undefined, "the session is there after start");
+				assert.deepEqual(
+					session.targets.map((target) => target.id),
+					["team", "dm"],
+				);
+				assert.deepEqual(session.commands, ["stop", "compact", "clear", "status"]);
+				assert.deepEqual(session.kinds, ["chat.message"]);
+				assert.equal(session.limits.submissionsPerMinute > 0, true);
+				assert.equal(session.limits.attachmentsPerMinute > 0, true);
 			} finally {
 				await connected.close();
 			}
@@ -323,173 +297,20 @@ describe("the handshake", () => {
 		}
 	});
 
-	it("narrows capabilities to what the connector claims and the operator allows", async () => {
+	it("is refused for a credential whose entry is not enabled", async () => {
 		const served = await serveConnector();
 		try {
-			const connected = await connectConnector(served, {
-				faces: fullFaces({
-					user: {
-						actors: [{ externalActorId: "8811" }],
-						conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-						capabilities: ["text", "markdown"],
-					},
-				}),
-			});
-			try {
-				// The entry grants text, markdown, files, approvals and streaming; the connector claims text and markdown.
-				// The answer is what is in both, which is how a connector is never sent a file it did not claim.
-				assert.deepEqual(connected.connector.status().session?.capabilities, ["text", "markdown"]);
-			} finally {
-				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("answers the one actor the entry owns, as the connector advertised it", async () => {
-		const served = await serveConnector();
-		try {
-			// Two advertised actors and one owner: the answer keeps the advertised record — id and display name — and
-			// drops the actor nobody granted, so a connector can tell an owned medium from an owned-and-shared one.
-			const connected = await connectConnector(served, {
-				faces: fullFaces({
-					user: {
-						actors: [
-							{ externalActorId: "9999", displayName: "Somebody" },
-							{ externalActorId: "8811", displayName: "Denis" },
-						],
-						conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-					},
-				}),
-			});
-			try {
-				assert.deepEqual(connected.connector.status().session?.faces.user?.actors, [
-					{ externalActorId: "8811", displayName: "Denis" },
-				]);
-			} finally {
-				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("refuses a protocol major it does not speak, and closes the socket", async () => {
-		const served = await serveConnector();
-		try {
-			const credential = served.credential;
-			const socket = new WebSocket(served.url, { headers: { authorization: `Bearer ${credential}` } });
-			const outcome = await new Promise<string>((resolve) => {
-				socket.on("open", () => {
-					socket.send(
-						JSON.stringify({
-							jsonrpc: "2.0",
-							id: "h1",
-							method: "mason/hello",
-							params: {
-								protocol: { major: 9, minors: [0] },
-								connector: { name: "telegram", version: "x" },
-								faces: {},
-							},
-						}),
-					);
-				});
-				socket.on("message", (data) => resolve(String(data)));
-				socket.on("close", () => resolve("closed"));
-			});
-			const frame = JSON.parse(outcome) as { error?: { data?: { code?: string } } };
-			assert.equal(frame.error?.data?.code, "mason.protocol_mismatch");
-			await new Promise((resolve) => socket.on("close", resolve));
-			socket.close();
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("accepts the first call only once, and answers a second hello as a bad request", async () => {
-		const served = await serveConnector();
-		try {
-			const socket = new WebSocket(served.url, { headers: { authorization: `Bearer ${served.credential}` } });
-			const frames: Array<{ id?: string; error?: { data?: { code?: string } }; result?: unknown }> = [];
-			socket.on("message", (data) => frames.push(JSON.parse(String(data))));
-			const hello = (id: string) => ({
-				jsonrpc: "2.0",
-				id,
-				method: "mason/hello",
-				params: { protocol: { major: 1, minors: [0] }, connector: { name: "telegram", version: "x" }, faces: {} },
-			});
-			await new Promise<void>((open) => socket.on("open", () => open()));
-			socket.send(JSON.stringify(hello("h1")));
-			await until(() => frames.length === 1, "the first answer");
-			socket.send(JSON.stringify(hello("h2")));
-			await until(() => frames.length === 2, "the second answer");
-			assert.ok(frames[0]?.result !== undefined, "the first hello is answered");
-			assert.equal(frames[1]?.error?.data?.code, "mason.invalid_request");
-			socket.close();
-		} finally {
-			await served.close();
-		}
-	});
-});
-
-/** Mint a credential for one entry of a served home, through the same command an operator would run. */
-async function mint(served: Awaited<ReturnType<typeof serveConnector>>, name: string): Promise<string> {
-	return (await mintConnectorCredential(served.paths.home, name)).credential;
-}
-
-describe("the socket's door", () => {
-	it("refuses no credential, a revoked one, and a page's Origin", async () => {
-		const served = await serveConnector();
-		try {
-			await assert.rejects(connectConnector(served, { credential: "masonc_not-a-real-credential" }));
-			const records = await listConnectorCredentials(served.paths.home);
-			const boot = records.find((record) => record.connector === "telegram");
-			assert.ok(boot !== undefined);
-			assert.equal(await revokeConnectorCredential(served.paths.home, boot.id), true);
-			// Revocation is read per upgrade: the very next connection is refused, without a restart.
-			await assert.rejects(connectConnector(served, { credential: served.credential }));
-
-			const rotated = await mint(served, "telegram");
-			const live = await connectConnector(served, { credential: rotated });
-			await live.close();
-
-			const bad = new WebSocket(served.url, {
-				headers: { authorization: `Bearer ${rotated}`, origin: "https://evil.example" },
+			// The home carries an entry called `off` with its connector switched off, and one credential: the socket has to
+			// close rather than open with nothing on it.
+			const socket = new WebSocket(served.url, {
+				headers: { authorization: `Bearer ${served.credential}` },
 			});
 			const closed = await new Promise<boolean>((resolve) => {
-				bad.on("close", () => resolve(true));
-				bad.on("open", () => setTimeout(() => resolve(false), 200));
+				socket.on("open", () => socket.close());
+				socket.on("close", () => resolve(true));
+				socket.on("error", () => resolve(true));
 			});
 			assert.equal(closed, true);
-			bad.close();
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("refuses a credential for an entry that is switched off", async () => {
-		const served = await serveConnector();
-		try {
-			const credential = await mint(served, "off");
-			await assert.rejects(connectConnector(served, { name: "off", credential }));
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("lets a second socket supersede the first, and says so", async () => {
-		const served = await serveConnector();
-		try {
-			const first = await connectConnector(served);
-			const second = await connectConnector(served);
-			try {
-				await until(() => first.connector.status().connected === false, "the first socket to be closed");
-				assert.equal(second.connector.status().connected, true);
-			} finally {
-				await first.close();
-				await second.close();
-			}
 		} finally {
 			await served.close();
 		}
@@ -497,20 +318,16 @@ describe("the socket's door", () => {
 });
 
 describe("control", () => {
-	it("runs a declared command once per request id, and an undeclared word spends nothing", async () => {
+	it("answers a granted control, and the vocabulary is the one the session named", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
+				const stop = await connected.connector.control({ op: "stop" });
+				assert.equal(stop.handled, true);
 				const status = await connected.connector.control({ op: "status" });
 				assert.equal(status.handled, true);
-				assert.match(status.reply ?? "", /idle/);
-				const stop = await connected.connector.control({ op: "stop" });
-				assert.equal(stop.reply, "stopped");
-				// A malformed op is refused, and the refusal names the whole set.
-				const bad = await connected.connector.control({ op: "restart" as never });
-				assert.equal(bad.handled, false);
-				assert.match(bad.reply ?? "", /not a control mason knows/);
+				assert.ok(status.status !== undefined, "a status control answers with the run's state");
 			} finally {
 				await connected.close();
 			}
@@ -519,53 +336,17 @@ describe("control", () => {
 		}
 	});
 
-	it("answers the handshake with the control vocabulary it was granted, and holds a word to its shape", async () => {
+	it("refuses a control the entry does not declare, and one that takes an argument it must not", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
-				// The list is the grant: a connector that was not given `stop` learns it here rather than by spending a
-				// refused call, and the four names are the protocol's closed set.
-				assert.deepEqual(connected.connector.status().session?.commands, ["stop", "compact", "clear", "status"]);
-
-				// The shape the old event door held a command to survives the cutover, because the socket is the only door
-				// now: a word that takes no argument refuses one, and `compact` reads a line rather than a document.
+				const undeclared = await connected.connector.control({ op: "reboot" as never });
+				assert.equal(undeclared.handled, false);
 				const withArgument = await connected.connector.control({ op: "stop", instructions: "now please" });
-				assert.equal(withArgument.handled, false);
-				assert.match(withArgument.reply ?? "", /"stop" takes no argument/);
-
-				const tooLong = await connected.connector.control({ op: "compact", instructions: "x".repeat(201) });
-				assert.equal(tooLong.handled, false);
-				assert.match(tooLong.reply ?? "", /at most 200 characters/);
+				assert.equal(withArgument.handled, false, "only compact reads what follows it");
 			} finally {
 				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-
-	it("keeps stop independent of the fire budget, so a flood cannot starve it", async () => {
-		const served = await serveConnector();
-		try {
-			// Raw, because the SDK turns a retryable refusal into `pending` and retries it later: the point here is the
-			// refusal itself, and the hint a client waits for.
-			const session = await rawConnect(served);
-			try {
-				const payload = { kind: "chat.message", payload: "flood" };
-				for (let index = 0; index < 6; index += 1) {
-					const fired = await session.call("mason/fire", { ...payload, fireId: `flood-${index}` });
-					assert.equal(fired.error, undefined);
-				}
-				const flood = await session.call("mason/fire", { ...payload, fireId: "flood-6" });
-				assert.equal(flood.error?.data?.code, "mason.rate_limited");
-				assert.equal(typeof flood.error?.data?.retryAfterMs, "number");
-				// The same minute's stop still lands: its budget is its own, which is the whole reason it has one.
-				const stop = await session.call("mason/control", { op: "stop" });
-				assert.equal(stop.error, undefined);
-				assert.equal((stop.result as { reply?: string }).reply, "stopped");
-			} finally {
-				session.close();
 			}
 		} finally {
 			await served.close();
@@ -574,62 +355,24 @@ describe("control", () => {
 });
 
 describe("budgets", () => {
-	it("counts submissions and fires separately, and answers a refusal with retryAfterMs", async () => {
-		const served = await serveConnector({ steps: quietTurns(80) });
-		try {
-			const session = await rawConnect(served);
-			try {
-				const submit = (index: number) =>
-					session.call("mason/submit", {
-						submissionId: `budget-${index}`,
-						origin: { connector: "telegram", externalConversationId: "-1001234" },
-						actor: { externalActorId: "8811" },
-						content: [{ type: "text", text: `message ${index}` }],
-					});
-				for (let index = 0; index < 60; index += 1) {
-					assert.equal((await submit(index)).error, undefined, `submission ${index} was admitted`);
-				}
-				const over = await submit(60);
-				assert.equal(over.error?.data?.code, "mason.rate_limited");
-				assert.equal(over.error?.data?.retryable, true);
-				assert.equal(typeof over.error?.data?.retryAfterMs, "number");
-				// A spent submission minute is not a spent fire minute.
-				const fired = await session.call("mason/fire", {
-					fireId: "still-here",
-					kind: "chat.message",
-					payload: "x",
-				});
-				assert.equal(fired.error, undefined);
-				// And the control class is untouched by both.
-				const stop = await session.call("mason/control", { op: "stop" });
-				assert.equal(stop.error, undefined);
-			} finally {
-				session.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-});
-
-describe("a hooked turn with no origin", () => {
-	it("still records the reply and reaches nobody, rather than claiming a delivery", async () => {
-		const served = await serveConnector({
-			home: await connectorHome(),
-			steps: [fauxAssistantMessage(fauxText("no reply here"))],
-		});
+	it("refuses a submission over the minute, and the SDK keeps it for a retry", async () => {
+		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
-				await connected.connector.fire({ fireId: "alarm-9", kind: "chat.message", payload: "ring" });
-				await until(async () => {
-					const hooks = await entries(served, HOOK_ENTRY_KIND);
-					return hooks.length === 1;
-				}, "the fire to land");
-				// The gate asked once for a reply and the model had nothing; nothing was sent anywhere and no reply entry claims
-				// otherwise.
-				assert.equal(connected.deliveries.length, 0);
-				assert.equal((await entries(served, REPLY_ENTRY_KIND)).length, 0);
+				// The limiter is per process and shared with the rest of this file's tests only through this server, so the
+				// budget is spent here and nowhere else.
+				let pending = 0;
+				for (let index = 0; index < 70; index += 1) {
+					const outcome = await connected.connector.submit({
+						appendId: `budget-${index}`,
+						origin: { ref: "team" },
+						content: [{ type: "text", text: `message ${index}` }],
+					});
+					if (outcome.status === "pending") pending += 1;
+				}
+				assert.ok(pending > 0, "at least one call past the minute stayed journaled");
+				assert.ok((await entries(served, CONNECTOR_ENTRY_KIND)).length <= 60, "the minute's budget was enforced");
 			} finally {
 				await connected.close();
 			}

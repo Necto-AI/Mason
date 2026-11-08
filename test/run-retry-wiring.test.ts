@@ -32,7 +32,7 @@ import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
 import { RETRY_HOOK, RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
-import { HOOK_ENTRY_KIND, REPLY_ENTRY_KIND, REPLY_TOOL } from "../src/shared/contract.ts";
+import { HOOK_ENTRY_KIND, REPLY_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -53,14 +53,12 @@ const ROUTINES = JSON.stringify([
 ]);
 
 /** The one chat the reply of the second test has to land in: a user face, and the room the words arrived in. */
-const CHAT = { connector: "telegram", externalConversationId: "-1001234" };
+const CHAT = { connector: "telegram", ref: "team" };
 const chatIntegrations = {
 	integrations: {
 		telegram: {
 			enabled: true,
-			connector: {
-				user: { conversations: [{ externalConversationId: CHAT.externalConversationId, kind: "room" }] },
-			},
+			connector: { user: { owner: "8811" }, targets: [{ id: "team", label: "the team chat" }] },
 		},
 	},
 };
@@ -104,7 +102,7 @@ const ANSWER_ONLY_THE_RETRY: FauxResponseFactory = (context) => {
 	if (!answering) return fauxAssistantMessage("", { stopReason: "error", errorMessage: "the provider is down" });
 	// A tool call does not end a run: the result goes back to the model, which answers again.
 	if (context.messages.some((message) => message.role === "toolResult")) return fauxAssistantMessage(fauxText("sent"));
-	return fauxAssistantMessage([fauxToolCall(REPLY_TOOL, { message: "Отвечаю: да, можно." })], {
+	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "Отвечаю: да, можно." })], {
 		stopReason: "toolUse",
 	});
 };

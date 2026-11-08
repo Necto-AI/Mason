@@ -259,17 +259,17 @@ describe("the flow", () => {
 		assert.equal(
 			setup,
 			"setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc --env TELEGRAM_ALLOWED_CHATS=@denis " +
-				"--owner @denis --conversations @denis",
+				"--owner @denis --targets @denis",
 			"the token and the chat are flags; the proxy nobody needs is not a flag with an empty value",
 		);
 	});
 
 	test("an optional question the plan left empty is answered, not refused, when the operation asks it", async () => {
-		// The operation asks its own optional questions — no proxy, no conversations of its own — and the plan answered them
+		// The operation asks its own optional questions — no proxy, no targets of its own — and the plan answered them
 		// by not answering. A refusal here is the bug the connector step would fail with on a `--connector telegram` run.
 		const prompter = answeredPrompter();
 		assert.equal(await prompter.text("HTTPS_PROXY", { fallback: "", required: false }), "");
-		assert.equal(await prompter.text("conversations", { required: false }), "", "no fallback is the empty answer");
+		assert.equal(await prompter.text("targets", { required: false }), "", "no fallback is the empty answer");
 		await assert.rejects(prompter.text("a token", { required: true }), /bug in the flow/);
 	});
 
@@ -567,7 +567,7 @@ describe("what the disk already answers", () => {
 				"connector.kind": "custom",
 				"connector.url": "ws://127.0.0.1:8083/api/connector",
 				"connector.owner": "@denis",
-				"connector.conversations": "",
+				"connector.targets": "",
 				"connector.events": ["stop", "wake=retry"],
 			}),
 		);

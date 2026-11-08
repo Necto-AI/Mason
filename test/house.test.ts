@@ -15,6 +15,7 @@ import { after, test } from "node:test";
 import { promisify } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Connection, LocalExecutionEnv, localDaemon } from "@earendil-works/pi-env";
+import { readDocsIndex, SHIPPED_DOCS_DIR, seedShippedDocs } from "../src/server/docs.ts";
 import { daemonCommand } from "../src/server/env.ts";
 import { discoverSkills, SHIPPED_SKILLS_DIR } from "../src/server/extensions/skills.ts";
 import {
@@ -66,6 +67,7 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			logDir: join(home, "agent", "log"),
 			journalDir: join(home, "agent", "journal"),
 			skillsDir: join(home, "agent", "skills"),
+			docsDir: join(home, "agent", "docs"),
 			agentsDir: join(home, "agent", "agents"),
 			workspaceDir: join(home, "agent", "workspace"),
 			// The server's half: the soul it renders, the door, the keys and the state.
@@ -521,3 +523,32 @@ async function gitAvailable(): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * The reference in `agent/docs/` is mason's, and the difference from a skill is the whole point: a skill is the agent's
+ * own instruction and an edit wins, while a page here describes the version that is running and is rewritten on every
+ * boot. A page the repository stops shipping stops existing, so no home keeps a manual for a connector it no longer has.
+ */
+test("the shipped reference is rewritten on every boot, and an edit in the home does not survive it", async () => {
+	const paths = housePaths(join(await tempDir("mason-house-docs-"), "home"));
+	await ensureHouse(paths, "SOUL FROM THE PRODUCT");
+	const page = join(paths.docsDir, "env.md");
+	assert.match(await readFile(page, "utf8"), /# The machine/, "the pages ship into the home");
+	assert.deepEqual(
+		(await readDocsIndex(paths.docsDir)).map((entry) => entry.path),
+		["README.md", "env.md", "events.md", "connectors/console.md", "connectors/telegram.md"],
+		"README first, the pages beside it next, the per-connector ones last",
+	);
+
+	await writeFile(page, "# The machine, as I understand it\n", "utf8");
+	await seedShippedDocs(paths.agentDir);
+	assert.match(await readFile(page, "utf8"), /# The machine/, "an edit in the home is overwritten, unlike a skill");
+
+	// A release that stops shipping a page: the home has no copy of it afterwards.
+	const shipped = await tempDir("mason-house-shipped-docs-");
+	await mkdir(shipped, { recursive: true });
+	await writeFile(join(shipped, "README.md"), "# The reference\n", "utf8");
+	await seedShippedDocs(paths.agentDir, shipped);
+	assert.deepEqual(await readdir(paths.docsDir), ["README.md"], "a withdrawn page goes with the release");
+	assert.deepEqual(SHIPPED_DOCS_DIR.endsWith("docs/agent/"), true, "the pages are the repository's own");
+});
