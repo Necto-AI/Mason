@@ -37,7 +37,7 @@ import { originAllowed, readConfig, updateConfig } from "./auth.ts";
 import type { Integration } from "./integrations.ts";
 
 /** A leaked connector credential is recognisable in a log, and distinct from an owner token at a glance. */
-const CONNECTOR_PREFIX = "masonc_";
+export const CONNECTOR_PREFIX = "masonc_";
 
 /**
  * The user face as the operator granted it: the owner, the rooms, and the content it may claim.
