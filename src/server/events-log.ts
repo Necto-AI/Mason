@@ -7,8 +7,10 @@
  *
  * It is **mason's state, not the agent's memory**: `service/data/events/YYYY-MM-DD.jsonl`, one file a day, written for
  * every event. Keeping it inside `agent/` would churn the memory repository with lines the agent did not choose to
- * write, and would let the agent rewrite its own history. Retention is mason's, and the deployment mounts the directory
- * read-only into the tool machine at `/mason/events`, so the agent can read what arrived and cannot edit it.
+ * write, and would let the agent rewrite its own history. Retention is mason's, and `mason doctor` reports the count.
+ *
+ * The log is also the dedupe: an event whose routine is switched off never becomes a transcript entry, so `seen` is what
+ * answers a resend that arrives after a lost acknowledgement.
  */
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +47,8 @@ export class EventLog {
 	readonly #retentionDays: number;
 	readonly #now: () => Date;
 	readonly #log: (line: string) => void;
+	#seen: Set<string> = new Set();
+	#seenLoaded = false;
 
 	constructor(options: EventLogOptions) {
 		this.#dir = options.dir;
@@ -67,6 +71,9 @@ export class EventLog {
 	 * process that dies between the two must not leave an event that woke a turn and left no record.
 	 */
 	append(line: EventLine): void {
+		if (typeof line.connector === "string" && typeof line.appendId === "string") {
+			this.#seen.add(seenKey(line.connector, line.appendId));
+		}
 		try {
 			mkdirSync(this.#dir, { recursive: true, mode: 0o700 });
 			appendFileSync(this.path(), `${JSON.stringify(line)}\n`, { mode: 0o600 });
@@ -99,6 +106,27 @@ export class EventLog {
 			}
 		}
 		return lines;
+	}
+
+	/**
+	 * Whether this append is already in the log.
+	 *
+	 * The log is the dedupe record for a fire, not a second one: an event whose routine is absent is answered `accepted`
+	 * without becoming an entry, so the transcript cannot say whether it arrived. The set is read from the files once and
+	 * then kept beside the appends, because a resend after a lost acknowledgement is exactly the case where the file has
+	 * it and this process has not seen it arrive.
+	 */
+	seen(connector: string, appendId: string): boolean {
+		if (!this.#seenLoaded) {
+			this.#seen = new Set([
+				...this.lines()
+					.filter((line) => typeof line.connector === "string" && typeof line.appendId === "string")
+					.map((line) => seenKey(line.connector, line.appendId)),
+				...this.#seen,
+			]);
+			this.#seenLoaded = true;
+		}
+		return this.#seen.has(seenKey(connector, appendId));
 	}
 
 	/** How many events are on disk, for `doctor`. */
@@ -135,6 +163,11 @@ export class EventLog {
 			return [];
 		}
 	}
+}
+
+/** The identity of one append, in the set `seen` keeps. */
+function seenKey(connector: string, appendId: string): string {
+	return `${connector}\u0000${appendId}`;
 }
 
 /** `YYYY-MM-DD` in UTC: one day boundary for every deployment, and a name that sorts. */

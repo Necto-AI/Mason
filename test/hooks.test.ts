@@ -396,6 +396,68 @@ describe("agent/routines.json", () => {
 		});
 	});
 
+	it("a routine with no intervalSeconds is armed without a timer: it is only ever woken by an event", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await routineHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([{ name: "check-mail", prompt: "Read the mail." }, routine("digest")]),
+			);
+			const clock = testClock(ALIGNED_START);
+			const hooks = manager(testRuntime, paths, clock);
+			try {
+				hooks.start();
+				assert.equal(hooks.get("check-mail")?.intervalMs, undefined, "no interval, no timer");
+				assert.equal(hooks.get("check-mail")?.enabled, true, "a routine without an interval is still armed");
+				// Nothing is written for it: a slot is what a timer has, and this routine has no timer to have one.
+				assert.equal((await stateOf(paths.state))["check-mail"]?.nextFireAt, undefined);
+				assert.equal((await stateOf(paths.state)).digest?.nextFireAt !== undefined, true);
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
+	it("enabled: false in the file switches a routine off, and the grant mapping around it still resolves", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await routineHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([{ name: "check-mail", prompt: "Read the mail.", enabled: false, intervalSeconds: 3_600 }]),
+			);
+			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
+			try {
+				hooks.start();
+				assert.equal(hooks.has("check-mail"), true, "the definition is read");
+				assert.equal(hooks.get("check-mail")?.enabled, false, "and it is switched off");
+				// A switched-off routine is never armed, so the boot scan writes no slot for it — and an event that maps to
+				// it reaches a hook whose `enabled` is false, which is the branch the connector answers "written down, wakes
+				// nothing" from (`test/connector.test.ts`).
+				assert.equal(hooks.get("check-mail")?.intervalMs, 3_600_000, "the file's interval is still its own");
+				assert.equal((await stateOf(paths.state))["check-mail"]?.nextFireAt, undefined, "nothing armed a slot");
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
+	it("whenBusy in the file decides how a wake meets a turn already running", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await routineHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([{ name: "check-mail", prompt: "Read the mail.", whenBusy: "steer" }]),
+			);
+			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
+			try {
+				hooks.start();
+				assert.equal(hooks.get("check-mail")?.whenBusy, "steer", "the file's word is the hook's behaviour");
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
 	it("a malformed file keeps the last good set armed and is reported once, naming the file and the problem", async () => {
 		await withFauxConversation(async (testRuntime) => {
 			const paths = await routineHome();

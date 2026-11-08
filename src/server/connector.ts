@@ -84,9 +84,6 @@ export interface ConnectorPrincipal {
 	readonly connector: string;
 }
 
-/** A notice this process has already written down, so a resend does not appear in the transcript twice. */
-type NoticeIds = Set<string>;
-
 export interface ConnectorDoorOptions {
 	readonly runtime: AgentRuntime;
 	/** Where an uploaded file is written for the model to read, when a submission carries one. */
@@ -118,7 +115,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	const home = options.home ?? currentHouse().home;
 	const conversation = await options.runtime.conversation();
 	const links = new Map<string, Link>();
-	const notices: NoticeIds = new Set();
 
 	const host: Host<ConnectorPrincipal> = createHost({
 		name: MASON_HOST,
@@ -144,6 +140,8 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		flush,
 		connected: (name) => links.has(name),
 		close: async () => {
+			// The watch first: a flush that lands mid-close would read a view this door is no longer the outbox for.
+			unsubscribe();
 			for (const link of links.values()) link.close("mason is shutting down");
 			links.clear();
 			await host.close();
@@ -161,7 +159,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		latest = view;
 		void flush();
 	});
-	void unsubscribe;
 
 	return door;
 
@@ -355,6 +352,14 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		grant: ConnectorGrant,
 		args: Extract<AppendArgs, { type: "submission" }>,
 	): Promise<AppendResult> {
+		// Everything in the grant is a ceiling, and the user face is the first of them: an entry granted only targets or
+		// events is a connector that may be sent to and may raise alerts, and its words are not a person's.
+		if (grant.user === undefined) {
+			throw masonError(
+				ERROR_CODE.faceNotGranted,
+				`"${name}" holds no user grant: this entry may not carry a person's words`,
+			);
+		}
 		const refusal = ownerRefusal(grant, args.origin?.actor);
 		if (refusal !== undefined) throw masonError(ERROR_CODE.actorUnknown, refusal);
 		const requestId = connectorRequestId(name, "submission", args.appendId);
@@ -460,9 +465,10 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		if (hook === undefined) {
 			throw masonError(ERROR_CODE.kindNotPermitted, `"${args.kind}" is not a kind this entry's grant names`);
 		}
+		// The log is the record, so it is the dedupe: an event whose routine is absent never becomes an entry, and a resend
+		// after a lost acknowledgement would otherwise be written twice.
+		if (options.runtime.events.seen(name, args.appendId)) return { outcome: "duplicate" };
 		const requestId = connectorRequestId(name, "fire", args.appendId);
-		const claimed = await claim(requestId);
-		if (claimed !== undefined) return { outcome: "duplicate", ...entryOf(claimed.entry) };
 		spend(name, "fire", CONNECTOR_FIRE_LIMIT);
 		const origin = originOf(name, args.origin);
 		options.runtime.events.append({
@@ -491,11 +497,16 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		return { outcome: "accepted", ...entryOf(record.entry) };
 	}
 
-	/** The medium talking about itself: written down for the reader, and it starts nothing. */
+	/**
+	 * The medium talking about itself: written down for the reader, and it starts nothing.
+	 *
+	 * A notice is an append with words in it, so it spends the submission budget: a connector that could write rows into
+	 * the transcript for free would be a budget that does not bound what it is for. Its duplicates are free, because the
+	 * transcript already holds the first one.
+	 */
 	async function notice(name: string, args: Extract<AppendArgs, { type: "notice" }>): Promise<AppendResult> {
-		const key = `${name}:${args.appendId}`;
-		if (notices.has(key)) return { outcome: "duplicate" };
-		notices.add(key);
+		if (await noticeSeen(name, args.appendId)) return { outcome: "duplicate" };
+		spend(name, "submission", CONNECTOR_SUBMISSION_LIMIT);
 		const placed = await conversation.commit(
 			(tx) =>
 				tx.appendEntry(conversation.id, {
@@ -561,6 +572,22 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	}
 
 	/** Whether this request id is already a durable claim, and what the claim says. */
+	/**
+	 * Whether this notice is already in the transcript.
+	 *
+	 * A notice becomes an entry, so the transcript is the record and the dedupe is a read of it: the newest window holds
+	 * every notice the retry could be repeating, and a restart reads the same answer the file gave.
+	 */
+	async function noticeSeen(name: string, appendId: string): Promise<boolean> {
+		const view = latest ?? watch.value;
+		return (view.entries ?? []).some(
+			(entry) =>
+				entry.kind === NOTICE_ENTRY_KIND &&
+				(entry.data as { appendId?: unknown; connector?: unknown } | undefined)?.appendId === appendId &&
+				(entry.data as { connector?: unknown }).connector === name,
+		);
+	}
+
 	async function claim(requestId: string): Promise<{ readonly entry?: number } | undefined> {
 		return conversation.commit(async (tx) => {
 			const existing = await tx.submissionByRequest(conversation.id, requestId);
@@ -569,12 +596,21 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		}, BACKGROUND_CONTEXT);
 	}
 
+	/**
+	 * Charge one act against its minute, or refuse with the wait in the words.
+	 *
+	 * Chord carries a code, a message and a reason across a link and nothing else, so a structured `retryAfterMs` would be
+	 * dropped on the way (`packages/connector/WIRE.md`). The sentence is the field that arrives: it names the budget, and
+	 * how long the connector should wait before it tries again.
+	 */
 	function spend(name: string, kind: "submission" | "fire" | "control" | "stop", perMinute: number): void {
 		const wait = options.limiter.take(`connector:${kind}:${name}`, perMinute);
 		if (wait === undefined) return;
-		throw masonError(ERROR_CODE.rateLimited, `this connector has spent its ${kind} budget for the minute`, {
-			retryable: true,
-		});
+		throw masonError(
+			ERROR_CODE.rateLimited,
+			`this connector has spent its ${kind} budget for the minute; retry in ${Math.max(1, Math.ceil(wait / 1_000))} s`,
+			{ retryable: true },
+		);
 	}
 }
 

@@ -1,12 +1,11 @@
 /**
  * Connectors: the grants a service holds, and the credential it opens its socket with.
  *
- * A connector is one external process with up to two faces — it carries people's words and reports events — and it is
- * the same entry in `service/integrations.json` that owns the MCP server mason calls. The socket grants words and events;
- * tools are not a face. They are the entry's `mcp`, reached by mason in the other direction, and the reason a connector
- * that advertises one is told its url rather than told it may use it. The `connector` block is what the operator grants
- * it: which external actor is the owner's, which external conversations may be spoken in, which event kinds fire which
- * routine, and which controls it may spend on `mason/control`.
+ * A connector is one external process that carries a person's words, reports events, or both, and it is the same entry
+ * in `service/integrations.json` that owns the MCP server mason calls. The socket carries those two; tools are not on it.
+ * They are the entry's `mcp`, reached by mason in the other direction. The `connector` block is what the operator grants:
+ * which external actor is the owner's, which targets may be sent to, which event kinds fire which routine, and which
+ * controls it may spend.
  *
  * Everything here is a **ceiling**, never a wish. The session the connector reads at the handshake is this file and
  * nothing else: an actor that is not the owner is refused, a target that is not listed is refused, a kind that maps to no
@@ -99,7 +98,11 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 	const raw = value as Record<string, unknown>;
 	// The keys the approval apparatus owned. They were required once, so every file written before the cut carries one,
 	// and reading past them would leave an operator believing a rule still runs.
-	const retired = RETIRED_GRANT_KEYS.filter((key) => raw[key] !== undefined);
+	// Both spellings of the room list are retired: `user.conversations` under the face, and a top-level `conversations`
+	// that a file written before the split may still carry. Read past either and an operator believes mason knows a room.
+	const retired = [...RETIRED_GRANT_KEYS, ...RETIRED_CONNECTOR_KEYS.filter((key) => !key.startsWith("user."))].filter(
+		(key) => raw[key] !== undefined,
+	);
 	if (retired.length > 0) {
 		throw new Error(
 			refusal(
@@ -223,8 +226,8 @@ function readUser(where: string, name: string, value: unknown): ConnectorUserGra
 
 /**
  * The places this connector may be sent to. A target is an id the model writes and a label a person reads, plus what
- * that channel can render: a notification channel does not carry files, and saying so here is what lets a reply fail
- * with a sentence instead of arriving as a broken message.
+ * that channel can render. The capabilities are the session's answer to "what may be sent here"; nothing refuses a block
+ * by them yet, and an operator who narrows one is narrowing a set mason reports rather than one it enforces.
  *
  * The ids are the model's vocabulary, so they are narrow on purpose: lowercase, no spaces, no slash — a slash is what
  * separates the connector from the target in an address.

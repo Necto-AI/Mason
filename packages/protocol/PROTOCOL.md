@@ -80,7 +80,6 @@ link and drops everything else, which is why the code rides in `reason` and why 
 | `mason.face_not_granted` | this entry does not grant the face the append needs |
 | `mason.actor_unknown` | the actor is not the one person this bot works for |
 | `mason.kind_not_permitted` | the kind is not in this entry's grant |
-| `mason.target_unknown` | the address is not one this connector's grant lists |
 | `mason.rate_limited` | the minute's budget for this class is spent; try later |
 | `mason.queue_overflow` | the turn is busy and the append asked to be refused rather than queued |
 | `mason.invalid_request` | the call is not a call this side makes |

@@ -48,7 +48,6 @@ import { chmod, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/prom
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { seedShippedDocs } from "./docs.ts";
 import { SHIPPED_SKILLS_DIR } from "./extensions/skills.ts";
 import {
 	BOT_NAME,
@@ -80,8 +79,6 @@ export interface HousePaths {
 	readonly logDir: string;
 	readonly journalDir: string;
 	readonly skillsDir: string;
-	/** The reference the agent reads about this machine (`docs.ts`): mason's pages, rewritten on every boot. */
-	readonly docsDir: string;
 	/** Where worker definitions live, beside skills: a file the agent may edit with `write`. */
 	readonly agentsDir: string;
 	readonly workspaceDir: string;
@@ -186,7 +183,6 @@ function layout(path: string): HousePaths {
 		logDir: join(agentDir, "log"),
 		journalDir: join(agentDir, "journal"),
 		skillsDir: join(agentDir, "skills"),
-		docsDir: join(agentDir, "docs"),
 		agentsDir: join(agentDir, "agents"),
 		workspaceDir: join(agentDir, "workspace"),
 		dataDir: join(serviceDir, "data"),
@@ -221,7 +217,6 @@ function layoutDirectories(paths: HousePaths): string[] {
 		paths.logDir,
 		paths.journalDir,
 		paths.skillsDir,
-		paths.docsDir,
 		paths.agentsDir,
 		paths.workspaceDir,
 		paths.serviceDir,
@@ -294,7 +289,6 @@ export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promi
 	}
 	if (!existsSync(paths.soul)) await writeFile(paths.soul, `${defaultSoul}\n`, { encoding: "utf8", mode: 0o600 });
 	await seedShippedSkills(paths);
-	await seedShippedDocs(paths.agentDir);
 }
 
 /**

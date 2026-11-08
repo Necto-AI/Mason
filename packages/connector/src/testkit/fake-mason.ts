@@ -242,13 +242,16 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		kind?: string;
 		payload?: unknown;
 		text?: string;
-		origin?: { ref: string };
+		origin?: { ref: string; actor?: { id: string } };
 		mode?: string;
 	}) {
 		if (args.type === "submission") {
 			spend("submissions", limits.submissionsPerMinute);
-			if (args.origin !== undefined && granted.owner !== undefined && args.origin.ref === "") {
-				throw masonError(ERROR_CODE.actorUnknown, "an empty address is not one this connector minted");
+			// The owner rule the real door applies: an actor that is not the granted one is refused, and so is any actor
+			// when the grant names none. The conformance suite's forged-actor case is this line, which is why it is one.
+			const actor = args.origin?.actor?.id;
+			if (actor !== undefined && actor !== granted.owner) {
+				throw masonError(ERROR_CODE.actorUnknown, `"${actor}" is not the actor this entry calls its owner`);
 			}
 		}
 		if (args.type === "event") {
