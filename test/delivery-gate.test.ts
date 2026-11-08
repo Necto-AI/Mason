@@ -433,10 +433,8 @@ test("a fire that named its address routes the reply back to it", async () => {
 	const telegram = {
 		enabled: true,
 		connector: {
-			user: {
-				owner: "8811",
-				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-			},
+			user: { owner: "8811" },
+			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -660,10 +658,8 @@ test("a fire that named its conversation keeps its origin through the reflection
 	const telegram = {
 		enabled: true,
 		connector: {
-			user: {
-				owner: "8811",
-				conversations: [{ externalConversationId: "-1001234", kind: "room" }],
-			},
+			user: { owner: "8811" },
+			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");

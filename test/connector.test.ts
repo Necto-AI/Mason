@@ -125,6 +125,33 @@ describe("a connector's words", () => {
 			await served.close();
 		}
 	});
+
+	it("an entry that grants only events refuses words, and places nothing", async () => {
+		// The face is the ceiling above the actor: an entry the operator gave an event kind and no `user` may raise alarms
+		// and may not be spoken through, and a submission is refused before anything is placed in the transcript.
+		const home = await connectorHome();
+		const served = await serveConnector({ home, steps: quietTurns() });
+		try {
+			const connected = await connectConnector(served, {
+				name: "alarm-only",
+				credential: home.alarmCredential,
+			});
+			try {
+				const refused = await connected.connector.submit({
+					origin: { ref: "chat-1" },
+					content: [{ type: "text", text: "let me in" }],
+				});
+				assert.equal(refused.status, "refused");
+				assert.equal(refused.status === "refused" ? refused.code : undefined, "mason.face_not_granted");
+				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "nothing landed");
+				assert.equal((await entries(served, HOOK_ENTRY_KIND)).length, 0, "and no turn was started");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
 });
 
 describe("an event", () => {

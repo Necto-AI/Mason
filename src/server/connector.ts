@@ -105,8 +105,6 @@ export interface ConnectorDoor {
 	attach(socket: WebSocket, request: IncomingMessage): Promise<void>;
 	/** Send what a connector is owed now — after a connect, and after every view change. */
 	flush(): Promise<void>;
-	/** Whether a connector's link is up. A socket that dropped is not a route, and the outbox says so. */
-	connected(name: string): boolean;
 	close(): Promise<void>;
 }
 
@@ -138,10 +136,11 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	const door: ConnectorDoor = {
 		attach,
 		flush,
-		connected: (name) => links.has(name),
 		close: async () => {
-			// The watch first: a flush that lands mid-close would read a view this door is no longer the outbox for.
+			// The watch first, and stopped rather than merely unsubscribed: a flush that lands mid-close would read a view
+			// this door is no longer the outbox for, and a watch left running is a listener on a log nobody reads back.
 			unsubscribe();
+			await watch.dispose();
 			for (const link of links.values()) link.close("mason is shutting down");
 			links.clear();
 			await host.close();

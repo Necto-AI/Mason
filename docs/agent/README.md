@@ -7,5 +7,5 @@ resident in your prompt, and none of it is your memory — `agent/profile.md`, `
 - `env.md`: the machine your tools run on, and where your files are.
 - `connectors/<name>.md`: one page per connector this home is granted, written when the entry was made.
 
-These pages are mason's. They are copied from the image on every boot, so an edit here is overwritten: a change that
-should survive belongs in `agent/skills/`, which is yours.
+These pages are mason's, mounted read-only at `/mason/docs`: an edit here is lost, and a change that should survive
+belongs in `agent/skills/`, which is yours.

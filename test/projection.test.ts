@@ -13,6 +13,8 @@ import { projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
 	DELIVERY_ENTRY_KIND,
+	HOOK_ENTRY_KIND,
+	NOTICE_ENTRY_KIND,
 	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
 	SEND_TOOL,
@@ -228,6 +230,48 @@ describe("the transcript the client is sent", () => {
 			]),
 		);
 		assert.deepEqual(transcript, [{ kind: "user", id: "1", text: "Do the thing." }]);
+	});
+
+	it("says a routine's silent fire is a silence, not a turn that never happened", () => {
+		// A routine's `app.hook` carries no `kind`: there is no event row to stand in for the fire, so the fire is the
+		// turn, and a turn that ended without a message owes the person the same notice as any other.
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, HOOK_ENTRY_KIND, [{ role: "user", content: "[ROUTINE: Morning brief]" }], {
+					data: { hookId: "morning-brief", hookName: "Morning brief", firedAt: "2026-10-20T09:00:00.000Z" },
+				}),
+				assistant(2, [{ type: "thinking", thinking: "nothing worth a message" }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
+		]);
+	});
+
+	it("shows the event a fire carried, and still says the fire spoke to nobody", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, HOOK_ENTRY_KIND, [{ role: "user", content: "a message arrived" }], {
+					data: { hookId: "team-chat", hookName: "a chat message", kind: "chat.message" },
+				}),
+				assistant(2, [{ type: "thinking", thinking: "nothing to answer" }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "event", id: "1", name: "chat.message" },
+			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
+		]);
+	});
+
+	it("shows a notice the medium wrote about itself", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, NOTICE_ENTRY_KIND, [], {
+					data: { appendId: "note-1", connector: "telegram", text: "the channel was muted for an hour" },
+				}),
+			]),
+		);
+		assert.deepEqual(transcript, [{ kind: "notice", id: "medium:1", text: "the channel was muted for an hour" }]);
 	});
 
 	it("says the agent finished without a message, rather than leaving the turn blank", () => {

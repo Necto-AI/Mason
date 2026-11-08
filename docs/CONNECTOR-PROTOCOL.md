@@ -38,6 +38,6 @@ disagreeing.
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | The console connector, in this repository | `scripts/chat.ts` — `mason chat`, on the same socket as every other connector |
 | Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` — text, files, an MCP server |
-| What the agent is told about a connector | `docs/agent/`, seeded into `agent/docs/` and indexed by the prompt, never pasted into it |
+| What the agent is told about a connector | `docs/agent/`, mounted read-only at `/mason/docs` and indexed by the prompt, never pasted into it |
 
 A connector can connect, append words or an event, receive deliveries and move files. One way in: this socket.

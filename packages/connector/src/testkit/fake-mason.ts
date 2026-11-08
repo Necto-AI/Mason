@@ -27,8 +27,11 @@ import type { Fetcher } from "../attachments.ts";
 
 /** What the operator granted: the ceiling every case is measured against. */
 export interface FakeMasonGrants {
-	/** The one external actor id mason accepts as the person it works for. Any other is refused. */
-	readonly owner?: string;
+	/**
+	 * The one external actor id mason accepts as the person it works for. Any other is refused. `null` is the entry that
+	 * grants no `user` face at all: it may raise events, write notices and answer controls, and it may not carry words.
+	 */
+	readonly owner?: string | null;
 	/** The event kinds this entry's grant names. A kind absent from this list is refused. */
 	readonly kinds?: readonly string[];
 	readonly commands?: readonly ControlOp[];
@@ -246,6 +249,14 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		mode?: string;
 	}) {
 		if (args.type === "submission") {
+			// The user face is the first ceiling, as it is at the door: an entry that grants no `user` may not carry words at
+			// all, and it spends nothing to be told so.
+			if (granted.owner === null) {
+				throw masonError(
+					ERROR_CODE.faceNotGranted,
+					"this entry holds no user grant: it may not carry a person's words",
+				);
+			}
 			spend("submissions", limits.submissionsPerMinute);
 			// The owner rule the real door applies: an actor that is not the granted one is refused, and so is any actor
 			// when the grant names none. The conformance suite's forged-actor case is this line, which is why it is one.
@@ -261,7 +272,11 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 			}
 		}
 		const key = `${args.type}:${args.appendId}`;
-		if (seen.has(key)) return { outcome: "duplicate" as const };
+		// A notice is words in the transcript, so the door charges it to the submission budget; the duplicate is free,
+		// because the row it would add is already there.
+		const duplicate = seen.has(key);
+		if (!duplicate && args.type === "notice") spend("submissions", limits.submissionsPerMinute);
+		if (duplicate) return { outcome: "duplicate" as const };
 		seen.add(key);
 		if (args.type === "submission") {
 			const text = (args.content ?? [])

@@ -1,5 +1,5 @@
 /**
- * Whether a tool call was made from inside another tool — `tools.reply()` in a code-mode script — instead of by
+ * Whether a tool call was made from inside another tool — `tools.send()` in a code-mode script — instead of by
  * the model itself.
  *
  * The ID is the whole test, and two facts make it honest. A nested call's ID is `<parentCallId>/<key>`

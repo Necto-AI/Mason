@@ -19,8 +19,8 @@ time: the paragraph first, the detail after.
 ## Controls
 
 `/stop`, `/compact`, `/clear`, `/status` reach mason through this connector, and only from the actor the grant names as
-its owner. Anybody else in a granted chat is read, and their messages are attributed to them, but they cannot stop a turn
-of yours.
+its owner. Anybody else's message in a granted chat is refused with `mason.actor_unknown` and places nothing: a group
+carries the owner's words and nobody else's.
 
 ## When it is down
 

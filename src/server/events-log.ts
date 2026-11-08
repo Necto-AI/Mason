@@ -7,7 +7,8 @@
  *
  * It is **mason's state, not the agent's memory**: `service/data/events/YYYY-MM-DD.jsonl`, one file a day, written for
  * every event. Keeping it inside `agent/` would churn the memory repository with lines the agent did not choose to
- * write, and would let the agent rewrite its own history. Retention is mason's, and `mason doctor` reports the count.
+ * write, and would let the agent rewrite its own history. Retention is mason's: a file older than the window is removed
+ * at boot, and nothing reports the count.
  *
  * The log is also the dedupe: an event whose routine is switched off never becomes a transcript entry, so `seen` is what
  * answers a resend that arrives after a lost acknowledgement.
@@ -86,7 +87,7 @@ export class EventLog {
 		}
 	}
 
-	/** Every line this log can see, oldest first. What `doctor` reports a count of, and what a test reads back. */
+	/** Every line this log can see, oldest first: what a test reads back, and what `count` is built from. */
 	lines(): EventLine[] {
 		const lines: EventLine[] = [];
 		for (const file of this.#files()) {
@@ -127,11 +128,6 @@ export class EventLog {
 			this.#seenLoaded = true;
 		}
 		return this.#seen.has(seenKey(connector, appendId));
-	}
-
-	/** How many events are on disk, for `doctor`. */
-	count(): number {
-		return this.lines().length;
 	}
 
 	/** Remove day files older than the retention window. Called once at boot; never on a write. */

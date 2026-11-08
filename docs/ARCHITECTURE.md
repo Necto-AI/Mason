@@ -18,7 +18,7 @@ One process is one bot: started by `npm run dev` in a checkout, or by `mason up`
   memory.
 - **`@earendil-works/pi-env` is the execution split** (`src/server/env.ts`): the model and the harness run here, and the
   tools that touch files run on the tool machine, which is the only place `~/.mason/agent/` is mounted.
-- **Connectors are the out-of-process edge** (`src/server/connector.ts`, `packages/protocol`): one JSON-RPC socket at
+- **Connectors are the out-of-process edge** (`src/server/connector.ts`, `packages/protocol`): one Chord socket at
   `/api/connector`, opened by a service that carries a *user* face, an *events* face, or both. An integration's *MCP
   server* is the other direction: mason calls it with that server's credential.
 - **The home is `~/.mason/<bot>/`** (`src/server/house.ts`): `agent/`, which the tool machine mounts — `profile.md`, the

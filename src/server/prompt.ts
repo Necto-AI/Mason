@@ -144,15 +144,15 @@ function renderIntegrations(): string | undefined {
 /**
  * Where the reference is, and when to go and read it.
  *
- * The pages are mason's and are rewritten on every boot (`docs.ts`), so the agent cannot damage them and cannot be left
- * reading a description of a version that has moved. The prompt carries an index and one line about when to open it:
- * the rule for what stays resident instead is **a rule stays in the prompt if the turn is already broken by the time
- * the agent would go and read it.**
+ * The pages are mason's and are mounted read-only (`docs.ts` names the mount), so the agent cannot damage them and
+ * cannot be left reading a description of a version that has moved. The prompt carries an index and one line about when
+ * to open it: the rule for what stays resident instead is **a rule stays in the prompt if the turn is already broken by
+ * the time the agent would go and read it.**
  */
 export const DOCS_GROUNDING = `\`/mason/docs/README.md\` is the read-only reference, not your memory: read its page when unsure how something here works.`;
 
 /**
- * What the index lists: every page seeded into the home, README first, and a `connectors/` page only for a connector this
+ * What the index lists: every page the image ships, README first, and a `connectors/` page only for a connector this
  * home is actually granted. A page about a chat that was never installed is a page the agent would read and find nothing
  * to do with.
  */
