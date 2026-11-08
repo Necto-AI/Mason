@@ -32,7 +32,7 @@ import { readIntegrations, writeIntegration } from "../src/server/integrations.t
 /** The built-in entry's name. It is also the name the connector says in its hello, and mason refuses a mismatch. */
 export const CONSOLE = "console";
 
-/** The one line the model is told about this entry. It carries no tools face, so nothing reads it yet — a person does. */
+/** The one line the model is told about this entry. It carries no MCP server, so nothing reads it yet — a person does. */
 export const CONSOLE_DESCRIPTION = "The terminal, built in: talk to the bot with no Telegram at all";
 
 /** The actor and the conversation the console serves. Fixed here because this file is the connector that serves them. */

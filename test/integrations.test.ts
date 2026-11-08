@@ -52,7 +52,7 @@ async function writeRaw(paths: HousePaths, text: string): Promise<void> {
 const github: Integration = {
 	enabled: true,
 	description: "Issues and pull requests for the team's repositories",
-	tools: { url: "http://mason-github:8082/mcp" },
+	mcp: { url: "http://mason-github:8082/mcp" },
 };
 
 /** The refusal a file earns, as the operator reads it. */
@@ -82,7 +82,7 @@ describe("the integration list on disk", () => {
 						enabled: true,
 						description: "Issues and pull requests",
 						note: "hand-written, and not mason's to drop",
-						tools: { url: "http://mason-github:8082/mcp", owner: "denis" },
+						mcp: { url: "http://mason-github:8082/mcp", owner: "denis" },
 					},
 				},
 			}),
@@ -90,12 +90,12 @@ describe("the integration list on disk", () => {
 
 		const read = await readIntegrations(paths);
 		assert.equal(read.integrations.github?.note, "hand-written, and not mason's to drop");
-		assert.equal(read.integrations.github?.tools?.owner, "denis");
+		assert.equal(read.integrations.github?.mcp?.owner, "denis");
 
 		await writeIntegration(paths, "docs", {
 			enabled: true,
 			description: "  The internal documentation server  ",
-			tools: { url: "http://mason-docs:8080/mcp" },
+			mcp: { url: "http://mason-docs:8080/mcp" },
 		});
 
 		const stored = JSON.parse(await readFile(paths.integrations, "utf8")) as {
@@ -104,7 +104,7 @@ describe("the integration list on disk", () => {
 		};
 		assert.equal(stored.future, "a key from a later version", "a key from the top level survived the rewrite");
 		assert.equal(stored.integrations.github?.note, "hand-written, and not mason's to drop");
-		assert.deepEqual(stored.integrations.github?.tools, { url: "http://mason-github:8082/mcp", owner: "denis" });
+		assert.deepEqual(stored.integrations.github?.mcp, { url: "http://mason-github:8082/mcp", owner: "denis" });
 		assert.deepEqual(Object.keys(stored.integrations), ["docs", "github"], "the file is in a stable order");
 		// The description is a line in the prompt: the space around it is nobody's intent.
 		assert.equal(stored.integrations.docs?.description, "The internal documentation server");
@@ -167,12 +167,12 @@ describe("the integration list on disk", () => {
 		assert.match(await refusal(unnamed), /has no name: the key is the name/);
 	});
 
-	it("refuses a tools face with no description, and an empty one", async () => {
+	it("refuses an MCP server with no description, and an empty one", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
 			JSON.stringify({
-				integrations: { github: { enabled: true, tools: { url: "http://mason-github:8082/mcp" } } },
+				integrations: { github: { enabled: true, mcp: { url: "http://mason-github:8082/mcp" } } },
 			}),
 		);
 		assert.match(await refusal(paths), /no "description": it is the only thing the model is told about it/);
@@ -181,31 +181,31 @@ describe("the integration list on disk", () => {
 			paths,
 			JSON.stringify({
 				integrations: {
-					github: { enabled: true, description: "   ", tools: { url: "http://mason-github:8082/mcp" } },
+					github: { enabled: true, description: "   ", mcp: { url: "http://mason-github:8082/mcp" } },
 				},
 			}),
 		);
 		assert.match(await refusal(paths), /empty "description"/);
 	});
 
-	it("refuses a tools url that is not an http endpoint", async () => {
+	it("refuses an mcp url that is not an http endpoint", async () => {
 		// `mason-github:8082/mcp` is the shape a person writes without the scheme: a real URL, of no usable protocol.
 		for (const url of ["mason-github:8082/mcp", "ftp://mason-github/mcp", "file:///mcp", ""]) {
 			const paths = await temporaryHome();
-			await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, tools: { url } } } }));
-			assert.match(await refusal(paths), /usable tools url/, `${url} is not an MCP endpoint`);
+			await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, mcp: { url } } } }));
+			assert.match(await refusal(paths), /usable mcp url/, `${url} is not an MCP endpoint`);
 		}
 	});
 
-	it("refuses a tools.required that is not a boolean, and an enabled that is a string", async () => {
+	it("refuses an mcp.required that is not a boolean, and an enabled that is a string", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
 			JSON.stringify({
-				integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp", required: "yes" } } },
+				integrations: { github: { ...github, mcp: { url: "http://mason-github:8082/mcp", required: "yes" } } },
 			}),
 		);
-		assert.match(await refusal(paths), /"tools.required" that is not true or false/);
+		assert.match(await refusal(paths), /"mcp.required" that is not true or false/);
 
 		await writeRaw(paths, JSON.stringify({ integrations: { github: { ...github, enabled: "false" } } }));
 		// The string "false" is truthy: read as a boolean it would leave an integration on that its author believed off.
@@ -233,6 +233,35 @@ describe("the integration list on disk", () => {
 		assert.match(commands, /"commands"/);
 		assert.match(commands, /connector\.commands/);
 		assert.match(commands, /Delete the key by hand/);
+	});
+
+	it("refuses the entry key the MCP server was called before it was named for what it is", async () => {
+		const paths = await temporaryHome();
+		// `tools` is a key nothing validates any more, so reading past it would boot the entry with no MCP server and
+		// nothing to say so: the refusal is the only thing that makes the rename visible.
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: { github: { ...github, tools: { url: "http://mason-github:8082/mcp" }, mcp: undefined } },
+			}),
+		);
+		const message = await refusal(paths);
+		assert.match(message, /has a "tools" block/);
+		assert.match(message, /is "mcp" now/);
+		assert.match(message, /Rename the key by hand/);
+	});
+
+	it("refuses a grant with nothing on the socket, an MCP server alone is not a face", async () => {
+		const paths = await temporaryHome();
+		// The entry has an MCP server, and the grant carries controls and no face: the connector would open a socket it
+		// was never granted anything to do on, and `commands` alone is not a conversation.
+		await writeRaw(
+			paths,
+			JSON.stringify({ integrations: { github: { ...github, connector: { commands: ["stop"] } } } }),
+		);
+		const message = await refusal(paths);
+		assert.match(message, /grants no face/);
+		assert.match(message, /is not one of them/);
 	});
 
 	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
@@ -336,8 +365,8 @@ describe("the integration list on disk", () => {
 		const paths = await temporaryHome();
 		await assert.rejects(() => writeIntegration(paths, "Bad Name", github), /not a usable name/);
 		await assert.rejects(
-			() => writeIntegration(paths, "github", { ...github, tools: { url: "not a url" } }),
-			/usable tools url/,
+			() => writeIntegration(paths, "github", { ...github, mcp: { url: "not a url" } }),
+			/usable mcp url/,
 		);
 	});
 });
@@ -362,7 +391,7 @@ describe("the integration command", () => {
 			paths.home,
 			"add",
 			"github",
-			"--url",
+			"--mcp-url",
 			"http://mason-github:8082/mcp",
 			"--description",
 			"Issues and pull requests",
@@ -394,15 +423,18 @@ describe("the integration command", () => {
 					github: {
 						enabled: false,
 						description: "The old endpoint",
-						tools: { url: "http://mason-github:8082/mcp", required: true },
-						connector: { commands: ["stop"] },
+						mcp: { url: "http://mason-github:8082/mcp", required: true },
+						connector: {
+							commands: ["stop"],
+							user: { owner: "8811", conversations: [{ externalConversationId: "8811", kind: "person" }] },
+						},
 					},
 				},
 			}),
 		);
 
 		await assert.rejects(
-			() => integration(paths.home, "add", "github", "--url", "http://new:8082/mcp", "--description", "New"),
+			() => integration(paths.home, "add", "github", "--mcp-url", "http://new:8082/mcp", "--description", "New"),
 			/already an integration/,
 		);
 
@@ -410,7 +442,7 @@ describe("the integration command", () => {
 			paths.home,
 			"add",
 			"github",
-			"--url",
+			"--mcp-url",
 			"http://new:8082/mcp",
 			"--description",
 			"New",
@@ -419,7 +451,7 @@ describe("the integration command", () => {
 		assert.match(replaced.stdout, /wrote disabled github/, "a replace does not switch an integration on");
 		const stored = (await readIntegrations(paths)).integrations.github;
 		assert.equal(stored?.description, "New");
-		assert.deepEqual(stored?.tools, { url: "http://new:8082/mcp", required: true });
+		assert.deepEqual(stored?.mcp, { url: "http://new:8082/mcp", required: true });
 	});
 
 	it("lists a connector by the faces it grants, and names no credential", async () => {
@@ -436,7 +468,7 @@ describe("the integration command", () => {
 			}),
 		);
 		const listed = await integration(paths.home, "list");
-		assert.match(listed.stdout, /connector \(user, tools\)/);
+		assert.match(listed.stdout, /connector \(user\)/);
 		assert.doesNotMatch(listed.stdout, /secret|credential/i);
 	});
 

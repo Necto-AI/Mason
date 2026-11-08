@@ -1,5 +1,5 @@
 /**
- * An integration's tools face: a live catalog a script asks, and a registry that does not move when a server does.
+ * An integration's MCP server: a live catalog a script asks, and a registry that does not move when a server does.
  *
  * Everything here runs against a fake MCP server on an in-memory transport, injected through the boot's `mcpTransport`
  * seam: no test dials a port, so a test can describe a server that offers two tools, one that is still coming up, one
@@ -373,7 +373,7 @@ const STALE_SCRIPT = `const result = await tools.mcp_call({
 });`;
 
 describe("the boot", () => {
-	it("connects nothing when no integration has a tools face, so the surface is the one before MCP", async () => {
+	it("connects nothing when no integration has an MCP server, so the surface is the one before MCP", async () => {
 		const directory = await temporaryDirectory();
 		const catalog = await openMcpCatalog({ integrations: { github: { enabled: true } }, log: () => {} });
 		assert.deepEqual(catalog.tools, []);
@@ -387,11 +387,11 @@ describe("the boot", () => {
 		}
 	});
 
-	it("counts an integration without a tools face as nothing to connect, and a disabled one as not its business", async () => {
+	it("counts an integration without an MCP server as nothing to connect, and a disabled one as not its business", async () => {
 		const catalog = await openMcpCatalog({
 			integrations: {
 				activity: { enabled: true },
-				docs: { enabled: false, description: "Docs", tools: { url: "http://mason-docs:8080/mcp" } },
+				docs: { enabled: false, description: "Docs", mcp: { url: "http://mason-docs:8080/mcp" } },
 			},
 			openTransport: downTransport,
 			log: () => {},
@@ -487,7 +487,7 @@ describe("the integrations route", () => {
 				{
 					name: "github",
 					enabled: true,
-					hasTools: true,
+					hasMcp: true,
 					connected: true,
 					tools: 2,
 					error: null,

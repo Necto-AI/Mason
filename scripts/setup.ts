@@ -11,7 +11,7 @@
  * argv; `scripts/wizard.ts` asks the questions this file leaves open. So the same steps run from a terminal, from CI
  * with `--yes`, and from a test — and the interactive path is the one with the least logic in it.
  *
- * What is deliberately not here: the tools face. A connector's MCP endpoint is reachable at `container.port` inside the
+ * What is deliberately not here: the MCP server. A connector's MCP endpoint is reachable at `container.port` inside the
  * podman network, and setup publishes no host port (a connector dials out and nothing dials in), so the entry it writes
  * carries the grant and no `tools` block. That arrives with the release that puts mason in the same network.
  */

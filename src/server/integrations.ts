@@ -1,10 +1,11 @@
 /**
  * Integrations: the services mason reaches, in one file in the server's half.
  *
- * An integration is a service mason reaches (ADR-0003): an MCP endpoint that lends the bot tools, and optionally a
+ * An integration is one entry, and one service mason reaches (ADR-0003): an MCP server that lends the bot tools, a
  * connector grant for the external process that carries people's words and reports events over `/api/connector`
- * (`connectors.ts`, §4.1d). There is no second door: the signed POST that used to wake a hook is gone (#104), and a
- * service that wants to wake mason does it over the socket it was granted. Everything that differs between integrations
+ * (`connectors.ts`, §4.1d), or both. An integration is not a connector: only the entries with a grant have one, and this
+ * file is the one place a name, a switch and a credential belong together. There is no second door: the signed POST that
+ * used to wake a hook is gone (#104), and a service that wants to wake mason does it over the socket it was granted. Everything that differs between integrations
  * is configuration read at boot — no TypeScript module, no extension, no client code per system — so this file and the
  * reader below it are the whole of mason's per-integration surface.
  *
@@ -48,8 +49,8 @@ export const INTEGRATIONS_VERSION = "0.1";
  */
 const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-/** The tools half: an MCP endpoint over Streamable HTTP. */
-export interface IntegrationTools {
+/** The entry's MCP server: an endpoint over Streamable HTTP that lends the bot tools. */
+export interface IntegrationMcp {
 	readonly url: string;
 	/** Opt in to the old behaviour: an unreachable server refuses the boot instead of removing its tools. */
 	readonly required?: boolean;
@@ -62,16 +63,16 @@ export interface IntegrationTools {
 	readonly [key: string]: unknown;
 }
 
-/** One integration, as the file holds it. A face that is present is a face that is on: there is no per-face switch. */
+/** One integration, as the file holds it. A half that is present is a half that is on: there is no per-half switch. */
 export interface Integration {
 	/** The only switch. Read at boot, never mid-conversation. */
 	readonly enabled: boolean;
-	/** Required whenever the tools face is present: it is the only thing the model is told about the integration. */
+	/** Required whenever there is an MCP server: it is the only thing the model is told about the integration. */
 	readonly description?: string;
-	readonly tools?: IntegrationTools;
+	readonly mcp?: IntegrationMcp;
 	/**
 	 * What this service is granted as a connector: the one `owner` actor, which kinds fire which routine, and which
-	 * controls it may spend. Absent for an integration that only lends tools.
+	 * controls it may spend. Absent for an integration that is only an MCP server.
 	 */
 	readonly connector?: ConnectorGrant;
 	readonly [key: string]: unknown;
@@ -195,8 +196,18 @@ function validate(where: string, name: string, value: unknown): Integration {
 			),
 		);
 	}
-	const tools = readTools(where, name, raw.tools);
-	const description = readDescription(where, name, raw.description, tools !== undefined);
+	// The MCP half was `tools` once: a key nothing validates would boot the entry with no server and no word about it.
+	if (raw.tools !== undefined) {
+		throw new Error(
+			refusal(
+				where,
+				name,
+				'has a "tools" block: the MCP server is "mcp" now, same url, credential and required. Rename the key by hand',
+			),
+		);
+	}
+	const mcp = readMcp(where, name, raw.mcp);
+	const description = readDescription(where, name, raw.description, mcp !== undefined);
 	// The trigger face and its command list are the old door (#104). An entry that still carries one is refused rather
 	// than read past: a secret nothing checks is a sender that looks configured and is not, and the fix is one command.
 	if (raw.trigger !== undefined) {
@@ -222,20 +233,20 @@ function validate(where: string, name: string, value: unknown): Integration {
 			),
 		);
 	}
-	const connector = readConnectorGrant(where, name, raw.connector, tools !== undefined);
+	const connector = readConnectorGrant(where, name, raw.connector);
 	return {
 		...raw,
 		enabled,
 		...(description === undefined ? {} : { description }),
-		...(tools === undefined ? {} : { tools }),
+		...(mcp === undefined ? {} : { mcp }),
 		...(connector === undefined ? {} : { connector }),
 	};
 }
 
-function readTools(where: string, name: string, value: unknown): IntegrationTools | undefined {
+function readMcp(where: string, name: string, value: unknown): IntegrationMcp | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error(refusal(where, name, 'has a "tools" face that is not an object'));
+		throw new Error(refusal(where, name, 'has an "mcp" that is not an object'));
 	}
 	const raw = value as Record<string, unknown>;
 	const url = raw.url;
@@ -244,7 +255,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 			refusal(
 				where,
 				name,
-				`has no usable tools url (${typeof url === "string" ? url : "none given"}): it is an MCP endpoint over ` +
+				`has no usable mcp url (${typeof url === "string" ? url : "none given"}): it is an MCP endpoint over ` +
 					"Streamable HTTP, so http:// or https://, served by the integration's own container",
 			),
 		);
@@ -255,7 +266,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 			refusal(
 				where,
 				name,
-				'has a "tools.required" that is not true or false: it decides whether a dead server refuses the boot',
+				'has an "mcp.required" that is not true or false: it decides whether a dead server refuses the boot',
 			),
 		);
 	}
@@ -265,7 +276,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 			refusal(
 				where,
 				name,
-				'has a "tools.credential" that is not a credential: it is the key the connector issued mason',
+				'has an "mcp.credential" that is not a credential: it is the key the connector issued mason',
 			),
 		);
 	}
@@ -279,7 +290,7 @@ function readTools(where: string, name: string, value: unknown): IntegrationTool
 
 /**
  * The description is the integration's whole presence in the model's context: the prompt names it and describes it, and
- * carries no schema. An integration with tools and no description would be a tool nobody knows when to reach for.
+ * carries no schema. An entry with an MCP server and no description would be a tool nobody knows when to reach for.
  */
 function readDescription(where: string, name: string, value: unknown, required: boolean): string | undefined {
 	if (value === undefined) {
@@ -288,7 +299,7 @@ function readDescription(where: string, name: string, value: unknown, required: 
 				refusal(
 					where,
 					name,
-					'has a tools face and no "description": it is the only thing the model is told about it',
+					'has an MCP server and no "description": it is the only thing the model is told about it',
 				),
 			);
 		}

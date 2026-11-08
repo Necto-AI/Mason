@@ -98,7 +98,7 @@ describe("a first run with the console connector", () => {
 		const telegram = {
 			enabled: true,
 			description: "my own line",
-			tools: { url: "http://127.0.0.1:8082/mcp", note: "a key mason has never heard of" },
+			mcp: { url: "http://127.0.0.1:8082/mcp", note: "a key mason has never heard of" },
 			connector: { user: { owner: "8811", conversations: [{ externalConversationId: "8811", kind: "person" }] } },
 		};
 		await mkdir(paths.serviceDir, { recursive: true, mode: 0o700 });

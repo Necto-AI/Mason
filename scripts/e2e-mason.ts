@@ -112,7 +112,7 @@ console.log(
 		base: `http://127.0.0.1:${server.port}`,
 		url: `ws://127.0.0.1:${server.port}/api/connector`,
 		home: paths.home,
-		// How the tools face's connection looks from mason's side. There is no HTTP route for it any more: the panel that
+		// How the MCP server's connection looks from mason's side. There is no HTTP route for it any more: the panel that
 		// read one is gone, and this line is the caller's answer instead.
 		integrations: integrationSummaries(currentIntegrations()),
 		credentials,

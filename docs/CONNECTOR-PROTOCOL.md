@@ -16,7 +16,7 @@ contract is how they start disagreeing.
   process and mason is the only thing in the middle. The reply router, the capability ceiling and the credential follow
   from it.
 - [`adr/0003-integrations-are-services.md`](adr/0003-integrations-are-services.md) — superseded where it says an
-  integration has exactly two faces; a connector now has up to three, and `events` is one of them.
+  integration is an MCP endpoint and a trigger: an entry holds an `mcp` server, a grant, or both.
 - Issue #99 on this repository — the cutover that replaces the integration layer, of which the protocol and the SDK are
   the first slice.
 
@@ -35,7 +35,7 @@ contract is how they start disagreeing.
 | Mason's server speaking this protocol | `src/server/connector.ts`: the socket, admission, the reply outbox, streaming, attachments and budgets (`docs/SPEC.md` §4.1d) |
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add <name>` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
-| Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` (`#104`) — text, files, replies, approvals, a tools face |
+| Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` (`#104`) — text, files, replies, approvals, an MCP server |
 | A minimal Slack as an external process on the SDK | `github.com/DenisSud/mason-slack` (`#104`) — text, replies; no files or streaming |
 | The live tool catalog | `src/server/mcp.ts`; `docs/SPEC.md` §4.1e |
 
