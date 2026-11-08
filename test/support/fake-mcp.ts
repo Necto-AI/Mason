@@ -40,7 +40,7 @@ export { MCP_TOOL as MCP } from "../../src/server/mcp.ts";
 export const APPROVAL_META_KEY = "dev.mason/approval";
 
 /**
- * An integration with a tools face, whose markers the operator trusts.
+ * An integration with an MCP server, whose markers the operator trusts.
  *
  * Trusting them is what keeps these tests about the catalog: a `not_required` marker then allows the call without a
  * person in the loop, and `permissions.test.ts` is where the gateway's own matrix lives.
@@ -48,14 +48,13 @@ export const APPROVAL_META_KEY = "dev.mason/approval";
 export const GITHUB: Integration = {
 	enabled: true,
 	description: "Issues and pull requests for the team's repositories",
-	tools: { url: "http://mason-github:8082/mcp" },
-	connector: {},
+	mcp: { url: "http://mason-github:8082/mcp" },
 };
 
 /** The same server, marked as the one the team cannot work without. */
 export const REQUIRED_GITHUB: Integration = {
 	...GITHUB,
-	tools: { url: "http://mason-github:8082/mcp", required: true },
+	mcp: { url: "http://mason-github:8082/mcp", required: true },
 };
 
 /** A read: marked safe, so a trusted-marker connector calls it without asking. */

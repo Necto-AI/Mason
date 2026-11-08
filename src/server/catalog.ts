@@ -54,7 +54,7 @@ export interface CatalogConnector {
 /**
  * Where the connector answers on its own network: the port its MCP endpoint listens on.
  *
- * Nothing reads it in this release, on purpose. A connector's tools face is reachable at this port inside the podman
+ * Nothing reads it in this release, on purpose. A connector's MCP server is reachable at this port inside the podman
  * network, mason lives on the host, and setup publishes no host port — so the entry it writes carries the grant and no
  * `tools` block (`scripts/setup.ts` says the same at the top). The field is parsed and validated now so the release that
  * puts mason in that network has the number it needs and no file has to change shape.

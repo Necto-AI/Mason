@@ -635,10 +635,10 @@ export class ConnectorSession {
 			}
 		}
 		if (request.faces?.tools !== undefined) {
-			if (this.#integration.tools === undefined) {
-				inactive.push({ face: "tools", reason: "the entry declares no MCP endpoint" });
+			if (this.#integration.mcp === undefined) {
+				inactive.push({ face: "tools", reason: "the entry declares no MCP server" });
 			} else {
-				faces.tools = { url: this.#integration.tools.url };
+				faces.tools = { url: this.#integration.mcp.url };
 			}
 		}
 		if (request.faces?.events !== undefined) {

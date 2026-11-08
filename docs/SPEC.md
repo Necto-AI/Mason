@@ -130,7 +130,7 @@ you everything the agent is told. A test fails if another base extension grows a
 | `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
-| `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with a tools face, sorted by name; omitted when there is none |
+| `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with an MCP server, sorted by name; omitted when there is none |
 | `codemode` | `<codemode>` | a count of the tools a script can call, and the three globals that find one (`ALL_TOOLS`, `searchTools`, `describeTool`); no declaration is resident |
 | `reflect` | `<reflect>` | plain text: what a turn of ten tool rounds or more owes the next one, with the profile and the log first and a skill rarely, and the guards each write has |
 
@@ -215,8 +215,8 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and two more are built per boot and installed alongside them: `mcp`, when an enabled integration has a tools face, and `codemode`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the reply tool and the gate that decides whether a turn's reader hears anything, so no conversation may be without it. `mcp` is absent rather than empty when no entry has a tool face, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
-- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has a tools face, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and two more are built per boot and installed alongside them: `mcp`, when an enabled integration has an MCP server, and `codemode`, always. `prompt` is the only one with sections (§3.2). `delivery` is unconditional: it carries the reply tool and the gate that decides whether a turn's reader hears anything, so no conversation may be without it. `mcp` is absent rather than empty when no entry has one, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has an MCP server, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it.
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
@@ -241,7 +241,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 └── service/                # Never mounted into the tool machine
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # The connector credentials, as hashes, one per entry (§4.1b)
-    ├── integrations.json   # The services mason reaches: each entry's MCP endpoint, connector grant and commands, read once at boot
+    ├── integrations.json   # The services mason reaches: each entry's MCP server, connector grant and commands, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
     └── data/               # agent.sqlite, routines-state.json, seeded-skills.json (§4.1c)
@@ -258,7 +258,7 @@ The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `i
 `agent.sqlite` are `0600`. It holds a transcript of everything Denis said, which is not a thing to leave readable by
 every other account on the machine.
 
-`integrations.json` describes every service mason may reach — an MCP endpoint that lends it tools, a connector that wakes
+`integrations.json` describes every service mason may reach — an MCP server that lends it tools, a connector that wakes
 it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
 there and a list that changed under a running turn would re-price the prefix and change what the model can do between
 two messages of one conversation.
@@ -473,8 +473,8 @@ all.
 
 ### 4.1d The connector door
 
-An external service is a **connector** (`docs/CONNECTOR-PROTOCOL.md`): a process with any combination of a user face, a
-tools face (MCP over Streamable HTTP) and an events face. The contract is `packages/protocol` — its prose and its schema
+A **connector** (`docs/CONNECTOR-PROTOCOL.md`) is a process with a user face, an events face, or both. An integration's
+**MCP server** is the other direction: Streamable HTTP, with that server's credential. The contract is `packages/protocol` — its prose and its schema
 are normative, and mason's end of it is `src/server/connector.ts`. This section is what that file decides.
 
 **Transport and credential.** One connector-initiated JSON-RPC 2.0 WebSocket at `/api/connector`, one frame per text
@@ -532,7 +532,7 @@ request to `/api/events/<name>` reaches nothing, and an entry that still names a
 sentence that says so.
 
 The two connectors that replaced the in-repository Telegram relay live in their own repositories — `mason-telegram` (text,
-files, replies and streaming, and a tools face) and `mason-slack` (text and replies, honestly without files or
+files, replies and streaming, and an MCP server) and `mason-slack` (text and replies, honestly without files or
 streaming) — and neither imports anything from this one. Their diff here is configuration: an entry with a `connector`
 block and a credential, and not one line of vendor source (§4.1d).
 

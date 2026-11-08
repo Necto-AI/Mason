@@ -23,7 +23,7 @@ export interface IntegrationHealth {
 export interface IntegrationSummary {
 	readonly name: string;
 	readonly enabled: boolean;
-	readonly hasTools: boolean;
+	readonly hasMcp: boolean;
 	readonly connected: boolean;
 	readonly tools: number;
 	readonly error: string | null;
@@ -54,7 +54,7 @@ export function integrationSummaries(integrations: Record<string, Integration>):
 			return {
 				name,
 				enabled: integration.enabled,
-				hasTools: integration.tools !== undefined,
+				hasMcp: integration.mcp !== undefined,
 				connected: health?.connected ?? false,
 				tools: health?.tools ?? 0,
 				error: health?.error ?? null,

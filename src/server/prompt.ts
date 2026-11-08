@@ -115,14 +115,14 @@ export const INTEGRATIONS_POINTER = `These services lend you tools. None of them
 \`searchTools("<what you want>")\` finds the name.`;
 
 /**
- * One line per enabled integration with a tools face, sorted by name, so two renders of one file are the same bytes and
+ * One line per enabled integration with an MCP server, sorted by name, so two renders of one file are the same bytes and
  * a file someone reordered renders equally. `undefined` when nothing qualifies: a section nobody can fill is absent
  * from the prompt, not an empty header.
  */
 function renderIntegrations(): string | undefined {
 	const lines = Object.entries(currentIntegrations())
 		.flatMap(([name, integration]) =>
-			integration.enabled && integration.tools !== undefined && integration.description !== undefined
+			integration.enabled && integration.mcp !== undefined && integration.description !== undefined
 				? [`${name}: ${integration.description}`]
 				: [],
 		)
@@ -174,7 +174,7 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	),
 	section("profile", (input, context) => renderProfile(input, context)),
 	// What exists beyond the tool list, by name and purpose only: a capability arrived without its schemas being paid
-	// for. Absent when no integration is enabled with a tools face.
+	// for. Absent when no integration is enabled with an MCP server.
 	section("integrations", () => renderIntegrations()),
 	// The tools a script can call, counted rather than listed: pi-durable's own section would spend a token budget on
 	// declarations in every turn, and the script can ask for the one it needs. Declared here so `delivery` stays the

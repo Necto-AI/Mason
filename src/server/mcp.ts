@@ -2,9 +2,9 @@
  * MCP: the live catalog of what the services offer — searched, described and called from a script, and never declared
  * to the model.
  *
- * An integration is a service with up to two faces (ADR-0003), and this is the tools half: one `McpClient` over
- * Streamable HTTP per enabled integration. What it offers is **not** the prompt prefix. A tool that appeared when a
- * container restarted, or vanished because a server redeployed, used to arrive as a deferred tool — which meant the
+ * An integration is one entry with an MCP server, a connector grant, or both (ADR-0003), and this is the MCP half: one
+ * `McpClient` over Streamable HTTP per enabled integration. What it offers is **not** the prompt prefix. A tool that
+ * appeared when a container restarted, or vanished because a server redeployed, used to arrive as a deferred tool — which meant the
  * `codemode` section that lists the tools a script can call was different between two turns of one build, and the
  * prefix stopped being reusable. So nothing a server says is registered here. The registry gets three stable tools,
  * `mcp_search`, `mcp_describe` and `mcp_call`, and the answer they give is whatever the servers say *now*.
@@ -49,7 +49,7 @@ import {
 import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker, isApprovalMarker } from "mason-protocol";
 import { Type } from "typebox";
 import { integrationStatus } from "./integration-status.ts";
-import type { Integration, IntegrationTools } from "./integrations.ts";
+import type { Integration, IntegrationMcp } from "./integrations.ts";
 
 /**
  * One request to an integration. A container that accepts a socket and then says nothing must not hold a turn, and the
@@ -179,7 +179,7 @@ export type McpRefusal = "unknown_tool" | "changed" | "unreachable";
 /** The catalog as the rest of mason sees it: a question about now, and a call against it. */
 export interface McpCatalog {
 	/**
-	 * The extension to install. `undefined` when no enabled integration has a tools face: nothing is installed then, so a
+	 * The extension to install. `undefined` when no enabled integration has an MCP server: nothing is installed then, so a
 	 * build with no integration has exactly the surface it had before MCP existed, not an empty extension in the list.
 	 */
 	readonly extension: Extension | undefined;
@@ -219,7 +219,7 @@ export interface OpenMcpCatalogOptions {
 }
 
 /**
- * Reach every enabled integration that has a tools face, in parallel, and keep what they offer.
+ * Reach every enabled integration that has an MCP server, in parallel, and keep what they offer.
  *
  * The clients stay open for the calls that follow: a catalog is only useful if the next script's call is cheap. The
  * tools are the same three whatever connected, which is the point — the registry does not move when a server comes or
@@ -228,15 +228,15 @@ export interface OpenMcpCatalogOptions {
 export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<McpCatalog> {
 	const wanted = Object.entries(options.integrations)
 		.flatMap(([name, integration]) =>
-			integration.enabled && integration.tools !== undefined ? [{ name, tools: integration.tools }] : [],
+			integration.enabled && integration.mcp !== undefined ? [{ name, mcp: integration.mcp }] : [],
 		)
 		.sort((left, right) => (left.name < right.name ? -1 : 1));
 	if (wanted.length === 0) return emptyCatalog();
 	const log = options.log ?? ((line: string) => console.log(line));
 	const openTransport = options.openTransport ?? httpTransport;
 	const servers = new Map<string, McpServer>();
-	for (const { name, tools } of wanted) {
-		servers.set(name, new McpServer({ name, tools, openTransport, log }));
+	for (const { name, mcp } of wanted) {
+		servers.set(name, new McpServer({ name, mcp, openTransport, log }));
 	}
 	// In parallel: twenty integrations must not mean twenty timeouts of boot latency.
 	const reached = await Promise.all([...servers.values()].map((server) => server.connectAtBoot()));
@@ -379,7 +379,7 @@ export function rediscovery(integration: string, tool: string, what: string): st
 /** One integration's connection and the list it last answered with. */
 class McpServer {
 	readonly name: string;
-	readonly #tools: IntegrationTools;
+	readonly #mcp: IntegrationMcp;
 	readonly #openTransport: McpTransportFactory;
 	readonly #log: (line: string) => void;
 	#client: McpClient | undefined;
@@ -389,12 +389,12 @@ class McpServer {
 
 	constructor(options: {
 		readonly name: string;
-		readonly tools: IntegrationTools;
+		readonly mcp: IntegrationMcp;
 		readonly openTransport: McpTransportFactory;
 		readonly log: (line: string) => void;
 	}) {
 		this.name = options.name;
-		this.#tools = options.tools;
+		this.#mcp = options.mcp;
 		this.#openTransport = options.openTransport;
 		this.#log = options.log;
 	}
@@ -426,7 +426,7 @@ class McpServer {
 			const message = errorMessage(error);
 			this.#record(false, message);
 			this.#log(`[mcp] ${this.name}: unreachable (${message}); its tools are absent until it answers`);
-			if (this.#tools.required !== true) return undefined;
+			if (this.#mcp.required !== true) return undefined;
 			return { name: this.name, error: message };
 		}
 	}
@@ -494,7 +494,7 @@ class McpServer {
 				requestTimeoutMs: REQUEST_TIMEOUT_MS,
 			});
 			try {
-				await client.connect(this.#openTransport(this.#tools.url, this.#tools.credential));
+				await client.connect(this.#openTransport(this.#mcp.url, this.#mcp.credential));
 				return { client, tools: await client.listTools() };
 			} catch (error) {
 				failure = error;
@@ -502,7 +502,7 @@ class McpServer {
 				if (attempt < CONNECT_ATTEMPTS) await delay(RETRY_DELAY_MS);
 			}
 		}
-		throw new Error(`MCP integration "${this.name}" at ${this.#tools.url}: ${errorMessage(failure)}`);
+		throw new Error(`MCP integration "${this.name}" at ${this.#mcp.url}: ${errorMessage(failure)}`);
 	}
 
 	/** Follow the server's own news: a list that changed is re-read, once, however many notices arrive together. */

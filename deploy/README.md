@@ -320,11 +320,11 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
    { "integrations": { "github": {
        "enabled": true,
        "description": "Issues and pull requests for the team's repositories",
-       "tools": { "url": "http://mason-github:8082/mcp", "required": false }
+       "mcp": { "url": "http://mason-github:8082/mcp", "required": false }
    } } }
    ```
 
-   `description` is required for an entry whose tools are on: it is the only thing the model is told about it. `required:
+   `description` is required for an entry with an `mcp` server: it is the only thing the model is told about it. `required:
    true` is the opt-in to a boot that refuses while that container is down; without it an unreachable integration removes
    its tools, logs why, and leaves the boot alone.
 

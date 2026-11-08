@@ -19,7 +19,8 @@ One process is one bot: started by `npm run dev` in a checkout, or by `mason up`
 - **`@earendil-works/pi-env` is the execution split** (`src/server/env.ts`): the model and the harness run here, and the
   tools that touch files run on the tool machine, which is the only place `~/.mason/agent/` is mounted.
 - **Connectors are the out-of-process edge** (`src/server/connector.ts`, `packages/protocol`): one JSON-RPC socket at
-  `/api/connector`, opened by a service that carries a *user* face, a *tools* face, an *events* face, or some of them.
+  `/api/connector`, opened by a service that carries a *user* face, an *events* face, or both. An integration's *MCP
+  server* is the other direction: mason calls it with that server's credential.
 - **The home is `~/.mason/<bot>/`** (`src/server/house.ts`): `agent/`, which the tool machine mounts — `profile.md`, the
   dated `log/`, `skills/`, `workspace/`, and the git history of all of it — and `service/`, which the tool machine never
   sees. `~/.mason` itself is the root (`src/server/root.ts`): `common/` and one directory per bot.
@@ -40,7 +41,7 @@ place. "Pinned by" is the test that fails when the mechanism is removed, or a no
 | A new agent capability (a tool) | `src/server/extensions/<name>.ts`, then the array in `src/server/runtime.ts` | `defineTool` + `defineExtension`, added to `BASE_EXTENSIONS`. A tool that a script may also call is `callers: ["tools"]`. Nothing a service offers may become a tool: it is asked for through `mcp_search` / `mcp_describe` / `mcp_call` | `test/delivery.test.ts` (the registration facts of `reply`), `test/mcp.test.ts` (a connected server moves no tool in the list). No test fails when an extension is merely added to `BASE_EXTENSIONS` — the extensions line in `docs/SURFACE.md` is what shows it |
 | A new prompt section | `src/server/prompt.ts` | `section(key, render)` in `PROMPT_SECTIONS`, in reading order. A section renders from files on the tool machine and must render byte-identically while nothing changed | `test/prompt.test.ts` — "every section renders byte-identically in the next turn" |
 | A new way for words to arrive (a connector face) | `src/server/connector.ts`, plus the entry's `connector.user` grant in `service/integrations.json` | The face is advertised at the handshake from the grant; `admission.ts` decides where the submission waits. The credential is minted by `npm run connector` and is the entry's, never a person's | `test/connector.test.ts` (submissions, actors, rooms, capabilities), `test/admission.test.ts` |
-| A new service the agent reaches | `service/integrations.json`; `src/server/integrations.ts` for the file, `src/server/mcp.ts` for the tools face | `npm run integration -- add` writes a tools face (an MCP endpoint over Streamable HTTP and the one line the model is told about it); the entry's `connector` block beside it is edited in the file. Read once at boot, so a change is a restart | `test/integrations.test.ts` (the file, the refusals, the route), `test/mcp.test.ts` (a live catalog, reconnection, the required-vs-optional boot) |
+| A new service the agent reaches | `service/integrations.json`; `src/server/integrations.ts` for the file, `src/server/mcp.ts` for the MCP server | `npm run integration -- add` writes `mcp` (a Streamable HTTP endpoint and its one line for the model); the entry's `connector` block is edited in the file. Read once at boot, so a change is a restart | `test/integrations.test.ts` (the file, the refusals), `test/mcp.test.ts` (a live catalog, reconnection, the required-vs-optional boot) |
 | Something that wakes the agent | `src/server/hooks.ts` for the hook; the caller's grant for the fire | The agent's own routine, from `agent/routines.json`, fired on a timer; a connector's `mason/fire` mapped through `connector.events.hooks`; or `RunRetrySupervisor`. A fire has a request id, and the same id never runs twice | `test/hooks.test.ts` (fire identity, arming), `test/connector.test.ts` (a fire is a hook entry, deduplicated on its `fireId`), `test/run-retry.test.ts` |
 | A new HTTP route | `src/server/main.ts`, then a row in `DOORS` in `scripts/surface.ts` | `authenticateConnector` on the connector's door; `/api/health` is the one public path. A route is unauthenticated until it is classified | `npm run gen:surface:check`: a route literal in no `DOORS` row stops the render and names the route |
 | A new thing a reader may see | `src/server/projection.ts` first, then the shape in `src/shared/contract.ts` | The projection is a whitelist: an entry kind is invisible until a `project*` function names it, and reasoning, tool calls, arguments and output never cross. | `test/projection.test.ts` (both halves of every case) |
@@ -67,7 +68,7 @@ A change that breaks one is not a trade-off to weigh, it is the wrong change.
    `agentStatus` from the committed view, and reasoning, tool calls, arguments and output are in none of them. Nothing
    consumes it yet: a reply reaches its connector through the outbox. Pinned by `test/projection.test.ts`.
 3. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
-   that arrived mid-conversation would re-price every later turn, which is why a service's tools are a catalog
+   that arrived mid-conversation would re-price every later turn, which is why an integration's tools are a catalog
    (`docs/SPEC.md` §4.1e). Pinned by `test/prompt.test.ts` (a section renders byte-identically twice) and
    `test/mcp.test.ts` (the tool list does not move when a server connects).
 
