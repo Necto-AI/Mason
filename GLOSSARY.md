@@ -129,24 +129,23 @@ way to speak to anyone, never a deployment.
 _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
 **delivery**:
-One outbound act that reaches the turn's origin connector and records the same reply in the transcript. The model calls
-`reply`, never a vendor's message tool.
-_Avoid_: message, notification (each names one shape of it)
+One outbound act: mason calls `deliver` on the connector that owes an answer, with one address and the blocks to send.
+The words were already committed, so a delivery follows the transcript rather than duplicating it.
+_Avoid_: message, notification
 
-**reply**:
-The one mason-owned tool a turn uses to reach its reader. It targets the turn's origin — the connector that carried the
-words — and commits an `app.reply` entry.
-_Avoid_: send_to_user (a removed tool), message, answer
+**send**:
+The one mason-owned tool a turn uses to reach its reader: it addresses the turn's origin, or a target for a turn nobody
+wrote to, and commits an `app.reply` entry.
+_Avoid_: reply (the former name), send_to_user, message
 
 **delivery id**:
-The durable identity of one reply: `reply:<callId>` of the call that asked for it. A streaming start, its deltas, its
-final and a resend after a reconnect all carry it, which is what lets a connector answer `duplicate` instead of sending
-twice.
+The durable identity of one send: `reply:<callId>` of the call that asked for it. A resend after a lost acknowledgement
+carries it, which lets a connector answer `duplicate` instead of sending twice.
 _Avoid_: message id, request id
 
 **outbox**:
-The committed replies a connector has not acknowledged yet, read from the transcript, not a second store. A reply is
-owed until an `app.delivery` entry says what became of it, and an `uncertain` one is never retried.
+The committed sends a connector has not acknowledged yet, read from the transcript, not a second store. A send is owed
+until an `app.delivery` entry says what became of it; an `uncertain` one is never retried.
 _Avoid_: queue, retry buffer
 
 ## Integrations and connectors
@@ -162,26 +161,27 @@ credential the server issued it, never the one it issued the connector.
 _Avoid_: tool surface, tools face
 
 **connector**:
-An external process mason admitted on `/api/connector`: it carries a person's words and reports events, with the
-credential minted for its integration. Two faces, user and events; tools are the entry's MCP server.
+An external process mason admitted on `/api/connector`, with the credential minted for its integration: it appends a
+person's words or an event, and mason calls `deliver` on it. Tools are the entry's MCP server, never the socket.
 _Avoid_: integration (that is the entry), plugin, client, app
 
-**user face**:
-The connector face that carries a person's submissions and the agent's replies, streamed and final.
-_Avoid_: ACP (the name of a specific editor-facing protocol), channel
+**append**:
+The one inbound call: a submission, an event or a notice, each with an id mason dedupes forever and an origin it never
+parses. One call for three shapes is what lets an events-only connector be answered.
+_Avoid_: submit, fire, envelope
 
-**events face**:
-The connector face that delivers events to mason: one granted kind becomes one fire. It does not carry ordinary human
-conversation; that is the user face.
-_Avoid_: webhook, trigger, source, listener
+**target**:
+One place a connector may be sent to, declared in `connector.targets` and named as `<connector>/<target>`. Unlike a
+**ref** it is a name a person wrote, and one mason can refuse.
+_Avoid_: conversation, room, destination
 
 **payload**:
-The data a fire carries. It reaches the model fenced as untrusted data and never becomes an instruction.
-_Avoid_: envelope (removed with the event door), event body, message
+The data an event carries. It reaches the model fenced as untrusted data and never becomes an instruction.
+_Avoid_: envelope, event body, message
 
 **connector credential**:
-The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. Stored as
-a hash in `service/config.json`, read on every connection, and the only credential mason issues.
+The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. A hash in
+`service/config.json`, read on every connection, and the only credential mason issues.
 _Avoid_: token, API key, session
 
 **content id**:
@@ -190,36 +190,36 @@ never a shared path, and an id is served only to the connector that uploaded it.
 _Avoid_: attachment id, file token
 
 **tool catalog**:
-What one MCP server offers *now*: each tool's own name, description, JSON Schema and approval marker, read and never
-registered as a tool. A script asks the catalog (`mcp_search`, `mcp_describe`, `mcp_call`); the model is never offered
-it, so a server that redeploys does not move the prompt.
-_Avoid_: tool list, tools face (that is the entry's server, not its contents), MCP tools (that is what a catalog holds)
+What one MCP server offers *now*: each tool's name, description, JSON Schema and approval marker, read and never
+registered as a tool. A script asks it (`mcp_search`, `mcp_describe`, `mcp_call`), so a server that redeploys does not
+move the prompt.
+_Avoid_: tool list, MCP tools (that is what a catalog holds)
 
 ## The conversation
 
 **person**:
-The human a home works for. One bot, one person: who that is, is `agent/profile.md`, and no file repeats it.
-_Avoid_: user, member, teammate, owner (see **owner actor**)
+The human a home works for. One bot, one person: who that is, is `agent/profile.md`.
+_Avoid_: user, member, owner (see **owner actor**)
 
 **actor**:
-Who caused a submission or a fire: the external id a connector asserted. mason accepts exactly one of them, the entry's
+Who caused a submission or an event: the external id a connector asserted. mason accepts exactly one, the entry's
 `owner`; anything else is refused.
 _Avoid_: user (for the actor), author (that is a name on a message written before the cutover)
 
 **owner actor**:
-The one external actor id a connector's user face names in `connector.user.owner`. Its words are the person's, and it
-may drive the controls the entry grants.
+The one external actor id a connector's grant names in `connector.user.owner`. Its words are the person's, and it may
+drive the controls the entry grants.
 _Avoid_: approver, admin, primary user
 
 **origin**:
-The connector and external conversation a submission came from, and therefore the destination of its reply. It is
-structured data on the entry, never prose in a prompt. A retry inherits the origin of the turn it resumes.
-_Avoid_: source, channel, session
+The connector and the opaque `ref` it minted on the append a turn came from, plus the actor when it named one: where an
+answer goes. Data on the entry, never prose in a prompt. A retry inherits the origin of the turn it resumes.
+_Avoid_: source, channel, session, conversation (there is one, and it is the transcript)
 
-**room**:
-One kind of external conversation a connector may carry words in (`kind: "room"`), as opposed to a direct message
-(`kind: "person"`). A property of the medium, not something a single-person home has.
-_Avoid_: team, channel, group chat
+**ref**:
+The address a connector mints into `origin.ref`, returned byte for byte on the delivery that answers that append. Mason
+never parses it, so a medium with no chat ids is a connector like any other.
+_Avoid_: address, room id, conversation id
 
 ## The wire
 
