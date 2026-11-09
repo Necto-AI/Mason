@@ -6,11 +6,14 @@
  * bin, the scripts and the evals into `dist/`, mirroring the checkout's layout (`dist/src/server/main.js`,
  * `dist/scripts/…`), so relative paths inside the code keep working and `npm test` never has to read a line of it.
  *
- * Two things travel beside the compiled code, both copied by this script rather than by tsc: the shipped skills, into
- * `dist/skills`, because `SHIPPED_SKILLS_DIR` reads them three directories up from the compiled module; and the
- * workspace packages the server imports bare, vendored into `dist/node_modules` under the name the import asks for, so
- * one tarball installs and boots with nothing but npm between it and the registry. #124 puts `mason-protocol` and
- * `mason-connector` on npm; from that tag they can move to ordinary dependencies and the vendoring goes.
+ * A few things travel beside the compiled code, copied by this script rather than by tsc: the shipped skills, into
+ * `dist/skills`, because `SHIPPED_SKILLS_DIR` reads them three directories up from the compiled module; the eval
+ * scenarios and the connector catalog, which `mason eval` and `mason setup` read as data; the deployment reference,
+ * into `dist/docs/agent`, because `SHIPPED_DOCS_DIR` resolves that path from the compiled module and the prompt's
+ * `docs` section is empty without it; and the workspace packages the server imports bare, vendored into
+ * `dist/node_modules` under the name the import asks for, so one tarball installs and boots with nothing but npm
+ * between it and the registry. #124 puts `mason-protocol` and `mason-connector` on npm; from that tag they can move to
+ * ordinary dependencies and the vendoring goes.
  *
  * A vendored copy is build output and nothing more, so it is guarded the way `npm run prove:connector` guards the
  * packages themselves: its own `package.json` comes along (the stamped version is the real one), the workspace source
@@ -136,6 +139,15 @@ async function main(): Promise<void> {
 	// `dist/` rather than as a second top-level `files` entry, so the tarball holds one copy of it.
 	await rm(join(tools, "catalog"), { recursive: true, force: true });
 	await cp(join(root, "catalog"), join(tools, "catalog"), { recursive: true });
+	// The deployment reference the prompt indexes: `SHIPPED_DOCS_DIR` resolves `../../docs/agent/` from the compiled
+	// module, which is `dist/docs/agent` in a tarball and the checkout's own `docs/agent` in a dev tree. Without the copy
+	// the tarball's prompt loses the section silently — `readDocsIndex` reads a missing directory as no pages — and the
+	// image, which mounts the same directory, keeps it. Two shipped deployments would disagree about the prompt.
+	await rm(join(tools, "docs", "agent"), { recursive: true, force: true });
+	await cp(join(root, "docs", "agent"), join(tools, "docs", "agent"), { recursive: true });
+	// The copy is the point of the build, so the build checks it: a data directory that did not travel is a section
+	// that disappears from the published prompt, and the failure is invisible until a bot answers without it.
+	await readFile(join(tools, "docs", "agent", "README.md"), "utf8");
 }
 
 await main();
