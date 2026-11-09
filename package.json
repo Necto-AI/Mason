@@ -1,9 +1,18 @@
 {
 	"name": "mason-agent",
+	"description": "An agent runtime for building, connecting and running AI agents.",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
+	"homepage": "https://github.com/DenisSud/mason#readme",
+	"keywords": [
+		"agent",
+		"ai",
+		"runtime",
+		"connectors",
+		"mcp"
+	],
 	"version": "0.1.0",
 	"license": "AGPL-3.0-only",
 	"type": "module",
@@ -29,6 +38,7 @@
 		"check:docs": "node --experimental-strip-types scripts/doc-budget.ts --check",
 		"check:code": "node --experimental-strip-types scripts/code-budget.ts --check",
 		"check:licence": "node --experimental-strip-types scripts/licence.ts",
+		"check:metadata": "node --experimental-strip-types scripts/metadata.ts",
 		"build:packages": "npm run build --workspace mason-protocol && npm run build --workspace mason-connector",
 		"prove:connector": "node --experimental-strip-types scripts/prove-connector-sdk.ts",
 		"lint": "node scripts/biome.mjs check .",

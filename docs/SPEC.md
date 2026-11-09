@@ -37,7 +37,7 @@ roster, no pairing link and no second credential class: `/api/health` is the onl
 ## 2. Repository Structure
 
 ```text
-/home/user/dev/mason/
+mason/
 ├── AGENTS.md                          # Standing orders: the rules, the commands, the paths
 ├── GLOSSARY.md                        # The vocabulary
 ├── docs/                              # ARCHITECTURE (where a change goes), SPEC, SURFACE (generated), adr/, agents/
@@ -460,8 +460,8 @@ throwaway server opened the real transcript while probing. A server that finds a
 so instead of starting a second, empty-looking agent:
 
 ```text
-[data] /home/user/.mason/service/data
-[data] ignoring ./.data (an older home): move it with `mv .data /home/user/.mason/service/data`
+[data] ~/.mason/service/data
+[data] ignoring ./.data (an older home): move it with `mv .data ~/.mason/service/data`
 ```
 
 A home upgraded from a build that still had the GitHub integration also carries a `connectors.json` there: the migration
