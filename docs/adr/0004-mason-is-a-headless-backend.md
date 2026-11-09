@@ -67,7 +67,7 @@ change, so the day this repository has no Telegram in it, this still holds.
   every contract decision would be made against one vendor's shape. Telegram is the first consumer of the contract and
   the cheapest way to test it; it is not its author.
 - **Keep a client in this repository.** It was kept once as a frozen console and once as a panel, and both were the
-  larger half of the tree while the contracts sibling will depend on stayed implicit. sibling is where a client belongs.
+  larger half of the tree while the contracts external clients depend on stayed implicit. A client belongs in its own project.
 - **Wait for a client before writing the contracts down.** The contracts already exist in code and are already
   consumed; leaving them implicit means a client discovers them by breaking them, and Mason discovers the break in
   production.
