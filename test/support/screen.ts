@@ -9,10 +9,11 @@
  * No Kitty keyboard protocol is negotiated, because a plain terminal speaks in bytes: `\x1b[B` is the down arrow, `\r` is
  * enter and a lone `\x1b` is escape. A test that presses those is pressing what a person's keyboard sends.
  */
-import { type TestRendererSetup, createTestRenderer } from "@opentui/core/testing";
+
 import type { Renderable } from "@opentui/core";
+import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { TerminalScreen } from "../../src/tui/app.ts";
-import { type Glyphs, type Paint, glyphs, paint } from "../../src/tui/style.ts";
+import { type Glyphs, glyphs, type Paint, paint } from "../../src/tui/style.ts";
 
 export interface Harness {
 	readonly screen: TerminalScreen;
@@ -28,6 +29,20 @@ export interface Harness {
 	/** Wait for the frame to catch up with whatever just happened. */
 	settle(): Promise<void>;
 	dispose(): Promise<void>;
+}
+
+/**
+ * Every screen this file opened and nobody disposed.
+ *
+ * The renderer paints on its own loop, so an undisposed one keeps the process alive after the last assertion: a test file
+ * then reads as a thirty-minute timeout instead of a failing test. A file registers `after(disposeAll)` once and the leak
+ * becomes a clean exit; a file that forgets still hangs, which is the only way this stays discoverable.
+ */
+const open = new Set<Harness>();
+
+/** Dispose every screen a test file opened and forgot. Register it once per file: `after(disposeAll)`. */
+export async function disposeAll(): Promise<void> {
+	for (const harness of [...open]) await harness.dispose();
 }
 
 /** A window and a style, or the defaults a real run would have on a UTF-8 terminal with colour. */
@@ -77,9 +92,11 @@ export async function openScreen(options: HarnessOptions = {}): Promise<Harness>
 		},
 		settle,
 		dispose: async () => {
+			open.delete(harness);
 			await setup.dispose();
 		},
 	};
+	open.add(harness);
 	await settle();
 	return harness;
 }

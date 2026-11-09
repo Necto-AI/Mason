@@ -15,18 +15,19 @@
  * one mask glyph per character, and never puts the value in a line it returns. The only place the value leaves is the
  * promise `onSubmit` resolves, which is the caller that stores it.
  */
+
+import { spawn } from "node:child_process";
 import {
 	BoxRenderable,
 	type CliRenderer,
-	type KeyEvent,
-	RGBA,
-	type Renderable,
-	StyledText,
-	TextRenderable,
-	type TextChunk,
 	createTextAttributes,
+	type KeyEvent,
+	type Renderable,
+	RGBA,
+	StyledText,
+	type TextChunk,
+	TextRenderable,
 } from "@opentui/core";
-import { spawn } from "node:child_process";
 import type { Journey } from "./screen.ts";
 import { type Glyphs, type Paint, widthOf } from "./style.ts";
 import { type Theme, theme } from "./theme.ts";
@@ -495,7 +496,9 @@ abstract class Field implements Body {
 					columns,
 				),
 			);
-		if (this.notice !== undefined) root.add(prose(this.geometry, this.ink, paint.dim(this.notice), columns));
+		// One line by contract: a failed open says its piece and the frame keeps its shape, so it is clipped by the block
+		// rather than wrapped into a second row that the layout below never reserved.
+		if (this.notice !== undefined) root.add(block(this.geometry, this.ink.line(paint.dim(this.notice))));
 		root.add(gap(this.geometry));
 		root.add(block(this.geometry, this.echo()));
 		if (this.problem !== undefined) {
@@ -634,7 +637,12 @@ export class MaskedField extends Field {
 		const { glyphs } = this.geometry;
 		const masked = glyphs.mask.repeat(this.value.length);
 		// The cursor cell trails the mask, so a backspace is visible on the last character even before the count changes.
-		return fieldText(this.geometry, this.ink, { before: masked, under: "", after: "", tag: String(this.value.length) });
+		return fieldText(this.geometry, this.ink, {
+			before: masked,
+			under: "",
+			after: "",
+			tag: String(this.value.length),
+		});
 	}
 
 	protected insert(text: string): void {
@@ -692,7 +700,13 @@ export class NoteView implements Body {
 		if (this.lines.length < BOXED_MIN_LINES) root.add(block(this.geometry, body.text));
 		else {
 			rows += 4 + 2;
-			root.add(boxed(this.geometry, this.ink, block(this.geometry, this.ink.paragraph(source, columns - BOXED_INSET).text)));
+			root.add(
+				boxed(
+					this.geometry,
+					this.ink,
+					block(this.geometry, this.ink.paragraph(source, columns - BOXED_INSET).text),
+				),
+			);
 		}
 		if (this.note !== undefined && this.note !== "") {
 			add(" ");

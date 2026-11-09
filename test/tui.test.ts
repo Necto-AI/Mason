@@ -10,10 +10,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 import type { KeyEvent } from "@opentui/core";
-import { ChoiceList, NoteView, StatusList, TextField, spinnerFrame, typedChar } from "../src/tui/components.ts";
-import { CHROME_ROWS, MARGIN, bodyRows, measure } from "../src/tui/frame.ts";
+import { ChoiceList, NoteView, StatusList, spinnerFrame, TextField, typedChar } from "../src/tui/components.ts";
+import { bodyRows, CHROME_ROWS, MARGIN, measure } from "../src/tui/frame.ts";
 import { Cancelled } from "../src/tui/screen.ts";
 import {
 	colourEnabled,
@@ -27,7 +27,12 @@ import {
 } from "../src/tui/style.ts";
 import { CLAY, parseSgr, theme } from "../src/tui/theme.ts";
 import * as frames from "./support/frames.ts";
-import { NARROW, WIDE, openScreen } from "./support/screen.ts";
+import { disposeAll, NARROW, openScreen, WIDE } from "./support/screen.ts";
+
+// The renderer paints on its own loop, so a screen a test forgot to dispose keeps the process alive and the file reads
+// as a timeout instead of a verdict. One hook per file, and a leak becomes an exit.
+after(disposeAll);
+
 import { SHOTS } from "./support/screens.ts";
 
 const utf8 = glyphs(true);
@@ -133,10 +138,7 @@ describe("theme", () => {
 	test("a parsed line becomes styled text, with the accent and the attributes OpenTUI draws", () => {
 		const painted = paint(true);
 		const chunks = ink.line(`${painted.heading("◇ Welcome")} ${painted.dim("step 1 / 7")}`).chunks;
-		assert.equal(
-			chunks.map((chunk) => chunk.text).join(""),
-			"◇ Welcome step 1 / 7",
-		);
+		assert.equal(chunks.map((chunk) => chunk.text).join(""), "◇ Welcome step 1 / 7");
 		assert.deepEqual(chunks[0]?.fg?.toInts(), [215, 135, 95, 255]);
 		assert.equal(chunks[0]?.attributes, 1, "bold is the first attribute");
 		assert.deepEqual(chunks[2]?.fg, undefined, "dim is an attribute, not a grey of our own");
@@ -145,10 +147,7 @@ describe("theme", () => {
 
 	test("a code the subset does not name is dropped, and never reaches the screen", () => {
 		const runs = parseSgr("\x1b[35mmagenta\x1b[0m plain \x1b[9mstruck");
-		assert.equal(
-			runs.map((run) => run.text).join(""),
-			"magenta plain struck",
-		);
+		assert.equal(runs.map((run) => run.text).join(""), "magenta plain struck");
 		assert.ok(runs.every((run) => run.tone === "plain" && !run.bold && !run.dim));
 		for (const chunk of ink.line("\x1b[35mmagenta\x1b[0m").chunks) assert.ok(!chunk.text.includes("\x1b"));
 	});
@@ -255,22 +254,30 @@ describe("the screens", () => {
 
 	test("below ninety columns the description moves under the list instead of beside it", async () => {
 		const choices = [
-			{ value: "quickstart", label: "Quickstart", description: "the defaults, and only the questions they cannot answer" },
+			{
+				value: "quickstart",
+				label: "Quickstart",
+				description: "the defaults, and only the questions they cannot answer",
+			},
 			{ value: "advanced", label: "Advanced", description: "every answer: the connector's own settings" },
 		];
 		const wide = await openScreen(WIDE);
 		wide.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void wide.screen.select("welcome.mode", "How would you like to start?", choices);
 		await wide.settle();
-		assert.match(wide.frame(), /▌ Quickstart  the defaults/, "a wide window has the column");
+		assert.match(wide.frame(), /▌ Quickstart {2}the defaults/, "a wide window has the column");
 		await wide.dispose();
 
 		const narrow = await openScreen({ columns: 88, rows: 30 });
 		narrow.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void narrow.screen.select("welcome.mode", "How would you like to start?", choices);
 		await narrow.settle();
-		assert.doesNotMatch(narrow.frame(), /▌ Quickstart  the defaults/, "a narrow one has not");
-		assert.match(narrow.frame(), /\n   the defaults, and only the questions they cannot answer\n/, "it is one line under the list");
+		assert.doesNotMatch(narrow.frame(), /▌ Quickstart {2}the defaults/, "a narrow one has not");
+		assert.match(
+			narrow.frame(),
+			/\n {3}the defaults, and only the questions they cannot answer\n/,
+			"it is one line under the list",
+		);
 		await narrow.dispose();
 	});
 
@@ -278,10 +285,14 @@ describe("the screens", () => {
 		const harness = await openScreen(WIDE);
 		harness.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void harness.screen.select("welcome.mode", "How would you like to start?", [
-			{ value: "quickstart", label: "Quickstart", description: "the defaults, and only the questions they cannot answer" },
+			{
+				value: "quickstart",
+				label: "Quickstart",
+				description: "the defaults, and only the questions they cannot answer",
+			},
 		]);
 		await harness.settle();
-		assert.match(harness.frame(), /▌ Quickstart  the defaults/);
+		assert.match(harness.frame(), /▌ Quickstart {2}the defaults/);
 		harness.setup.resize(70, 24);
 		await harness.settle();
 		await harness.settle();
@@ -291,7 +302,7 @@ describe("the screens", () => {
 			`nothing is wider than the window:\n${rows.join("\n")}`,
 		);
 		assert.match(harness.frame(), /◇ Welcome/, "the frame survives");
-		assert.doesNotMatch(harness.frame(), /▌ Quickstart  the defaults/, "so does the description rule");
+		assert.doesNotMatch(harness.frame(), /▌ Quickstart {2}the defaults/, "so does the description rule");
 		await harness.dispose();
 	});
 
@@ -335,7 +346,10 @@ describe("a secret", () => {
 		await harness.press(..."sk-live-0123456789".split(""));
 		const shown = harness.frame();
 		assert.ok(shown.includes("•".repeat("sk-live-0123456789".length)), shown);
-		assert.ok(shown.includes(` ${String("sk-live-0123456789".length)}`), "the live count is the length, and not the value");
+		assert.ok(
+			shown.includes(` ${String("sk-live-0123456789".length)}`),
+			"the live count is the length, and not the value",
+		);
 		assert.ok(shown.includes("--key <key>"), "the flag is offered as the way out of the question");
 		assert.ok(!shown.includes("sk-live"), "the key reached the screen");
 		await harness.press("\r");
@@ -386,7 +400,11 @@ describe("a page", () => {
 		});
 		await harness.settle();
 		assert.match(harness.frame(), /line 0/);
-		assert.doesNotMatch(harness.frame(), /line 39/, "the page is longer than the window, which is what this is about");
+		assert.doesNotMatch(
+			harness.frame(),
+			/line 39/,
+			"the page is longer than the window, which is what this is about",
+		);
 		assert.match(harness.frame(), /↑↓ scroll/, "the footer says the page goes on below the fold");
 		for (let index = 0; index < 40; index += 1) harness.setup.mockInput.pressKey("\x1b[B");
 		await harness.settle();
@@ -441,7 +459,9 @@ describe("a progress screen", () => {
 	test("a spinner repaints on its own clock, and stops when the operation does", async () => {
 		const harness = await openScreen();
 		harness.screen.where({ title: "Install", index: 7, total: 7 });
-		const progress = harness.screen.progress("apply", "Installing", [{ label: "minting the credential", state: "run" }]);
+		const progress = harness.screen.progress("apply", "Installing", [
+			{ label: "minting the credential", state: "run" },
+		]);
 		await harness.settle();
 		const first = harness.frame();
 		harness.screen.busy(true);
@@ -530,7 +550,11 @@ describe("the plain path", () => {
 		assert.ok(painted.length > 0);
 		for (const span of painted) {
 			assert.equal(span.attributes, 0, `an attribute reached a plain screen: ${JSON.stringify(span.text)}`);
-			assert.deepEqual(span.fg.toInts(), DEFAULT_INK, `a colour reached a plain screen: ${JSON.stringify(span.text)}`);
+			assert.deepEqual(
+				span.fg.toInts(),
+				DEFAULT_INK,
+				`a colour reached a plain screen: ${JSON.stringify(span.text)}`,
+			);
 		}
 		const accent = coloured.setup
 			.captureSpans()
@@ -575,7 +599,11 @@ describe("the components on their own", () => {
 		prose.mount(short.build());
 		await prose.settle();
 		assert.doesNotMatch(prose.frame(), /╭/);
-		assert.equal(short.rows, 4, "a title, a blank, and two lines: the rows the screen decides on are the rows it draws");
+		assert.equal(
+			short.rows,
+			4,
+			"a title, a blank, and two lines: the rows the screen decides on are the rows it draws",
+		);
 		await prose.dispose();
 
 		const page = await openScreen();

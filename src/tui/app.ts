@@ -20,11 +20,11 @@ import {
 	type Geometry,
 	MaskedField,
 	NoteView,
-	type StatusRow,
 	StatusList,
+	type StatusRow,
 	TextField,
 } from "./components.ts";
-import { type Context, Frame, type Hint, bodyRows, measure } from "./frame.ts";
+import { bodyRows, type Context, Frame, type Hint, measure } from "./frame.ts";
 import { Cancelled, type Page, type Progress, type Question, type Screen, type Where } from "./screen.ts";
 import { type Glyphs, type Paint, terminalStyle } from "./style.ts";
 
@@ -106,12 +106,18 @@ export class TerminalScreen implements Screen {
 		if (process.stdin.isTTY !== true || process.stdout.isTTY !== true)
 			throw new Error("this needs a terminal: run it from one, or pass --yes to answer with flags");
 		filterWarnings();
-		const renderer = new CliRenderer(process.stdin, process.stdout, process.stdout.columns || 80, process.stdout.rows || 24, {
-			screenMode: "alternate-screen",
-			// Ctrl-C is a byte here: this screen decides what it means, and the renderer must not exit under it.
-			exitOnCtrlC: false,
-			consoleMode: "disabled",
-		});
+		const renderer = new CliRenderer(
+			process.stdin,
+			process.stdout,
+			process.stdout.columns || 80,
+			process.stdout.rows || 24,
+			{
+				screenMode: "alternate-screen",
+				// Ctrl-C is a byte here: this screen decides what it means, and the renderer must not exit under it.
+				exitOnCtrlC: false,
+				consoleMode: "disabled",
+			},
+		);
 		const screen = new TerminalScreen({ renderer, ...options });
 		screen.owns = true;
 		// Raw mode and the alternate screen belong to the terminal, not to the tree: the first screen is built now and
