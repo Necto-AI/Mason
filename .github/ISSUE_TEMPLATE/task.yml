@@ -1,6 +1,5 @@
 name: Task or project work
 description: Track release, maintenance, research, or other non-feature work.
-title: ""
 labels:
   - needs-triage
 body:
