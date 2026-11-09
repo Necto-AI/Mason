@@ -52,7 +52,14 @@ import {
  */
 const CHATS = "_CHATS";
 
-export interface SetupArgs {
+/**
+ * One connector's answers on the command line: the flags from its `--connector` up to the next one.
+ *
+ * A repeated `--connector` is a second connector, and `--url`/`--env`/`--owner`/`--targets`/`--events`/`--no-start` belong to
+ * the connector they follow — which is what `mason onboard --connector telegram --owner @me --connector console` promises.
+ * The same fields sit on `SetupArgs` for the last of them, so everything that reads one connector reads as it did.
+ */
+export interface SetupConnector {
 	readonly connector?: string;
 	readonly url?: string;
 	readonly env: ReadonlyMap<string, string>;
@@ -62,6 +69,11 @@ export interface SetupArgs {
 	/** A `url:` connector's event kinds, `kind=hook` pairs comma separated. Absent means ask. */
 	readonly events?: string;
 	readonly start: boolean;
+}
+
+export interface SetupArgs extends SetupConnector {
+	/** Every connector the command line names, in the order it was written: one install each, on one home. */
+	readonly connectors: readonly SetupConnector[];
 	readonly yes: boolean;
 	readonly chat: boolean;
 	readonly help: boolean;
@@ -73,7 +85,8 @@ export function usage(): string {
   The first run: pick a connector, answer what it needs, and mason writes the integration entry, its grant and its
   credential, generates the connector's compose project and starts it.
 
-  --connector <name>   the connector to install: one from the catalog, \`console\`, or \`custom\`
+  --connector <name>   the connector to install: one from the catalog, \`console\`, or \`custom\`. Repeat it to install a
+                       second one, in the order written
   --url <ws-url>       a connector already running somewhere else; implies --connector custom
   --env NAME=value     one answer a connector needs; repeatable, and it answers a question so nothing is asked
   --owner <id>         who owns this chat: the id the connector will send for the person mason works for
@@ -93,15 +106,25 @@ function sha256(value: string): string {
 	return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+/** One connector's answers while the command line is being read: the same shape `SetupConnector` ends up as. */
+interface Segment {
+	connector?: string;
+	url?: string;
+	env: Map<string, string>;
+	owner?: string;
+	targets?: string;
+	events?: string;
+	start: boolean;
+}
+
+const segment = (): Segment => ({ env: new Map(), start: true });
+
 /** Flags, in the two spellings a person types: `--connector telegram`, and `--env=TELEGRAM_BOT_TOKEN=…`. */
 export function parseArgs(argv: readonly string[]): SetupArgs {
-	const env = new Map<string, string>();
-	let connector: string | undefined;
-	let url: string | undefined;
-	let owner: string | undefined;
-	let targets: string | undefined;
-	let events: string | undefined;
-	let start = true;
+	// A flag belongs to the `--connector` it follows, so the argv is read as segments and not as one set of answers: the
+	// segment already open takes the first `--connector`, and every one after it opens another.
+	const segments: Segment[] = [segment()];
+	const current = (): Segment => segments[segments.length - 1] as Segment;
 	let yes = false;
 	let chat = false;
 	let help = false;
@@ -118,21 +141,24 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 			return next;
 		};
 		switch (flag) {
-			case "--connector":
-				connector = value();
+			case "--connector": {
+				const name = value();
+				if (current().connector === undefined) current().connector = name;
+				else segments.push({ ...segment(), connector: name });
 				break;
+			}
 			case "--url":
-				url = value();
+				current().url = value();
 				break;
 			case "--owner":
-				owner = value();
+				current().owner = value();
 				break;
 			case "--targets":
 			case "--conversations":
-				targets = value();
+				current().targets = value();
 				break;
 			case "--events":
-				events = value();
+				current().events = value();
 				break;
 			case "--env": {
 				const answer = value();
@@ -140,14 +166,15 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 				if (separator <= 0) throw new Error(`--env takes NAME=value, not "${answer}"`);
 				// `NAME=` is how a script says "no answer", which is the same thing as not passing the flag: the connector's
 				// question is still open, and setup asks it.
-				if (answer.slice(separator + 1) !== "") env.set(answer.slice(0, separator), answer.slice(separator + 1));
+				if (answer.slice(separator + 1) !== "")
+					current().env.set(answer.slice(0, separator), answer.slice(separator + 1));
 				break;
 			}
 			case "--no-start":
-				start = false;
+				current().start = false;
 				break;
 			case "--start":
-				start = true;
+				current().start = true;
 				break;
 			case "--yes":
 			case "-y":
@@ -165,13 +192,8 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 		}
 	}
 	return {
-		...(connector === undefined ? {} : { connector }),
-		...(url === undefined ? {} : { url }),
-		...(owner === undefined ? {} : { owner }),
-		...(targets === undefined ? {} : { targets }),
-		...(events === undefined ? {} : { events }),
-		env,
-		start,
+		...current(),
+		connectors: segments,
 		yes,
 		chat,
 		help,
@@ -311,7 +333,7 @@ const OWNER = {
 } as const;
 
 /** Every question the chosen connector needs, answered from a flag or from the prompter — and nothing written yet. */
-async function plan(args: SetupArgs, prompter: Prompter, paths: HousePaths): Promise<Plan> {
+async function plan(args: SetupConnector, prompter: Prompter, paths: HousePaths): Promise<Plan> {
 	// `--url` already named the connector it belongs to: a person who passes the address of a running connector has
 	// answered "which one", and asking again is the flag lying about what it does.
 	const name =
@@ -433,7 +455,7 @@ async function plan(args: SetupArgs, prompter: Prompter, paths: HousePaths): Pro
 async function install(
 	paths: HousePaths,
 	plan_: Plan,
-	args: SetupArgs,
+	args: SetupConnector,
 ): Promise<{ readonly credential?: string; readonly started: boolean }> {
 	// Every read that can refuse happens before the first write: a broken `config.json` used to be discovered after the
 	// grant had landed, which left a connector installed with no credential and a command that exited 1.
@@ -597,30 +619,34 @@ export async function runSetup(
 		// First, because it makes the two halves and refuses a home from before the split by name: every write below
 		// assumes the layout it creates, and a soul it finds is left alone.
 		await ensureHouse(paths, DEFAULT_SOUL);
-		const plan_ = await plan(args, prompter, paths);
-		const outcome = await install(paths, plan_, args);
-		console.log("");
-		console.log(`[setup] "${plan_.name}" is installed.`);
-		if (plan_.container && outcome.started)
-			console.log(
-				"[setup] next: mason up  — the connector connects when the socket is there, and the project above comes back with the machine",
-			);
-		else if (plan_.container)
-			console.log(
-				`[setup] next: mason up  — the connector connects when the socket is there. Start it with: podman compose -f ${composePath(paths, plan_.name)} -p ${projectName(paths.home, plan_.name)} up -d`,
-			);
-		else if (plan_.name === CONSOLE)
-			console.log(`[setup] next: mason chat${paths.fleet === undefined ? "" : ` -b ${paths.fleet.bot}`}`);
-		else
-			console.log(
-				`[setup] next: give the credential above to the connector at ${args.url ?? "its url"}. Its grant names ` +
-					`${plan_.grant.targets?.length ?? 0} target(s) and ` +
-					`${Object.keys(plan_.grant.events?.hooks ?? {}).length} event kind(s): change either with ` +
-					`\`mason setup --connector ${plan_.name} --url ${args.url ?? "<url>"} --targets <ids> ` +
-					"--events <kind=hook>`",
-			);
-		if (outcome.credential !== undefined)
-			console.log("[setup] the credential was printed once, above: mason keeps only its hash.");
+		// One connector per `--connector`, in the order they were written: each one is its own grant, credential and
+		// project, and stopping at the first failure is what makes the error the thing a person fixes.
+		for (const one of args.connectors) {
+			const plan_ = await plan(one, prompter, paths);
+			const outcome = await install(paths, plan_, one);
+			console.log("");
+			console.log(`[setup] "${plan_.name}" is installed.`);
+			if (plan_.container && outcome.started)
+				console.log(
+					"[setup] next: mason up  — the connector connects when the socket is there, and the project above comes back with the machine",
+				);
+			else if (plan_.container)
+				console.log(
+					`[setup] next: mason up  — the connector connects when the socket is there. Start it with: podman compose -f ${composePath(paths, plan_.name)} -p ${projectName(paths.home, plan_.name)} up -d`,
+				);
+			else if (plan_.name === CONSOLE)
+				console.log(`[setup] next: mason chat${paths.fleet === undefined ? "" : ` -b ${paths.fleet.bot}`}`);
+			else
+				console.log(
+					`[setup] next: give the credential above to the connector at ${one.url ?? "its url"}. Its grant names ` +
+						`${plan_.grant.targets?.length ?? 0} target(s) and ` +
+						`${Object.keys(plan_.grant.events?.hooks ?? {}).length} event kind(s): change either with ` +
+						`\`mason setup --connector ${plan_.name} --url ${one.url ?? "<url>"} --targets <ids> ` +
+						"--events <kind=hook>`",
+				);
+			if (outcome.credential !== undefined)
+				console.log("[setup] the credential was printed once, above: mason keeps only its hash.");
+		}
 		if (args.chat) return await runChat([]);
 		return 0;
 	} catch (error) {
