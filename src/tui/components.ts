@@ -62,6 +62,8 @@ export interface StatusRow {
 export interface Body {
 	/** The renderable for the state the body is in now. Called again after a resize: it must not lose what was typed. */
 	build(): Renderable;
+	/** The window changed. The body keeps its state and takes the new room, which `build` then draws in. */
+	resize?(geometry: Geometry): void;
 	/** Take one keypress; `true` when it was used, so the screen can leave the rest alone. */
 	handleKey(key: KeyEvent): boolean;
 	/** Text that arrived as one paste. A field takes it whole; nothing else has anything to do with it. */
@@ -205,13 +207,15 @@ function fieldText(
 export class ChoiceList implements Body {
 	onSelect?: (value: string) => void;
 	onCancel?: () => void;
-	private readonly geometry: Geometry;
+	private geometry: Geometry;
 	private readonly ink: Theme;
 	private readonly question: string;
 	private readonly hint: string | undefined;
 	private readonly preface: readonly string[];
 	private readonly searchable: boolean;
-	private readonly maxVisible: number;
+	/** The rows the list shows, which is the window's when the caller did not say. Re-read on a resize. */
+	private readonly maxVisibleOption: number | undefined;
+	private maxVisible: number;
 	private readonly all: readonly Choice[];
 	private view: BoxRenderable | undefined;
 	private query = "";
@@ -238,13 +242,18 @@ export class ChoiceList implements Body {
 		this.preface = options.preface ?? [];
 		this.searchable = options.searchable ?? true;
 		this.all = options.choices;
-		// Six rows are the question, the hint, a blank line and the filter's; the rest of the window is the list's. Four is
-		// the smallest list worth scrolling: below that a page hint costs as much as it explains.
-		this.maxVisible = Math.max(4, options.maxVisible ?? Math.min(10, geometry.rows - 6));
+		this.maxVisibleOption = options.maxVisible;
+		this.maxVisible = this.windowFor(geometry.rows);
 		this.index = Math.max(
 			0,
 			this.all.findIndex((choice) => choice.value === options.selected),
 		);
+	}
+
+	/** Six rows are the question, the hint, a blank line and the filter's; the rest of the window is the list's. */
+	private windowFor(rows: number): number {
+		// Four is the smallest list worth scrolling: below that a page hint costs as much as it explains.
+		return Math.max(4, this.maxVisibleOption ?? Math.min(10, rows - 6));
 	}
 
 	/** What the list is showing now: the filtered rows, in the order they are drawn. */
@@ -259,6 +268,11 @@ export class ChoiceList implements Body {
 		this.view = root;
 		this.fill(root);
 		return root;
+	}
+
+	resize(geometry: Geometry): void {
+		this.geometry = geometry;
+		this.maxVisible = this.windowFor(geometry.rows);
 	}
 
 	/** The bar moved, or the filter changed what the list shows: the same tree, with its rows drawn again. */
@@ -288,8 +302,9 @@ export class ChoiceList implements Body {
 			root.add(prose(this.geometry, this.ink, paint.dim("no match"), columns));
 			return;
 		}
-		// The window follows the selection: a list longer than the window is scrolled, never cut at a static offset.
-		const start = Math.max(0, Math.min(this.index - this.maxVisible + 2, rows.length - this.maxVisible));
+		// The window follows the selection: a list longer than the window is scrolled, never cut at a static offset, and the
+		// selected row is the last one shown so the rows under it come into view as the bar moves down.
+		const start = Math.max(0, Math.min(this.index - this.maxVisible + 1, rows.length - this.maxVisible));
 		const shown = rows.slice(start, start + this.maxVisible);
 		const beside = window >= DESCRIBE_MIN;
 		const labelWidth = Math.max(...rows.map((choice) => widthOf(choice.label)));
@@ -395,7 +410,7 @@ export class ChoiceList implements Body {
 abstract class Field implements Body {
 	onSubmit?: (value: string) => void;
 	onCancel?: () => void;
-	protected readonly geometry: Geometry;
+	protected geometry: Geometry;
 	protected readonly ink: Theme;
 	private readonly question: string;
 	private readonly hint: string | undefined;
@@ -448,6 +463,10 @@ abstract class Field implements Body {
 		return root;
 	}
 
+	resize(geometry: Geometry): void {
+		this.geometry = geometry;
+	}
+
 	/** A keystroke changed the line, the cursor or the complaint under it: the same tree, drawn again. */
 	reflect(): void {
 		if (this.view !== undefined) this.fill(this.view);
@@ -488,8 +507,12 @@ abstract class Field implements Body {
 	handleKey(key: KeyEvent): boolean {
 		this.notice = undefined;
 		if (key.ctrl && key.name === "o" && this.journey !== undefined) {
+			// The opener answers later than the key: spawning a browser fails on the spawn's own error event, so the line the
+			// failure becomes has to ask for the frame the key did not.
 			openPage(this.journey.url, (problem) => {
 				this.notice = problem;
+				this.reflect();
+				this.geometry.renderer.requestRender();
 			});
 			return true;
 		}
@@ -634,7 +657,7 @@ export class NoteView implements Body {
 	onScroll?: (delta: number) => void;
 	/** How many rows the page took the last time it was built: the screen reads this to say whether it scrolls. */
 	rows = 0;
-	private readonly geometry: Geometry;
+	private geometry: Geometry;
 	private readonly ink: Theme;
 	private readonly title: string;
 	private readonly lines: readonly string[];
@@ -679,6 +702,10 @@ export class NoteView implements Body {
 		return root;
 	}
 
+	resize(geometry: Geometry): void {
+		this.geometry = geometry;
+	}
+
 	handleKey(key: KeyEvent): boolean {
 		if (isEnter(key) || typedChar(key) === " ") {
 			this.onContinue?.();
@@ -710,7 +737,7 @@ export class StatusList implements Body {
 	onKey?: (key: string) => void;
 	private rows: readonly StatusRow[];
 	private note: string | undefined;
-	private readonly geometry: Geometry;
+	private geometry: Geometry;
 	private readonly ink: Theme;
 	private readonly title: string | undefined;
 	private readonly now: () => number;
@@ -734,6 +761,10 @@ export class StatusList implements Body {
 		this.rows = rows;
 		if (note !== undefined) this.note = note;
 		this.reflect();
+	}
+
+	resize(geometry: Geometry): void {
+		this.geometry = geometry;
 	}
 
 	/** One turn of the spinner: a running row is the only thing on any screen that moves, and the screen times it. */
