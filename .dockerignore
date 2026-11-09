@@ -5,8 +5,23 @@ node_modules
 # A package inside the repository (`integrations/`) installs its own dependencies; mason's image is not built from them.
 integrations/*/node_modules
 .dev
-.data
+.data*
 dist
+# The workspace builds are the host's, not the commit's: the Dockerfile builds them itself, and a copy from a checkout
+# that once ran `scripts/setup.sh` would mask a build failure with code the tag does not contain.
+packages/*/dist
 .git
 **/.git
 *.log
+# Operator credentials. `deploy/README.md` asks for these before the first `up`, so a build from a working checkout has
+# them on disk; inside the image they would be a layer anyone who can pull the tag can read.
+deploy/.env
+deploy/vpn/config.json
+deploy/vpn/happ.url
+# Local state nothing in the image reads: scratch notes, a Python venv and its weights, the release staging
+# directory, and tarballs dropped by hand.
+.scratch
+asr/.venv
+asr/models
+.release
+*.tgz
