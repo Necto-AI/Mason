@@ -35,9 +35,9 @@ whatever survives it is a contract, not a chat feature.
 
 mason is a headless, always-on agent backend: a durable agent engine plus a small set of deliberate contracts that
 interfaces attach to. Telegram is the first interface and the cheapest way to test those contracts, not the definition
-of the product. sibling is the intended rich client and the multi-agent future; it integrates with mason as a backend
-rather than replacing it, it owns the panel an operator reads, and it will depend on the contract — so the contract, not
-the screen, is what mason invests in. Every interface is a connector: a socket, a grant, and no privileged code path.
+of the product. Rich clients and multi-agent orchestration are product-level concerns outside this runtime. Mason
+invests in the contracts they can consume, not in a particular client or screen. Every interface is a connector: a
+socket, a grant, and no privileged code path.
 The decision is written about the backend and not about Telegram on purpose: the interface is the part expected to
 change, so the day this repository has no Telegram in it, this still holds.
 
@@ -51,16 +51,15 @@ change, so the day this repository has no Telegram in it, this still holds.
 - **The control contract is what a person drives.** `stop`, `compact`, `clear` and `status` are the vocabulary a
   connector's grant may carry, and the agent's own routines are a file it edits rather than a surface a client owns.
 - **Observability is part of the contract.** A fire, a turn, a delivery and a refusal each leave a fact — in the
-  transcript, in the durable entries, in the `[cache]` line and in the log. An operator reading sibling and an operator
+  transcript, in the durable entries, in the `[cache]` line and in the log. An operator reading a client and an operator
   reading a chat must be able to get the same answers, or the backend is only observable through one of its
   interfaces.
 - **The versioning policy is explicit because a consumer lives outside this repository.** Within a version, changes are
   additive: an older reader ignores a key it does not know and an older sender simply omits it, so nothing has to move
   at once. Anything incompatible is a new version with a deprecation window, decided here and not negotiated by
   whichever client notices first.
-- **sibling integrates; it does not replace.** sibling adds bots, clients and orchestration above this backend and reads
-  the transcript through the wire contract mason defines. A change that would break that contract for a consumer
-  outside the tree is a change sibling makes in sibling, or a new version agreed here.
+- **Clients use the connector contract.** A client reaches Mason through the same connector interface as any other
+  surface. Changes to that contract must be versioned deliberately because consumers live outside this repository.
 
 ## Alternatives considered
 
@@ -69,8 +68,8 @@ change, so the day this repository has no Telegram in it, this still holds.
   the cheapest way to test it; it is not its author.
 - **Keep a client in this repository.** It was kept once as a frozen console and once as a panel, and both were the
   larger half of the tree while the contracts sibling will depend on stayed implicit. sibling is where a client belongs.
-- **Wait for sibling's client before writing the contracts down.** The contracts already exist in code and are already
-  being consumed; leaving them implicit means sibling discovers them by breaking them, and mason discovers the break in
+- **Wait for a client before writing the contracts down.** The contracts already exist in code and are already
+  consumed; leaving them implicit means a client discovers them by breaking them, and Mason discovers the break in
   production.
 - **Bring multi-bot to mason now.** Refused by `docs/adr/0001-mason-defines-one-bot.md`, and refused again here for a
   second reason: a team of bots behind a backend whose contracts are still implicit is two unfinished things instead of
