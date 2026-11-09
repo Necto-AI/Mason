@@ -7,7 +7,7 @@
 		"GLOSSARY.md": 1650,
 		"README.md": 600,
 		"docs/AGENTS.md": 911,
-		"docs/ARCHITECTURE.md": 1800,
+		"docs/ARCHITECTURE.md": 1950,
 		"docs/CONNECTOR-PROTOCOL.md": 431,
 		"docs/SPEC.md": 9050,
 		"docs/agent/README.md": 115,
@@ -15,6 +15,6 @@
 		"docs/agent/connectors/telegram.md": 233,
 		"docs/agent/env.md": 262,
 		"docs/agent/events.md": 361,
-		"CONTRIBUTING.md": 267
+		"CONTRIBUTING.md": 275
 	}
 }
