@@ -1,6 +1,6 @@
 # mason
 
-One process, one bot, one person. mason runs continuously on a machine with Node 22, answers through a connector
+One process, one bot, one person. mason runs continuously on a machine with Node 26, answers through a connector
 (the person's words come in over it, the agent's replies go out through it), and keeps everything it is in one home:
 `$MASON_HOME`, else `~/.mason`. The full story of how it is assembled lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 

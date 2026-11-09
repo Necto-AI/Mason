@@ -25,14 +25,19 @@ import { type OnboardingOptions, runOnboarding } from "./onboarding.ts";
 import { runSetup } from "./setup.ts";
 import { MissingAnswer } from "./wizard.ts";
 
-/** The connector `--connector <name>` (or `--connector=<name>`) names, when the setup flags name one. */
-function connectorNamed(setup: readonly string[]): string | undefined {
+/** Every connector `--connector <name>` (or `--connector=<name>`) names, in the order written. */
+function connectorsNamed(setup: readonly string[]): string[] {
+	const names: string[] = [];
 	for (let index = 0; index < setup.length; index += 1) {
 		const arg = setup[index];
-		if (arg === "--connector") return setup[index + 1];
-		if (arg?.startsWith("--connector=") === true) return arg.slice("--connector=".length);
+		if (arg === "--connector") {
+			const name = setup[index + 1];
+			if (name !== undefined) names.push(name);
+			continue;
+		}
+		if (arg?.startsWith("--connector=") === true) names.push(arg.slice("--connector=".length));
 	}
-	return undefined;
+	return names;
 }
 
 export interface OnboardArgs {
@@ -56,7 +61,7 @@ export function usage(): string {
   --provider <id>        the provider to store (mason init)
   --model <id>           the model to store (mason init)
   --key <key>            the provider's API key (mason init)
-  --connector <name>     the first connector, one from the catalog or \`console\` (mason setup)
+  --connector <name>     a connector, one from the catalog or \`console\`; repeat it for a second (mason setup)
   --url <ws-url>         a connector already running somewhere else; implies --connector custom
   --env NAME=value       one answer a connector needs; repeatable
   --owner <id>           who owns this chat
@@ -208,14 +213,15 @@ export async function runOnboard(
 				.filter((name) => integrations[name]?.connector !== undefined)
 				.sort();
 			// A flag that names a connector which is not granted yet is a request, not a duplicate: it used to be dropped
-			// with "nothing installed twice" and an exit code that said the run had done what was asked.
-			const wanted = connectorNamed(setupArgs);
-			const missing = wanted !== undefined && !granted.includes(wanted);
-			if (granted.length === 0 || missing) {
+			// with "nothing installed twice" and an exit code that said the run had done what was asked. With a repeated
+			// flag the request is a list, and one missing name is enough to run setup for all of them.
+			const named = connectorsNamed(setupArgs);
+			const missing = named.filter((name) => !granted.includes(name));
+			if (granted.length === 0 || missing.length > 0) {
 				const code = await runSetup(setupArgs, { house: paths });
 				if (code !== 0) return code;
-			} else if (wanted !== undefined) {
-				console.log(`[onboard] already granted: ${wanted}; nothing installed twice`);
+			} else if (named.length > 0) {
+				console.log(`[onboard] already granted: ${named.join(", ")}; nothing installed twice`);
 			} else {
 				console.log(
 					`[onboard] already granted: ${granted.join(", ")}; pass \`--connector <name>\` to add another, or ` +

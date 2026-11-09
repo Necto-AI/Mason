@@ -29,10 +29,17 @@ import { botPaths, type HousePaths } from "../src/server/house.ts";
 import { readInstalls } from "../src/server/install-state.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { checkPodman, listening } from "../src/server/podman.ts";
-import { modelIds, openProviders, type ProviderAccess, providerIds, verifyCompletion } from "../src/server/provider.ts";
+import {
+	modelRows,
+	openProviders,
+	type ProviderAccess,
+	providerIds,
+	verifyCompletion,
+} from "../src/server/provider.ts";
 import { BOT_NAME, botHome, COMMON, type MasonRoot, readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
 import { TerminalScreen } from "../src/tui/app.ts";
 import type { Choice, StatusRow } from "../src/tui/components.ts";
+import { providerJourney, variableJourney } from "../src/tui/journeys.ts";
 import { Cancelled, type Screen } from "../src/tui/screen.ts";
 import type { Glyphs, Paint } from "../src/tui/style.ts";
 import { CONSOLE } from "./chat.ts";
@@ -51,7 +58,7 @@ import { MissingAnswer, type Prompter } from "./wizard.ts";
 type Events = Record<string, string>;
 
 /** One connector's answers, before anything is written. */
-export interface ConnectorPlan {
+export interface ConnectorDraft {
 	readonly kind: string;
 	readonly description: string;
 	readonly url?: string;
@@ -71,7 +78,8 @@ export interface Draft {
 	mode?: "quickstart" | "advanced";
 	provider?: { readonly id: string; readonly model: string; readonly key?: string };
 	agent?: { readonly name: string };
-	connector?: ConnectorPlan;
+	/** Every connector this run installs, in the order they were added: one `mason setup` each, on one home. */
+	connectors?: ConnectorDraft[];
 	/** The doctor's answer after the apply, kept for the completion screen. */
 	checks?: readonly DoctorCheck[];
 	/** The step that failed, when the apply did not finish. */
@@ -81,9 +89,9 @@ export interface Draft {
 	/** Which steps a flag answered, so their screens say so instead of asking the same question again. */
 	seeded?: {
 		readonly provider?: boolean;
-		/** The flags answered every question this connector has, so its screen has nothing to ask. */
+		/** The flags answered every question these connectors have, so their page has nothing to ask. */
 		readonly connector?: boolean;
-		/** The flags named the kind: the picker is skipped even when the rest was asked on screen. */
+		/** The flags named the kinds: the picker is skipped even when the rest was asked on screen. */
 		readonly connectorKind?: boolean;
 	};
 }
@@ -229,7 +237,7 @@ function initArgs(draft: Draft): string[] {
 }
 
 /** The setup flags a plan is, in the spelling `mason setup` already parses: the argv a script would type. */
-function setupArgs(connector: ConnectorPlan): string[] {
+function setupArgs(connector: ConnectorDraft): string[] {
 	const args = ["--connector", connector.kind];
 	if (connector.url !== undefined) args.push("--url", connector.url);
 	for (const [name, value] of Object.entries(connector.env)) args.push("--env", `${name}=${value}`);
@@ -400,29 +408,45 @@ async function provider(ctx: Context): Promise<Direction> {
 	);
 	if (!known.includes(id)) throw new Error(`there is no provider "${id}": this build knows ${known.join(", ")}`);
 	let key = draft.provider?.id === id ? draft.provider.key : undefined;
-	if (!access.faux && key === undefined)
+	if (!access.faux && key === undefined) {
+		// The page that mints it, when this build has been there: no URL is guessed here, and a provider whose console
+		// nobody in this repo has opened gets no line at all.
+		const journey = providerJourney(id);
 		key = await screen.secret("provider.key", `The ${id} API key`, {
 			hint: "it is written to common/auth.json, 0600, and only after the provider answers",
 			flag: "--key <key>",
+			...(journey === undefined ? {} : { journey }),
 		});
-	const models = modelIds(access, id);
+	}
+	const models = modelRows(access, id);
 	const current = draft.provider?.id === id ? draft.provider.model : undefined;
-	const picked = await screen.select(
-		"provider.model",
-		"Which model?",
-		[
-			...models.map((model): Choice => ({ value: model, label: model })),
-			{ value: "__custom", label: "a model id I type myself", description: "for a model this build does not list" },
-		],
-		{
-			...(current === undefined ? {} : { value: models.includes(current) ? current : "__custom" }),
-			hint: `${models.length} model${models.length === 1 ? "" : "s"} this build knows for ${id}; type to filter`,
-		},
-	);
+	// A catalog with nothing in it is a text field, not a one-row menu.
+	const picked =
+		models.length === 0
+			? "__custom"
+			: await screen.select(
+					"provider.model",
+					"Which model?",
+					[
+						...models.map((model): Choice => ({ ...model })),
+						{
+							value: "__custom",
+							label: "+ a model id I type myself",
+							description: "for a model this build does not list",
+							pinned: true,
+						},
+					],
+					{
+						...(current === undefined
+							? {}
+							: { value: models.some((row) => row.value === current) ? current : "__custom" }),
+						hint: `this build's catalog, read offline: ${models.length} model${models.length === 1 ? "" : "s"} for ${id}`,
+					},
+				);
 	const model =
 		picked === "__custom"
 			? await screen.text("provider.model.custom", "The model id", {
-					...(current === undefined || models.includes(current) ? {} : { value: current }),
+					...(current === undefined ? {} : { value: current }),
 					hint: `as ${id} spells it; the provider checks it, not this build`,
 					flag: "--model <id>",
 				})
@@ -434,10 +458,19 @@ async function provider(ctx: Context): Promise<Direction> {
 		no: "skip: the install checks it before it writes anything",
 	});
 	if (!check) return NEXT;
+	// The wait is the screen, not a frozen frame: one real completion takes seconds on a provider with a queue, and a
+	// screen that does not move for seconds is a screen a person calls broken. The row says what is being waited on.
+	const running: StatusRow = {
+		label: `${id}/${model}`,
+		state: "run",
+		detail: "one real completion, nothing written yet",
+	};
+	const progress = screen.progress("provider.checking", "Checking the provider", [running]);
 	screen.busy(true);
 	try {
 		const reply = await io.verify(access, { provider: id, modelId: model }, key);
 		screen.busy(false);
+		progress.close();
 		await screen.note("provider.ok", "The provider answered", {
 			lines: [
 				`${glyphs.ok} ${id}/${model} answered ${JSON.stringify(reply.slice(0, 60))}`,
@@ -449,6 +482,7 @@ async function provider(ctx: Context): Promise<Direction> {
 		return NEXT;
 	} catch (error) {
 		screen.busy(false);
+		progress.close();
 		await screen.note("provider.failed", "The provider did not answer", {
 			lines: [
 				paint.bad(`${glyphs.fail} ${error instanceof Error ? error.message : String(error)}`),
@@ -474,12 +508,17 @@ async function agent(ctx: Context): Promise<Direction> {
 	// blank answer and the login name would quietly install a second home beside the first.
 	const only = root.bots.length === 1 ? root.bots[0] : undefined;
 	const suggested = draft.agent?.name ?? ctx.flags.bot ?? only?.name ?? suggestedName();
+	// The answers already given, in one dim line above the question: a person six screens in should not have to remember
+	// which model they chose, and this is the last screen where changing their mind is still cheap.
+	const chosen = draft.provider;
+	const already = chosen === undefined ? "" : `${paint.dim(`${chosen.id}/${chosen.model}`)}   ${paint.dim("·")}   `;
 	const name = await screen.text("agent.name", "What should this agent be called?", {
 		value: suggested,
 		hint:
-			only !== undefined && only.name === suggested
+			already +
+			(only !== undefined && only.name === suggested
 				? `this root already has ${only.name}: continuing finishes what it needs`
-				: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`,
+				: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`),
 		...(ctx.flags.bot === undefined ? {} : { flag: `-b ${ctx.flags.bot}` }),
 		validate: botNameProblem,
 	});
@@ -515,7 +554,7 @@ async function knownConnector(kind: string): Promise<boolean> {
  * owner, and a plan that went straight to the install with those missing would fail inside `mason setup` on a question the
  * person was never shown.
  */
-async function connectorAnswered(plan: ConnectorPlan): Promise<boolean> {
+async function connectorAnswered(plan: ConnectorDraft): Promise<boolean> {
 	if (plan.kind === CONSOLE) return true;
 	if (plan.owner === undefined) return false;
 	if (plan.kind === "custom") return plan.url !== undefined;
@@ -525,19 +564,28 @@ async function connectorAnswered(plan: ConnectorPlan): Promise<boolean> {
 }
 
 /**
- * The connector a home already grants, when it grants exactly one.
+ * The connectors a home already grants: what the page reports, and never removes.
  *
- * A second run is a run about a home that exists, and that home's grant is the answer it already gave: offering it as the
- * default means a resume is enter-enter-enter rather than a choice that silently rewrites it.
+ * A second run is a run about a home that exists, and those entries are the answer it already gave. They are not questions
+ * here — removing an integration is `mason integration remove`, and this wizard writes nothing before its apply step.
  */
-async function grantedKind(ctx: Context): Promise<string | undefined> {
+async function grantedKinds(ctx: Context): Promise<readonly string[]> {
 	const name = ctx.draft.agent?.name ?? ctx.flags.bot;
-	if (name === undefined) return undefined;
+	if (name === undefined) return [];
 	const { integrations } = await readIntegrations(
 		botPaths({ root: ctx.root.root, name, home: botHome(ctx.root.root, name) }),
 	).catch(() => ({ integrations: {} as Record<string, Integration> }));
-	const granted = Object.keys(integrations).filter((key) => integrations[key]?.connector !== undefined);
-	return granted.length === 1 ? granted[0] : undefined;
+	return Object.keys(integrations)
+		.filter((key) => integrations[key]?.connector !== undefined)
+		.sort();
+}
+
+/** One line about a connector, as a person reads it on the page: the catalog's own sentence, or the built-in one. */
+async function describeKind(kind: string): Promise<string> {
+	if (kind === CONSOLE) return "the terminal, built in";
+	if (kind === "custom") return "a connector already running somewhere else";
+	const entry = await catalogEntry(kind).catch(() => undefined);
+	return entry?.description ?? "";
 }
 
 /** What a catalog connector's grant says, in words, before the person is asked to grant it. */
@@ -549,61 +597,40 @@ async function permissionLines(kind: string): Promise<string[]> {
 	];
 }
 
-/** Connector: the kind, then that connector's own questions — and its permissions before its answers. */
-async function connector(ctx: Context): Promise<Direction> {
+/**
+ * One connector's questions, in the order its answers need them: the kind, then its own variables, who owns it, and — on
+ * an advanced run — where it may be sent, what it may fire, and whether it starts.
+ *
+ * `base` is what a flag or an earlier pass already answered. What it holds is not asked again, which is how
+ * `--connector telegram --owner @denis` reaches the page with only the token outstanding, and how a step re-entered from
+ * the review keeps what was typed. Escape is `Cancelled`, and the page it came from decides what going back means.
+ */
+async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<ConnectorDraft> {
 	const { screen, draft, io } = ctx;
 	const { paint, glyphs } = look(ctx);
 	const advanced = draft.mode === "advanced";
-	// A flag answers its own question, and only that one: `--connector telegram` names the kind and still owes a token, so a
-	// seeded plan that is missing an answer is asked for it here rather than announced as complete.
-	const unknown =
-		draft.seeded?.connector === true &&
-		draft.connector !== undefined &&
-		!(await knownConnector(draft.connector.kind));
-	if (unknown) {
-		// A flag can name a connector this build does not ship. The picker is where that is answered, so the seed stops
-		// being a seed rather than throwing the run away four screens in.
-		draft.seeded = { ...draft.seeded, connector: false, connectorKind: false };
-		draft.connector = undefined;
-	}
-	const seeded = draft.seeded?.connector === true ? draft.connector : undefined;
-	if (unknown)
-		await screen.note("connector.unknown", "That connector is not in this build", {
-			lines: [
-				`${glyphs.warn} the command line named a connector this build does not ship. Nothing was written.`,
-				"",
-				paint.dim("The next screen lists the ones it has; the rest of your answers are still here."),
-			],
-			note: "continue picks one from the list",
-		});
-	if (seeded !== undefined && (await connectorAnswered(seeded))) {
-		await screen.note("connector.flags", "Connector", {
-			lines: rows(paint, "Answered on the command line", [
-				["type", seeded.kind],
-				["owner", seeded.owner ?? "(none named)"],
-				["starts", seeded.start ? "now" : "no: --no-start"],
-			]),
-			note: "nothing to ask: the flags answered it",
-		});
-		return NEXT;
-	}
-	// Half a seed is not a seed: what the person types here is not "answered on the command line", and the review must keep
-	// its way back into this step once it has been asked. The kind the flag named stays named, so the picker is not asked
-	// again behind their back.
-	if (draft.seeded?.connector === true) draft.seeded = { ...draft.seeded, connector: false };
-	const namedKind = draft.seeded?.connectorKind === true ? draft.connector?.kind : undefined;
-	const granted = draft.connector === undefined ? await grantedKind(ctx) : draft.connector.kind;
+	const installed = base === undefined ? await grantedKinds(ctx) : [];
+	// The one connector a home already grants is offered as the default: a resume is enter-enter rather than a choice
+	// that silently rewrites the grant it already has.
+	const suggested = installed.length === 1 ? installed[0] : undefined;
 	const kind =
-		namedKind ??
+		base?.kind ??
 		(await screen.select("connector.kind", "How will you talk to it?", await connectorChoices(), {
-			...(granted === undefined ? {} : { value: granted }),
+			...(suggested === undefined ? {} : { value: suggested }),
 			hint:
-				granted === undefined
+				suggested === undefined
 					? "the console is built in; a catalog connector runs as a container beside mason"
-					: `${granted} is already granted here: choosing it again keeps its grant and its credential`,
+					: `${suggested} is already granted here: choosing it again keeps its grant and its credential`,
 		}));
 	if (kind === CONSOLE) {
-		ctx.draft.connector = {
+		await screen.note("connector.console", "The console connector", {
+			lines: [
+				"It is built in: mason chat opens the same socket a Telegram bot opens.",
+				"No token, no image, no container, and nothing to start.",
+			],
+			note: "continue builds the plan; the review shows exactly what is granted",
+		});
+		return {
 			kind,
 			description: "The terminal, built in: talk to the bot with no Telegram at all",
 			env: {},
@@ -612,17 +639,9 @@ async function connector(ctx: Context): Promise<Direction> {
 			container: false,
 			start: false,
 		};
-		await screen.note("connector.console", "The console connector", {
-			lines: [
-				"It is built in: mason chat opens the same socket a Telegram bot opens.",
-				"No token, no image, no container, and nothing to start.",
-			],
-			note: "continue builds the plan; the review shows exactly what is granted",
-		});
-		return NEXT;
 	}
 	if (kind === "custom") {
-		const previous = draft.connector?.kind === "custom" ? draft.connector : undefined;
+		const previous = base?.kind === "custom" ? base : undefined;
 		const url = await screen.text("connector.url", "Which connector url?", {
 			hint: "the ws:// address of a connector that is already running somewhere else",
 			...(previous?.url === undefined ? {} : { value: previous.url }),
@@ -668,7 +687,7 @@ async function connector(ctx: Context): Promise<Direction> {
 			: "";
 		const events = raw === "" ? {} : parseEvents(raw);
 		if (typeof events === "string") throw new Error(events);
-		ctx.draft.connector = {
+		return {
 			kind,
 			description: `A connector already running at ${url}`,
 			url,
@@ -679,10 +698,9 @@ async function connector(ctx: Context): Promise<Direction> {
 			container: false,
 			start: false,
 		};
-		return NEXT;
 	}
 	const entry = await catalogEntry(kind);
-	const previous = draft.connector?.kind === kind ? draft.connector : undefined;
+	const previous = base?.kind === kind ? base : undefined;
 	const podman = await io.podman();
 	await screen.note("connector.permissions", "What it may do", {
 		lines: [
@@ -710,11 +728,15 @@ async function connector(ctx: Context): Promise<Direction> {
 			? "Which places may it be sent to, and how does it answer for them?"
 			: variable.prompt.charAt(0).toUpperCase() + variable.prompt.slice(1);
 		const hint = chats ? "chat ids or @usernames, comma separated: the places it may be sent to" : variable.prompt;
+		// The page that issues a secret is named on the question, and only when this build has been there: a guessed
+		// address is worse than none, and it is the table in `src/tui/journeys.ts` that decides.
+		const journey = variable.secret === true ? variableJourney(variable.name) : undefined;
 		const answer =
 			variable.secret === true
 				? await screen.secret(`connector.env.${variable.name}`, question, {
 						hint: `${variable.name}: the value goes into the container's environment and nowhere else`,
 						flag: `--env ${variable.name}="<${variable.prompt}>"`,
+						...(journey === undefined ? {} : { journey }),
 					})
 				: await screen.text(`connector.env.${variable.name}`, question, {
 						hint: `${hint}${optional ? " · leave it empty to skip" : ""}`,
@@ -743,7 +765,7 @@ async function connector(ctx: Context): Promise<Direction> {
 						no: "write everything and leave it down",
 					})
 				: true;
-	ctx.draft.connector = {
+	return {
 		kind,
 		description: entry.description,
 		env: answers,
@@ -753,7 +775,146 @@ async function connector(ctx: Context): Promise<Direction> {
 		container: true,
 		start,
 	};
-	return NEXT;
+}
+
+/**
+ * Connectors: the list this run will install, and the questions that fill it.
+ *
+ * One list rather than one question, because the model is one entry per service and a person with a Telegram bot and a
+ * terminal client was running this twice or leaving one out. Nothing is written before the apply step, so removing a
+ * connector here is dropping it from the draft and not a call to `mason integration remove`; an entry already on disk is
+ * reported as installed and is not removable here at all.
+ */
+async function connectors(ctx: Context): Promise<Direction> {
+	const { screen, draft } = ctx;
+	const { paint, glyphs } = look(ctx);
+	const installed = await grantedKinds(ctx);
+	// A flag answers its own question, and only where it answered all of it: `--connector telegram` names the kind and
+	// still owes a token, so a seeded connector missing an answer is asked for it here rather than announced as complete.
+	if (draft.seeded?.connector === true) {
+		const seeded = draft.connectors ?? [];
+		if (seeded.length > 0 && (await Promise.all(seeded.map(connectorAnswered))).every(Boolean)) {
+			await screen.note("connector.flags", "Connectors", {
+				lines: rows(
+					paint,
+					"Answered on the command line",
+					await Promise.all(
+						seeded.map(
+							async (plan): Promise<readonly [string, string]> => [
+								plan.kind,
+								`${await describeKind(plan.kind)} · ${plan.owner ?? "no owner named"}`,
+							],
+						),
+					),
+				),
+				note: "nothing to ask: the flags answered it",
+			});
+			return NEXT;
+		}
+		// Half a seed is not a seed: what the person types here is not "answered on the command line", and the review must
+		// keep its way back into this step once it has been asked.
+		draft.seeded = { ...draft.seeded, connector: false };
+	}
+	// A flag can name a connector this build does not ship. The picker is where that is answered, so the seed stops being
+	// a seed rather than throwing the run away four screens in.
+	const unknown: string[] = [];
+	for (const plan of draft.connectors ?? []) if (!(await knownConnector(plan.kind))) unknown.push(plan.kind);
+	if (unknown.length > 0) {
+		draft.connectors = (draft.connectors ?? []).filter((plan) => !unknown.includes(plan.kind));
+		draft.seeded = { ...draft.seeded, connector: false, connectorKind: false };
+		await screen.note("connector.unknown", "That connector is not in this build", {
+			lines: [
+				`${glyphs.warn} the command line named ${unknown.map((kind) => `"${kind}"`).join(", ")}, which this build does not ship. Nothing was written.`,
+				"",
+				paint.dim("The next screen lists the ones it has; the rest of your answers are still here."),
+			],
+			note: "continue picks one from the list",
+		});
+	}
+	// What a flag named and did not finish, asked with the picker skipped — the flag already said which connector it is —
+	// and written back into the draft one at a time, so an escape here leaves the answers already given.
+	const plans: ConnectorDraft[] = draft.connectors ?? [];
+	draft.connectors = plans;
+	for (const [index, plan] of [...plans].entries()) {
+		if (await connectorAnswered(plan)) continue;
+		plans.splice(index, 1, await askConnector(ctx, plan));
+	}
+	const page = async (): Promise<{ readonly lines: readonly string[]; readonly choices: readonly Choice[] }> => {
+		const listed: ConnectorDraft[] = draft.connectors ?? [];
+		const lines = [
+			...rows(
+				paint,
+				"This run installs",
+				await Promise.all(
+					listed.map(
+						async (plan): Promise<readonly [string, string]> => [
+							plan.kind,
+							`${await describeKind(plan.kind)} · ${plan.container && plan.start ? "written, then started" : "written, nothing to start here"}`,
+						],
+					),
+				),
+			),
+			...rows(
+				paint,
+				"Already installed",
+				await Promise.all(
+					installed
+						.filter((kind) => !listed.some((plan) => plan.kind === kind))
+						.map(
+							async (kind): Promise<readonly [string, string]> => [
+								kind,
+								`${await describeKind(kind)} · already installed, and not removed from here`,
+							],
+						),
+				),
+			),
+		];
+		const choices: Choice[] = [
+			{
+				value: "continue",
+				label: "continue",
+				description:
+					listed.length === 0
+						? "nothing new: what is on disk stays as it is"
+						: `${listed.length} to install: ${listed.map((plan) => plan.kind).join(", ")}`,
+			},
+			{ value: "add", label: "+ add another", description: "one more connector, with its own questions" },
+			...listed.map(
+				(plan, index): Choice => ({
+					value: `remove:${index}`,
+					label: `- remove ${plan.kind}`,
+					description: "added in this run: nothing has been written yet",
+				}),
+			),
+		];
+		return { lines, choices };
+	};
+	for (;;) {
+		const listed: readonly ConnectorDraft[] = draft.connectors ?? [];
+		// Nothing configured, nothing on disk: the first connector is asked before the page, because a page with no row
+		// on it is not a question. The same branch takes a drop that left the list empty.
+		if (listed.length === 0 && installed.length === 0) {
+			draft.connectors = [...listed, await askConnector(ctx)];
+			continue;
+		}
+		const { lines, choices } = await page();
+		const action = await screen.select("connectors.list", "Which connectors should this run install?", choices, {
+			preface: lines,
+			hint: "enter continues; nothing is written before the review",
+		});
+		if (action === "continue") return NEXT;
+		if (action === "add") {
+			try {
+				draft.connectors = [...listed, await askConnector(ctx)];
+			} catch (error) {
+				// Escape inside the questions goes back to the page it came from: a person who changed their mind about
+				// adding one has not lost the ones already answered.
+				if (!(error instanceof Cancelled)) throw error;
+			}
+			continue;
+		}
+		draft.connectors = listed.filter((_, index) => index !== Number(action.slice("remove:".length)));
+	}
 }
 
 /** `/stop /compact /clear /status`: the controls a grant names, as a sentence reads them. */
@@ -808,7 +969,7 @@ async function review(ctx: Context): Promise<Direction> {
 	const canChangeProvider =
 		draft.seeded?.provider !== true && (draft.provider !== undefined || !(await ctx.io.ready(root.root)));
 	const canChangeConnector = draft.seeded?.connector !== true;
-	const connectorPlan = draft.connector;
+	const connectorPlans = draft.connectors ?? [];
 	const lines: string[] = [
 		"Nothing has been written yet. This is what will be.",
 		"",
@@ -831,30 +992,31 @@ async function review(ctx: Context): Promise<Direction> {
 			],
 		]),
 	];
-	const connectorPairs: Array<readonly [string, string]> = [["type", connectorPlan?.kind ?? "(unchosen)"]];
-	if (connectorPlan?.url !== undefined) connectorPairs.push(["url", connectorPlan.url]);
-	if (connectorPlan?.owner !== undefined) connectorPairs.push(["owner", connectorPlan.owner]);
-	if ((connectorPlan?.targets.length ?? 0) > 0)
-		connectorPairs.push(["send to", (connectorPlan?.targets ?? []).join(", ")]);
-	const events = Object.entries(connectorPlan?.events ?? {});
-	if (events.length > 0)
-		connectorPairs.push(["events", events.map(([event, hook]) => `${event} → ${hook}`).join(", ")]);
-	if (connectorPlan?.container === true)
-		connectorPairs.push(["starts", connectorPlan.start ? "now, and after a reboot" : "no: written and left down"]);
-	// What the grant allows, on the screen that asks for it: the connector step explained it before the answers, and the
-	// review is where a person reads the whole thing back.
-	if (connectorPlan !== undefined) {
-		const { face, controls } = await grantFace(connectorPlan.kind);
+	// One block per connector, each naming what it may do: the page before it asked for the grant, and this is where a
+	// person reads the whole thing back before it is written.
+	for (const [index, plan] of connectorPlans.entries()) {
+		const connectorPairs: Array<readonly [string, string]> = [["type", plan.kind]];
+		if (plan.url !== undefined) connectorPairs.push(["url", plan.url]);
+		if (plan.owner !== undefined) connectorPairs.push(["owner", plan.owner]);
+		if (plan.targets.length > 0) connectorPairs.push(["send to", plan.targets.join(", ")]);
+		const events = Object.entries(plan.events);
+		if (events.length > 0)
+			connectorPairs.push(["events", events.map(([event, hook]) => `${event} → ${hook}`).join(", ")]);
+		if (plan.container)
+			connectorPairs.push(["starts", plan.start ? "now, and after a reboot" : "no: written and left down"]);
+		const { face, controls } = await grantFace(plan.kind);
 		connectorPairs.push(["may", `${face}; ${controls}`]);
+		lines.push(...rows(paint, connectorPlans.length === 1 ? "Connector" : `Connector ${index + 1}`, connectorPairs));
 	}
-	lines.push(...rows(paint, "Connector", connectorPairs));
 	lines.push(
 		...rows(paint, "Install", [
 			["store", draft.provider === undefined ? "unchanged" : "written, after the provider answers"],
 			["home", existsSync(botHome(root.root, name)) ? "already there, kept as it is" : "created"],
 			[
-				"connector",
-				connectorPlan?.container === true ? "grant, credential, compose project" : "grant and credential",
+				"connectors",
+				connectorPlans.length === 0
+					? "none: what is on disk stays as it is"
+					: `${connectorPlans.map((plan) => plan.kind).join(", ")}: grant and credential, and a project when it runs in a container`,
 			],
 			["checks", "mason doctor: nine read-only checks"],
 		]),
@@ -866,7 +1028,7 @@ async function review(ctx: Context): Promise<Direction> {
 		{ value: "apply", label: "install it", description: "four steps, then the checks" },
 		...(canChangeProvider ? [{ value: "provider", label: "change the provider or model" }] : []),
 		{ value: "agent", label: "change the agent name" },
-		...(canChangeConnector ? [{ value: "connector", label: "change the connector" }] : []),
+		...(canChangeConnector ? [{ value: "connector", label: "change the connectors" }] : []),
 		{ value: "cancel", label: "leave without writing anything" },
 	];
 	const fits = pageAndChoicesFit(screen, lines, choices.length);
@@ -891,7 +1053,7 @@ interface ApplyStep {
 	run(): Promise<void>;
 }
 
-/** The plan as steps, in the order their failures happen: the store, the home, the connector, the checks. */
+/** The plan as steps, in the order their failures happen: the store, the home, one connector each, the checks. */
 function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 	const { draft, io, root } = ctx;
 	const steps: ApplyStep[] = [];
@@ -923,22 +1085,19 @@ function applySteps(ctx: Context, house: () => HousePaths): ApplyStep[] {
 				if (code !== 0) throw new Error("the home was not created");
 			},
 		});
-	const connectorPlan = draft.connector;
-	if (connectorPlan !== undefined)
+	// One step per connector, in the order they were added: each is its own grant, credential and project, and a failure
+	// names the connector it stopped on while the rows below it stay unrun rather than silently skipped.
+	for (const [index, plan] of (draft.connectors ?? []).entries())
 		steps.push({
-			id: "connector",
-			label: connectorPlan.container
-				? connectorPlan.start
-					? "connector, credential and container"
-					: "connector, credential and project"
-				: "connector and credential",
+			id: `connector.${index}`,
+			label: `${plan.kind}: ${plan.container ? (plan.start ? "credential and container" : "credential and project") : "credential"}`,
 			committed: (log) =>
 				log.some((line) => line.includes("wrote the grant") || line.includes("minted connector credential"))
 					? "The grant and the credential were written before anything was started; mason doctor reads what is there"
 					: "Nothing was written",
 			run: async () => {
-				const code = await io.setup(setupArgs(connectorPlan), house(), answeredPrompter());
-				if (code !== 0) throw new Error("the connector was not installed");
+				const code = await io.setup(setupArgs(plan), house(), answeredPrompter());
+				if (code !== 0) throw new Error(`the ${plan.kind} connector was not installed`);
 			},
 		});
 	if (name !== undefined)
@@ -1137,11 +1296,14 @@ async function done(ctx: Context): Promise<Direction> {
 			],
 		]),
 	];
-	if (draft.connector?.container === false && draft.connector.kind !== CONSOLE)
-		lines.push(
-			paint.dim(`it needs a credential: mason connector add ${draft.connector.kind} --replace prints one, once`),
-			"",
-		);
+	// What was installed, read off the plan: the summary's `grants` row reads the same entries from disk, and this says
+	// how to put a credential back on the ones that run somewhere else.
+	for (const plan of draft.connectors ?? [])
+		if (!plan.container && plan.kind !== CONSOLE)
+			lines.push(
+				paint.dim(`it needs a credential: mason connector add ${plan.kind} --replace prints one, once`),
+				"",
+			);
 	if (!up) lines.push(paint.dim(`next: mason up -b ${name}, then mason chat -b ${name}`), "");
 	if (server !== undefined && !server.ok && up === false) lines.push(paint.dim(server.detail), "");
 	// The same rule the review has: a summary longer than the window would put the decision below the fold.
@@ -1175,14 +1337,14 @@ async function done(ctx: Context): Promise<Direction> {
 
 type Step = (ctx: Context) => Promise<Direction>;
 
-const STEPS: Record<StepId, Step> = { welcome, provider, agent, connector, review, apply, done };
+const STEPS: Record<StepId, Step> = { welcome, provider, agent, connector: connectors, review, apply, done };
 
 /** The section each step's screens carry in the frame: the question is the body's first line, this is above it. */
 const SECTIONS: Record<StepId, string> = {
 	welcome: "Welcome",
 	provider: "Model and provider",
 	agent: "Agent",
-	connector: "Connector",
+	connector: "Connectors",
 	review: "Review",
 	apply: "Installing",
 	done: "Done",
@@ -1191,36 +1353,41 @@ const SECTIONS: Record<StepId, string> = {
 /** The pre-answers `mason onboard` flags are: a flag answers its question, so no screen asks it again. */
 export function preseed(flags: { readonly init: readonly string[]; readonly setup: readonly string[] }): {
 	readonly provider?: Draft["provider"];
-	readonly connector?: Draft["connector"];
+	readonly connectors?: ConnectorDraft[];
 	readonly seeded?: Draft["seeded"];
 } {
 	const init = parseInitArgs(flags.init);
 	const setup = parseSetupArgs(flags.setup);
 	const draft: {
 		provider?: Draft["provider"];
-		connector?: Draft["connector"];
+		connectors?: ConnectorDraft[];
 		seeded?: Draft["seeded"];
 	} = {};
 	if (init.provider !== undefined && init.model !== undefined)
 		draft.provider = { id: init.provider, model: init.model, ...(init.key === undefined ? {} : { key: init.key }) };
-	if (setup.connector !== undefined || setup.url !== undefined) {
-		const events = setup.events === undefined ? {} : parseEvents(setup.events);
-		draft.connector = {
-			kind: setup.connector ?? "custom",
-			description: "",
-			...(setup.url === undefined ? {} : { url: setup.url, kind: "custom" }),
-			env: Object.fromEntries(setup.env),
-			...(setup.owner === undefined ? {} : { owner: setup.owner }),
-			targets: setup.targets === undefined ? [] : splitIds(setup.targets),
-			events: typeof events === "string" ? {} : events,
-			container: (setup.connector ?? "") !== "" && setup.connector !== CONSOLE && setup.connector !== "custom",
-			start: setup.start,
-		};
-	}
-	if (draft.provider !== undefined || draft.connector !== undefined)
+	// One connector per `--connector` the command line names, in the order it named them: the flags that follow one belong
+	// to it, which is the whole reason a second `--connector` starts a second connector.
+	const connectors = setup.connectors
+		.filter((one) => one.connector !== undefined || one.url !== undefined)
+		.map((one): ConnectorDraft => {
+			const events = one.events === undefined ? undefined : parseEvents(one.events);
+			return {
+				kind: one.url === undefined ? (one.connector ?? "custom") : "custom",
+				description: "",
+				...(one.url === undefined ? {} : { url: one.url }),
+				env: Object.fromEntries(one.env),
+				...(one.owner === undefined ? {} : { owner: one.owner }),
+				targets: one.targets === undefined ? [] : splitIds(one.targets),
+				events: events === undefined || typeof events === "string" ? {} : events,
+				container: one.connector !== undefined && one.connector !== CONSOLE && one.connector !== "custom",
+				start: one.start,
+			};
+		});
+	if (connectors.length > 0) draft.connectors = connectors;
+	if (draft.provider !== undefined || draft.connectors !== undefined)
 		draft.seeded = {
 			...(draft.provider === undefined ? {} : { provider: true }),
-			...(draft.connector === undefined ? {} : { connector: true, connectorKind: true }),
+			...(draft.connectors === undefined ? {} : { connector: true, connectorKind: true }),
 		};
 	return draft;
 }

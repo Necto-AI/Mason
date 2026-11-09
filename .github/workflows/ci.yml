@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 26
 
       # The same recipe a fresh clone runs (`devenv shell -- setup`): the root install, then the two packages the tests
       # and the runtime import from `dist`. No submodule and no Rust: `@earendil-works/*` are ordinary dependencies and

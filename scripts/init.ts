@@ -21,7 +21,13 @@ import {
 	readCommonRuntime,
 	writeCommonStore,
 } from "../src/server/common.ts";
-import { modelIds, openProviders, type ProviderAccess, providerIds, verifyCompletion } from "../src/server/provider.ts";
+import {
+	modelRows,
+	openProviders,
+	type ProviderAccess,
+	providerIds,
+	verifyCompletion,
+} from "../src/server/provider.ts";
 import { readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
 import {
 	choosePrompter,
@@ -113,6 +119,49 @@ function modelHint(models: readonly string[]): string {
 	return `one of ${shown}${models.length > 8 ? `, and ${models.length - 8} more` : ""}`;
 }
 
+/** The row that leads out of a catalog that does not hold the model a person wants. */
+const TYPE_MODEL = "type-it-myself";
+
+/**
+ * The model, chosen from the catalog rather than recalled from memory.
+ *
+ * The list is the same one the provider question was built from — this build's own catalog, read offline — so a model id
+ * is a thing a person recognizes instead of a string they have to get exactly right. The catalog is a snapshot and the
+ * provider keeps serving, so the last row stays a text field: a model this build does not list is still an answer.
+ *
+ * A provider whose list is empty skips the question and asks for the id, because a list of one row that says "type it
+ * yourself" is a text field with a menu in front of it. `fallback` is what a `--yes` run takes, and it is the catalog's
+ * first model — the same answer an empty line has always meant here.
+ */
+async function askModel(prompter: Prompter, access: ProviderAccess, provider: string): Promise<string> {
+	const rows = modelRows(access, provider);
+	if (rows.length === 0)
+		return await prompter.text(MODEL_QUESTION, { hint: modelHint([]), flag: "--model <id>", required: true });
+	const picked = await prompter.pick(
+		MODEL_QUESTION,
+		[
+			...rows,
+			{
+				value: TYPE_MODEL,
+				label: "+ a model id I type myself",
+				description: "for a model this build does not list",
+				pinned: true,
+			},
+		],
+		{
+			flag: "--model <id>",
+			fallback: rows[0]?.value,
+			hint: `this build's catalog, read offline: ${rows.length} model${rows.length === 1 ? "" : "s"} for ${provider}`,
+		},
+	);
+	if (picked !== TYPE_MODEL) return picked;
+	return await prompter.text(MODEL_QUESTION, {
+		hint: `the id exactly as ${provider} writes it`,
+		flag: "--model <id>",
+		required: true,
+	});
+}
+
 /** The command. Returns an exit code rather than calling `process.exit`, so a test can run the flow in-process. */
 export async function runInit(
 	argv: readonly string[],
@@ -158,14 +207,7 @@ export async function runInit(
 			));
 		if (!known.includes(provider))
 			throw new Error(`there is no provider "${provider}": this build knows ${known.join(", ")}`);
-		const models = modelIds(access, provider);
-		const model =
-			args.model ??
-			(await prompter.text(MODEL_QUESTION, {
-				hint: modelHint(models),
-				flag: "--model <id>",
-				...(models[0] === undefined ? { required: true } : { fallback: models[0] }),
-			}));
+		const model = args.model ?? (await askModel(prompter, access, provider));
 		const key = access.faux
 			? undefined
 			: (args.key ??
