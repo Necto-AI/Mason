@@ -484,23 +484,22 @@ upgrade carries `Authorization: Bearer masonc_…`, verified against the hash in
 becomes the child host `connector:<name>` with the principal the credential stamped; a second socket for one connector
 supersedes the first, closed with a reason. No ping, no version handshake, no frame of our own.
 
-**The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the control vocabulary
-the grant holds (`commands`), the `targets` it may be sent to, the event `kinds` and their routine, the limits — read
-through the reference and re-read whenever it changes. Nothing is accepted before it resolves, which is what
-`host.get` already does.
+**The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the `commands` the
+grant holds, the `targets` it may be sent to, the event `kinds` and their routine, the limits — re-read whenever it
+changes. Nothing is accepted before it resolves, which is what `host.get` already does.
 
 **Admission is one append.** `append` takes an `appendId`, an optional opaque `origin` (`{ref, messageId?, actor?}`) and
 one of three types. `submission` places ordinary human conversation: an `app.connector` entry whose `data.origin` is the
 origin, and nothing else — one bot has one person, so there is no name to attribute. It is refused with
 `mason.face_not_granted` when the entry grants no `user`, with `mason.actor_unknown` when the actor is not the entry's
 `owner` (and for any actor at all when the entry names none), and it spends the submission budget. `event` is written to
-`service/data/events/YYYY-MM-DD.jsonl` always, and wakes the bot only when the routine its kind maps to is live and
-enabled; a kind the grant does not name is `mason.kind_not_permitted`. `notice` is the medium talking about itself: an
-`app.notice` entry, no turn, and it spends the submission budget because it is an append with words in it.
+`service/data/events/YYYY-MM-DD.jsonl` always, and wakes the bot only when its kind's routine is live and enabled; a kind
+the grant does not name is `mason.kind_not_permitted`. `notice` is the medium on itself: an `app.notice` entry, no turn, and it spends the submission budget because it is an
+append with words in it.
 
-Every append is deduplicated durably, and the record is not a second store: a submission and an event are claimed through
-the transcript (`connector:<connector>:submission:<id>` / `:fire:<id>`), and an event is also deduplicated by the event
-log, because an absent routine makes no entry. A resend is answered `{"outcome": "duplicate"}`
+Every append is deduplicated durably: all three are claimed by request id (`:submission:`, `:fire:`, `:notice:`), and an
+event also by the event log, because an absent routine makes no entry. What a connector is still owed is read from the
+transcript after boot, not from the window, which renders the newest fifty entries and is not a record. A resend is answered `{"outcome": "duplicate"}`
 and creates no second operation, before or after a restart. Content is typed blocks: text and markdown become the message
 unprefixed, and a file block is read from the attachment store and written into the agent's `workspace/inbox/`, with
 images also passed as image blocks.

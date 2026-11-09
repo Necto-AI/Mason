@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a capability or behavior change.
+labels:
+  - feature
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use a title in the form `area: short outcome` (for example, `runtime: resume scheduled work after restart`).
+        Describe the problem and desired outcome; implementation ideas are optional. Do not include credentials, private URLs, personal data, or exploitable details.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should become possible, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current limitation
+      description: What is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: How would you know this solves the problem?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Constraints, examples, or related issues.
+    validations:
+      required: false

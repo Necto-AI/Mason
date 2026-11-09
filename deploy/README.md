@@ -34,7 +34,7 @@ host loopback :8787 ──► mason ──ssh──► mason-env        (no port
 The split is a **mount boundary**, not a permission mode: `bash` can talk its way around a mode bit. In this deployment
 `service/` does not exist in the `mason-env` container at all, so the agent cannot read its own door, its own keys or
 its own provider credential even if a prompt tells it to. The soul is the clearest case: the bot has no path to the job
-it was hired to do, which is what lets apiary hand several bots different souls from the same codebase.
+it was hired to do, which lets separate deployments give different bots different souls from the same codebase.
 
 **The home's repository is the memory repo, and it lives at `agent/.git`.** The agent writes a fact to
 `agent/log/YYYY-MM-DD.md` with `write` and commits it *on the tool machine*, in that repository — the log and its

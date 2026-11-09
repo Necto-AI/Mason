@@ -19,10 +19,6 @@ A role a connector plays when it reaches a person: a chat, or another user-facin
 and mason has no interface type.
 _Avoid_: frontend, UI (for the abstract thing), channel
 
-**apiary**:
-The separate project that is mason's rich client and the control plane for a fleet of bots. It reaches mason as a
-connector, reads the wire contract, and owns whatever panel an operator reads. Out of scope here.
-_Avoid_: the app, mason's client (it is one of several), the router
 
 ## The home
 

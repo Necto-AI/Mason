@@ -1,73 +1,60 @@
-# Issue tracker: GitHub
+# GitHub issues
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Use GitHub issues for defects, proposals, and planned work. Search before opening an issue; update an existing issue when the work is already tracked.
 
-## Conventions
+## Titles
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+Use lowercase `area: outcome` titles. Name the project area, then state the intended change in plain language.
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+Examples:
+- `runtime: persist scheduled work across restarts`
+- `connector: publish the Telegram image`
+- `docs: explain the local development setup`
 
-## Pull requests as a triage surface
+Avoid generic titles such as "Slice 4", "Future", or "Fix this".
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+## Issue body
 
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+Keep one issue focused on one outcome. Use this structure:
 
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh api --paginate 'repos/{owner}/{repo}/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+```md
+## Goal
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+What should become possible, and why?
 
-## When a skill says "publish to the issue tracker"
+## Work
 
-Create a GitHub issue.
+- [ ] Concrete, verifiable step.
+- [ ] Concrete, verifiable step.
 
-## When a skill says "fetch the relevant ticket"
+## Done when
 
-Read it as in **Read an issue** above.
+Observable acceptance criteria. Name tests or commands when useful.
 
-## Waves: from a ticket to a merged branch
+## Related
 
-An issue is written at a moment and the code moves. A ticket is audited against the tree before it is specified: a spec
-that names a file, symbol or test which does not exist is refused, and the audit's verdict goes on the issue as a
-comment.
+Links to dependencies and adjacent work.
+```
 
-A wave is one issue, one spec, one branch, one worktree, one writer. Five things, and a spec without one of them does not
-start:
+Add `## Scope` or `## Not in scope` only when boundaries need to be explicit. Keep useful technical evidence and implementation detail; remove repeated context, speculative prose, and copied checklists.
 
-- **Seam**: the file and the type the behaviour joins at, named as it is today.
-- **Acceptance**: the tests that fail before and pass after, by name.
-- **Budget**: the lines the area may gain, and the ceiling it lowers in `docs/code-budgets.json`.
-- **Not in this spec**: the adjacent work it deliberately leaves, so the next reader does not mistake an omission for a
-  plan.
-- **Failure it prevents**: one sentence, because a spec with no failure is a preference.
+## Labels
 
-The branch runs `/full-send <pointer>`. It ends green or it does not end: lint, typecheck, `npm test`,
-`test:packages`, `prove:connector`, `gen:surface:check`, `check:docs`, `check:code`. A commit that removes code lowers
-the ceiling it leaves behind, in the same commit.
+Use at most one type label:
+- `bug` — existing behavior is broken.
+- `feature` — product behavior or capability should change.
+- `docs` — documentation-only work.
 
-**Parallel only where the files do not overlap.** Read the seam, not the title: two issues that both move `runtime.ts`
-run in sequence, however unrelated they look. Each branch gets its own worktree and one writer.
+Use exactly one status label on every open issue:
+- `needs-triage` — a maintainer must scope or prioritize it.
+- `needs-info` — waiting for information from the reporter.
+- `ready-for-agent` — bounded and specified; an agent can implement it.
+- `ready-for-human` — a maintainer decision or manual action is required.
+- `parked` — intentionally deferred; use instead of any readiness label.
+- `wontfix` — explicitly declined.
 
-**Merge one branch at a time.** An integrator session rebases the wave, reads the diffs together, and resolves an
-overlap at the seam rather than by adding an abstraction over both. Review is short and fixed: anything the issue marked
-as a decision, any diff that crosses a budget, and any change to the prompt, the declared tool list or the protocol.
+Wayfinder labels (`wayfinder:map`, `wayfinder:task`, `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`) are reserved for that workflow. They are additional role labels, not type or status labels.
 
-## Wayfinding operations
+## Dependencies and duplicates
 
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
-
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+Link adjacent work with `Related: #N`. Use GitHub issue dependencies for real blockers. Do not copy implementation checklists into parent or launch-tracking issues. Close duplicates with a comment linking the canonical issue; close obsolete work with a reason.

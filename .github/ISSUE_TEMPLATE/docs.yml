@@ -1,0 +1,29 @@
+name: Documentation
+description: Report missing, unclear, or incorrect documentation.
+labels:
+  - docs
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use a title in the form `area: short outcome` (for example, `docs: explain connector permissions`). Do not include credentials, private URLs, personal data, or exploitable details.
+  - type: textarea
+    id: location
+    attributes:
+      label: Page or section
+      description: Link the file or section, if known.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What is unclear or incorrect?
+    validations:
+      required: true
+  - type: textarea
+    id: improvement
+    attributes:
+      label: Suggested improvement
+    validations:
+      required: false

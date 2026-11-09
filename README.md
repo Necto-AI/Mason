@@ -57,6 +57,9 @@ this repository and the workflow file).
 The server imports `mason-protocol` (the connector wire contract) bare. The packages are not on the registry yet
 (#124), so `npm run build` copies exactly the packages the emitted imports name — today that is `mason-protocol`,
 nothing else — into `dist/node_modules` under that bare name, and that is the copy an installed bot resolves. It
-shadows any `mason-protocol` the consuming project happens to have installed: this runtime speaks its own pinned
-copy of the wire protocol, deliberately. When #124 publishes, the same commit moves it to an ordinary dependency
+shadows any `mason-protocol` the consuming project installed: this runtime speaks its pinned copy, deliberately. When #124 publishes, the same commit moves it to an ordinary dependency
 and drops the vendoring.
+
+## Licence
+
+AGPL-3.0-only, in [`LICENSE`](LICENSE), published packages included.

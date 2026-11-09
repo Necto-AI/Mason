@@ -14,7 +14,7 @@ write.
 | Runtime and loop | AG-UI, loop at the endpoint | one pi-durable loop, tools in `pi-env` | mason ahead |
 | Persistence, memory, learning | Postgres, 92 tables, vendor transcripts | SQLite, split home, file memory | mason ahead; openbot on learning |
 | Tools, triggers, security | plugin store, vault, audit | one MCP client, one HMAC door, no record | mason ahead on tools and triggers; openbot ahead on security |
-| Web, desktop, mobile | five endpoints, Tauri, Expo | projection, Chord, web client frozen as an operator console; Telegram is the interface | mason ahead on the web; the rich clients go to apiary |
+| Web, desktop, mobile | five endpoints, Tauri, Expo | projection, Chord, web client frozen as an operator console; Telegram is the interface | Mason focuses on runtime and connector contracts; rich client surfaces are outside its scope |
 | Identity, deployment, operations | one org, three deploy shapes | one owner, mount boundary | differs by design |
 
 ## Five things worth copying
@@ -31,7 +31,7 @@ write.
    ([02](02-server-core.md) §Proactive, routines, scheduling). Touches `src/server/hooks.ts`.
 5. **Reach that names the decision**: a revocable device row, a delivery that carries the agent's own words
    ([09](09-mobile-expo.md) §Push). Touches `src/server/auth.ts` and the Telegram integration; a push client
-   would be apiary's, not mason's.
+   is a client-level concern, not part of Mason's runtime.
 
 ## Five things to never copy
 
@@ -69,11 +69,11 @@ write.
 1. **[12](12-comparison.md)**, then **[13](13-parity-roadmap.md)** — verdicts and sequencing; a reader
    deciding stops there. 13 is now the Telegram-first roadmap: Telegram is mason's interface, the web client
    is frozen as an operator console for transcript inspection, debugging and fallback, and the rich clients
-   move to apiary.
+   are outside Mason's scope.
 2. Backend: **[01](01-product-and-repo-map.md)**, **[02](02-server-core.md)**,
    **[03](03-data-and-learning.md)**, **[04](04-agent-engines.md)**.
 3. Host and deploy: **[05](05-container-and-deploy.md)**, plus 03 §"What a self-hoster must back up".
 4. Client: **[06](06-web-app-architecture.md)**, then **[07](07-ui-ux.md)**; add
-   **[09](09-mobile-expo.md)**, **[08](08-desktop-tauri.md)** only for what apiary inherits.
+   **[09](09-mobile-expo.md)**, **[08](08-desktop-tauri.md)** only for the client-side implications.
 5. Security: **[10](10-security-and-integrations.md)**, then 02 §"Auth header".
 6. **[11](11-product-suite.md)** last: it reconciles the reports and notes disagreements.
