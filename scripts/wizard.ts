@@ -189,6 +189,9 @@ export function terminalPrompter(): Prompter {
 									...(options.hint === undefined ? {} : { hint: options.hint }),
 									...(options.fallback === undefined ? {} : { placeholder: options.fallback }),
 									...(options.journey === undefined ? {} : { journey: options.journey }),
+									// Forwarded, not assumed: an optional question and a default both end with an empty line,
+									// and a field that refuses one turns "enter, enter" into a dead end.
+									...(options.required === undefined ? {} : { required: options.required }),
 								});
 				} catch (error) {
 					if (error instanceof Cancelled) throw cancelled();

@@ -177,7 +177,8 @@ export class TerminalScreen implements Screen {
 				this.settle();
 				reject(new Cancelled());
 			};
-			this.show(list, hints("select", options.journey !== undefined));
+			// A list has no journey line and no ctrl+o: its footer says only the keys it answers.
+			this.show(list, hints("select", false));
 		});
 	}
 
@@ -211,6 +212,7 @@ export class TerminalScreen implements Screen {
 				...(options.hint === undefined ? {} : { hint: options.hint }),
 				...(options.flag === undefined ? {} : { flag: options.flag }),
 				...(options.journey === undefined ? {} : { journey: options.journey }),
+				...(options.required === undefined ? {} : { required: options.required }),
 			});
 			field.onSubmit = (value) => {
 				this.settle();
