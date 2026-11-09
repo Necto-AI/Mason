@@ -194,23 +194,30 @@ describe("the screens", () => {
 		await harness.dispose();
 	});
 
-	test("a bare slash starts the filter, and escape clears it before it means back", async () => {
+	test("typing starts the filter, and escape clears it before it means back", async () => {
 		const harness = await openScreen();
 		harness.screen.where({ title: "Provider", index: 2, total: 7 });
 		const answering = harness.screen.select("provider.id", "Which provider?", [
 			{ value: "anthropic", label: "anthropic", description: "the console" },
 			{ value: "openrouter", label: "openrouter", description: "one key, many models" },
+			{ value: "opencode-go", label: "opencode-go", description: "a subscription" },
 			{ value: "faux", label: "faux", description: "the offline provider" },
 		]);
 		await harness.settle();
-		// A letter is not a filter: a list is also a place where a person drops and adds entries.
-		await harness.press("z");
-		assert.match(harness.frame(), /▌ anthropic/);
-		await harness.press("/");
-		assert.match(harness.frame(), /\/type to filter/);
-		for (const char of "open") await harness.press(char);
+		// No prefix key: the word itself is the filter, which is the whole point of a long list.
+		await harness.press("o");
+		await harness.press("p");
+		await harness.press("e");
+		await harness.press("n");
+		assert.match(harness.frame(), /❯ open/, "the query is drawn as a line a person typed into");
 		assert.match(harness.frame(), /▌ openrouter/);
+		assert.match(harness.frame(), /2 of 4/, "the count says how much of the list is left");
 		assert.doesNotMatch(harness.frame(), /anthropic/);
+		await harness.press("c");
+		assert.match(harness.frame(), /▌ opencode-go/, "the filter narrows as the word grows");
+		assert.doesNotMatch(harness.frame(), /openrouter/);
+		await harness.press("\x7f");
+		assert.match(harness.frame(), /▌ openrouter/, "backspace widens it again");
 		await harness.press("\x1b");
 		assert.match(harness.frame(), /▌ anthropic/, "escape cleared the filter, and did not cancel the question");
 		// The rejection handler is attached before the key that causes it: a promise rejected in the tick a keypress runs in is
@@ -228,13 +235,57 @@ describe("the screens", () => {
 		harness.screen.where({ title: "Provider", index: 2, total: 7 });
 		void harness.screen.select("provider.id", "Which provider?", [{ value: "faux", label: "faux" }]);
 		await harness.settle();
-		await harness.press("/");
 		for (const char of "zzz") await harness.press(char);
 		assert.match(harness.frame(), /no match/);
 		await harness.press("\r");
 		await harness.settle();
 		assert.match(harness.frame(), /no match/, "the question is still the one being asked");
 		await harness.dispose();
+	});
+
+	test("a pinned row outlives the filter: the way out is there when nothing matches", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Model", index: 3, total: 7 });
+		const answering = harness.screen.select("provider.model", "Which model?", [
+			{ value: "claude-haiku-5-5", label: "claude-haiku-5-5" },
+			{ value: "minimax-m3", label: "minimax-m3" },
+			{ value: "__custom", label: "+ a model id I type myself", pinned: true },
+		]);
+		await harness.settle();
+		for (const char of "gpt-5") await harness.press(char);
+		assert.match(harness.frame(), /0 of 2/, "the count is of the rows the query kept, not of the pinned row");
+		assert.match(
+			harness.frame(),
+			/▌ \+ a model id I type myself/,
+			"the escape row is still the row a keypress is on",
+		);
+		await harness.press("\r");
+		assert.equal(await answering, "__custom");
+		await harness.dispose();
+	});
+
+	test("a long list says it can be filtered, and a short one stays quiet", async () => {
+		const long = await openScreen();
+		void long.screen.select(
+			"provider.id",
+			"Which provider?",
+			Array.from({ length: 9 }, (_, index) => ({
+				value: `p${index}`,
+				label: `provider-${index}`,
+			})),
+		);
+		await long.settle();
+		assert.match(long.frame(), /❯ type to filter/);
+		await long.dispose();
+
+		const short = await openScreen();
+		void short.screen.select("provider.id", "Which provider?", [
+			{ value: "a", label: "alpha" },
+			{ value: "b", label: "beta" },
+		]);
+		await short.settle();
+		assert.doesNotMatch(short.frame(), /type to filter/, "three rows and a caret line is more chrome than list");
+		await short.dispose();
 	});
 
 	test("below ninety columns the description moves under the list instead of beside it", async () => {

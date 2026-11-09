@@ -29,7 +29,13 @@ import { botPaths, type HousePaths } from "../src/server/house.ts";
 import { readInstalls } from "../src/server/install-state.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { checkPodman, listening } from "../src/server/podman.ts";
-import { modelIds, openProviders, type ProviderAccess, providerIds, verifyCompletion } from "../src/server/provider.ts";
+import {
+	modelChoices,
+	openProviders,
+	type ProviderAccess,
+	providerIds,
+	verifyCompletion,
+} from "../src/server/provider.ts";
 import { BOT_NAME, botHome, COMMON, type MasonRoot, readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
 import { TerminalScreen } from "../src/tui/app.ts";
 import type { Choice, StatusRow } from "../src/tui/components.ts";
@@ -412,24 +418,35 @@ async function provider(ctx: Context): Promise<Direction> {
 			...(journey === undefined ? {} : { journey }),
 		});
 	}
-	const models = modelIds(access, id);
+	const models = modelChoices(access, id);
 	const current = draft.provider?.id === id ? draft.provider.model : undefined;
-	const picked = await screen.select(
-		"provider.model",
-		"Which model?",
-		[
-			...models.map((model): Choice => ({ value: model, label: model })),
-			{ value: "__custom", label: "a model id I type myself", description: "for a model this build does not list" },
-		],
-		{
-			...(current === undefined ? {} : { value: models.includes(current) ? current : "__custom" }),
-			hint: `${models.length} model${models.length === 1 ? "" : "s"} this build knows for ${id}; type to filter`,
-		},
-	);
+	// A catalog with nothing in it is a text field, not a one-row menu.
+	const picked =
+		models.length === 0
+			? "__custom"
+			: await screen.select(
+					"provider.model",
+					"Which model?",
+					[
+						...models.map((model): Choice => ({ ...model })),
+						{
+							value: "__custom",
+							label: "+ a model id I type myself",
+							description: "for a model this build does not list",
+							pinned: true,
+						},
+					],
+					{
+						...(current === undefined
+							? {}
+							: { value: models.some((row) => row.value === current) ? current : "__custom" }),
+						hint: `this build's catalog, read offline: ${models.length} model${models.length === 1 ? "" : "s"} for ${id}`,
+					},
+				);
 	const model =
 		picked === "__custom"
 			? await screen.text("provider.model.custom", "The model id", {
-					...(current === undefined || models.includes(current) ? {} : { value: current }),
+					...(current === undefined ? {} : { value: current }),
 					hint: `as ${id} spells it; the provider checks it, not this build`,
 					flag: "--model <id>",
 				})

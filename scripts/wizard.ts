@@ -20,6 +20,8 @@ export interface Choice {
 	readonly value: string;
 	readonly label: string;
 	readonly description?: string;
+	/** A row the filter never takes away: an action, or the way out of a list that does not hold the answer. */
+	readonly pinned?: boolean;
 }
 
 export interface TextQuestion {
@@ -44,6 +46,13 @@ export interface TextQuestion {
 export interface PickQuestion {
 	/** e.g. `--provider <id>`: what a headless run should pass instead of an answer. */
 	readonly flag?: string;
+	/** One line of context under the question: where the list comes from, or how much of it there is. */
+	readonly hint?: string;
+	/**
+	 * What a scripted run takes when the answer was not among its flags: named by the caller, never guessed here, because
+	 * a default this file chose would be a decision about somebody's bot.
+	 */
+	readonly fallback?: string;
 }
 
 /** What the flow may ask. Every method is one question, and nothing here decides what an answer means. */
@@ -93,6 +102,8 @@ export function scriptedPrompter(answers: ScriptedAnswers): Prompter {
 				return scripted;
 			}
 			if (choices.length === 1 && choices[0] !== undefined) return choices[0].value;
+			const fallback = options.fallback;
+			if (fallback !== undefined && choices.some((choice) => choice.value === fallback)) return fallback;
 			throw new MissingAnswer(
 				`no terminal, and ${question}: pass ${options.flag ?? "--connector <name>"}, one of ` +
 					`${choices.map((choice) => choice.value).join(", ")}`,
@@ -155,7 +166,7 @@ export function terminalPrompter(): Prompter {
 	const cancelled = (): MissingAnswer => new MissingAnswer("cancelled: nothing was written");
 
 	return {
-		async pick(question, choices) {
+		async pick(question, choices, options = {}) {
 			try {
 				return await screen.select(
 					"wizard.pick",
@@ -164,7 +175,9 @@ export function terminalPrompter(): Prompter {
 						value: choice.value,
 						label: choice.label,
 						...(choice.description === undefined ? {} : { description: choice.description }),
+						...(choice.pinned === undefined ? {} : { pinned: choice.pinned }),
 					})),
+					options.hint === undefined ? {} : { hint: options.hint },
 				);
 			} catch (error) {
 				if (error instanceof Cancelled) throw cancelled();
