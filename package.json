@@ -23,6 +23,7 @@
 		"test:packages": "node --experimental-strip-types --experimental-sqlite --test packages/protocol/test/*.test.ts packages/connector/test/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"gen:surface": "node --experimental-strip-types scripts/surface.ts",
+		"gen:frames": "node --experimental-strip-types scripts/gen-frames.ts",
 		"prompt": "node --experimental-strip-types scripts/prompt.ts",
 		"gen:surface:check": "node --experimental-strip-types scripts/surface.ts --check",
 		"check:docs": "node --experimental-strip-types scripts/doc-budget.ts --check",

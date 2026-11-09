@@ -189,6 +189,65 @@ describe("a first run, on disk", () => {
 		assert.match(page?.choices?.join(" ") ?? "", /continue/, "and continuing is offered");
 	});
 
+	test("two connectors in one run: two entries, one credential each, and a doctor that passes", async () => {
+		offline();
+		const root = await tempRoot();
+		// The flags answer the connectors page, so this run is one pass over the whole wizard with two connectors in it: the
+		// entry that is written and the credential that is minted are what the page promised, on disk.
+		const screen = new ScriptedScreen({
+			"welcome.mode": "quickstart",
+			"provider.id": "faux",
+			"provider.model": "faux-1",
+			"agent.name": "alice",
+			"connectors.list": "continue",
+			"review.action": "apply",
+			"done.action": "finish",
+		});
+		const code = await runOnboarding({
+			root,
+			screen,
+			setup: [
+				"--connector",
+				"console",
+				"--connector",
+				"custom",
+				"--url",
+				"ws://127.0.0.1:9/api/connector",
+				"--owner",
+				"@me",
+				"--no-start",
+			],
+		});
+		// 0 is also the doctor's verdict: `runOnboarding` returns 1 when any check failed, so this line says nine of nine.
+		assert.equal(code, 0, "the run installed both and the checks passed");
+
+		const integrations = await json(join(root, "alice", "service", "integrations.json"));
+		assert.deepEqual(
+			Object.keys(integrations.integrations ?? {}).sort(),
+			["console", "custom"],
+			"one entry per connector",
+		);
+
+		const config = (await json(join(root, "alice", "service", "config.json"))) as {
+			connectors?: readonly { id: string; connector: string; sha256: string }[];
+		};
+		const credentials = config.connectors ?? [];
+		assert.equal(credentials.length, 2, "one credential per connector");
+		assert.deepEqual(
+			credentials.map((record) => record.connector).sort(),
+			["console", "custom"],
+			"each credential names the connector it opens",
+		);
+		assert.ok(
+			credentials.every((record) => /^con_[0-9a-f]{8}$/.test(record.id) && /^[0-9a-f]{64}$/.test(record.sha256)),
+			"and each is a hash, not a secret",
+		);
+		assert.ok(
+			!(await read(join(root, "alice", "service", "config.json"))).includes("masonc_"),
+			"only hashes on disk",
+		);
+	});
+
 	test("an advanced run writes the same files, with the questions it adds", async () => {
 		offline();
 		const root = await tempRoot();
