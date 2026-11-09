@@ -1,6 +1,5 @@
 name: Feature request
 description: Propose a capability or behavior change.
-title: ""
 labels:
   - feature
   - needs-triage
