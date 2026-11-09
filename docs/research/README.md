@@ -27,7 +27,7 @@ Stated once here, because they are what the plans are built on. Each names where
    about a policy file. (`always-on-agents/08`, §1)
 2. **Every agent gets its own machine, and the isolation unit is a product decision with a bill attached.** Per user
    shared by agents (Grok Bot) makes collaboration free and compartmentalisation impossible; per agent (OpenBot, dots)
-   buys the opposite. Apiary's whole shape depended on which one mason is; **answered 2026-11-02:** one container per bot,
+   buys the opposite. A product built around agents depends on this choice; **answered 2026-11-02:** one container per bot,
    and several bots are a fleet speaking A2A ([`../FLEET-PLAN.md`](../FLEET-PLAN.md)). (`always-on-agents/08`, §2)
 3. **A credential must never enter the context window.** Three closed vendors, three mechanisms, one invariant: the model
    is given a reference or a surrogate, and the real secret is substituted at the network boundary by something that is
