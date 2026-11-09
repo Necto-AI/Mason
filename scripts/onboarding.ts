@@ -37,6 +37,7 @@ import {
 	verifyCompletion,
 } from "../src/server/provider.ts";
 import { BOT_NAME, botHome, COMMON, type MasonRoot, readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
+import { masonPort } from "../src/setup/plan.ts";
 import { TerminalScreen } from "../src/tui/app.ts";
 import type { Choice, StatusRow } from "../src/tui/components.ts";
 import { providerJourney, variableJourney } from "../src/tui/journeys.ts";
@@ -45,13 +46,7 @@ import type { Glyphs, Paint } from "../src/tui/style.ts";
 import { CONSOLE } from "./chat.ts";
 import { parseArgs as parseInitArgs, runInit } from "./init.ts";
 import { runNew } from "./new.ts";
-import {
-	masonPort,
-	parseEvents as parseGrantEvents,
-	parseArgs as parseSetupArgs,
-	runSetup,
-	splitIds,
-} from "./setup.ts";
+import { parseEvents as parseGrantEvents, parseArgs as parseSetupArgs, runSetup, splitIds } from "./setup.ts";
 import { MissingAnswer, type Prompter } from "./wizard.ts";
 
 /** `kind=hook` pairs, as the grant carries them. */
