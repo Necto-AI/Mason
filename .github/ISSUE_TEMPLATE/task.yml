@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use a title in the form `area: short outcome`. Keep one issue focused on one outcome.
+        Use a title in the form `area: short outcome`. Keep one issue focused on one outcome. Do not include credentials, private URLs, personal data, or exploitable details.
   - type: textarea
     id: goal
     attributes:
