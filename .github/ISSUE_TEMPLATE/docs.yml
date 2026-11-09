@@ -1,6 +1,5 @@
 name: Documentation
 description: Report missing, unclear, or incorrect documentation.
-title: ""
 labels:
   - docs
   - needs-triage
