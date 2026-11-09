@@ -10,6 +10,7 @@ Mason is an open runtime for building, connecting, and running AI agents. Siblin
 - [Specification](docs/SPEC.md) — product contracts and planned behavior.
 - [ADRs](docs/adr/) — decisions relevant to the area.
 - [Glossary](GLOSSARY.md) — project terminology.
+- [Issue conventions](docs/agents/issue-tracker.md) — issue format and labels.
 
 Do not read every document by default. Follow the links relevant to the task.
 
