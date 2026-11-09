@@ -8,7 +8,7 @@
  *
  * They share one keyboard, because a wizard where escape means "back" on one screen and "cancel" on the next is a wizard
  * a person has to learn twice. `enter` continues or selects, `escape` cancels, the arrows move a selection or scroll a
- * page, space continues a page, and a bare `/` starts a filter in a list.
+ * page, space continues a page, and any other character starts a filter in a list.
  *
  * `MaskedField` is the one component with a security argument. A secret typed into a screen is a secret written to the
  * terminal, to a scrollback buffer, and to whatever records the session, so this field keeps the value in memory, draws
@@ -50,6 +50,12 @@ export interface Choice {
 	readonly value: string;
 	readonly label: string;
 	readonly description?: string;
+	/**
+	 * A row a filter never removes: an action ("+ add another") or the way out of the list ("+ a model id I type
+	 * myself"). Those are exactly the rows a person needs when what they typed matches nothing, so a search that took
+	 * them away would take away the answer.
+	 */
+	readonly pinned?: boolean;
 }
 
 /** One row of a status list: what is being done, and how it went. */
@@ -94,6 +100,14 @@ const BOXED_INSET = 6;
  * a window's width must not be what decides whether a block is a plan.
  */
 const BOXED_MIN_LINES = 5;
+
+/**
+ * The row count from which a list says it can be filtered before anyone types.
+ *
+ * Below this the whole list is already on one screen and the invitation is a line of chrome for a feature nobody needs:
+ * three rows and a caret line is more furniture than list. At eight the question has become "where is mine".
+ */
+const FILTER_HINT_MIN = 8;
 
 /** The glyph for a running operation at `now`: deterministic, so a test can assert the frame it expects. */
 export function spinnerFrame(glyphs: Glyphs, now = Date.now()): string {
@@ -198,12 +212,14 @@ function fieldText(
 }
 
 /**
- * A list, with an optional filter.
+ * A list, with a filter that typing starts.
  *
  * The filter is on for every list rather than for "long" ones: a person who has seen a provider list forty entries long
- * types into the next one that is four. It is started by `/` and not by a letter, because a list is also a place where a
- * person adds and drops entries, and a filter that swallowed those keys would be a list that cannot be edited. `escape`
- * clears the filter before it means "back", so a mistyped letter is one key from gone.
+ * types into the next one that is four. A letter starts it rather than a `/` first, because the question a long list
+ * asks is "where is mine", and the answer is the word itself. Nothing in a list is bound to a letter, so the keys that
+ * would have been shortcuts cost nothing; the rows that are actions rather than choices are pinned and outlive the
+ * filter. `escape` clears the filter before it means "back", so a mistyped letter is one key from gone, and `/` alone
+ * still starts an empty one, which is what the fingers of anyone who learned the older gesture will do.
  */
 export class ChoiceList implements Body {
 	onSelect?: (value: string) => void;
@@ -261,7 +277,10 @@ export class ChoiceList implements Body {
 	visible(): readonly Choice[] {
 		const query = this.query.trim().toLowerCase();
 		if (query === "") return this.all;
-		return this.all.filter((choice) => `${choice.label} ${choice.description ?? ""}`.toLowerCase().includes(query));
+		return this.all.filter(
+			(choice) =>
+				choice.pinned === true || `${choice.label} ${choice.description ?? ""}`.toLowerCase().includes(query),
+		);
 	}
 
 	build(): Renderable {
@@ -287,17 +306,11 @@ export class ChoiceList implements Body {
 		if (this.preface.length > 0) root.add(this.review());
 		root.add(prose(this.geometry, this.ink, paint.heading(this.question), columns));
 		if (this.hint !== undefined) root.add(prose(this.geometry, this.ink, paint.dim(this.hint), columns));
-		if (this.typing)
-			root.add(
-				prose(
-					this.geometry,
-					this.ink,
-					`${paint.dim("/")}${this.query === "" ? paint.dim("type to filter") : this.query}`,
-					columns,
-				),
-			);
-		root.add(gap(this.geometry));
 		const rows = this.visible();
+		// One line, drawn while the filter is being used and left as an invitation on a list long enough to need one. The
+		// count is what tells a person the filter is not the reason a row is missing.
+		if (this.typing || this.all.length >= FILTER_HINT_MIN) root.add(block(this.geometry, this.filterLine(rows)));
+		root.add(gap(this.geometry));
 		this.index = Math.min(this.index, Math.max(0, rows.length - 1));
 		if (rows.length === 0) {
 			root.add(prose(this.geometry, this.ink, paint.dim("no match"), columns));
@@ -336,6 +349,24 @@ export class ChoiceList implements Body {
 			root.add(gap(this.geometry));
 			root.add(prose(this.geometry, this.ink, paint.dim(selected.description), columns));
 		}
+	}
+
+	/** The filter as a line a person types into: the query, a cursor cell, and how much of the list is left. */
+	private filterLine(rows: readonly Choice[]): StyledText {
+		const { paint, glyphs } = this.geometry;
+		if (!this.typing || this.query === "")
+			return this.ink.line(`${paint.accent(glyphs.prompt)} ${paint.dim("type to filter")}`);
+		// The count is of the rows the query kept, never of the pinned ones: an action that outlived the filter is not an
+		// answer to it, and "0 of 2" beside "a model id I type myself" is the sentence a person needs.
+		const choosable = this.all.filter((choice) => choice.pinned !== true);
+		const matched = rows.filter((choice) => choice.pinned !== true);
+		const tag = matched.length === choosable.length ? undefined : `${matched.length} of ${choosable.length}`;
+		return fieldText(this.geometry, this.ink, {
+			before: this.query,
+			under: "",
+			after: "",
+			...(tag === undefined ? {} : { tag }),
+		});
 	}
 
 	/** The lines above the question, boxed when they are what the answer is about rather than a sentence about it. */
@@ -410,11 +441,11 @@ export class ChoiceList implements Body {
 		const typed = typedChar(key);
 		if (typed === undefined || !this.searchable) return false;
 		if (!this.typing) {
-			if (typed !== "/") return false;
 			this.typing = true;
 			this.query = "";
 			this.index = 0;
-			return true;
+			// The older gesture: `/` starts the filter and is not part of the query, so a hand that learned it keeps working.
+			if (typed === "/") return true;
 		}
 		this.query += typed;
 		this.index = 0;

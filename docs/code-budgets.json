@@ -4,9 +4,9 @@
 		"evals": 565,
 		"packages/connector/src": 2533,
 		"packages/protocol/src": 240,
-		"scripts": 4122,
+		"scripts": 4173,
 		"src/server": 6811,
 		"src/shared": 54,
-		"src/tui": 1686
+		"src/tui": 1696
 	}
 }
