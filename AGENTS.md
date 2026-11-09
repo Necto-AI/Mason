@@ -32,9 +32,9 @@ tool or entry kind is invisible until the whitelist says so.
 4. **Always split Harness vs. Tool Execution via `@earendil-works/pi-env`:**
    - Never use `NodeExecutionEnv` directly in the agent harness when `pi-env` is available.
    - Connect `RemoteExecutionEnv` (or `LocalExecutionEnv`) to a `Connection` running `localDaemon()` (the binary ships in `@earendil-works/pi-env`), or an SSH target when configured.
-5. **Run TypeScript directly from source on Node 22:**
+5. **Run TypeScript directly from source on Node 26:**
    - Use `node --experimental-strip-types ...` for all server entrypoints and tests. There is no `--conditions=source`
-     any more: it made a published package resolve to `src/`, which is not in its tarball.
+     any more: it made a published package resolve to `src/`, which is not in its tarball. The floor is 26.4.
 6. **Every way in goes through a credential check.** There is one credential class, the connector's: a hashed entry in `service/config.json`, read as `Authorization: Bearer` on every upgrade (`src/server/connectors.ts`), so a revoke lands on the next connection. It opens `/api/connector` and the one attachment upload path and nothing else. `/api/health` is the only path that answers without a credential, and it answers one word. A new entry point — another route, another socket, another tool that reaches the network — is unauthenticated until it says how it is opened, and `npm run gen:surface` fails on a route no door names. Responses carry the security headers from `main.ts`; a new route gets them for free and must not widen them.
 7. **The catalog is live, and no MCP tool schema enters the registry.** The surface is `mcp_search`/`mcp_describe`/
    `mcp_call` and the catalog behind them, because a tool that appears mid-conversation would re-price the prompt prefix.
@@ -68,8 +68,8 @@ tool or entry kind is invisible until the whitelist says so.
   chosen one needs, writes the grant through the writer the boot reads, mints one credential, renders
   `service/connectors/<name>/compose.yaml` (`connector-compose.ts`) and starts it through `podman compose` (`podman.ts`)
   with `restart: always`, and reports `podman-restart.service` when the boot half of that policy is missing. Every step has a flag (`--connector`, `--url`, `--env K=V`,
-  `--owner`, `--no-start`, `--yes`), so CI drives the same flow with no terminal, and the wizard (`scripts/wizard.ts`,
-  `@earendil-works/pi-tui`) is a shell over it. `mason chat` is the built-in `console` connector: it mints its own
+  `--owner`, `--no-start`, `--yes`), so CI drives the same flow with no terminal, and the wizard (`scripts/wizard.ts`)
+  is a shell over it, drawn by `src/tui/`. `mason chat` is the built-in `console` connector: it mints its own
   credential for that entry and opens the same socket every connector opens. `service/connectors.json` records what was
   installed; the server never reads it.
 
