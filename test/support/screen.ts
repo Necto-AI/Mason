@@ -93,6 +93,9 @@ export async function openScreen(options: HarnessOptions = {}): Promise<Harness>
 		settle,
 		dispose: async () => {
 			open.delete(harness);
+			// The screen first: `busy` runs on an interval of its own, and a test that fails between busy(true) and
+			// busy(false) would otherwise leave it running, which keeps the process alive after the last assertion.
+			screen.close();
 			await setup.dispose();
 		},
 	};

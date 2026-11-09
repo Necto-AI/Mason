@@ -458,10 +458,19 @@ async function provider(ctx: Context): Promise<Direction> {
 		no: "skip: the install checks it before it writes anything",
 	});
 	if (!check) return NEXT;
+	// The wait is the screen, not a frozen frame: one real completion takes seconds on a provider with a queue, and a
+	// screen that does not move for seconds is a screen a person calls broken. The row says what is being waited on.
+	const running: StatusRow = {
+		label: `${id}/${model}`,
+		state: "run",
+		detail: "one real completion, nothing written yet",
+	};
+	const progress = screen.progress("provider.checking", "Checking the provider", [running]);
 	screen.busy(true);
 	try {
 		const reply = await io.verify(access, { provider: id, modelId: model }, key);
 		screen.busy(false);
+		progress.close();
 		await screen.note("provider.ok", "The provider answered", {
 			lines: [
 				`${glyphs.ok} ${id}/${model} answered ${JSON.stringify(reply.slice(0, 60))}`,
@@ -473,6 +482,7 @@ async function provider(ctx: Context): Promise<Direction> {
 		return NEXT;
 	} catch (error) {
 		screen.busy(false);
+		progress.close();
 		await screen.note("provider.failed", "The provider did not answer", {
 			lines: [
 				paint.bad(`${glyphs.fail} ${error instanceof Error ? error.message : String(error)}`),

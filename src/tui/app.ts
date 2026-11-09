@@ -298,13 +298,18 @@ export class TerminalScreen implements Screen {
 	}
 
 	busy(on: boolean): void {
+		this.frame.setBusy(on);
 		if (!on) {
 			this.stopBusy?.();
 			this.stopBusy = undefined;
+			this.renderer.requestRender();
 			return;
 		}
 		if (this.stopBusy !== undefined) return;
 		const timer = setInterval(() => {
+			// The chrome turns whether or not the body can: a screen with no running row still has to show that the wait is
+			// a wait and not a dead process.
+			this.frame.tick();
 			this.active?.tick?.();
 			this.renderer.requestRender();
 		}, SPINNER_REPAINT_MS);
