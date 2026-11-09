@@ -16,6 +16,8 @@
  * 4. **Delivery.** A reply committed as an `app.reply` entry is owed to the connector it addresses. The outbox sends it,
  *    records the acknowledgement as an `app.delivery` entry, resends what was never acknowledged, and never retries an
  *    `uncertain` answer — a person who received the same message twice is the failure this arrangement exists to avoid.
+ *    What is owed is read from the transcript once at boot and kept from the live window after that, so a reply that
+ *    scrolls out of the window while a connector is away is still sent.
  *
  * What is *not* here: the owner's token. A connector credential opens this socket and the attachment endpoints and
  * nothing else; the config is read per request, so a revoke lands on the next connection rather than the next restart.
@@ -26,7 +28,14 @@ import type { IncomingMessage } from "node:http";
 import { basename, join } from "node:path";
 import { createHost, type Host, type Link, webSocketLink } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Conversation, ConversationView, EntryRecord, SubmissionDraft } from "@earendil-works/pi-durable";
+import type {
+	Conversation,
+	ConversationView,
+	Cursor,
+	EntryId,
+	EntryRecord,
+	SubmissionDraft,
+} from "@earendil-works/pi-durable";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import {
 	type AppendArgs,
@@ -51,7 +60,7 @@ import {
 	SessionSchema,
 } from "mason-protocol";
 import type { WebSocket } from "ws";
-import { CONNECTOR_ENTRY_KIND, DELIVERY_ENTRY_KIND, NOTICE_ENTRY_KIND, REPLY_ENTRY_KIND } from "../shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, DELIVERY_ENTRY_KIND, NOTICE_ENTRY_KIND } from "../shared/contract.ts";
 import { ATTACHMENT_LIMIT, type AttachmentStore } from "./attachments.ts";
 import { commandTarget, runCommand } from "./commands.ts";
 import { authenticateConnector, type ConnectorGrant, connectorGrantFor, ownerRefusal } from "./connectors.ts";
@@ -78,6 +87,12 @@ const DELIVERY_TIMEOUT_MS = 15_000;
 
 /** How long a fresh reference may take to bind before the delivery is left owed: a connector mid-handshake is not lost. */
 const REFERENCE_TIMEOUT_MS = 10_000;
+
+/** One page of the boot scan of the transcript. */
+const OWED_SEED_PAGE = 128;
+
+/** How many of those pages it will read before it says it stopped at the cap rather than silently truncating. */
+const OWED_SEED_MAX_PAGES = 512;
 
 /** Who is on the other end of a link. The credential wrote it and nothing on the wire may change it. */
 export interface ConnectorPrincipal {
@@ -150,6 +165,12 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	let latest: ConversationView | undefined;
 	let flushing: Promise<void> | undefined;
 	let dirty = false;
+	/**
+	 * What the outbox still owes, keyed by delivery id. Seeded once from the transcript at boot, then kept by the door's
+	 * window: a reply the window shows is owed, and its acknowledgement — or a delivery this process made — removes it.
+	 */
+	const owed = new Map<string, OwedReply>();
+	let seeded = false;
 
 	// One watch for the whole door: the outbox reads the same revision. A per-socket watch would be one listener per
 	// connector on a log that already fans out to every reader.
@@ -199,8 +220,9 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	 * Send every reply an open connector is owed, in the order they were committed.
 	 *
 	 * One flush at a time, coalesced: a flush asked for while one is running is a rerun of the whole door, never a second
-	 * pass for one connector — the replies a connector is owed are read from the transcript, so the pass that runs last is
-	 * the one that is right.
+	 * pass for one connector — the replies a connector is owed are one set, so the pass that runs last is the one that is
+	 * right. The set is read from the transcript once, on the first pass after boot, and the door's window keeps it after
+	 * that: the newest entries say a reply is owed, and nothing else here reads the record.
 	 */
 	async function flush(): Promise<void> {
 		if (flushing !== undefined) {
@@ -210,9 +232,21 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		flushing = (async () => {
 			do {
 				dirty = false;
+				if (!seeded) {
+					try {
+						await seedOwed();
+						seeded = true;
+					} catch (error) {
+						// Without the transcript there is no answer to "what is owed", and a guess is a second copy of something
+						// already sent. Nothing goes out this pass; the next one reads again.
+						log(`[connector] the outbox could not read the transcript: ${textOf(error)}`);
+						return;
+					}
+				}
 				const view = latest ?? watch.value;
 				if (view === undefined) return;
-				for (const [name, records] of owedReplies(view)) {
+				maintainOwed(view);
+				for (const [name, records] of owedByConnector()) {
 					for (const record of records) {
 						if (!links.has(name)) break;
 						try {
@@ -235,26 +269,81 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		return flushing;
 	}
 
-	/** The committed replies each connected connector still owes: its address, no acknowledgement recorded, in order. */
-	function owedReplies(view: ConversationView): Array<[string, ReplyRecord[]]> {
-		const entries = (view.entries ?? []) as readonly EntryRecord[];
-		const acknowledged = new Set<string>();
-		for (const entry of entries) {
-			if (entry.kind !== DELIVERY_ENTRY_KIND) continue;
-			const data = entry.data as { deliveryId?: unknown } | undefined;
-			if (typeof data?.deliveryId === "string") acknowledged.add(data.deliveryId);
+	/**
+	 * Everything the transcript says is still owed, read once at boot in one paged pass.
+	 *
+	 * The window is not a record: a reply that fell out of it while a connector was away — its turn still running, its
+	 * socket reconnecting, a pass paused — is still owed, and the transcript is the only place that says so. Descending,
+	 * because an acknowledgement is always committed after the reply it settles: a read that stops early must keep the
+	 * newest entries, where a reply and its ack still sit together. Cutting the other end would keep a reply and lose its
+	 * ack, which is a message the transcript already settled being sent a second time. Order of delivery does not depend
+	 * on this read: `owedByConnector` sorts by entry id.
+	 */
+	async function seedOwed(): Promise<void> {
+		const seededOwed = await conversation.commit(async (tx) => {
+			const replies: OwedReply[] = [];
+			const acknowledged = new Set<string>();
+			let cursor: Cursor | undefined;
+			let complete = false;
+			for (let page = 0; page < OWED_SEED_MAX_PAGES; page += 1) {
+				const scanned = await tx.scanEntries(
+					{ conversationId: conversation.id, order: "descending" },
+					OWED_SEED_PAGE,
+					cursor,
+				);
+				for (const entry of scanned.items) {
+					const owedEntry = owedEntryOf(entry);
+					if (owedEntry !== undefined) {
+						replies.push(owedEntry);
+						continue;
+					}
+					const delivered = deliveredIdOf(entry);
+					if (delivered !== undefined) acknowledged.add(delivered);
+				}
+				if (scanned.next === undefined) {
+					complete = true;
+					break;
+				}
+				cursor = scanned.next;
+			}
+			return { replies: replies.filter((item) => !acknowledged.has(item.record.deliveryId)), complete };
+		}, BACKGROUND_CONTEXT);
+		if (!seededOwed.complete) {
+			log(
+				`[connector] the outbox stopped at ${OWED_SEED_MAX_PAGES} pages of the transcript: ` +
+					"a reply owed from further back than that is not tracked, and the window cannot bring it back",
+			);
 		}
-		const byConnector = new Map<string, ReplyRecord[]>();
-		for (const entry of entries) {
-			if (entry.kind !== REPLY_ENTRY_KIND) continue;
-			const record = replyRecordOf(entry);
-			if (record?.address === undefined || acknowledged.has(record.deliveryId)) continue;
-			const name = record.address.connector;
+		for (const item of seededOwed.replies) owed.set(item.record.deliveryId, item);
+	}
+
+	/** Keep the set on the window: a reply that appears is owed, and the acknowledgement of one takes it out. */
+	function maintainOwed(view: ConversationView): void {
+		for (const entry of (view.entries ?? []) as readonly EntryRecord[]) {
+			const owedEntry = owedEntryOf(entry);
+			if (owedEntry !== undefined) {
+				owed.set(owedEntry.record.deliveryId, owedEntry);
+				continue;
+			}
+			const delivered = deliveredIdOf(entry);
+			if (delivered !== undefined) owed.delete(delivered);
+		}
+	}
+
+	/** The replies each open connector still owes: one destination, in the order the transcript holds them. */
+	function owedByConnector(): Array<[string, ReplyRecord[]]> {
+		const byConnector = new Map<string, OwedReply[]>();
+		for (const item of owed.values()) {
+			const name = item.record.address?.connector;
+			if (name === undefined || !links.has(name)) continue;
 			const list = byConnector.get(name) ?? [];
-			list.push(record);
+			list.push(item);
 			byConnector.set(name, list);
 		}
-		return [...byConnector].filter(([name]) => links.has(name));
+		return [...byConnector].map(([name, items]): [string, ReplyRecord[]] => [
+			name,
+			items.sort((left, right) => left.entryId - right.entryId).map((item) => item.record),
+		]);
 	}
 
 	/** One `deliver`, and its acknowledgement written down — whatever it says, including `uncertain`. */
@@ -504,18 +593,23 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	 * transcript already holds the first one.
 	 */
 	async function notice(name: string, args: Extract<AppendArgs, { type: "notice" }>): Promise<AppendResult> {
-		if (await noticeSeen(name, args.appendId)) return { outcome: "duplicate" };
+		// A write submission is the transcript's own index: its request id is durable, so a resend is the same act whether
+		// the first notice is the newest entry or a hundred entries back. A write starts no run, which is what a notice is.
+		const requestId = connectorRequestId(name, "notice", args.appendId);
+		const claimed = await claim(requestId);
+		if (claimed !== undefined) return { outcome: "duplicate", ...entryOf(claimed.entry) };
 		spend(name, "submission", CONNECTOR_SUBMISSION_LIMIT);
-		const placed = await conversation.commit(
-			(tx) =>
-				tx.appendEntry(conversation.id, {
-					kind: NOTICE_ENTRY_KIND,
-					data: { appendId: args.appendId, connector: name, text: args.text },
-				}),
+		const placed = await conversation.submit(
+			{
+				type: "write",
+				requestId,
+				entry: { kind: NOTICE_ENTRY_KIND, data: { appendId: args.appendId, connector: name, text: args.text } },
+			},
 			BACKGROUND_CONTEXT,
 		);
+		const record = await placed.status(BACKGROUND_CONTEXT);
 		log(`[connector] ${name}: notice ${args.appendId}`);
-		return { outcome: "accepted", ...entryOf(placed.id) };
+		return { outcome: "accepted", ...entryOf(record.entry) };
 	}
 
 	async function control(name: string, args: ControlArgs): Promise<ControlResult> {
@@ -571,22 +665,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	}
 
 	/** Whether this request id is already a durable claim, and what the claim says. */
-	/**
-	 * Whether this notice is already in the transcript.
-	 *
-	 * A notice becomes an entry, so the transcript is the record and the dedupe is a read of it: the newest window holds
-	 * every notice the retry could be repeating, and a restart reads the same answer the file gave.
-	 */
-	async function noticeSeen(name: string, appendId: string): Promise<boolean> {
-		const view = latest ?? watch.value;
-		return (view.entries ?? []).some(
-			(entry) =>
-				entry.kind === NOTICE_ENTRY_KIND &&
-				(entry.data as { appendId?: unknown; connector?: unknown } | undefined)?.appendId === appendId &&
-				(entry.data as { connector?: unknown }).connector === name,
-		);
-	}
-
 	async function claim(requestId: string): Promise<{ readonly entry?: number } | undefined> {
 		return conversation.commit(async (tx) => {
 			const existing = await tx.submissionByRequest(conversation.id, requestId);
@@ -611,6 +689,26 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			{ retryable: true },
 		);
 	}
+}
+
+/** One reply the outbox still owes, and where it sits in the transcript: entry order is the order it goes out in. */
+interface OwedReply {
+	readonly record: ReplyRecord;
+	readonly entryId: EntryId;
+}
+
+/** The reply one entry carries, when it is a committed send with an address: that is a reply the outbox owes. */
+function owedEntryOf(entry: EntryRecord): OwedReply | undefined {
+	const record = replyRecordOf(entry);
+	if (record?.address === undefined) return undefined;
+	return { record, entryId: entry.id };
+}
+
+/** The delivery id one entry acknowledges, when it is an `app.delivery`: that is a reply the outbox no longer owes. */
+function deliveredIdOf(entry: EntryRecord): string | undefined {
+	if (entry.kind !== DELIVERY_ENTRY_KIND) return undefined;
+	const data = entry.data as { deliveryId?: unknown } | undefined;
+	return typeof data?.deliveryId === "string" ? data.deliveryId : undefined;
 }
 
 /** Write one acknowledgement down as its own entry: the outbox's record that this delivery is no longer owed. */
@@ -691,7 +789,11 @@ function payloadText(payload: unknown, summary: string | undefined): string {
 }
 
 /** A request id namespaced by connector and act: the durable log holds it forever, so two senders cannot collide. */
-export function connectorRequestId(connector: string, act: "submission" | "fire" | "control", id: string): string {
+export function connectorRequestId(
+	connector: string,
+	act: "submission" | "fire" | "notice" | "control",
+	id: string,
+): string {
 	return `connector:${connector}:${act}:${id}`;
 }
 

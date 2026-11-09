@@ -9,8 +9,8 @@ about the contracts.*
 mason stays a **single-bot system**, and it is a **headless backend before it is anything else**. **Telegram is the
 first interface** — the cheapest way to test the backend where the person already is — not the product definition.
 Multi-bot routing, orchestration, agent-to-agent protocol and every rich client — web, desktop, mobile — belong to
-sibling, which will integrate with mason as a backend rather than replace it
-(`docs/adr/0004-mason-is-a-headless-backend.md`). mason's investment therefore goes to the contract and its guarantees:
+a separate client, which consumes Mason through the connector contract
+(`docs/adr/0004-mason-is-a-headless-backend.md`). Mason's investment therefore goes to the contract and its guarantees:
 security, identity and attribution, approvals, schedules, memory, the integration framework, delivery, backup and
 recovery, evaluation.
 
@@ -41,8 +41,8 @@ and about five other people:
    ask for it.
 9. **Recovery is a command.** The home backs up and restores, and an eval run guards the behaviour a change might break.
 
-Read those nine as contracts rather than as chat features, because they are what sibling and every later interface
-inherit — eight surfaces: **inbound** (a signed event), **outbound** (a delivery, and the transcript stream),
+Read those nine as contracts rather than as chat features, because they are what any client and later interface
+can rely on — eight surfaces: **inbound** (a signed event), **outbound** (a delivery, and the transcript stream),
 **control** (a session, a routine, an approval, a memory), **identity and attribution**, **observability**, **the
 integration framework** (a container, a config entry, a secret and a hook, proved twice — A0-1, A0-2, C2-1),
 **recovery** (a command — A0-4), and a **version** on each of them. Four guarantees decide the milestones:
@@ -93,7 +93,7 @@ gets no answer there. mason asks in the chat.
 **D4 — a widget catalogue?** Report 06 §"Mason-relevant" holds both sides in one section: a catalogue for
 `generateSandboxedUi` is "a middle ground mason lacks", with publication and grants server-side; and the component
 volume — `components/ui` plus the gallery — is "tens of thousands of lines of chrome for a chat that is one column".
-**This is no longer mason's question to settle.** A catalogue is a client surface, so it goes to sibling with the rest of
+**This is no longer mason's question to settle.** A catalogue is a client surface, so it is outside Mason's scope with the rest of
 the client work (§6), and mason keeps what it already has: one generic sandboxed widget and a skill that documents it
 (`docs/SPEC.md` §5, `skills/generative-ui/SKILL.md`), which the frozen console renders as it does today.
 
@@ -141,19 +141,18 @@ worker, voice and media, and a question about the stack answered in the chat.
 | C2-3 | **Slice: voice notes in, media out**<br>*report 10 §"Channels" (voice is a provider, chosen by shape); report 02 §"Mason-relevant" (`dictation/*, voice/*`); `integrations/telegram/src/filter.ts:36-47` (non-text is dropped today), `asr/README.md`* | A voice note in the chat is fetched, transcribed by the dictation service this repo already runs (`asr/`, JSON over HTTP, nothing imported from the agent stack), and relayed as text labelled as a transcript — so a person can talk to the agent from a phone. A picture or a file goes out over the same tools face | A0-2 | M | medium — a transcript is the model's input, so a misheard number becomes an action on the wrong number | M2 |
 | C2-4 | **Slice: what mason can reach, answered in the chat**<br>*report 10 §"Mason-relevant" (a capability matrix that outruns the code checking it); `src/server/integration-status.ts:1-65`, `src/server/main.ts:491-495`, `src/server/mcp.ts:1-40`* | An `integrations` tool over the boot's own registry: what each integration lends, whether the boot reached it, and why not — answered in the chat, because a person debugging a bot should not need a browser and the console is frozen. Enable and disable stay a config change and a restart, and the answer says so rather than implying live editing | A0-1 | S | low | M2 |
 
-## 6. Deferred to sibling
+## 6. Outside Mason's scope
 
-sibling is where the client and the multi-bot layer live, and it will integrate with mason as a backend rather than
-replace it. That is why the third column is about what sibling attaches to, not about what mason lacks. Nothing in this
-table is a mason gap.
+The capabilities below belong to client applications or product-level orchestration, not to the agent runtime. Mason
+provides contracts that clients can consume; their absence here is not a runtime gap.
 
-| Capability | Where it lives in openbot | Why it is sibling's |
+| Capability | Where it lives in openbot | Why it is outside Mason |
 |---|---|---|
-| Every rich client surface: the web app's product half, the desktop shell, the mobile app | report 06 §"Routing model", report 08 §"What it is", report 09 §"What it is" | A client is a rendering of one transcript, and sibling will serve several bots and several transcripts. mason's two transports (Chord state, `/api/*`) and its projection whitelist are the seam a client attaches to; building the client here would build it twice |
+| Every rich client surface: the web app's product half, the desktop shell, the mobile app | report 06 §"Routing model", report 08 §"What it is", report 09 §"What it is" | A client is a rendering of one transcript, and a client can render several bots and transcripts. mason's two transports (Chord state, `/api/*`) and its projection whitelist are the seam a client attaches to; building the client here would build it twice |
 | Push notifications, device rows, an installable client | report 09 §"Push, and what it wakes", §"Mason-relevant" (Device identity that can be revoked) | Push exists because a client does: openbot needed an app for the iOS prerequisite and then carried a device lifecycle for it. mason's ambient channel is the chat, which already has its own lock screen, its own notifications and its own answers (report 09 §"Mason-relevant", Already right in mason) |
-| The generative-UI gallery: components declaring model-facing metadata, publication, grants | report 06 §"Mason-relevant" (Worth copying: a widget catalogue; Worth avoiding: the component volume) | It is a build pipeline and a browse surface. mason keeps one generic sandboxed widget and a skill that documents it; a catalogue is sibling's, and it can reuse the sandbox (D4) |
-| Multi-agent orchestration: routing, groups, per-bot profiles, handoffs with depth caps | report 02 §"Mason-relevant" (no answer: mason has one bot), report 01 §"Mason-relevant" (Worth avoiding: the multi-Bot layer) | ADR-0001. openbot's own docs concede `ask_person` is a template's honest answer, not a rota. A second bot is a second identity, home and transcript — sibling's unit of work |
-| Agent-to-agent protocol: an AG-UI runtime seam, signed run assertions, a supervisor that speaks in bots | report 04 §"The contract each adapter implements", §"supervisor and worker" | It is the protocol between orchestrator and worker, and mason has no orchestrator. When sibling runs several bots from this codebase, the seam is sibling's to define and mason's loop stays server-owned |
+| The generative-UI gallery: components declaring model-facing metadata, publication, grants | report 06 §"Mason-relevant" (Worth copying: a widget catalogue; Worth avoiding: the component volume) | It is a build pipeline and a browse surface. mason keeps one generic sandboxed widget and a skill that documents it; a catalogue is a client-level feature, and it can reuse the sandbox (D4) |
+| Multi-agent orchestration: routing, groups, per-bot profiles, handoffs with depth caps | report 02 §"Mason-relevant" (no answer: mason has one bot), report 01 §"Mason-relevant" (Worth avoiding: the multi-Bot layer) | ADR-0001. openbot's own docs concede `ask_person` is a template's honest answer, not a rota. A second bot is a second identity, home and transcript — a product-level unit of work |
+| Agent-to-agent protocol: an AG-UI runtime seam, signed run assertions, a supervisor that speaks in bots | report 04 §"The contract each adapter implements", §"supervisor and worker" | It is the protocol between orchestrator and worker, and mason has no orchestrator. An external orchestrator that runs several bots defines that seam; Mason's loop stays server-owned |
 | Orgs, roles and tenancy: an org table, per-row tenant ids, capability switches | report 03 §"The data model", report 10 §"Identity: one deployment, one organisation, two roles" | One bot, one home, one conversation (ADR-0001, ADR-0002). openbot is single-tenant wearing the shape; a second tenant is a second deployment |
 | Per-tenant packages and build-time branding | report 01 §"Decisions and their reasons" (Configuration is a package, not a screen) | mason's branding is `service/soul.md` and a wordmark, read at boot. A package per customer is for a company that ships per customer |
 
