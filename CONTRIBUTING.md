@@ -19,6 +19,7 @@ The setup script installs dependencies and builds the two workspace packages use
 ```sh
 npm run dev
 npm test
+npm run e2e:first-run
 npm run test:packages
 npm run lint
 npm run typecheck
