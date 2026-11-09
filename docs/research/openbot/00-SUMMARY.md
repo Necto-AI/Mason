@@ -31,7 +31,7 @@ write.
    ([02](02-server-core.md) §Proactive, routines, scheduling). Touches `src/server/hooks.ts`.
 5. **Reach that names the decision**: a revocable device row, a delivery that carries the agent's own words
    ([09](09-mobile-expo.md) §Push). Touches `src/server/auth.ts` and the Telegram integration; a push client
-   would be apiary's, not mason's.
+   is a client-level concern, not part of Mason's runtime.
 
 ## Five things to never copy
 
@@ -69,7 +69,7 @@ write.
 1. **[12](12-comparison.md)**, then **[13](13-parity-roadmap.md)** — verdicts and sequencing; a reader
    deciding stops there. 13 is now the Telegram-first roadmap: Telegram is mason's interface, the web client
    is frozen as an operator console for transcript inspection, debugging and fallback, and the rich clients
-   move to apiary.
+   are outside Mason's scope.
 2. Backend: **[01](01-product-and-repo-map.md)**, **[02](02-server-core.md)**,
    **[03](03-data-and-learning.md)**, **[04](04-agent-engines.md)**.
 3. Host and deploy: **[05](05-container-and-deploy.md)**, plus 03 §"What a self-hoster must back up".
