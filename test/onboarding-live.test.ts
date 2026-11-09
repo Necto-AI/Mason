@@ -16,11 +16,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
+import { KeyCodes } from "@opentui/core/testing";
 import { runOnboarding } from "../scripts/onboarding.ts";
-import { TerminalScreen } from "../src/tui/app.ts";
 import { ScriptedScreen } from "../src/tui/screen.ts";
-import { plainStyle } from "../src/tui/style.ts";
-import { FakeTerminal, screenText } from "./support/terminal.ts";
+import { disposeAll, openScreen, WIDE } from "./support/screen.ts";
 
 const roots: string[] = [];
 const saved: NodeJS.ProcessEnv = { ...process.env };
@@ -57,6 +56,7 @@ function script(name: string): ScriptedScreen {
 		"provider.model": "faux-1",
 		"agent.name": name,
 		"connector.kind": "console",
+		"connectors.list": "continue",
 		"review.action": "apply",
 		"done.action": "finish",
 	});
@@ -80,6 +80,7 @@ describe("a first run, on disk", () => {
 			"connector.owner": "@denis",
 			"connector.targets": "@denis",
 			"connector.events": "",
+			"connectors.list": "continue",
 			"review.action": "apply",
 			"done.action": "finish",
 		});
@@ -154,10 +155,12 @@ describe("a first run, on disk", () => {
 		const config = await read(join(home, "service", "config.json"));
 		await writeFile(soul, "# the soul this person wrote\n\nBe brief.\n", "utf8");
 
+		// A home that already grants a connector is not asked to choose one again: the page lists it as installed and the
+		// run writes nothing for it.
 		const second = new ScriptedScreen({
 			"welcome.mode": "quickstart",
 			"agent.name": "alice",
-			"connector.kind": "console",
+			"connectors.list": "continue",
 			"review.action": "apply",
 			"done.action": "finish",
 		});
@@ -176,10 +179,72 @@ describe("a first run, on disk", () => {
 			"alice",
 			"the name comes from the root, not from the login",
 		);
-		assert.equal(
-			second.asked.find((question) => question.id === "connector.kind")?.value,
-			"console",
-			"so does the grant",
+		assert.ok(!second.asked.some((question) => question.id === "connector.kind"), "no second connector was chosen");
+		const page = second.asked.find((question) => question.id === "connectors.list");
+		assert.match(
+			(page?.preface ?? []).join("\n"),
+			/Already installed[\s\S]*console/,
+			"the grant is reported, not asked",
+		);
+		assert.match(page?.choices?.join(" ") ?? "", /continue/, "and continuing is offered");
+	});
+
+	test("two connectors in one run: two entries, one credential each, and a doctor that passes", async () => {
+		offline();
+		const root = await tempRoot();
+		// The flags answer the connectors page, so this run is one pass over the whole wizard with two connectors in it: the
+		// entry that is written and the credential that is minted are what the page promised, on disk.
+		const screen = new ScriptedScreen({
+			"welcome.mode": "quickstart",
+			"provider.id": "faux",
+			"provider.model": "faux-1",
+			"agent.name": "alice",
+			"connectors.list": "continue",
+			"review.action": "apply",
+			"done.action": "finish",
+		});
+		const code = await runOnboarding({
+			root,
+			screen,
+			setup: [
+				"--connector",
+				"console",
+				"--connector",
+				"custom",
+				"--url",
+				"ws://127.0.0.1:9/api/connector",
+				"--owner",
+				"@me",
+				"--no-start",
+			],
+		});
+		// 0 is also the doctor's verdict: `runOnboarding` returns 1 when any check failed, so this line says nine of nine.
+		assert.equal(code, 0, "the run installed both and the checks passed");
+
+		const integrations = await json(join(root, "alice", "service", "integrations.json"));
+		assert.deepEqual(
+			Object.keys(integrations.integrations ?? {}).sort(),
+			["console", "custom"],
+			"one entry per connector",
+		);
+
+		const config = (await json(join(root, "alice", "service", "config.json"))) as {
+			connectors?: readonly { id: string; connector: string; sha256: string }[];
+		};
+		const credentials = config.connectors ?? [];
+		assert.equal(credentials.length, 2, "one credential per connector");
+		assert.deepEqual(
+			credentials.map((record) => record.connector).sort(),
+			["console", "custom"],
+			"each credential names the connector it opens",
+		);
+		assert.ok(
+			credentials.every((record) => /^con_[0-9a-f]{8}$/.test(record.id) && /^[0-9a-f]{64}$/.test(record.sha256)),
+			"and each is a hash, not a secret",
+		);
+		assert.ok(
+			!(await read(join(root, "alice", "service", "config.json"))).includes("masonc_"),
+			"only hashes on disk",
 		);
 	});
 
@@ -193,6 +258,7 @@ describe("a first run, on disk", () => {
 			"agent.name": "alice",
 			"agent.home": "",
 			"connector.kind": "console",
+			"connectors.list": "continue",
 			"review.action": "apply",
 			"done.action": "finish",
 		});
@@ -207,46 +273,58 @@ describe("a first run, on disk", () => {
 
 describe("a first run on a terminal", () => {
 	/**
-	 * The whole wizard, driven the way a person drives it: real screens, real keys, the real commands behind them.
+	 * The whole wizard, driven the way a person drives it: the real screens, real keys, the real commands behind them.
 	 *
-	 * The only thing that is not real is the terminal object, and it is the one component of this that a test should not
-	 * have to own: the application's writes go into it and the keys come out of it, in the same order a pty would deliver
-	 * them. What the assertions read is the reconstructed screen, which is what a person would have seen.
+	 * The only thing that is not real is the terminal, and it is the one component of this that a test should not have to
+	 * own: OpenTUI's test renderer paints the same grid a window would and feeds back the same bytes a keyboard sends. What
+	 * the assertions read is the frame a person would have seen, which is also the only honest way to say a credential
+	 * never reached the screen.
 	 */
 	test("goes from the first screen to the last, and ends in a conversation it can offer", async () => {
 		offline();
 		const root = await tempRoot();
-		const terminal = new FakeTerminal({ columns: 100, rows: 30 });
-		const screen = new TerminalScreen({ terminal, paint: plainStyle.paint, glyphs: plainStyle.glyphs });
+		const harness = await openScreen(WIDE);
 		const seen: string[] = [];
-		const shown = (): string => screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		/**
-		 * Wait for the screen a person would be looking at, then answer it: one token per keypress, because an escape
-		 * sequence is one keypress and a terminal delivers it as one chunk.
-		 */
+		const frames: string[] = [];
+		/** Wait for the screen a person would be looking at, then answer it. */
 		const at = async (needle: string, keys: readonly string[]): Promise<void> => {
 			for (let attempt = 0; attempt < 400; attempt += 1) {
-				if (shown().includes(needle)) {
+				const shown = harness.frame();
+				if (shown.includes(needle)) {
 					seen.push(needle);
-					for (const key of keys) terminal.type(key);
+					frames.push(shown);
+					for (const key of keys) harness.setup.mockInput.pressKey(key);
+					await harness.settle();
 					return;
 				}
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
-			throw new Error(`the screen never showed "${needle}"; it showed:\n${shown()}`);
+			throw new Error(`the screen never showed "${needle}"; it showed:\n${harness.frame()}`);
 		};
-		const ENTER = "\r";
+		const ENTER = KeyCodes.RETURN;
+		const DOWN = KeyCodes.ARROW_DOWN;
 		const running = runOnboarding({
 			root,
-			screen,
+			screen: harness.screen,
 			handoff: async () => 0,
 		});
 		await at("How would you like to start?", [ENTER]);
 		await at("Which provider?", [ENTER]);
 		await at("Which model?", [ENTER]);
-		await at("What should this agent be called?", ["\x15", "a", "l", "i", "c", "e", ENTER]);
-		await at("How will you talk to it?", ["\x1b[B", ENTER]);
+		// The field arrives holding the login name, so it is cleared the way a person would: the backspace, once per
+		// character, rather than a control sequence whose meaning every editor spells differently.
+		await at("What should this agent be called?", [
+			...Array.from({ length: 24 }, () => KeyCodes.BACKSPACE),
+			"a",
+			"l",
+			"i",
+			"c",
+			"e",
+			ENTER,
+		]);
+		await at("How will you talk to it?", [DOWN, ENTER]);
 		await at("The console connector", [ENTER]);
+		await at("Which connectors should this run install?", [ENTER]);
 		await at("The plan", [ENTER]);
 		await at("Apply this plan?", [ENTER]);
 		await at("What next?", [ENTER]);
@@ -258,14 +336,16 @@ describe("a first run on a terminal", () => {
 			"What should this agent be called?",
 			"How will you talk to it?",
 			"The console connector",
+			"Which connectors should this run install?",
 			"The plan",
 			"Apply this plan?",
 			"What next?",
 		]);
 		assert.ok(existsSync(join(root, "alice", "service", "integrations.json")));
-		assert.ok(
-			!terminal.writes.join("").includes("masonc_"),
-			"the credential was printed to a screen nobody can scroll",
-		);
+		assert.ok(!frames.join("\n").includes("masonc_"), "the credential was printed to a screen nobody can scroll");
+		await harness.dispose();
 	});
 });
+
+// The renderer paints on its own loop: a screen nobody disposed would keep this file's process alive after its verdict.
+after(disposeAll);

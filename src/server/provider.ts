@@ -55,6 +55,35 @@ export function modelIds(access: ProviderAccess, provider: string): string[] {
 	return access.models.getModels(provider).map((model) => model.id);
 }
 
+/** A row a wizard can draw: the id a person picks, and one line of what it holds. */
+export interface ModelRow {
+	readonly value: string;
+	readonly label: string;
+	readonly description: string;
+}
+
+/** Thousands, rounded, because 200000 and 200k are the same answer and one of them fits beside a label. */
+function contextSize(tokens: number): string {
+	return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${tokens}`;
+}
+
+/**
+ * One provider's models as a list to choose from rather than an id to remember: the catalog this build already read to
+ * offer the provider, drawn per row.
+ *
+ * The label is the id, because the id is what gets written and what a person will type to filter. What it holds is the
+ * description, in the order that decides a choice: room for a conversation, then whether it thinks, then whether it can
+ * be shown a picture.
+ */
+export function modelRows(access: ProviderAccess, provider: string): ModelRow[] {
+	return access.models.getModels(provider).map((model) => {
+		const facts = [`${contextSize(model.contextWindow)} context`];
+		if (model.reasoning) facts.push("reasoning");
+		if (model.input.includes("image")) facts.push("images");
+		return { value: model.id, label: model.id, description: facts.join(" · ") };
+	});
+}
+
 /**
  * Send one real completion and return its text, or throw with the sentence a person can act on.
  *

@@ -9,7 +9,7 @@
 {
   packages = [
     pkgs.git
-    pkgs.nodejs_22
+    pkgs.nodejs_26
     pkgs.fd
     pkgs.ripgrep
     pkgs.sqlite

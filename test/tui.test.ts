@@ -1,47 +1,55 @@
 /**
- * The TUI primitives, pinned where the promises are: a secret that is never rendered, a list that filters, a frame that
- * fits a narrow window, and a screen that is the real application driven by bytes.
+ * The terminal, pinned where the promises are: a frame per screen at both window sizes the spec names, the plain path, the
+ * keys, the 90-column description drop, and the one thing a wizard must never do — put a secret on the screen.
  *
- * The last one is why `test/support/terminal.ts` exists. Everything above it proves a component; the `TerminalScreen`
- * tests prove the composition — the alternate screen, the layout root, the scroll view, the focus and the keyboard — and
- * they read the *bytes the application wrote*, which is the only place "the key was never echoed" is a fact rather than a
- * claim about a function that returns lines.
+ * Everything here runs through `@opentui/core`'s own test renderer, so what is asserted is the frame the renderer painted
+ * rather than the lines a component returned. That is the whole difference from the harness this replaces: a layout bug
+ * in the flexbox is a failing golden, and a key that never reached the body is a frame that did not change.
  */
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
-import { TerminalScreen } from "../src/tui/app.ts";
-import { ChoiceList, MaskedInput, NoteView, StatusList, TextField } from "../src/tui/components.ts";
-import { Frame } from "../src/tui/frame.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, test } from "node:test";
+import type { KeyEvent } from "@opentui/core";
+import { ChoiceList, NoteView, StatusList, spinnerFrame, TextField, typedChar } from "../src/tui/components.ts";
+import { bodyRows, CHROME_ROWS, MARGIN, measure } from "../src/tui/frame.ts";
 import { Cancelled } from "../src/tui/screen.ts";
-import { colourEnabled, glyphs, paint, plainStyle, widthOf } from "../src/tui/style.ts";
-import { FakeTerminal, screenText } from "./support/terminal.ts";
+import { colourEnabled, glyphs, paint, plainStyle, terminalStyle, utf8Locale, widthOf } from "../src/tui/style.ts";
+import { CLAY, parseSgr, theme } from "../src/tui/theme.ts";
+import * as frames from "./support/frames.ts";
+import { disposeAll, NARROW, openScreen, WIDE } from "./support/screen.ts";
+
+// The renderer paints on its own loop, so a screen a test forgot to dispose keeps the process alive and the file reads
+// as a timeout instead of a verdict. One hook per file, and a leak becomes an exit.
+after(disposeAll);
+
+import { SHOTS } from "./support/screens.ts";
 
 const utf8 = glyphs(true);
-const style = { paint: paint(false), glyphs: utf8 };
 
-/** A list, field or frame at one window: the geometry a screen would hand it. */
-function geometry(
-	columns = 100,
-	rows = 24,
-): { columns: number; rows: number; paint: typeof style.paint; glyphs: typeof utf8 } {
-	return { columns, rows, paint: style.paint, glyphs: utf8 };
-}
+/** The goldens, by the shot and the window they were taken at. */
+const GOLDENS: Readonly<Record<string, string>> = {
+	"welcome 100": frames.WELCOME_100,
+	"welcome 72": frames.WELCOME_72,
+	"text 100": frames.TEXT_100,
+	"text 72": frames.TEXT_72,
+	"secret 100": frames.SECRET_100,
+	"secret 72": frames.SECRET_72,
+	"confirm 100": frames.CONFIRM_100,
+	"confirm 72": frames.CONFIRM_72,
+	"note 100": frames.NOTE_100,
+	"note 72": frames.NOTE_72,
+	"review 100": frames.REVIEW_100,
+	"review 72": frames.REVIEW_72,
+	"progress 100": frames.PROGRESS_100,
+	"progress 72": frames.PROGRESS_72,
+	"done 100": frames.DONE_100,
+	"done 72": frames.DONE_72,
+};
 
-/** Every rendered line fits: the one rule a TUI component cannot break, because the renderer errors on it. */
-function fits(lines: readonly string[], width: number): void {
-	for (const line of lines) assert.ok(widthOf(line) <= width, `"${line}" is ${widthOf(line)} columns, not ${width}`);
-}
-
-/** The editor coalesces renders on a 16ms interval; a forced repaint lands on the next turn of the loop. */
-async function settle(): Promise<void> {
-	await new Promise((resolve) => setImmediate(resolve));
-	await new Promise((resolve) => setImmediate(resolve));
-}
-
-/** A line with the cursor markers pi-tui puts around the cell a cursor would be in. They are zero-width and not text. */
-function visible(line: string): string {
-	return line.replace(/\x1b_pi:\/?[a-z]+\x07/g, "");
-}
+/** The default foreground the renderer paints when nothing chose a colour: what the plain path must stay on. */
+const DEFAULT_INK = [255, 255, 255, 255];
 
 describe("style", () => {
 	test("plain is the identity, in every name", () => {
@@ -58,473 +66,734 @@ describe("style", () => {
 
 	test("the ascii glyphs are ascii, and the utf-8 ones are not", () => {
 		const ascii = glyphs(false);
-		for (const mark of [ascii.ok, ascii.fail, ascii.cursor, ascii.rule])
+		for (const mark of [ascii.ok, ascii.fail, ascii.cursor, ascii.rule, ascii.section, ascii.prompt])
 			assert.ok(mark.length === 1 && mark < "\x7f");
 		assert.equal(utf8.ok, "✓");
 		assert.equal(utf8.rule, "─");
+		assert.equal(utf8.cursor, "▌");
+	});
+
+	test("the measure skips the escapes a painted line carries, and counts a wide glyph as two", () => {
+		assert.equal(widthOf("mason"), 5);
+		assert.equal(widthOf(paint(true).dim("mason")), 5);
+		assert.equal(widthOf(paint(true).heading("mason")), 5);
+		assert.equal(widthOf("日本語"), 6);
+		assert.equal(widthOf("e\u0301"), 1);
+	});
+
+	test("the terminal's style follows the environment, in one place", () => {
+		assert.equal(utf8Locale({ LANG: "en_GB.UTF-8" }), true);
+		assert.equal(utf8Locale({ LANG: "C" }), false);
+		assert.equal(terminalStyle({}, false).paint.colour, false);
+		assert.equal(terminalStyle({}, true).paint.colour, true);
+		assert.equal(terminalStyle({ LC_ALL: "C" }, true).glyphs.ok, "+");
 	});
 });
 
-describe("ChoiceList", () => {
-	const choices = [
-		{ value: "telegram", label: "telegram", description: "Telegram, for one person or a group chat" },
-		{ value: "console", label: "console", description: "the terminal, built in" },
-	];
+describe("theme", () => {
+	const ink = theme(paint(true), { COLORTERM: "truecolor" });
 
-	test("the question, the hint and one row per choice", () => {
-		const list = new ChoiceList(geometry(), {
-			question: "How will you talk to it?",
-			hint: "the console is built in",
-			choices,
-		});
-		const lines = list.render(100);
-		assert.ok(lines.some((line) => line.includes("How will you talk to it?")));
-		assert.ok(lines.some((line) => line.includes("the console is built in")));
-		assert.ok(lines.some((line) => line.includes("telegram")));
-		assert.equal(lines.length, 7);
-		fits(lines, 100);
+	test("the accent is clay, and its 256-colour index where the terminal has no truecolor", () => {
+		assert.deepEqual(ink.accent.toInts(), [215, 135, 95, 255]);
+		assert.equal(ink.accent.intent, "rgb");
+		const indexed = theme(paint(true), {}).accent;
+		assert.equal(indexed.intent, "indexed");
+		assert.deepEqual(indexed.toInts(), [215, 135, 95, 255], "the index resolves to the same colour");
+		assert.equal(CLAY, "#d7875f");
 	});
 
-	test("typing filters, and enter takes the one row left", () => {
-		const list = new ChoiceList(geometry(), { question: "Which?", choices });
-		let picked: string | undefined;
-		list.onSelect = (value) => {
-			picked = value;
-		};
-		for (const char of "cons") list.handleInput(char);
+	test("the SGR subset parses into runs with the tone and the two attributes paint can name", () => {
+		const painted = paint(true);
+		const runs = parseSgr(`a ${painted.heading("b")} ${painted.dim("c")} ${painted.ok("d")} ${painted.bad("e")}`);
 		assert.deepEqual(
-			list.visible().map((choice) => choice.value),
-			["console"],
+			runs.map((run) => [run.text, run.tone, run.bold, run.dim]),
+			[
+				["a ", "plain", false, false],
+				["b", "accent", true, false],
+				[" ", "plain", false, false],
+				["c", "plain", false, true],
+				[" ", "plain", false, false],
+				["d", "ok", false, false],
+				[" ", "plain", false, false],
+				["e", "bad", false, false],
+			],
 		);
-		list.handleInput("\r");
-		assert.equal(picked, "console");
 	});
 
-	test("a filter that matches nothing says so, and enter takes nothing", () => {
-		const list = new ChoiceList(geometry(), { question: "Which?", choices });
-		let picked = false;
-		list.onSelect = () => {
-			picked = true;
-		};
-		for (const char of "zzz") list.handleInput(char);
-		assert.equal(list.visible().length, 0);
-		assert.ok(list.render(100).some((line) => line.includes("no match")));
-		list.handleInput("\r");
-		assert.equal(picked, false);
+	test("a parsed line becomes styled text, with the accent and the attributes OpenTUI draws", () => {
+		const painted = paint(true);
+		const chunks = ink.line(`${painted.heading("◇ Welcome")} ${painted.dim("step 1 / 7")}`).chunks;
+		assert.equal(chunks.map((chunk) => chunk.text).join(""), "◇ Welcome step 1 / 7");
+		assert.deepEqual(chunks[0]?.fg?.toInts(), [215, 135, 95, 255]);
+		assert.equal(chunks[0]?.attributes, 1, "bold is the first attribute");
+		assert.deepEqual(chunks[2]?.fg, undefined, "dim is an attribute, not a grey of our own");
+		assert.equal(chunks[2]?.attributes, 2, "dim is the second attribute");
 	});
 
-	test("the arrows wrap at both ends, and escape cancels", () => {
-		const list = new ChoiceList(geometry(), { question: "Which?", choices });
-		let cancelled = false;
-		let picked: string | undefined;
-		list.onCancel = () => {
-			cancelled = true;
-		};
-		list.onSelect = (value) => {
-			picked = value;
-		};
-		// Which row is selected is the thing wrap means: the cursor is drawn on that row and nowhere else.
-		const selected = (): string | undefined => list.render(100).find((line) => line.includes(utf8.cursor));
-
-		list.handleInput("\x1b[A");
-		assert.match(selected() ?? "", /console/, "up from the first row lands on the last");
-		list.handleInput("\x1b[B");
-		assert.match(selected() ?? "", /telegram/, "down from the last row lands on the first");
-		list.handleInput("\r");
-		assert.equal(picked, "telegram");
-		list.handleInput("\x1b");
-		assert.equal(cancelled, true);
+	test("a code the subset does not name is dropped, and never reaches the screen", () => {
+		const runs = parseSgr("\x1b[35mmagenta\x1b[0m plain \x1b[9mstruck");
+		assert.equal(runs.map((run) => run.text).join(""), "magenta plain struck");
+		assert.ok(runs.every((run) => run.tone === "plain" && !run.bold && !run.dim));
+		for (const chunk of ink.line("\x1b[35mmagenta\x1b[0m").chunks) assert.ok(!chunk.text.includes("\x1b"));
 	});
 
-	test("a description moves to its own line when the window is narrow", () => {
-		const list = new ChoiceList(geometry(60, 24), { question: "Which?", choices });
-		const lines = list.render(60);
-		assert.ok(lines.some((line) => line.includes("Telegram, for one person or a group chat")));
-		fits(lines, 60);
+	test("a plain theme drops the codes rather than drawing them in colour", () => {
+		const bare = theme(paint(false), {});
+		const chunks = bare.line(paint(true).heading("x")).chunks;
+		assert.equal(chunks[0]?.attributes, undefined);
+		assert.equal(chunks[0]?.fg, undefined);
 	});
 
-	test("the list is windowed, and says which rows it is showing", () => {
-		const many = Array.from({ length: 20 }, (_, index) => ({ value: `model-${index}`, label: `model-${index}` }));
-		const list = new ChoiceList(geometry(100, 14), { question: "Which model?", choices: many });
-		const lines = list.render(100);
-		assert.ok(lines.length <= 14);
-		assert.ok(lines.some((line) => line.includes("of 20")));
-		fits(lines, 100);
-	});
-
-	test("the preface is the review screen: prose above the question", () => {
-		const list = new ChoiceList(geometry(), {
-			question: "Apply this plan?",
-			preface: ["This is what will be written.", "", "Nothing has been written yet."],
-			choices: [{ value: "apply", label: "install it" }],
-		});
-		const lines = list.render(100);
-		assert.equal(lines[0], "This is what will be written.");
-		assert.equal(lines[1], "");
-		assert.equal(lines[2], "Nothing has been written yet.");
-		assert.ok(lines.some((line) => line.includes("Apply this plan?")));
+	test("a paragraph wraps at the width, keeps a hard break, and counts its rows", () => {
+		const drawn = ink.paragraph("one two three\n\nfour", 8);
+		assert.equal(drawn.rows, 4);
+		assert.deepEqual(
+			drawn.text.chunks
+				.map((chunk) => chunk.text)
+				.join("")
+				.split("\n")
+				.map((line) => line.trimEnd()),
+			["one two", "three", "", "four"],
+		);
 	});
 });
 
-describe("MaskedInput", () => {
-	test("one mask per character, and never the value", () => {
-		const field = new MaskedInput(geometry(), { question: "The API key", hint: "written once", flag: "--key <key>" });
-		const renders: string[] = [];
-		for (const char of "hunter2") {
-			field.handleInput(char);
-			renders.push(...field.render(100));
+describe("the screens", () => {
+	for (const size of [WIDE, NARROW]) {
+		for (const shot of SHOTS) {
+			test(`${shot.id}, at ${size.columns}x${size.rows}`, async () => {
+				const harness = await openScreen(size);
+				harness.screen.where({ title: shot.section, index: shot.index, total: shot.total });
+				void shot.show(harness);
+				shot.type?.(harness);
+				await harness.settle();
+				await harness.settle();
+				assert.equal(harness.frame(), GOLDENS[`${shot.id} ${size.columns}`]);
+				await harness.dispose();
+			});
 		}
-		assert.equal(field.length, 7);
-		const last = field.render(100).join("\n");
-		assert.ok(last.includes("•".repeat(7)));
-		for (const line of renders) assert.ok(!line.includes("hunter"), `a render carried the value: ${line}`);
-		assert.ok(
-			field.render(100).some((line) => line.includes("--key <key>")),
-			"the flag is offered as the way out",
-		);
-	});
+	}
 
-	test("backspace removes one, ctrl+u removes all, and an empty enter submits nothing", () => {
-		const field = new MaskedInput(geometry(), { question: "The API key" });
-		let submitted: string | undefined;
-		field.onSubmit = (value) => {
-			submitted = value;
-		};
-		field.handleInput("\r");
-		assert.equal(submitted, undefined);
-		field.handleInput("a");
-		field.handleInput("b");
-		field.handleInput("\x7f");
-		assert.equal(field.length, 1);
-		field.handleInput("c");
-		field.handleInput("\r");
-		assert.equal(submitted, "ac");
-		field.handleInput("\x15");
-		assert.equal(field.length, 0);
-	});
-
-	test("a paste is taken whole, and its control characters are not", () => {
-		const field = new MaskedInput(geometry(), { question: "The API key" });
-		field.handleInput("sk-live-000\t0001");
-		assert.equal(field.length, "sk-live-0000001".length);
-	});
-
-	test("escape cancels", () => {
-		const field = new MaskedInput(geometry(), { question: "The API key" });
-		let cancelled = false;
-		field.onCancel = () => {
-			cancelled = true;
-		};
-		field.handleInput("\x1b");
-		assert.equal(cancelled, true);
-	});
-});
-
-describe("TextField", () => {
-	test("a value that fails validation is shown, and not submitted", () => {
-		const field = new TextField(geometry(), {
-			question: "What should this agent be called?",
-			value: "Bob",
-			validate: (value) => (value === value.toLowerCase() ? undefined : "lowercase letters only"),
-		});
-		let submitted: string | undefined;
-		field.onSubmit = (value) => {
-			submitted = value;
-		};
-		field.handleInput("\r");
-		assert.equal(submitted, undefined);
-		assert.ok(field.render(100).some((line) => line.includes("lowercase letters only")));
-		field.accept("bob");
-		field.handleInput("\r");
-		assert.equal(submitted, "bob");
-	});
-
-	test("a required field refuses an empty line, and an optional one takes it", () => {
-		const required = new TextField(geometry(), { question: "The model id" });
-		let submitted: string | undefined;
-		required.onSubmit = (value) => {
-			submitted = value;
-		};
-		required.handleInput("\r");
-		assert.equal(submitted, undefined);
-		assert.ok(required.render(100).some((line) => line.includes("required")));
-		const optional = new TextField(geometry(), { question: "Optional", required: false });
-		optional.onSubmit = (value) => {
-			submitted = value;
-		};
-		optional.handleInput("\r");
-		assert.equal(submitted, "");
-	});
-
-	test("a prefilled answer is edited from its end", () => {
-		const field = new TextField(geometry(), { question: "What should this agent be called?", value: "denis" });
-		let submitted: string | undefined;
-		field.onSubmit = (value) => {
-			submitted = value;
-		};
-		field.handleInput("\x15");
-		for (const char of "alice") field.handleInput(char);
-		field.handleInput("\r");
-		assert.equal(submitted, "alice");
-	});
-
-	test("the value is the editor's, and the question is above it", () => {
-		const field = new TextField(geometry(), { question: "Which model?", value: "faux-1", hint: "one of a few" });
-		const lines = field.render(100);
-		assert.equal(lines[0], "Which model?");
-		assert.equal(lines[1], "one of a few");
-		assert.ok(visible(lines[3] ?? "").includes("faux-1"));
-		fits(lines, 100);
-	});
-});
-
-describe("StatusList and NoteView", () => {
-	test("a row draws its state, and a running row spins on the clock", () => {
-		const rows = [
-			{ label: "provider and model", state: "ok" as const, detail: "the provider answered" },
-			{ label: "agent home", state: "run" as const },
-			{ label: "checks", state: "skip" as const, detail: "already there" },
-		];
-		const list = new StatusList(geometry(), rows, { now: () => 0 });
-		const lines = list.render(100);
-		assert.ok(lines[0]?.includes(utf8.ok));
-		assert.ok(
-			lines.some((line) => line.includes(utf8.spinner[0] ?? "x")),
-			lines.join("\n"),
-		);
-		assert.ok(lines.some((line) => line.includes("already there")));
-		fits(lines, 100);
-	});
-
-	test("a note wraps a long line instead of cutting it", () => {
-		const note = new NoteView(["mason is one agent, one home, one connector, and this line is far too long to fit"]);
-		const lines = note.render(40);
-		assert.ok(lines.length > 1);
-		assert.equal(
-			lines.join(" ").replace(/\s+/g, " ").trim(),
-			"mason is one agent, one home, one connector, and this line is far too long to fit",
-		);
-		fits(lines, 40);
-	});
-});
-
-describe("Frame", () => {
-	function frame(): Frame {
-		const built = new Frame(style);
-		built.setContext({ brand: "mason", title: "Model and provider", index: 2, total: 7 });
-		built.setHints([
-			{ key: "enter", label: "select" },
-			{ key: "esc", label: "back" },
-			{ key: "ctrl+c", label: "quit" },
+	test("the arrows move the bar, and enter takes the row it is on", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Welcome", index: 1, total: 7 });
+		const answering = harness.screen.select("welcome.mode", "How would you like to start?", [
+			{ value: "quickstart", label: "Quickstart", description: "the defaults" },
+			{ value: "advanced", label: "Advanced", description: "every answer" },
 		]);
-		built.mount(new NoteView(["a body"]));
-		return built;
-	}
-
-	test("the brand, the step, the section and the hints", () => {
-		const text = frame().render(100).join("\n");
-		assert.ok(text.includes("mason"));
-		assert.ok(text.includes("step 2 of 7"));
-		assert.ok(text.includes("Model and provider"));
-		assert.ok(text.includes("enter select"));
-		assert.ok(text.includes("esc back"));
-		assert.ok(text.includes("ctrl+c quit"));
+		await harness.settle();
+		assert.match(harness.frame(), /▌ Quickstart/);
+		await harness.press("\x1b[B");
+		assert.match(harness.frame(), /▌ Advanced/);
+		assert.doesNotMatch(harness.frame(), /▌ Quickstart/);
+		await harness.press("\x1b[B");
+		assert.match(harness.frame(), /▌ Quickstart/, "down from the last row lands on the first");
+		await harness.press("\x1b[A");
+		await harness.press("\r");
+		assert.equal(await answering, "advanced");
+		await harness.dispose();
 	});
 
-	test("every line fits, from a narrow window to a wide one", () => {
-		for (const width of [24, 40, 70, 100, 140]) fits(frame().render(width), width);
-	});
-
-	test("a narrow window drops the least important hint rather than wrapping", () => {
-		const lines = frame().render(20);
-		const footer = lines[lines.length - 1] ?? "";
-		assert.ok(widthOf(footer) <= 20);
-		assert.ok(footer.startsWith("enter"), footer);
-		assert.ok(!footer.includes("ctrl+c"), "the last hint is the one dropped");
-	});
-
-	test("the body sits two columns in", () => {
-		const lines = frame().render(100);
-		const body = lines.find((line) => line.includes("a body"));
-		assert.ok(body?.startsWith("  a body"));
-	});
-
-	test("a flow of one says nothing about progress", () => {
-		const single = new Frame(style);
-		single.setContext({ brand: "mason", title: "Done", index: 1, total: 1 });
-		single.mount(new NoteView(["x"]));
-		assert.ok(!single.render(100).join("\n").includes("step 1 of 1"));
-	});
-});
-
-describe("TerminalScreen", () => {
-	/** The real application, on a terminal that keeps what was written to it. */
-	function open(size: { columns: number; rows: number } = { columns: 100, rows: 30 }): {
-		screen: TerminalScreen;
-		terminal: FakeTerminal;
-	} {
-		const terminal = new FakeTerminal(size);
-		const screen = new TerminalScreen({ terminal, paint: style.paint, glyphs: utf8 });
-		screen.where({ title: "Model and provider", index: 2, total: 7 });
-		return { screen, terminal };
-	}
-
-	test("a list answer arrives, and the frame is on the screen", async () => {
-		const { screen, terminal } = open();
-		const answer = screen.select("provider", "Which provider?", [
-			{ value: "opencode-go", label: "opencode-go", description: "OpenCode's own gateway" },
+	test("typing starts the filter, and escape clears it before it means back", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Provider", index: 2, total: 7 });
+		const answering = harness.screen.select("provider.id", "Which provider?", [
+			{ value: "anthropic", label: "anthropic", description: "the console" },
+			{ value: "openrouter", label: "openrouter", description: "one key, many models" },
+			{ value: "opencode-go", label: "opencode-go", description: "a subscription" },
 			{ value: "faux", label: "faux", description: "the offline provider" },
 		]);
-		await settle();
-		terminal.type("\x1b[B");
-		terminal.type("\r");
-		assert.equal(await answer, "faux");
-		const text = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		assert.ok(text.includes("mason"));
-		assert.ok(text.includes("step 2 of 7"));
-		assert.ok(text.includes("Model and provider"));
-		assert.ok(text.includes("Which provider?"));
-		assert.ok(text.includes("enter select   esc back   ctrl+c quit"), text);
-		screen.close();
+		await harness.settle();
+		// No prefix key: the word itself is the filter, which is the whole point of a long list.
+		await harness.press("o");
+		await harness.press("p");
+		await harness.press("e");
+		await harness.press("n");
+		assert.match(harness.frame(), /❯ open/, "the query is drawn as a line a person typed into");
+		assert.match(harness.frame(), /▌ openrouter/);
+		assert.match(harness.frame(), /2 of 4/, "the count says how much of the list is left");
+		assert.doesNotMatch(harness.frame(), /anthropic/);
+		await harness.press("c");
+		assert.match(harness.frame(), /▌ opencode-go/, "the filter narrows as the word grows");
+		assert.doesNotMatch(harness.frame(), /openrouter/);
+		await harness.press("\x7f");
+		assert.match(harness.frame(), /▌ openrouter/, "backspace widens it again");
+		await harness.press("\x1b");
+		assert.match(harness.frame(), /▌ anthropic/, "escape cleared the filter, and did not cancel the question");
+		// The rejection handler is attached before the key that causes it: a promise rejected in the tick a keypress runs in is
+		// an unhandled rejection, and the runner fails the test for it before the assertion below ever sees the promise.
+		const cancelled = assert.rejects(answering, Cancelled);
+		await harness.press("\x1b");
+		await cancelled;
+		harness.screen.close();
+		harness.screen.close();
+		await harness.dispose();
 	});
 
-	test("a secret is never written to the terminal", async () => {
-		const { screen, terminal } = open();
-		const answer = screen.secret("key", "The API key", { hint: "written once", flag: "--key <key>" });
-		await settle();
-		for (const char of "sk-live-0123456789") terminal.type(char);
-		await settle();
-		const shown = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		terminal.type("\r");
-		assert.equal(await answer, "sk-live-0123456789");
-		const stream = terminal.writes.join("");
-		assert.ok(!stream.includes("sk-live"), "the key reached the terminal");
-		assert.ok(!stream.includes("0123456789"), "part of the key reached the terminal");
-		assert.ok(shown.includes("•".repeat("sk-live-0123456789".length)), "the masks are on the screen");
-		screen.close();
+	test("a filter that matches nothing says so, and enter takes nothing", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Provider", index: 2, total: 7 });
+		void harness.screen.select("provider.id", "Which provider?", [{ value: "faux", label: "faux" }]);
+		await harness.settle();
+		for (const char of "zzz") await harness.press(char);
+		assert.match(harness.frame(), /no match/);
+		await harness.press("\r");
+		await harness.settle();
+		assert.match(harness.frame(), /no match/, "the question is still the one being asked");
+		await harness.dispose();
 	});
 
-	test("escape rejects as a cancel, and the screen is released", async () => {
-		const { screen, terminal } = open();
-		const answer = screen.text("name", "What should this agent be called?");
-		await settle();
-		terminal.type("\x1b");
-		await assert.rejects(answer, Cancelled);
-		screen.close();
-		screen.close();
+	test("a pinned row outlives the filter: the way out is there when nothing matches", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Model", index: 3, total: 7 });
+		const answering = harness.screen.select("provider.model", "Which model?", [
+			{ value: "claude-haiku-5-5", label: "claude-haiku-5-5" },
+			{ value: "minimax-m3", label: "minimax-m3" },
+			{ value: "__custom", label: "+ a model id I type myself", pinned: true },
+		]);
+		await harness.settle();
+		for (const char of "gpt-5") await harness.press(char);
+		assert.match(harness.frame(), /0 of 2/, "the count is of the rows the query kept, not of the pinned row");
+		assert.match(
+			harness.frame(),
+			/▌ \+ a model id I type myself/,
+			"the escape row is still the row a keypress is on",
+		);
+		await harness.press("\r");
+		assert.equal(await answering, "__custom");
+		await harness.dispose();
 	});
 
-	test("a narrow window keeps the frame, and scrolls the body", async () => {
-		const { screen, terminal } = open({ columns: 70, rows: 20 });
-		const answer = screen.note("review", "Review", {
-			lines: Array.from({ length: 30 }, (_, index) => `line ${index} of the review, which is long`),
-			note: "enter continues",
+	test("a wait shows in the chrome, from a screen whose body cannot tick", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Provider", index: 2, total: 7 });
+		// A confirmation page has no running row: the frame is the only place a spinner can go, and a call that takes
+		// seconds behind a frame that does not move is a call a person calls a hang.
+		void harness.screen.confirm("provider.check", "Check that this provider answers?", {
+			yes: "check it now",
+			no: "skip it",
 		});
-		await settle();
-		await settle();
-		const lines = screenText(terminal.writes, { columns: 70, rows: 20 });
-		assert.ok(lines.length <= 20);
-		assert.ok(lines[0]?.includes("mason"));
-		assert.ok(lines.join("\n").includes("Review"));
-		assert.ok(lines.join("\n").includes("enter continue"), "the footer survives a body that does not fit");
-		terminal.type("\r");
-		await answer;
-		screen.close();
+		await harness.settle();
+		const idle = harness.rows()[0] ?? "";
+		assert.match(idle, /◇ Provider +step 2 \/ 7$/, "the step counter, and nothing before it");
+		harness.screen.busy(true);
+		await harness.settle();
+		assert.match(harness.rows()[0] ?? "", /◇ Provider +\S+ step 2 \/ 7$/, "the spinner rides beside the counter");
+		harness.screen.busy(false);
+		await harness.settle();
+		assert.match(harness.rows()[0] ?? "", /◇ Provider +step 2 \/ 7$/, "and it stops with the call");
+		await harness.dispose();
 	});
 
-	test("a page longer than the window scrolls to its end, and enter continues from there", async () => {
-		const { screen, terminal } = open();
-		const answering = screen.note("long", "The plan", {
+	test("a long list says it can be filtered, and a short one stays quiet", async () => {
+		const long = await openScreen();
+		void long.screen.select(
+			"provider.id",
+			"Which provider?",
+			Array.from({ length: 9 }, (_, index) => ({
+				value: `p${index}`,
+				label: `provider-${index}`,
+			})),
+		);
+		await long.settle();
+		assert.match(long.frame(), /❯ type to filter/);
+		await long.dispose();
+
+		const short = await openScreen();
+		void short.screen.select("provider.id", "Which provider?", [
+			{ value: "a", label: "alpha" },
+			{ value: "b", label: "beta" },
+		]);
+		await short.settle();
+		assert.doesNotMatch(short.frame(), /type to filter/, "three rows and a caret line is more chrome than list");
+		await short.dispose();
+	});
+
+	test("below ninety columns the description moves under the list instead of beside it", async () => {
+		const choices = [
+			{
+				value: "quickstart",
+				label: "Quickstart",
+				description: "the defaults, and only the questions they cannot answer",
+			},
+			{ value: "advanced", label: "Advanced", description: "every answer: the connector's own settings" },
+		];
+		const wide = await openScreen(WIDE);
+		wide.screen.where({ title: "Welcome", index: 1, total: 7 });
+		void wide.screen.select("welcome.mode", "How would you like to start?", choices);
+		await wide.settle();
+		assert.match(wide.frame(), /▌ Quickstart {2}the defaults/, "a wide window has the column");
+		await wide.dispose();
+
+		const narrow = await openScreen({ columns: 88, rows: 30 });
+		narrow.screen.where({ title: "Welcome", index: 1, total: 7 });
+		void narrow.screen.select("welcome.mode", "How would you like to start?", choices);
+		await narrow.settle();
+		assert.doesNotMatch(narrow.frame(), /▌ Quickstart {2}the defaults/, "a narrow one has not");
+		assert.match(
+			narrow.frame(),
+			/\n {3}the defaults, and only the questions they cannot answer\n/,
+			"it is one line under the list",
+		);
+		await narrow.dispose();
+	});
+
+	test("a window that shrinks keeps its frame, and redraws the list at the new width", async () => {
+		const harness = await openScreen(WIDE);
+		harness.screen.where({ title: "Welcome", index: 1, total: 7 });
+		void harness.screen.select("welcome.mode", "How would you like to start?", [
+			{
+				value: "quickstart",
+				label: "Quickstart",
+				description: "the defaults, and only the questions they cannot answer",
+			},
+		]);
+		await harness.settle();
+		assert.match(harness.frame(), /▌ Quickstart {2}the defaults/);
+		harness.setup.resize(70, 24);
+		await harness.settle();
+		await harness.settle();
+		const rows = harness.frame().split("\n");
+		assert.ok(
+			rows.every((row) => widthOf(row) <= 70),
+			`nothing is wider than the window:\n${rows.join("\n")}`,
+		);
+		assert.match(harness.frame(), /◇ Welcome/, "the frame survives");
+		assert.doesNotMatch(harness.frame(), /▌ Quickstart {2}the defaults/, "so does the description rule");
+		await harness.dispose();
+	});
+
+	test("a narrow window drops the last hint rather than wrapping it", async () => {
+		const harness = await openScreen({ columns: 30, rows: 12 });
+		harness.screen.where({ title: "Welcome", index: 1, total: 7 });
+		void harness.screen.select("welcome.mode", "Start?", [{ value: "quickstart", label: "Quickstart" }]);
+		await harness.settle();
+		assert.match(harness.frame(), /enter select/);
+		assert.doesNotMatch(harness.frame(), /ctrl\+c/, "the least important hint is the one dropped");
+		await harness.dispose();
+	});
+
+	test("a flow of one says nothing about progress", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Done", index: 1, total: 1 });
+		void harness.screen.note("done", "Done", { lines: ["x"] });
+		await harness.settle();
+		assert.doesNotMatch(harness.frame(), /step 1 \/ 1/);
+		assert.doesNotMatch(harness.frame(), /mason {2,}/, "a flow of one is not a flow, so it carries no wordmark");
+		await harness.dispose();
+	});
+
+	test("the frame measures the body: a capped measure, and the rows the chrome leaves", () => {
+		assert.equal(measure(200), 86);
+		assert.equal(measure(100), 86);
+		assert.equal(measure(72), 67);
+		assert.equal(bodyRows(30), 30 - CHROME_ROWS);
+		assert.equal(MARGIN, 2);
+	});
+});
+
+describe("a secret", () => {
+	test("is never on the screen, and the masks are", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Model and provider", index: 2, total: 7 });
+		const answering = harness.screen.secret("provider.key", "The anthropic API key", {
+			hint: "written once",
+			flag: "--key <key>",
+		});
+		await harness.press(..."sk-live-0123456789".split(""));
+		const shown = harness.frame();
+		assert.ok(shown.includes("•".repeat("sk-live-0123456789".length)), shown);
+		assert.ok(
+			shown.includes(` ${String("sk-live-0123456789".length)}`),
+			"the live count is the length, and not the value",
+		);
+		assert.ok(shown.includes("--key <key>"), "the flag is offered as the way out of the question");
+		assert.ok(!shown.includes("sk-live"), "the key reached the screen");
+		await harness.press("\r");
+		assert.equal(await answering, "sk-live-0123456789");
+		await harness.dispose();
+	});
+
+	test("a paste is taken whole, and its control characters are not", async () => {
+		const harness = await openScreen();
+		const answering = harness.screen.secret("provider.key", "The key");
+		await harness.settle();
+		harness.setup.mockInput.pressKey("sk-live-000");
+		await harness.settle();
+		await harness.press("\r");
+		assert.equal(await answering, "sk-live-000");
+		await harness.dispose();
+	});
+
+	test("escape cancels, and a closed screen is safe to close twice", async () => {
+		const harness = await openScreen();
+		const answering = harness.screen.text("agent.name", "What should this agent be called?");
+		await harness.settle();
+		const cancelled = assert.rejects(answering, Cancelled);
+		await harness.press("\x1b");
+		await cancelled;
+		harness.screen.close();
+		harness.screen.close();
+		await harness.dispose();
+	});
+});
+
+describe("a page", () => {
+	test("enter continues, and space is the same key", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "What it may do", index: 4, total: 7 });
+		const reading = harness.screen.note("permissions", "What it may do", { lines: ["nothing is written yet"] });
+		await harness.settle();
+		await harness.press(" ");
+		await reading;
+		await harness.dispose();
+	});
+
+	test("a page longer than the window says it scrolls, and the arrows reach its end", async () => {
+		const harness = await openScreen({ columns: 80, rows: 20 });
+		harness.screen.where({ title: "Review", index: 6, total: 7 });
+		const reading = harness.screen.note("plan", "The plan", {
 			lines: Array.from({ length: 40 }, (_, index) => `line ${index}`),
 		});
-		await settle();
-		const first = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		assert.ok(first.includes("line 0"));
-		assert.ok(!first.includes("line 39"), "the page is longer than the window, which is what this test is about");
-		assert.ok(first.includes("up/down scroll"), "the footer says the page goes on below the fold");
-		// The arrows reach the scroll view: the page being read is never the thing that swallows them.
-		// The arrows are the alt screen's own: it repaints on its frame timer, so a real tick is what makes them visible.
-		for (let index = 0; index < 30; index += 1) terminal.type("\x1b[B");
-		await new Promise((resolve) => setTimeout(resolve, 40));
-		const last = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		assert.ok(last.includes("line 39"), `scrolled to the end:\n${last}`);
-		terminal.type("\r");
-		await answering;
-		screen.close();
-	});
-
-	test("a page that fits to the last row is not told it scrolls, and one row more is", async () => {
-		// The boundary the off-by-one lived on: the frame is five rows, the body keeps one blank line of its own, so a
-		// window of twenty rows holds fourteen. A page that fits must not carry a scroll hint, and a page one row longer must.
-		const body = 20 - 5 - 1;
-		for (const [lines, hinted] of [
-			[body - 2, false],
-			[body - 1, true],
-		] as const) {
-			const { screen, terminal } = open({ columns: 100, rows: 20 });
-			const answering = screen.note("page", "The plan", {
-				lines: Array.from({ length: lines }, (_, index) => `line ${index}`),
-			});
-			await settle();
-			const text = screenText(terminal.writes, { columns: 100, rows: 20 }).join("\n");
-			assert.equal(text.includes("up/down scroll"), hinted, `${lines} lines in a body of ${body}`);
-			if (!hinted)
-				assert.ok(text.includes(`line ${lines - 1}`), "the last line of a page that fits is on the screen");
-			terminal.type("\r");
-			await answering;
-			screen.close();
-		}
-	});
-
-	test("a window that shrinks to nothing still has its frame, and every line fits it", async () => {
-		const { screen, terminal } = open();
-		const answering = screen.select(
-			"connector",
-			"How will you talk to it?",
-			[
-				{ value: "console", label: "the console", description: "built in: no token, no container" },
-				{ value: "telegram", label: "telegram", description: "a bot token, and a container beside mason" },
-			],
-			{ hint: "the console needs nothing; telegram needs a token from the bot's father" },
+		await harness.settle();
+		assert.match(harness.frame(), /line 0/);
+		assert.doesNotMatch(
+			harness.frame(),
+			/line 39/,
+			"the page is longer than the window, which is what this is about",
 		);
-		await settle();
-		terminal.resize(58, 16);
-		screen.where({ title: "Connector", index: 4, total: 7 });
-		await settle();
-		const lines = screenText(terminal.writes, { columns: 58, rows: 16 });
-		assert.equal(lines.length, 16);
-		assert.ok(
-			lines.every((line) => visible(line).length <= 58),
-			`nothing is wider than the window:\n${lines.map(visible).join("\n")}`,
-		);
-		const text = lines.join("\n");
-		assert.ok(text.includes("mason"), "the brand survives");
-		assert.ok(text.includes("step 4 of 7"), "the counter survives even when the dots do not");
-		assert.ok(!text.includes("●"), "the dots are the first thing the width drops");
-		terminal.type("\r");
-		await answering;
-		screen.close();
+		assert.match(harness.frame(), /↑↓ scroll/, "the footer says the page goes on below the fold");
+		for (let index = 0; index < 40; index += 1) harness.setup.mockInput.pressKey("\x1b[B");
+		await harness.settle();
+		assert.match(harness.frame(), /line 39/, "the arrows reached the scroll region, not the page");
+		await harness.press("\r");
+		await reading;
+		await harness.dispose();
 	});
 
-	test("a progress screen takes keys, and reports the rows it ended with", async () => {
-		const { screen, terminal } = open();
-		const progress = screen.progress("apply", "Installing", [{ label: "provider and model", state: "run" }]);
-		await settle();
+	test("a page that fits is not told it scrolls", async () => {
+		const harness = await openScreen({ columns: 80, rows: 20 });
+		harness.screen.where({ title: "Review", index: 6, total: 7 });
+		const reading = harness.screen.note("plan", "The plan", {
+			lines: Array.from({ length: 5 }, (_, index) => `line ${index}`),
+		});
+		await harness.settle();
+		assert.doesNotMatch(harness.frame(), /↑↓ scroll/);
+		assert.match(harness.frame(), /line 4/);
+		await harness.press("\r");
+		await reading;
+		await harness.dispose();
+	});
+});
+
+describe("a progress screen", () => {
+	test("takes keys, carries their labels, and reports the rows it ended with", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Install", index: 7, total: 7 });
+		const progress = harness.screen.progress("apply", "Installing", [{ label: "provider and model", state: "run" }]);
+		await harness.settle();
 		progress.update([{ label: "provider and model", state: "fail", detail: "the provider did not answer" }]);
-		await settle();
-		await settle();
-		const text = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		assert.ok(text.includes("the provider did not answer"));
+		await harness.settle();
+		assert.match(harness.frame(), /the provider did not answer/);
 		const key = progress.key([
 			{ key: "r", label: "retry what failed" },
 			{ key: "enter", label: "stop here" },
 		]);
-		await settle();
-		const hints = screenText(terminal.writes, { columns: 100, rows: 30 }).join("\n");
-		assert.ok(hints.includes("retry what failed"), "the key carries its own label, not the keycode");
-		terminal.type("r");
+		await harness.settle();
+		assert.match(harness.frame(), /retry what failed/, "the key carries its own label, not the keycode");
+		assert.match(harness.frame(), /stop here/);
+		await harness.press("r");
 		assert.equal(await key, "r");
+		// A key that was not offered is not an answer: the screen is still waiting for one of the two.
+		const other = progress.key([{ key: "enter", label: "stop here" }]);
+		await harness.press("q");
+		await harness.press("\r");
+		assert.equal(await other, "enter");
 		progress.close();
-		screen.close();
+		await harness.dispose();
+	});
+
+	test("a spinner repaints on its own clock, and stops when the operation does", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Install", index: 7, total: 7 });
+		const progress = harness.screen.progress("apply", "Installing", [
+			{ label: "minting the credential", state: "run" },
+		]);
+		await harness.settle();
+		const first = harness.frame();
+		harness.screen.busy(true);
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		await harness.settle();
+		const second = harness.frame();
+		assert.notEqual(first, second, "the running row moved");
+		assert.ok(
+			[...first, ...second].some((char) => utf8.spinner.includes(char)),
+			"a spinner frame is what it moved to",
+		);
+		harness.screen.busy(false);
+		progress.close();
+		await harness.dispose();
+	});
+
+	test("the spinner is a function of the clock, so a frame can be asserted", () => {
+		assert.equal(spinnerFrame(utf8, 0), utf8.spinner[0]);
+		assert.equal(spinnerFrame(utf8, 80), utf8.spinner[1]);
+		assert.equal(spinnerFrame(utf8, 0), spinnerFrame(utf8, 79));
 	});
 });
+
+describe("a journey", () => {
+	test("draws one dim line, opens on ctrl+o, and a failed open is a line rather than a throw", async () => {
+		const before = process.env.PATH;
+		const empty = await mkdtemp(join(tmpdir(), "mason-no-browser-"));
+		process.env.PATH = empty;
+		try {
+			const harness = await openScreen();
+			harness.screen.where({ title: "Model and provider", index: 2, total: 7 });
+			const answering = harness.screen.secret("provider.key", "The anthropic API key", {
+				journey: { url: "https://console.anthropic.com/settings/keys", what: "create a key and copy it" },
+			});
+			await harness.settle();
+			assert.match(
+				harness.frame(),
+				/ctrl\+o opens https:\/\/console\.anthropic\.com\/settings\/keys, create a key and copy it/,
+				"the address itself, not its host: the path is what takes you to the key",
+			);
+			assert.match(harness.frame(), /ctrl\+o open/, "the key is in the footer, or the line is a lie");
+			await harness.press("\x0f");
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			await harness.settle();
+			assert.match(
+				harness.frame(),
+				/could not open console\.anthropic\.com: open https:\/\/console\.anthropic\.com\/settings\/keys yourself/,
+			);
+			const cancelled = assert.rejects(answering, Cancelled);
+			await harness.press("\x1b");
+			await cancelled;
+			await harness.dispose();
+		} finally {
+			if (before === undefined) delete process.env.PATH;
+			else process.env.PATH = before;
+			await rm(empty, { recursive: true, force: true });
+		}
+	});
+
+	test("an optional field takes the empty line a default and a skip are said with", async () => {
+		const harness = await openScreen();
+		const answering = harness.screen.text("events", "Which event kinds may it fire?", {
+			hint: "kind=hook pairs, comma separated; empty means none",
+			placeholder: "",
+			required: false,
+		});
+		await harness.settle();
+		await harness.press("\r");
+		assert.equal(await answering, "", "enter on an empty optional field answers with nothing, not a refusal");
+		assert.doesNotMatch(harness.frame(), /this answer is required/);
+		await harness.dispose();
+	});
+
+	test("a description too long for the column is not wrapped beside the label", async () => {
+		// The row is what a decision is made on: a wrapped description loses its indent and reads as a second row with no
+		// bar and no label, which is the one shape the column exists to prevent.
+		const harness = await openScreen();
+		void harness.screen
+			.select(
+				"connector",
+				"How will you talk to it?",
+				[
+					{
+						value: "console",
+						label: "console",
+						description:
+							"the terminal, built in: no token, no container, works the moment mason is up and it never leaves this machine",
+					},
+					{ value: "custom", label: "custom", description: "a connector already running somewhere else" },
+				],
+				{ hint: "the console is built in; a catalog connector runs as a container beside mason" },
+			)
+			.catch(() => undefined);
+		await harness.settle();
+		const rows = harness.rows();
+		const wrapped = rows.find((row) => /^\s{1,6}(up|machine|and)\b/.test(row));
+		assert.equal(wrapped, undefined, `no description continuation at the body's left edge:\n${rows.join("\n")}`);
+		assert.ok(
+			rows.some((row) => row.includes("works the moment")),
+			"the selected row's description is drawn under the list instead",
+		);
+		await harness.dispose();
+	});
+
+	test("a question without one draws no line and offers no key", async () => {
+		const harness = await openScreen();
+		void harness.screen.secret("token", "The bot token");
+		await harness.settle();
+		assert.doesNotMatch(harness.frame(), /ctrl\+o/);
+		await harness.dispose();
+	});
+});
+
+describe("the plain path", () => {
+	test("the same screen, the same words, and nothing drawn in colour", async () => {
+		const shot = SHOTS[3];
+		assert.ok(shot !== undefined);
+		const coloured = await openScreen({ ...WIDE, paint: paint(true) });
+		coloured.screen.where({ title: shot.section, index: shot.index, total: shot.total });
+		void shot.show(coloured);
+		shot.type?.(coloured);
+		await coloured.settle();
+		await coloured.settle();
+		const plain = await openScreen({ ...WIDE, paint: paint(false) });
+		plain.screen.where({ title: shot.section, index: shot.index, total: shot.total });
+		void shot.show(plain);
+		shot.type?.(plain);
+		await plain.settle();
+		await plain.settle();
+		assert.equal(plain.frame(), coloured.frame(), "the same text, with or without a terminal that has colour");
+		const painted = plain.setup
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.filter((span) => span.text.trim() !== "");
+		assert.ok(painted.length > 0);
+		for (const span of painted) {
+			assert.equal(span.attributes, 0, `an attribute reached a plain screen: ${JSON.stringify(span.text)}`);
+			assert.deepEqual(
+				span.fg.toInts(),
+				DEFAULT_INK,
+				`a colour reached a plain screen: ${JSON.stringify(span.text)}`,
+			);
+		}
+		const accent = coloured.setup
+			.captureSpans()
+			.lines.flatMap((line) => line.spans)
+			.filter((span) => span.fg.toInts()[0] === 215 && span.fg.toInts()[1] === 135 && span.fg.toInts()[2] === 95);
+		assert.ok(accent.length > 0, "the accent is clay where there is colour");
+		await coloured.dispose();
+		await plain.dispose();
+	});
+});
+
+describe("the components on their own", () => {
+	/** A geometry for a renderer: the measure the frame would hand a body, and the room around it. */
+	const geometry = (harness: Awaited<ReturnType<typeof openScreen>>, columns = 80, rows = 20) => ({
+		renderer: harness.setup.renderer,
+		window: columns,
+		columns,
+		rows,
+		paint: paint(false),
+		glyphs: utf8,
+	});
+
+	test("a list longer than its window scrolls with the bar, and says which rows it is showing", async () => {
+		const harness = await openScreen();
+		const many = Array.from({ length: 20 }, (_, index) => ({ value: `model-${index}`, label: `model-${index}` }));
+		const list = new ChoiceList(geometry(harness), { question: "Which model?", choices: many, maxVisible: 5 });
+		harness.mount(list.build());
+		await harness.settle();
+		assert.match(harness.frame(), /▌ model-0/);
+		assert.match(harness.frame(), /1-5 of 20/);
+		for (let index = 0; index < 6; index += 1) list.handleKey(key("down"));
+		list.reflect?.();
+		await harness.settle();
+		assert.match(harness.frame(), /▌ model-6/);
+		assert.match(harness.frame(), /3-7 of 20/);
+		await harness.dispose();
+	});
+
+	test("a note's rows are what the screen decides on: short prose is not boxed, a long page is", async () => {
+		const prose = await openScreen();
+		const short = new NoteView(geometry(prose), { title: "Done", lines: ["one", "two"] });
+		prose.mount(short.build());
+		await prose.settle();
+		assert.doesNotMatch(prose.frame(), /╭/);
+		assert.equal(
+			short.rows,
+			4,
+			"a title, a blank, and two lines: the rows the screen decides on are the rows it draws",
+		);
+		await prose.dispose();
+
+		const page = await openScreen();
+		const long = new NoteView(geometry(page), {
+			title: "The plan",
+			lines: Array.from({ length: 8 }, (_, index) => `line ${index}`),
+		});
+		page.mount(long.build());
+		await page.settle();
+		assert.match(page.frame(), /╭/, "a page read before a decision gets an edge");
+		await page.dispose();
+	});
+
+	test("a status list puts a detail under its row, and a note under the list", async () => {
+		const harness = await openScreen();
+		const list = new StatusList(
+			geometry(harness),
+			[
+				{ label: "provider answered", state: "ok", detail: "the provider answered" },
+				{ label: "checks", state: "skip", detail: "already there" },
+			],
+			{ title: "What it is doing", note: "nothing was written", now: () => 0 },
+		);
+		harness.mount(list.build());
+		await harness.settle();
+		const text = harness.frame();
+		assert.match(text, /✓ provider answered/);
+		// The detail sits under the label, and the label starts one column past the mark: two columns, in a body mounted with
+		// no frame around it. Through a screen the frame's own margin and inset add three more.
+		assert.match(text, /\n {2}the provider answered/, "the detail is indented under the row it belongs to");
+		assert.match(text, /nothing was written/);
+		assert.match(text, /What it is doing/);
+		await harness.dispose();
+	});
+
+	test("a text field is edited from its end, and refuses a value its validation rejects", async () => {
+		const harness = await openScreen();
+		const text = new TextField(geometry(harness), {
+			question: "What should this agent be called?",
+			value: "denis",
+			validate: (value: string) => (value === value.toLowerCase() ? undefined : "lowercase letters only"),
+		});
+		let submitted: string | undefined;
+		text.onSubmit = (value: string) => {
+			submitted = value;
+		};
+		harness.mount(text.build());
+		await harness.settle();
+		assert.match(harness.frame(), /❯ denis/);
+		text.handleKey(key("a"));
+		text.accept("alice");
+		text.handleKey(key("enter"));
+		text.reflect?.();
+		await harness.settle();
+		assert.equal(submitted, "alice");
+		text.accept("ALICE");
+		text.handleKey(key("enter"));
+		text.reflect?.();
+		await harness.settle();
+		assert.equal(submitted, "alice", "a rejected value is not submitted");
+		assert.match(harness.frame(), /lowercase letters only/);
+		await harness.dispose();
+	});
+
+	test("a typed character is a character only when no modifier is held", () => {
+		assert.equal(typedChar(key("a")), "a");
+		assert.equal(typedChar(key(" ")), " ");
+		assert.equal(typedChar(key("up")), undefined);
+		assert.equal(typedChar(key("a", { ctrl: true })), undefined);
+	});
+});
+
+/** A keypress as the renderer hands one to a component: the fields the components read, and nothing else. */
+function key(name: string, modifiers: { readonly ctrl?: boolean } = {}): KeyEvent {
+	return {
+		name,
+		ctrl: modifiers.ctrl ?? false,
+		meta: false,
+		shift: false,
+		option: false,
+		sequence: name,
+		number: false,
+		raw: name,
+		eventType: "press",
+		source: "raw",
+	} as unknown as KeyEvent;
+}
