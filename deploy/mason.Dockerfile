@@ -42,6 +42,11 @@ COPY . /app
 # `npm install` needs the network: the packages are published, there is no submodule to link.
 RUN npm install
 
+# The server imports `mason-protocol` as a value, and its `exports.import` is `./dist/index.js`: the workspace symlink
+# resolves to a package whose build this image does not have yet. `packages/*/dist` is kept out of the context above, so
+# this is the only build in the layer, and the code the image runs is the tag's rather than a host's.
+RUN npm run build:packages
+
 # The daemon that runs on the far side of the tool machine is a binary from the checkout, not from this image's package
 # manager: `bin/pi-env-linux-<arch>/pi-env` is built by `npm run build:daemon` on whichever machine owns the submodule, and
 # on a NixOS machine that build links the dynamic loader out of the Nix store. The file then carries
@@ -52,10 +57,14 @@ RUN npm install
 # Repointing the loader at the one this image has, and dropping the store RPATH that goes with it, makes the binary run
 # anywhere glibc is current — verified against mason-env on ubuntu 24.04. It only touches a binary that points into
 # `/nix/store`, so an ordinary build is left exactly as it was, and a cross-built (`aarch64`) one is caught later, by the
-# arch check in `packagedDaemon`.
+# arch check in `packagedDaemon`. A statically linked build has no interpreter at all — the published `pi-env` is one —
+# and is left as it is rather than failing the build on `patchelf`'s non-zero exit.
 RUN set -eux; \
     for daemon in $(find -L /app -path '*pi-env-linux-*/pi-env' -type f); do \
-      loader="$(patchelf --print-interpreter "$daemon")"; \
+      if ! loader="$(patchelf --print-interpreter "$daemon" 2>/dev/null)"; then \
+        echo "$daemon has no interpreter (statically linked); leaving it"; \
+        continue; \
+      fi; \
       case "$loader" in \
         /nix/store/*) echo "retargeting $daemon from $loader"; \
           patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath "$daemon" ;; \
