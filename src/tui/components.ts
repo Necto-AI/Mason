@@ -324,9 +324,15 @@ export class ChoiceList implements Body {
 				),
 			);
 		// The description column is the first thing a narrow window drops, and the selected row's description then moves
-		// under the list as one line, rather than wrapping mid-sentence beside a label.
+		// under the list as one line, rather than wrapping mid-sentence beside a label. A row too long for the column at a
+		// wide window takes the same path, which is why the test is the row's own fit and not the list's width.
 		const selected = rows[this.index];
-		if (!beside && selected?.description !== undefined && selected.description !== "") {
+		const selectedFits =
+			beside &&
+			selected?.description !== undefined &&
+			widthOf(`  ${selected.description}`) <=
+				this.geometry.columns - widthOf(`${paint.accent(this.geometry.glyphs.cursor)} ${" ".repeat(labelWidth)}`);
+		if (!selectedFits && selected?.description !== undefined && selected.description !== "") {
 			root.add(gap(this.geometry));
 			root.add(prose(this.geometry, this.ink, paint.dim(selected.description), columns));
 		}
@@ -340,13 +346,22 @@ export class ChoiceList implements Body {
 		return boxed(this.geometry, this.ink, prose(this.geometry, this.ink, source, width - BOXED_INSET));
 	}
 
-	/** One row: the bar, the label, and the description in the column beside it when there is room for one. */
+	/**
+	 * One row: the bar, the label, and the description in the column beside it when there is room for one.
+	 *
+	 * "Room" is per row and not per list. A description longer than the room used to be wrapped by the paragraph and its
+	 * continuation landed at the body's left edge, which reads as a second row with no bar and no label: the one shape the
+	 * column exists to prevent. A row that does not fit drops its description here, and the selected row's description is
+	 * drawn under the list by `build` instead.
+	 */
 	private row(choice: Choice, selected: boolean, beside: boolean, labelWidth: number): TextRenderable {
 		const { paint, glyphs } = this.geometry;
 		const bar = selected ? paint.accent(glyphs.cursor) : " ";
 		const padded = choice.label.padEnd(labelWidth);
 		const label = selected ? paint.bold(padded) : padded;
-		const description = beside && choice.description !== undefined ? `  ${paint.dim(choice.description)}` : "";
+		const room = this.geometry.columns - widthOf(`${bar} ${padded}`);
+		const fits = beside && choice.description !== undefined && widthOf(`  ${choice.description}`) <= room;
+		const description = fits ? `  ${paint.dim(choice.description)}` : "";
 		return prose(this.geometry, this.ink, `${bar} ${label}${description}`, this.geometry.columns);
 	}
 
@@ -483,7 +498,10 @@ abstract class Field implements Body {
 				prose(
 					this.geometry,
 					this.ink,
-					paint.dim(`ctrl+o opens ${hostOf(this.journey.url)}, ${this.journey.what}`),
+					// The address, not its host: `console.anthropic.com` is a front door, and the key page is a path on it.
+					// On a machine whose opener exists and does nothing (no display, ssh, a bare container) this line is the
+					// only copy of the URL the person gets.
+					paint.dim(`ctrl+o opens ${this.journey.url}, ${this.journey.what}`),
 					columns,
 				),
 			);
@@ -874,6 +892,11 @@ function openPage(url: string, report: (problem: string) => void): void {
 		}
 		const child = spawn(command, [url], { detached: true, stdio: "ignore" });
 		child.on("error", () => attempt(index + 1));
+		// `xdg-open` on a machine with no browser, or with no handler for the scheme, exits 3 or 4 and says nothing: the
+		// spawn succeeded and the page did not open, so the next command gets its turn and the last one reports.
+		child.on("exit", (code) => {
+			if (code !== 0 && code !== null) attempt(index + 1);
+		});
 		child.on("spawn", () => child.unref());
 	};
 	attempt(0);

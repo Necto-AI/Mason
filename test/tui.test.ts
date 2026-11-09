@@ -15,16 +15,7 @@ import type { KeyEvent } from "@opentui/core";
 import { ChoiceList, NoteView, StatusList, spinnerFrame, TextField, typedChar } from "../src/tui/components.ts";
 import { bodyRows, CHROME_ROWS, MARGIN, measure } from "../src/tui/frame.ts";
 import { Cancelled } from "../src/tui/screen.ts";
-import {
-	colourEnabled,
-	glyphs,
-	paint,
-	plainStyle,
-	spread,
-	terminalStyle,
-	utf8Locale,
-	widthOf,
-} from "../src/tui/style.ts";
+import { colourEnabled, glyphs, paint, plainStyle, terminalStyle, utf8Locale, widthOf } from "../src/tui/style.ts";
 import { CLAY, parseSgr, theme } from "../src/tui/theme.ts";
 import * as frames from "./support/frames.ts";
 import { disposeAll, NARROW, openScreen, WIDE } from "./support/screen.ts";
@@ -88,12 +79,6 @@ describe("style", () => {
 		assert.equal(widthOf(paint(true).heading("mason")), 5);
 		assert.equal(widthOf("日本語"), 6);
 		assert.equal(widthOf("e\u0301"), 1);
-	});
-
-	test("spread puts two things on one line, and refuses when they would collide", () => {
-		assert.equal(spread("a", "b", 5), "a   b");
-		assert.equal(spread("left", "right", 4), "left");
-		assert.equal(widthOf(spread(paint(true).dim("a"), "b", 9)), 9);
 	});
 
 	test("the terminal's style follows the environment, in one place", () => {
@@ -497,7 +482,11 @@ describe("a journey", () => {
 				journey: { url: "https://console.anthropic.com/settings/keys", what: "create a key and copy it" },
 			});
 			await harness.settle();
-			assert.match(harness.frame(), /ctrl\+o opens console\.anthropic\.com, create a key and copy it/);
+			assert.match(
+				harness.frame(),
+				/ctrl\+o opens https:\/\/console\.anthropic\.com\/settings\/keys, create a key and copy it/,
+				"the address itself, not its host: the path is what takes you to the key",
+			);
 			assert.match(harness.frame(), /ctrl\+o open/, "the key is in the footer, or the line is a lie");
 			await harness.press("\x0f");
 			await new Promise((resolve) => setTimeout(resolve, 200));
@@ -515,6 +504,51 @@ describe("a journey", () => {
 			else process.env.PATH = before;
 			await rm(empty, { recursive: true, force: true });
 		}
+	});
+
+	test("an optional field takes the empty line a default and a skip are said with", async () => {
+		const harness = await openScreen();
+		const answering = harness.screen.text("events", "Which event kinds may it fire?", {
+			hint: "kind=hook pairs, comma separated; empty means none",
+			placeholder: "",
+			required: false,
+		});
+		await harness.settle();
+		await harness.press("\r");
+		assert.equal(await answering, "", "enter on an empty optional field answers with nothing, not a refusal");
+		assert.doesNotMatch(harness.frame(), /this answer is required/);
+		await harness.dispose();
+	});
+
+	test("a description too long for the column is not wrapped beside the label", async () => {
+		// The row is what a decision is made on: a wrapped description loses its indent and reads as a second row with no
+		// bar and no label, which is the one shape the column exists to prevent.
+		const harness = await openScreen();
+		void harness.screen
+			.select(
+				"connector",
+				"How will you talk to it?",
+				[
+					{
+						value: "console",
+						label: "console",
+						description:
+							"the terminal, built in: no token, no container, works the moment mason is up and it never leaves this machine",
+					},
+					{ value: "custom", label: "custom", description: "a connector already running somewhere else" },
+				],
+				{ hint: "the console is built in; a catalog connector runs as a container beside mason" },
+			)
+			.catch(() => undefined);
+		await harness.settle();
+		const rows = harness.rows();
+		const wrapped = rows.find((row) => /^\s{1,6}(up|machine|and)\b/.test(row));
+		assert.equal(wrapped, undefined, `no description continuation at the body's left edge:\n${rows.join("\n")}`);
+		assert.ok(
+			rows.some((row) => row.includes("works the moment")),
+			"the selected row's description is drawn under the list instead",
+		);
+		await harness.dispose();
 	});
 
 	test("a question without one draws no line and offers no key", async () => {
