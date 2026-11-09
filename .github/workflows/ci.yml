@@ -43,6 +43,10 @@ jobs:
       # The manifests, the README, LICENSE and NOTICE are four places the terms are read from, and they were edited at
       # different times: NOTICE claimed Apache-2.0 for the published packages while everything else said AGPL-3.0.
       - run: npm run check:licence
+      # The manifests against the tree they describe: the npm page's fields, every `files` entry, `prepack` on both
+      # packages, each declared Node floor against its dependencies', and no maintainer's home path in a file a stranger
+      # reads. No build needed: the `dist` entries are the ones `prepack` writes, and `prove:package` proves they arrive.
+      - run: npm run check:metadata
       - run: npm test
       # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second
       # onboard, a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket
@@ -59,6 +63,9 @@ jobs:
       - run: npm run build
       - run: test -f dist/docs/agent/README.md
       - run: npm run test:packages
+      # The tarball as a stranger installs it: packed, unpacked outside the tree, and driven there — onboard, doctor, and
+      # the prompt's `docs` section, which a missing copy used to empty without failing anything.
+      - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
       # an SDK, and this is the only check that says so.
       - run: npm run prove:connector
