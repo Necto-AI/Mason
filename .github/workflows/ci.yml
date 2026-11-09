@@ -41,6 +41,15 @@ jobs:
       # that shrinks an area is expected to lower its number in the same commit.
       - run: npm run check:code
       - run: npm test
+      # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second
+      # onboard, a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket
+      # on `bob`'s home in that root, against a server this script opens because no environment variable scripts the
+      # faux provider. `test/onboard.test.ts` spawns the CLI too, but only for the short-lived commands, and
+      # `test/chat.test.ts` opens its server in-process: no test starts `mason up` as a process and checks the bot it
+      # serves, and the assertion that the run left no home halves at the root it made and wrote no `~/.mason` under
+      # its scratch HOME lives only in this script.
+      - run: npm run e2e:first-run
+        timeout-minutes: 5
       - run: npm run test:packages
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
       # an SDK, and this is the only check that says so.
