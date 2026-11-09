@@ -481,12 +481,17 @@ async function agent(ctx: Context): Promise<Direction> {
 	// blank answer and the login name would quietly install a second home beside the first.
 	const only = root.bots.length === 1 ? root.bots[0] : undefined;
 	const suggested = draft.agent?.name ?? ctx.flags.bot ?? only?.name ?? suggestedName();
+	// The answers already given, in one dim line above the question: a person six screens in should not have to remember
+	// which model they chose, and this is the last screen where changing their mind is still cheap.
+	const chosen = draft.provider;
+	const already = chosen === undefined ? "" : `${paint.dim(`${chosen.id}/${chosen.model}`)}   ${paint.dim("·")}   `;
 	const name = await screen.text("agent.name", "What should this agent be called?", {
 		value: suggested,
 		hint:
-			only !== undefined && only.name === suggested
+			already +
+			(only !== undefined && only.name === suggested
 				? `this root already has ${only.name}: continuing finishes what it needs`
-				: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`,
+				: `its home is ${short(botHome(root.root, suggested), env)}; you will talk to it by this name`),
 		...(ctx.flags.bot === undefined ? {} : { flag: `-b ${ctx.flags.bot}` }),
 		validate: botNameProblem,
 	});
