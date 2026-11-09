@@ -52,6 +52,7 @@ jobs:
       - run: npm run gen:surface:check
       - run: npm run check:docs
       - run: npm run check:code
+      - run: npm run check:licence
       - run: npm test
       # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second
       # onboard, a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket
