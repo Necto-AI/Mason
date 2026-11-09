@@ -28,6 +28,7 @@
 		"gen:surface:check": "node --experimental-strip-types scripts/surface.ts --check",
 		"check:docs": "node --experimental-strip-types scripts/doc-budget.ts --check",
 		"check:code": "node --experimental-strip-types scripts/code-budget.ts --check",
+		"check:licence": "node --experimental-strip-types scripts/licence.ts",
 		"build:packages": "npm run build --workspace mason-protocol && npm run build --workspace mason-connector",
 		"prove:connector": "node --experimental-strip-types scripts/prove-connector-sdk.ts",
 		"lint": "node scripts/biome.mjs check .",
