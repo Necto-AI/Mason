@@ -22,7 +22,7 @@ import {
 	writeCommonStore,
 } from "../src/server/common.ts";
 import {
-	modelChoices,
+	modelRows,
 	openProviders,
 	type ProviderAccess,
 	providerIds,
@@ -134,7 +134,7 @@ const TYPE_MODEL = "type-it-myself";
  * first model — the same answer an empty line has always meant here.
  */
 async function askModel(prompter: Prompter, access: ProviderAccess, provider: string): Promise<string> {
-	const rows = modelChoices(access, provider);
+	const rows = modelRows(access, provider);
 	if (rows.length === 0)
 		return await prompter.text(MODEL_QUESTION, { hint: modelHint([]), flag: "--model <id>", required: true });
 	const picked = await prompter.pick(
