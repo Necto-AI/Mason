@@ -1,15 +1,26 @@
-# Triage Labels
+# Issue labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+Keep labels small and consistent. Apply no more than one type label and one triage label to an ordinary issue. Add `parked` only when work is intentionally deferred.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+## Type
 
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
+| Label | Use when |
+|---|---|
+| `bug` | Existing behavior is broken. |
+| `feature` | Product behavior or capability should change. |
+| `docs` | The work changes documentation only. |
 
-Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
+## Triage
+
+| Label | Meaning |
+|---|---|
+| `needs-triage` | A maintainer must scope or prioritize the issue. |
+| `needs-info` | Work is waiting for information from the reporter. |
+| `ready-for-agent` | The scope and acceptance criteria are clear enough for implementation. |
+| `ready-for-human` | A maintainer decision or manual action is required. |
+| `wontfix` | The project has explicitly declined the work. |
+| `parked` | Intentionally deferred; do not treat as ready. |
+
+## Workflow-specific labels
+
+`wayfinder:map`, `wayfinder:task`, `wayfinder:research`, `wayfinder:prototype`, and `wayfinder:grilling` are reserved for Wayfinder-generated maps and child tickets. They describe the ticket's role in that workflow and do not replace its type or triage label.
