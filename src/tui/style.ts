@@ -42,9 +42,6 @@ export interface Glyphs {
 	readonly cursor: string;
 	readonly rule: string;
 	readonly mask: string;
-	/** The two halves of a progress dot: where the flow has been, and where it is going. */
-	readonly dot: string;
-	readonly dotAhead: string;
 	/** The frames a running operation cycles through. */
 	readonly spinner: readonly string[];
 	/** The mark before a section's name in the frame. */
@@ -111,8 +108,6 @@ export function glyphs(utf8: boolean): Glyphs {
 			cursor: ">",
 			rule: "-",
 			mask: "*",
-			dot: "*",
-			dotAhead: ".",
 			spinner: ["|", "/", "-", "\\"],
 			section: "*",
 			prompt: ">",
@@ -126,8 +121,6 @@ export function glyphs(utf8: boolean): Glyphs {
 		cursor: "▌",
 		rule: "─",
 		mask: "•",
-		dot: "●",
-		dotAhead: "○",
 		spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 		section: "◇",
 		prompt: "❯",
@@ -190,11 +183,4 @@ export function widthOf(text: string): number {
 	let width = 0;
 	for (const char of text.replace(SGR_ONLY, "")) width += cellsOf(char.codePointAt(0) ?? 0);
 	return width;
-}
-
-/** `left` and `right` on one line of exactly `width` columns, or `left` alone when they would collide. */
-export function spread(left: string, right: string, width: number): string {
-	const room = width - widthOf(left) - widthOf(right);
-	if (room < 1) return left;
-	return `${left}${" ".repeat(room)}${right}`;
 }

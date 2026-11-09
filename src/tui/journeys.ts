@@ -7,7 +7,7 @@
  * that does not exist and makes them doubt the rest of the screen.
  *
  * Every entry is here because the address is one this repo would bet on. That is the whole rule, and it is why the
- * provider table covers sixteen of the forty-four providers pi-ai knows: the rest are environment credentials, OAuth, or
+ * provider table covers fourteen of the forty-four providers pi-ai knows: the rest are environment credentials, OAuth, or
  * a console nobody here has opened. A provider with no row still works; it just explains itself with the sentence the
  * flow already wrote.
  *
