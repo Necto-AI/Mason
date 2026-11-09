@@ -39,10 +39,10 @@ the panel's tests. With them went the last credential class mason issued for a p
 only one left, and `/api/health` is the only path that answers without one.
 
 **Why:** a panel is a client, and a client in the repository that serves the agent is the thing that keeps growing while
-the contracts stay implicit. sibling owns it now, and it reaches mason the way every other surface does — as a connector.
+the contracts stay implicit. The client layer is outside this repository; any client reaches Mason through the same connector contract.
 
 **What stands:** the projection. `src/server/projection.ts` still turns the durable view into the rows a reader is sent,
-and it is the whitelist sibling will read when it builds the panel. Nothing in mason consumes it today.
+and it is the whitelist a future reader can consume. Nothing in Mason consumes it today.
 
 **Revisit if:** mason is asked to own a client again. The answer is a decision of its own, not a resurrection of these
 files.
