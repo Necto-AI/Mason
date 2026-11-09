@@ -6,7 +6,7 @@
 	},
 	"version": "0.1.0",
 	"description": "The mason connector protocol, v1: two Chord contracts and the shapes they carry.",
-	"license": "Apache-2.0",
+	"license": "AGPL-3.0-only",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
