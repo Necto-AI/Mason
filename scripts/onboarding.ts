@@ -30,7 +30,7 @@ import { readInstalls } from "../src/server/install-state.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
 import { checkPodman, listening } from "../src/server/podman.ts";
 import {
-	modelChoices,
+	modelRows,
 	openProviders,
 	type ProviderAccess,
 	providerIds,
@@ -418,7 +418,7 @@ async function provider(ctx: Context): Promise<Direction> {
 			...(journey === undefined ? {} : { journey }),
 		});
 	}
-	const models = modelChoices(access, id);
+	const models = modelRows(access, id);
 	const current = draft.provider?.id === id ? draft.provider.model : undefined;
 	// A catalog with nothing in it is a text field, not a one-row menu.
 	const picked =

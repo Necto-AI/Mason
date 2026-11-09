@@ -56,7 +56,7 @@ export function modelIds(access: ProviderAccess, provider: string): string[] {
 }
 
 /** A row a wizard can draw: the id a person picks, and one line of what it holds. */
-export interface ModelChoice {
+export interface ModelRow {
 	readonly value: string;
 	readonly label: string;
 	readonly description: string;
@@ -75,7 +75,7 @@ function contextSize(tokens: number): string {
  * description, in the order that decides a choice: room for a conversation, then whether it thinks, then whether it can
  * be shown a picture.
  */
-export function modelChoices(access: ProviderAccess, provider: string): ModelChoice[] {
+export function modelRows(access: ProviderAccess, provider: string): ModelRow[] {
 	return access.models.getModels(provider).map((model) => {
 		const facts = [`${contextSize(model.contextWindow)} context`];
 		if (model.reasoning) facts.push("reasoning");
