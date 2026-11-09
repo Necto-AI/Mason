@@ -17,6 +17,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { fuzzyFilter } from "@earendil-works/pi-tui";
 import {
 	BoxRenderable,
 	type CliRenderer,
@@ -273,14 +274,25 @@ export class ChoiceList implements Body {
 		return Math.max(4, this.maxVisibleOption ?? Math.min(10, rows - 6));
 	}
 
-	/** What the list is showing now: the filtered rows, in the order they are drawn. */
+	/**
+	 * What the list is showing now, in the order it is drawn: the rows the query matched, best match first, and the
+	 * pinned ones under them.
+	 *
+	 * The matching is pi-tui's `fuzzyFilter`, which is the one thing from that package this renderer still uses and the
+	 * reason it is a dependency: the characters have to appear in order rather than in one run, so `ocgo` finds
+	 * `opencode-go`, the gaps and the word boundaries decide the order, and a slash or a space splits the query into
+	 * tokens that must all match. It is a pure function over strings: no widget, no terminal, nothing to inherit.
+	 *
+	 * Only the label is matched, never the description. A fuzzy match over a sentence is noise: `open` would find
+	 * "the console" through its own vowels, and the row a person typed the name of would arrive after it.
+	 */
 	visible(): readonly Choice[] {
-		const query = this.query.trim().toLowerCase();
+		const query = this.query.trim();
 		if (query === "") return this.all;
-		return this.all.filter(
-			(choice) =>
-				choice.pinned === true || `${choice.label} ${choice.description ?? ""}`.toLowerCase().includes(query),
-		);
+		const choosable = this.all.filter((choice) => choice.pinned !== true);
+		const pinned = this.all.filter((choice) => choice.pinned === true);
+		const matched = fuzzyFilter([...choosable], query, (choice) => choice.label);
+		return [...matched, ...pinned];
 	}
 
 	build(): Renderable {
