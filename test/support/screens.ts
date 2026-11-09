@@ -5,7 +5,6 @@
  * this code draws and not a second description of it. The copy here is representative rather than final — a flow owns what
  * its own screens say — but the shape of each screen is the shape the frame rules are about.
  */
-import type { TerminalScreen } from "../../src/tui/app.ts";
 import { paint } from "../../src/tui/style.ts";
 import type { Harness } from "./screen.ts";
 

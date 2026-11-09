@@ -11,7 +11,7 @@
  * colours; `ok`, `warn` and `bad` are the terminal's own green, yellow and red, because a check that failed is a state
  * every terminal already has a word for.
  */
-import { RGBA, StyledText, type TextChunk, createTextAttributes } from "@opentui/core";
+import { createTextAttributes, RGBA, StyledText, type TextChunk } from "@opentui/core";
 import { type Paint, widthOf } from "./style.ts";
 
 /** The one accent: a designed value, so it is a hex and the index it falls on in a 256-colour palette. */
@@ -158,7 +158,12 @@ function chunksOf(runs: readonly Run[], theme: Theme): TextChunk[] {
 		if (run.text === "") continue;
 		const fg = theme.colour && run.tone !== "plain" ? theme[run.tone] : undefined;
 		const attributes = theme.colour ? createTextAttributes({ bold: run.bold, dim: run.dim }) : 0;
-		chunks.push({ __isChunk: true, text: run.text, ...(fg === undefined ? {} : { fg }), ...(attributes === 0 ? {} : { attributes }) });
+		chunks.push({
+			__isChunk: true,
+			text: run.text,
+			...(fg === undefined ? {} : { fg }),
+			...(attributes === 0 ? {} : { attributes }),
+		});
 	}
 	return chunks;
 }
@@ -182,9 +187,7 @@ export function theme(ink: Paint, env: NodeJS.ProcessEnv = process.env): Theme {
 		line: (text) => new StyledText(chunksOf(parseSgr(text), built)),
 		paragraph: (text, width) => {
 			const lines = hardLines(parseSgr(text)).flatMap((line) => wrapRuns(line, Math.max(1, width)));
-			const runs = lines.flatMap((line, index) =>
-				index === 0 ? line : [{ ...RESET, text: "\n" } as Run, ...line],
-			);
+			const runs = lines.flatMap((line, index) => (index === 0 ? line : [{ ...RESET, text: "\n" } as Run, ...line]));
 			return { text: new StyledText(chunksOf(runs, built)), rows: lines.length };
 		},
 	};
