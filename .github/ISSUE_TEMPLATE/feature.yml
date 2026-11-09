@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         Use a title in the form `area: short outcome` (for example, `runtime: resume scheduled work after restart`).
-        Describe the problem and desired outcome; implementation ideas are optional.
+        Describe the problem and desired outcome; implementation ideas are optional. Do not include credentials, private URLs, personal data, or exploitable details.
   - type: textarea
     id: goal
     attributes:
