@@ -370,7 +370,13 @@ export class TerminalScreen implements Screen {
 
 	private readonly onResize = (): void => {
 		this.frame.setColumns(this.renderer.width);
-		if (this.active !== undefined) this.frame.mount(this.active.build());
+		const body = this.active;
+		if (body !== undefined) {
+			// The body was built at the old window, and the width is what decides whether a row has a description beside it: it
+			// is told the new room before it is asked to draw it, or a shrunken window keeps the layout it was given.
+			body.resize?.(this.geometry());
+			this.frame.mount(body.build());
+		}
 		this.renderer.requestRender();
 	};
 }
