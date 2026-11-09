@@ -2,27 +2,18 @@
  * The two ways `mason setup` asks a question: a terminal, and no terminal.
  *
  * The wizard is a shell over functions that take answers (`setup.ts`), and this file is the only place that knows how an
- * answer is collected. `terminalPrompter` drives `@earendil-works/pi-tui` — a renderer and a widget kit, not a prompt
- * library, so the sequence is a state machine here: mount a `SelectList` or an `Input`, take what it hands back, unmount
- * it, ask the next thing. `scriptedPrompter` answers from flags and refuses when a required answer was not among them,
- * which is what makes the flow drivable in CI and in a test: no TTY, no keypresses, the same functions.
+ * answer is collected. `terminalPrompter` is a thin adapter over the same `TerminalScreen` every other mason flow draws
+ * with, so one renderer and one set of keys serves `mason onboard` and `mason setup`: a question here is the same list,
+ * the same field, and the same footer as a question there.
  *
- * pi-tui has no TTY guard of its own. Started on a pipe it renders ANSI and reads whole lines, so a `SelectList` would
- * appear to hang: the arrow keys it listens for never arrive. `choosePrompter` therefore falls back to the scripted side
- * when there is no terminal, and a headless run says why it is asking for flags instead of quietly taking defaults.
+ * `scriptedPrompter` answers from flags and refuses when a required answer was not among them, which is what makes the
+ * flow drivable in CI and in a test: no TTY, no keypresses, the same functions. `choosePrompter` therefore falls back to
+ * the scripted side when there is no terminal, and a headless run says why it is asking for flags instead of quietly
+ * taking defaults.
  */
-import {
-	Input,
-	matchesKey,
-	ProcessTerminal,
-	type SelectItem,
-	SelectList,
-	type SelectListTheme,
-	Spacer,
-	Text,
-	type TUI,
-	TuiMainScreen,
-} from "@earendil-works/pi-tui";
+import { filterWarnings, TerminalScreen } from "../src/tui/app.ts";
+import type { Journey } from "../src/tui/screen.ts";
+import { Cancelled } from "../src/tui/screen.ts";
 
 /** One option in a list: the value is what the flow gets, the label is what a person reads. */
 export interface Choice {
@@ -32,20 +23,21 @@ export interface Choice {
 }
 
 export interface TextQuestion {
-	/** One line of context above the prompt, e.g. where a token comes from. */
+	/** One or two lines of context above the prompt, e.g. where a token comes from. */
 	readonly hint?: string;
 	/** The flag that answers this without a terminal, e.g. `--env TELEGRAM_BOT_TOKEN="<token>"`. */
 	readonly flag?: string;
 	/**
-	 * The answer is a credential, and the terminal has to say that it is about to echo it: pi-tui's `Input` has no masked
-	 * mode. What the answer is *not* is written down — the value goes into the container's environment and nowhere else,
-	 * never into the install record.
+	 * The answer is a credential, and the field masks it: one glyph per character, never the value. What the answer is
+	 * *not* is written down — it goes into the container's environment and nowhere else, never into the install record.
 	 */
 	readonly secret?: boolean;
 	/** Taken when the person presses enter on an empty line. */
 	readonly fallback?: string;
 	/** An answer with no fallback is required: an empty line asks again. */
 	readonly required?: boolean;
+	/** The page the answer comes from, when it comes from somewhere else: drawn under the hint, opened with `ctrl+o`. */
+	readonly journey?: Journey;
 }
 
 /** A question answered from a list, and the flag that answers it without a terminal. */
@@ -143,129 +135,77 @@ export const PROVIDER_QUESTION = "which provider?";
 export const MODEL_QUESTION = "which model?";
 export const KEY_QUESTION = "the provider's API key?";
 
-/** The theme pi-tui wants, in the colours a terminal already has: no truecolor dependency, no colour on a pipe. */
-function theme(): SelectListTheme {
-	const dim = (s: string): string => `\x1b[2m${s}\x1b[22m`;
-	const invert = (s: string): string => `\x1b[7m${s}\x1b[27m`;
-	const cyan = (s: string): string => `\x1b[36m${s}\x1b[39m`;
-	return { selectedPrefix: cyan, selectedText: invert, description: dim, scrollInfo: dim, noMatch: dim };
-}
-
 /**
- * The terminal. One `TUI` for the whole run, with each question mounted, answered and unmounted in turn.
+ * The terminal: one screen for the whole run, with each question mounted, answered and replaced in turn.
  *
- * Every `ask` builds its own promise and resolves it from the widget's callback; the widget leaves the tree before the
- * promise settles, so the next question never renders underneath the last one. `close()` calls `tui.stop()` once, and
- * the caller runs it in a `finally`: a throw between two questions must not leave the terminal in raw mode with the
- * cursor hidden.
+ * Escape is `mason setup`'s cancel, not a step backwards: `setup` asks its questions in one pass and nothing is written
+ * before its plan, so going back would only be returning to a question already answered. It is translated to the
+ * `MissingAnswer` a scripted run raises, which is what every caller already reads as "nothing was written".
  */
 export function terminalPrompter(): Prompter {
-	const terminal = new ProcessTerminal();
-	const tui: TUI = new TuiMainScreen(terminal);
+	filterWarnings();
+	const screen = TerminalScreen.open({ subtitle: "setup" });
+	screen.where({ title: "Setup", index: 1, total: 1 });
 	let closed = false;
 	const finish = (): void => {
 		if (closed) return;
 		closed = true;
-		tui.stop();
+		screen.close();
 	};
-	// Ctrl-C in raw mode is a byte, not a signal: pi-tui installs no handler of its own, so this is the one thing that
-	// has to be intercepted before it becomes a keystroke in an input box.
-	tui.addInputListener((data) => {
-		if (matchesKey(data, "ctrl+c")) {
-			finish();
-			process.exit(130);
-		}
-		return undefined;
-	});
-	tui.start();
+	const cancelled = (): MissingAnswer => new MissingAnswer("cancelled: nothing was written");
 
-	function pick(question: string, choices: readonly Choice[]): Promise<string> {
-		return new Promise((answer, reject) => {
-			const label = new Text(question, 0, 1);
-			const list = new SelectList(
-				choices.map(
-					(choice): SelectItem => ({
+	return {
+		async pick(question, choices) {
+			try {
+				return await screen.select(
+					"wizard.pick",
+					question,
+					choices.map((choice) => ({
 						value: choice.value,
 						label: choice.label,
 						...(choice.description === undefined ? {} : { description: choice.description }),
-					}),
-				),
-				10,
-				theme(),
-			);
-			const done = (value: string): void => {
-				tui.removeChild(list);
-				tui.removeChild(label);
-				answer(value);
-			};
-			list.onSelect = (item) => {
-				done(item.value);
-			};
-			list.onCancel = () => {
-				reject(new MissingAnswer("cancelled: nothing was written"));
-			};
-			tui.addChild(label);
-			tui.addChild(list);
-			tui.setFocus(list);
-			// `addChild` only pushes: without this the question is in the tree and not on the screen.
-			tui.requestRender();
-		});
-	}
-
-	function text(question: string, options: TextQuestion = {}): Promise<string> {
-		return new Promise((answer, reject) => {
-			// `secret` cannot buy a masked field — pi-tui's `Input` has no such mode, and drawing over it would leave the
-			// real value on the line anyway. It buys the one thing that is honest: saying so, with the flag that avoids it.
-			const hint =
-				options.secret === true
-					? [
-							options.hint,
-							`this answer is echoed as you type it: on a shared screen pass ${options.flag ?? "it as a flag"} instead`,
-						]
-							.filter((line) => line !== undefined)
-							.join("\n")
-					: options.hint;
-			const label = new Text(hint === undefined ? question : `${question}\n${hint}`, 0, 1);
-			const input = new Input({ prompt: "> " });
-			const done = (value: string): void => {
-				tui.removeChild(input);
-				tui.removeChild(label);
-				answer(value);
-			};
-			input.onSubmit = (value: string) => {
-				const trimmed = value.trim();
-				if (trimmed === "") {
-					if (options.fallback !== undefined) return done(options.fallback);
-					// A required answer is asked again rather than refused: the person is here, and one empty enter is a
-					// slip, not a decision.
-					if (options.required === true) {
-						input.setValue("");
-						return;
-					}
-					return done("");
+					})),
+				);
+			} catch (error) {
+				if (error instanceof Cancelled) throw cancelled();
+				throw error;
+			}
+		},
+		async text(question, options = {}) {
+			// A required answer is asked again rather than refused: the person is here, and one empty enter is a slip, not a
+			// decision. An empty answer to an optional question takes the fallback, which is how a model's first id and an
+			// optional variable are both "enter, enter".
+			for (;;) {
+				let answer: string;
+				try {
+					answer =
+						options.secret === true
+							? await screen.secret("wizard.secret", question, {
+									...(options.hint === undefined ? {} : { hint: options.hint }),
+									...(options.flag === undefined ? {} : { flag: options.flag }),
+									...(options.journey === undefined ? {} : { journey: options.journey }),
+								})
+							: await screen.text("wizard.text", question, {
+									...(options.hint === undefined ? {} : { hint: options.hint }),
+									...(options.fallback === undefined ? {} : { placeholder: options.fallback }),
+									...(options.journey === undefined ? {} : { journey: options.journey }),
+								});
+				} catch (error) {
+					if (error instanceof Cancelled) throw cancelled();
+					throw error;
 				}
-				done(trimmed);
-			};
-			input.onEscape = () => {
-				reject(new MissingAnswer("cancelled: nothing was written"));
-			};
-			tui.addChild(label);
-			tui.addChild(new Spacer(1));
-			tui.addChild(input);
-			tui.setFocus(input);
-			tui.requestRender();
-		});
-	}
-
-	return {
-		pick,
-		text,
-		async confirm(question, fallback) {
-			const value = await pick(question, [
-				{ value: "yes", label: "yes" },
-				{ value: "no", label: "no" },
-			]);
-			return value === "yes" ? true : value === "no" ? false : fallback;
+				if (answer !== "") return answer;
+				if (options.fallback !== undefined) return options.fallback;
+				if (options.required !== true) return "";
+			}
+		},
+		async confirm(question, _fallback) {
+			try {
+				return await screen.confirm("wizard.confirm", question, { yes: "yes", no: "no" });
+			} catch (error) {
+				if (error instanceof Cancelled) throw cancelled();
+				throw error;
+			}
 		},
 		close: finish,
 	};
