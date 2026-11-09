@@ -163,13 +163,13 @@ describe("theme", () => {
 	test("a paragraph wraps at the width, keeps a hard break, and counts its rows", () => {
 		const drawn = ink.paragraph("one two three\n\nfour", 8);
 		assert.equal(drawn.rows, 4);
-		assert.equal(
+		assert.deepEqual(
 			drawn.text.chunks
 				.map((chunk) => chunk.text)
 				.join("")
 				.split("\n")
 				.map((line) => line.trimEnd()),
-			["one two", "three", "", "four"].join("\n").split("\n").map((line) => line.trimEnd()),
+			["one two", "three", "", "four"],
 		);
 	});
 });
@@ -229,8 +229,11 @@ describe("the screens", () => {
 		assert.doesNotMatch(harness.frame(), /anthropic/);
 		await harness.press("\x1b");
 		assert.match(harness.frame(), /▌ anthropic/, "escape cleared the filter, and did not cancel the question");
+		// The rejection handler is attached before the key that causes it: a promise rejected in the tick a keypress runs in is
+		// an unhandled rejection, and the runner fails the test for it before the assertion below ever sees the promise.
+		const cancelled = assert.rejects(answering, Cancelled);
 		await harness.press("\x1b");
-		await assert.rejects(answering, Cancelled);
+		await cancelled;
 		harness.screen.close();
 		harness.screen.close();
 		await harness.dispose();
@@ -332,7 +335,7 @@ describe("a secret", () => {
 		await harness.press(..."sk-live-0123456789".split(""));
 		const shown = harness.frame();
 		assert.ok(shown.includes("•".repeat("sk-live-0123456789".length)), shown);
-		assert.ok(shown.includes("13"), "the live count is the length, and not the value");
+		assert.ok(shown.includes(` ${String("sk-live-0123456789".length)}`), "the live count is the length, and not the value");
 		assert.ok(shown.includes("--key <key>"), "the flag is offered as the way out of the question");
 		assert.ok(!shown.includes("sk-live"), "the key reached the screen");
 		await harness.press("\r");
@@ -355,8 +358,9 @@ describe("a secret", () => {
 		const harness = await openScreen();
 		const answering = harness.screen.text("agent.name", "What should this agent be called?");
 		await harness.settle();
+		const cancelled = assert.rejects(answering, Cancelled);
 		await harness.press("\x1b");
-		await assert.rejects(answering, Cancelled);
+		await cancelled;
 		harness.screen.close();
 		harness.screen.close();
 		await harness.dispose();
@@ -482,8 +486,9 @@ describe("a journey", () => {
 				harness.frame(),
 				/could not open console\.anthropic\.com: open https:\/\/console\.anthropic\.com\/settings\/keys yourself/,
 			);
+			const cancelled = assert.rejects(answering, Cancelled);
 			await harness.press("\x1b");
-			await assert.rejects(answering, Cancelled);
+			await cancelled;
 			await harness.dispose();
 		} finally {
 			if (before === undefined) delete process.env.PATH;
@@ -570,7 +575,7 @@ describe("the components on their own", () => {
 		prose.mount(short.build());
 		await prose.settle();
 		assert.doesNotMatch(prose.frame(), /╭/);
-		assert.equal(short.rows, 5, "a title, a blank, two lines, and a blank");
+		assert.equal(short.rows, 4, "a title, a blank, and two lines: the rows the screen decides on are the rows it draws");
 		await prose.dispose();
 
 		const page = await openScreen();
@@ -598,7 +603,9 @@ describe("the components on their own", () => {
 		await harness.settle();
 		const text = harness.frame();
 		assert.match(text, /✓ provider answered/);
-		assert.match(text, / {5}the provider answered/, "the detail is indented under the row it belongs to");
+		// The detail sits under the label, and the label starts one column past the mark: two columns, in a body mounted with
+		// no frame around it. Through a screen the frame's own margin and inset add three more.
+		assert.match(text, /\n {2}the provider answered/, "the detail is indented under the row it belongs to");
 		assert.match(text, /nothing was written/);
 		assert.match(text, /What it is doing/);
 		await harness.dispose();
