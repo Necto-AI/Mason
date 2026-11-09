@@ -41,6 +41,7 @@
 		"check:metadata": "node --experimental-strip-types scripts/metadata.ts",
 		"build:packages": "npm run build --workspace mason-protocol && npm run build --workspace mason-connector",
 		"prove:connector": "node --experimental-strip-types scripts/prove-connector-sdk.ts",
+		"prove:package": "node --experimental-strip-types scripts/prove-package.ts",
 		"lint": "node scripts/biome.mjs check .",
 		"lint:write": "node scripts/biome.mjs check --write .",
 		"eval": "node --experimental-strip-types evals/run.ts",
