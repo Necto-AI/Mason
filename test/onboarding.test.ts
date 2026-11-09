@@ -12,12 +12,13 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { consoleGrant } from "../scripts/chat.ts";
 import { runOnboard } from "../scripts/onboard.ts";
 import {
 	answeredPrompter,
@@ -51,6 +52,18 @@ function fauxAccess(): Awaited<ReturnType<Operations["providers"]>> {
 	return { models, faux: true };
 }
 
+/**
+ * A catalog with one provider id, offline: the faux provider's models under the name the journey table either knows or
+ * does not. The flow only reads the two lists off it, so where the models came from does not matter here.
+ */
+function catalogFor(id: string): Awaited<ReturnType<Operations["providers"]>> {
+	const faux = fauxProvider();
+	faux.setResponses([fauxAssistantMessage(fauxText("ok"))]);
+	const models = createModels();
+	models.setProvider({ ...faux.provider, id, name: id });
+	return { models, faux: false };
+}
+
 const PASSING: readonly DoctorCheck[] = [
 	{ name: "home", ok: true, detail: "a home with both halves" },
 	{ name: "model", ok: true, detail: "faux/faux-1, the offline provider needs no key" },
@@ -82,7 +95,7 @@ interface Fixture {
  * `faux: false` is a provider that wants a key and answers one: the check that screen 2 offers only runs for a provider
  * that can fail, so the fake catalog is handed over with its offline flag turned off.
  */
-function fixture(options: { readonly faux?: boolean } = {}): Fixture {
+function fixture(options: { readonly faux?: boolean; readonly catalog?: string } = {}): Fixture {
 	const calls: string[] = [];
 	const break_ = {
 		init: false,
@@ -99,7 +112,8 @@ function fixture(options: { readonly faux?: boolean } = {}): Fixture {
 		ready: async () => break_.ready,
 		settings: async () => (break_.ready ? { provider: "faux", model: "faux-1" } : undefined),
 		hasKey: async () => false,
-		providers: async () => ({ ...fauxAccess(), faux: options.faux ?? true }),
+		providers: async () =>
+			options.catalog === undefined ? { ...fauxAccess(), faux: options.faux ?? true } : catalogFor(options.catalog),
 		verify: async () => {
 			calls.push("verify");
 			if (break_.verify > 0) {
@@ -159,6 +173,7 @@ function quickstart(overrides: Readonly<Record<string, Answer>> = {}): Readonly<
 		"provider.model": "faux-1",
 		"agent.name": "alice",
 		"connector.kind": "console",
+		"connectors.list": "continue",
 		"review.action": "apply",
 		"done.action": "finish",
 		...overrides,
@@ -216,6 +231,7 @@ describe("the flow", () => {
 				"agent.name",
 				"connector.kind",
 				"connector.console",
+				"connectors.list",
 				"review.read",
 				"review.action",
 				"apply.steps",
@@ -324,7 +340,214 @@ describe("the flow", () => {
 		const { screen } = await drive(quickstart());
 		assert.deepEqual(
 			screen.locations.map((place) => place.title),
-			["Welcome", "Model and provider", "Agent", "Connector", "Review", "Installing", "Done"],
+			["Welcome", "Model and provider", "Agent", "Connectors", "Review", "Installing", "Done"],
+		);
+	});
+});
+
+describe("the connectors page", () => {
+	test("an advanced run that adds two installs both, in the order they were added", async () => {
+		const { code, screen, calls } = await drive({
+			"welcome.mode": "advanced",
+			"provider.id": "faux",
+			"provider.model": "faux-1",
+			"agent.name": "alice",
+			"connector.kind": ["console", "telegram"],
+			"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+			"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+			"connector.env.HTTPS_PROXY": "",
+			"connector.owner": "@denis",
+			"connector.start": false,
+			"connectors.list": ["add", "continue"],
+			"review.action": "apply",
+			"done.action": "finish",
+		});
+		assert.equal(code, 0);
+		// One `mason setup` per connector, in the order the page listed them: `writeIntegration` merges by name and
+		// `connector add` mints one credential per entry, so the two entries follow from these two calls.
+		assert.deepEqual(
+			calls.filter((call) => call.startsWith("setup")),
+			[
+				"setup --connector console",
+				"setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc --env TELEGRAM_ALLOWED_CHATS=@denis " +
+					"--owner @denis --targets @denis --no-start",
+			],
+		);
+		// The review is where a person reads the plan back: one block per connector, each naming what it may send.
+		const read = [
+			...(screen.asked.find((question) => question.id === "review.action")?.preface ?? []),
+			...screen.pages.filter((page) => page.id === "review.read").flatMap((page) => page.page.lines),
+		].join("\n");
+		assert.match(read, /Connector 1/);
+		assert.match(read, /Connector 2/);
+		assert.match(read, /console/);
+		assert.match(read, /telegram/);
+		assert.match(read, /\/stop/, "each block says what that connector may send");
+		// And the progress list is one row per connector, both done.
+		const rows = screen.progressRows.get("apply.steps") ?? [];
+		assert.deepEqual(
+			rows
+				.filter((row) => row.label.includes("console") || row.label.includes("telegram"))
+				.map((row) => `${row.label}: ${row.state}`),
+			["console: credential: ok", "telegram: credential and project: ok"],
+		);
+	});
+
+	test("a repeated --connector pre-seeds both, and the screen asks nothing about either", async () => {
+		const { code, screen, calls } = await drive(
+			{
+				"welcome.mode": "quickstart",
+				"agent.name": "alice",
+				"review.action": "apply",
+				"done.action": "finish",
+			},
+			{
+				flags: {
+					init: ["--provider", "faux", "--model", "faux-1"],
+					setup: [
+						"--connector",
+						"telegram",
+						"--owner",
+						"@denis",
+						"--env",
+						"TELEGRAM_BOT_TOKEN=123:abc",
+						"--env",
+						"TELEGRAM_ALLOWED_CHATS=@denis",
+						"--connector",
+						"console",
+					],
+				},
+			},
+		);
+		assert.equal(code, 0);
+		assert.ok(screen.asked.some((question) => question.id === "connector.flags"));
+		for (const id of ["connector.kind", "connector.owner", "connector.env.TELEGRAM_BOT_TOKEN", "connectors.list"])
+			assert.ok(!screen.asked.some((question) => question.id === id), `nothing asked ${id}: a flag answered it`);
+		assert.equal(calls.filter((call) => call.startsWith("setup")).length, 2, "both were installed, and nobody asked");
+	});
+
+	test("a connector dropped on the page is left out of the install", async () => {
+		const { code, calls } = await drive({
+			...quickstart(),
+			"connector.kind": ["console", "telegram"],
+			"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+			"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+			"connector.env.HTTPS_PROXY": "",
+			"connector.owner": "@denis",
+			"connectors.list": ["add", "remove:0", "continue"],
+		});
+		assert.equal(code, 0);
+		const setup = calls.filter((call) => call.startsWith("setup"));
+		assert.deepEqual(setup.length, 1, "the console was dropped before anything was written");
+		assert.match(setup[0] ?? "", /^setup --connector telegram/);
+	});
+
+	test("dropping the last one asks for a connector again, rather than installing nothing", async () => {
+		const { code, screen, calls } = await drive({
+			...quickstart(),
+			"connector.kind": ["console", "console"],
+			"connectors.list": ["remove:0", "continue"],
+		});
+		assert.equal(code, 0);
+		assert.equal(
+			screen.asked.filter((question) => question.id === "connector.kind").length,
+			2,
+			"the page with no row on it is the question that fills it",
+		);
+		assert.equal(calls.filter((call) => call.startsWith("setup")).length, 1);
+	});
+
+	test("the key question names the console that mints it, and only when this build knows one", async () => {
+		const known = fixture({ faux: false, catalog: "anthropic" });
+		const asked = await drive(
+			quickstart({ "provider.id": "anthropic", "provider.key": "sk-test", "provider.check": false }),
+			{ fixture: known },
+		);
+		assert.equal(asked.code, 0);
+		assert.equal(
+			asked.screen.asked.find((question) => question.id === "provider.key")?.journey?.url,
+			"https://console.anthropic.com/settings/keys",
+		);
+
+		const unknown = fixture({ faux: false, catalog: "a-provider-this-table-has-never-seen" });
+		const quiet = await drive(
+			quickstart({
+				"provider.id": "a-provider-this-table-has-never-seen",
+				"provider.key": "sk-test",
+				"provider.check": false,
+			}),
+			{ fixture: unknown },
+		);
+		assert.equal(quiet.code, 0);
+		assert.equal(
+			quiet.screen.asked.find((question) => question.id === "provider.key")?.journey,
+			undefined,
+			"a provider with no row gets no line: the wizard does not invent an address",
+		);
+	});
+
+	test("a connector's secret variable says which page issues it", async () => {
+		const { screen } = await drive(
+			quickstart({
+				"connector.kind": "telegram",
+				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
+				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
+				"connector.env.HTTPS_PROXY": "",
+				"connector.owner": "@denis",
+			}),
+		);
+		assert.equal(
+			screen.asked.find((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN")?.journey?.url,
+			"https://t.me/BotFather",
+		);
+		assert.equal(
+			screen.asked.find((question) => question.id === "connector.owner")?.journey,
+			undefined,
+			"a question whose answer is not on a website carries no journey",
+		);
+	});
+
+	test("the page lists what this run installs, with the state of each row", async () => {
+		const { screen } = await drive(quickstart());
+		const read = (screen.asked.find((question) => question.id === "connectors.list")?.preface ?? []).join("\n");
+		assert.match(read, /This run installs/, "one row per connector this run will write");
+		assert.match(read, /console/);
+		assert.match(read, /written/);
+	});
+
+	test("a connector already on disk is reported as installed, and is not removable here", async () => {
+		// A home from an earlier run: its grant is the answer it already gave, so the page reports it and writes nothing.
+		// Removing an integration is `mason integration remove`, not a row on a wizard that has written nothing yet.
+		const root = await tempRoot();
+		await mkdir(join(root, "alice", "service"), { recursive: true });
+		await writeFile(
+			join(root, "alice", "service", "integrations.json"),
+			JSON.stringify({ version: "0.1", integrations: { console: { enabled: true, connector: consoleGrant() } } }),
+			"utf8",
+		);
+		const { code, screen, calls } = await drive(
+			{
+				"welcome.mode": "quickstart",
+				"provider.id": "faux",
+				"provider.model": "faux-1",
+				"agent.name": "alice",
+				"connectors.list": "continue",
+				"review.action": "apply",
+				"done.action": "finish",
+			},
+			{ root },
+		);
+		assert.equal(code, 0);
+		assert.ok(!screen.asked.some((question) => question.id === "connector.kind"), "nothing asked which one to add");
+		assert.ok(!calls.some((call) => call.startsWith("setup")), "nothing was installed twice");
+		const page = screen.asked.find((question) => question.id === "connectors.list");
+		const read = (page?.preface ?? []).join("\n");
+		assert.match(read, /Already installed/);
+		assert.match(read, /not removed from here/, "an entry on disk is not this page's to drop");
+		assert.deepEqual(
+			(page?.choices ?? []).filter((choice) => choice.startsWith("remove")),
+			[],
+			"and it is offered no row that would remove it",
 		);
 	});
 });
@@ -379,6 +602,7 @@ describe("what the disk already answers", () => {
 				"welcome.mode": "quickstart",
 				"agent.name": "alice",
 				"connector.kind": "console",
+				"connectors.list": "continue",
 				"review.action": "apply",
 				"done.action": "finish",
 			},
@@ -394,6 +618,7 @@ describe("what the disk already answers", () => {
 				"agent.name",
 				"connector.kind",
 				"connector.console",
+				"connectors.list",
 				"review.read",
 				"review.action",
 				"apply.steps",
@@ -460,6 +685,7 @@ describe("what the disk already answers", () => {
 				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
 				"connector.env.HTTPS_PROXY": "",
 				"connector.owner": "@denis",
+				"connectors.list": "continue",
 				"review.action": "apply",
 				"done.action": "finish",
 			},
@@ -513,14 +739,15 @@ describe("what the disk already answers", () => {
 	});
 
 	test("a connector the flags half answered is still a step the review can go back into", async () => {
-		// Escape at the review returns to the connector with what was typed kept, and the review keeps its way back: a
-		// half-seeded plan is not "answered on the command line", whatever the flag said.
+		// Escape at the review returns to the connectors page with what was typed kept, and the review keeps its way back:
+		// a half-seeded plan is not "answered on the command line", whatever the flag said.
 		const { code, screen } = await drive(
 			quickstart({
 				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
 				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
 				"connector.env.HTTPS_PROXY": "",
 				"connector.owner": "@denis",
+				"connectors.list": ["continue", "continue"],
 				"review.action": [CANCEL, "apply"],
 			}),
 			{ flags: { setup: ["--connector", "telegram"] } },
@@ -532,8 +759,13 @@ describe("what the disk already answers", () => {
 		);
 		assert.equal(
 			screen.asked.filter((question) => question.id === "connector.permissions").length,
+			1,
+			"the questions were asked once: what a re-entry shows is the page, with the answers it already has",
+		);
+		assert.equal(
+			screen.asked.filter((question) => question.id === "connectors.list").length,
 			2,
-			"escape re-entered the step, with the answers it already has",
+			"escape at the review landed on the page again",
 		);
 		assert.ok(
 			!screen.asked.some((question) => question.id === "connector.kind"),
@@ -732,11 +964,26 @@ describe("the name a bot may have", () => {
 		const custom = preseed({
 			init: [],
 			setup: ["--url", "ws://127.0.0.1:9/x", "--owner", "@me", "--no-start"],
+		}) as { connectors?: readonly Record<string, unknown>[] };
+		assert.equal(custom.connectors?.[0]?.kind, "custom");
+		assert.equal(custom.connectors?.[0]?.owner, "@me");
+		assert.equal(custom.connectors?.[0]?.start, false);
+		assert.equal(custom.connectors?.[0]?.container, false);
+	});
+
+	test("a repeated --connector is a second connector, with the flags that follow it", () => {
+		// Criterion 5 of #159: one headless run installs both, and the `--owner` written after the first connector belongs
+		// to it and not to the second one.
+		const seeded = preseed({
+			init: [],
+			setup: ["--connector", "telegram", "--owner", "@denis", "--connector", "console"],
 		});
-		assert.equal(custom.connector?.kind, "custom");
-		assert.equal(custom.connector?.owner, "@me");
-		assert.equal(custom.connector?.start, false);
-		assert.equal(custom.connector?.container, false);
+		assert.deepEqual(
+			seeded.connectors?.map((plan) => plan.kind),
+			["telegram", "console"],
+		);
+		assert.equal(seeded.connectors?.[0]?.owner, "@denis");
+		assert.equal(seeded.connectors?.[1]?.owner, undefined, "the second connector took none of the first one's flags");
 	});
 });
 
