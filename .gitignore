@@ -30,6 +30,10 @@ __pycache__/
 # Local dev stack state (scripts/dev-stack.ts)
 .dev/
 
+# Release staging: tarballs copied out of `dist` before a publish, and a by-hand `npm pack`.
+.release/
+*.tgz
+
 # The `vpn` sidecar's real server address and key. `deploy/vpn/config.example.json` is the template.
 deploy/vpn/config.json
 
