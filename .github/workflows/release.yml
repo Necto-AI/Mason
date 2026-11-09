@@ -32,12 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-
-      # Node 22's npm 10 has no OIDC publish exchange: the OIDC token flow landed in npm 11.5.0, and without it
-      # the `--provenance` publishes below would die ENEEDAUTH at the first tag (there is no secret to fall back
-      # to). The compile and the checks above run under node 22 the same way `ci` does.
-      - run: npm install -g npm@latest
+          node-version: 26
 
       # The tag names the tree: a version pushed on a tree with different manifest versions publishes those
       # numbers, so the mismatch becomes the run's failure instead of a discovery after the publish.
