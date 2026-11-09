@@ -1,0 +1,40 @@
+name: Task or project work
+description: Track release, maintenance, research, or other non-feature work.
+title: ""
+labels:
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use a title in the form `area: short outcome`. Keep one issue focused on one outcome.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be completed, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: work
+    attributes:
+      label: Work
+      description: List concrete steps. Use Markdown checkboxes when useful.
+      value: |
+        - [ ] 
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: State observable completion criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related issues
+      description: Link dependencies or adjacent work.
+    validations:
+      required: false
