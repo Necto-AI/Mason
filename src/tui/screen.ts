@@ -32,8 +32,23 @@ export interface Where {
 	readonly subtitle?: string;
 }
 
+/**
+ * Where an answer comes from, when it comes from somewhere else.
+ *
+ * Two of the wizard's questions need a value that lives on a website: a provider's API key, and a connector's bot token.
+ * A question that names the page, and the one thing to do on it, is a question a person can answer without leaving the
+ * terminal to guess. `url` is opened with `ctrl+o`; the screen draws the key only when there is one.
+ */
+export interface Journey {
+	readonly url: string;
+	/** What to do once the page is open, in one line: "create a key and copy it". */
+	readonly what: string;
+}
+
 /** What a question may carry, whichever kind it is. The fields are guidance, not permission: the flow decides. */
 export interface Question {
+	/** The page this answer lives on, and what to do there. Drawn under the hint, opened with `ctrl+o`. */
+	readonly journey?: Journey;
 	/** One or two lines above the field: where a token comes from, what an answer costs. */
 	readonly hint?: string;
 	/** An answer already given: the flow's own memory, shown so a re-entered screen is not blank. */
@@ -114,6 +129,8 @@ export class ScriptedScreen implements Screen {
 		readonly title: string;
 		readonly value?: string;
 		readonly choices?: readonly string[];
+		/** The page the answer was said to live on, recorded so a test can prove every external value explains itself. */
+		readonly journey?: Journey;
 	}> = [];
 	/** Every place the flow said it was, in order: the progress indication, asserted without the pixels. */
 	readonly locations: Where[] = [];
@@ -155,7 +172,7 @@ export class ScriptedScreen implements Screen {
 	 */
 	private async answer(id: string, kind: string, title: string, options: Question): Promise<string> {
 		for (;;) {
-			const answer = this.take(id, kind, title, options.value);
+			const answer = this.take(id, kind, title, options.value, undefined, undefined, options.journey);
 			if (typeof answer !== "string") throw new Error(`the scripted answer for "${id}" is not a line`);
 			const problem = options.validate?.(answer);
 			if (problem === undefined) return answer;
@@ -171,6 +188,7 @@ export class ScriptedScreen implements Screen {
 		value?: string,
 		choices?: readonly string[],
 		preface?: readonly string[],
+		journey?: Journey,
 	): ScriptedAnswer {
 		this.asked.push({
 			id,
@@ -179,6 +197,7 @@ export class ScriptedScreen implements Screen {
 			...(value === undefined ? {} : { value }),
 			...(choices === undefined ? {} : { choices }),
 			...(preface === undefined ? {} : { preface }),
+			...(journey === undefined ? {} : { journey }),
 		});
 		const queued = this.queues.get(id);
 		if (queued !== undefined && queued.length > 0) return queued.shift() as ScriptedAnswer;
@@ -204,6 +223,7 @@ export class ScriptedScreen implements Screen {
 			options.value,
 			choices.map((choice) => choice.value),
 			options.preface,
+			options.journey,
 		);
 		if (typeof answer !== "string")
 			throw new Error(
