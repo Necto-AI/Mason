@@ -21,9 +21,9 @@ Today there are two kinds of external participant and two channels:
 
 Denis's proposal, which is the right one: **collapse them.** A connector is a process that (1) delivers events, (2) lends
 tools, and (3) is where a reply goes. A chat is a connector. A web
-app is a connector. A mailbox is a connector. Mason has one contract and one door, and apiary stops being special — it is a
-connector with an `apiary` flavour, holding its own credential, and the same bot could appear in two people's apiary
-accounts because nothing in mason's contract says "one surface per person".
+app is a connector. A mailbox is a connector. Mason has one contract and one door: every connector has its own
+credential, and the same bot can be reached through multiple connectors without a privileged path or a special client
+type.
 
 ## Decision
 
@@ -43,15 +43,15 @@ accounts because nothing in mason's contract says "one surface per person".
    only credential mason issues.
 
 6. **There is no operator door.** A connector manages its own medium, never mason's configuration, and nothing else
-   holds a credential: `npm run connector` and `npm run integration` write the files an operator changes. apiary reads
-   that state where an operator would — in the panel it will build — not through a control plane mason has to expose.
+   holds a credential: `npm run connector` and `npm run integration` write the files an operator changes. Operators
+   inspect and change that state through the files and commands; Mason exposes no separate control-plane door.
 
 ## What this costs, and the one thing it cannot do
 
 - **A browser cannot be a connector.** A connector is a process that holds a credential and opens a socket; a page
-  cannot. apiary therefore keeps a small server-side connector between the browser and mason. This is not a wart to
-  remove later: it is what "the app is a client of mason" means.
-- **Multi-user is a bigger decision than plumbing.** "The same bot in two people's apiary accounts" is two questions:
+  cannot. A browser-based client therefore needs a server-side connector between the browser and Mason. The server-side
+  process holds the credential and speaks the connector protocol.
+- **Multi-user is a bigger decision than plumbing.** "The same bot shared by two people" is two questions:
   *whose* credential pays for a turn, and *whose memory* a turn writes to. Mason today is one home, one identity, one
   conversation (`ADR-0001`). A connector contract can carry several people; the home layout cannot, yet. That is a separate
   ADR and it is not required for anything in the current plan.
@@ -67,7 +67,7 @@ Denis's refinement, kept because it is right and because it hides two different 
 acts, and they must not share a setting.
 
 1. **A display mirror needs no mechanism at all.** Every reply is committed to the transcript before it is sent, so the
-   durable record is the mirror. apiary showing the Telegram conversation is not fan-out: it reads the conversation where
+   durable record is the mirror. a client showing the Telegram conversation is not fan-out: it reads the conversation where
    the agent keeps it.
 2. **A delivery fan-out is a different act with a different audience.** "Also send this to Slack" makes another
    application buzz, and the people in it are not necessarily the people in the chat that asked. So it is opt-in per
@@ -109,4 +109,4 @@ Two places where the implementation is simpler than this document proposed, both
   connector protocol major, not an entry's field.
 
 Still owed: the per-entry `prompt` section (§3), which an operator writes in `service/integrations.json` today and which
-would wait for a panel only if apiary builds one.
+would wait for a client to expose it.
