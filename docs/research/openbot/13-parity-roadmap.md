@@ -41,8 +41,8 @@ and about five other people:
    ask for it.
 9. **Recovery is a command.** The home backs up and restores, and an eval run guards the behaviour a change might break.
 
-Read those nine as contracts rather than as chat features, because they are what sibling and every later interface
-inherit — eight surfaces: **inbound** (a signed event), **outbound** (a delivery, and the transcript stream),
+Read those nine as contracts rather than as chat features, because they are what any client and later interface
+can rely on — eight surfaces: **inbound** (a signed event), **outbound** (a delivery, and the transcript stream),
 **control** (a session, a routine, an approval, a memory), **identity and attribution**, **observability**, **the
 integration framework** (a container, a config entry, a secret and a hook, proved twice — A0-1, A0-2, C2-1),
 **recovery** (a command — A0-4), and a **version** on each of them. Four guarantees decide the milestones:
@@ -93,7 +93,7 @@ gets no answer there. mason asks in the chat.
 **D4 — a widget catalogue?** Report 06 §"Mason-relevant" holds both sides in one section: a catalogue for
 `generateSandboxedUi` is "a middle ground mason lacks", with publication and grants server-side; and the component
 volume — `components/ui` plus the gallery — is "tens of thousands of lines of chrome for a chat that is one column".
-**This is no longer mason's question to settle.** A catalogue is a client surface, so it goes to sibling with the rest of
+**This is no longer mason's question to settle.** A catalogue is a client surface, so it is outside Mason's scope with the rest of
 the client work (§6), and mason keeps what it already has: one generic sandboxed widget and a skill that documents it
 (`docs/SPEC.md` §5, `skills/generative-ui/SKILL.md`), which the frozen console renders as it does today.
 
