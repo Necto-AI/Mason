@@ -264,6 +264,27 @@ describe("the screens", () => {
 		await harness.dispose();
 	});
 
+	test("a wait shows in the chrome, from a screen whose body cannot tick", async () => {
+		const harness = await openScreen();
+		harness.screen.where({ title: "Provider", index: 2, total: 7 });
+		// A confirmation page has no running row: the frame is the only place a spinner can go, and a call that takes
+		// seconds behind a frame that does not move is a call a person calls a hang.
+		void harness.screen.confirm("provider.check", "Check that this provider answers?", {
+			yes: "check it now",
+			no: "skip it",
+		});
+		await harness.settle();
+		const idle = harness.rows()[0] ?? "";
+		assert.match(idle, /◇ Provider +step 2 \/ 7$/, "the step counter, and nothing before it");
+		harness.screen.busy(true);
+		await harness.settle();
+		assert.match(harness.rows()[0] ?? "", /◇ Provider +\S+ step 2 \/ 7$/, "the spinner rides beside the counter");
+		harness.screen.busy(false);
+		await harness.settle();
+		assert.match(harness.rows()[0] ?? "", /◇ Provider +step 2 \/ 7$/, "and it stops with the call");
+		await harness.dispose();
+	});
+
 	test("a long list says it can be filtered, and a short one stays quiet", async () => {
 		const long = await openScreen();
 		void long.screen.select(

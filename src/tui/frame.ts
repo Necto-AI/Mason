@@ -25,6 +25,7 @@ import {
 	ScrollBoxRenderable,
 	TextRenderable,
 } from "@opentui/core";
+import { spinnerFrame } from "./components.ts";
 import { type Glyphs, type Paint, widthOf } from "./style.ts";
 import { type Theme, theme } from "./theme.ts";
 
@@ -91,6 +92,7 @@ export class Frame {
 	private readonly scroll: ScrollBoxRenderable;
 	private readonly wordmark: ASCIIFontRenderable;
 	private whereabouts: Context = { brand: "mason", title: "", index: 1, total: 1 };
+	private busy = false;
 	private hints: readonly Hint[] = [];
 	private body: Renderable | undefined;
 	private columns: number;
@@ -163,11 +165,33 @@ export class Frame {
 		this.whereabouts = context;
 		const { paint, glyphs } = this.style;
 		this.section.content = this.ink.line(paint.heading(`${glyphs.section} ${context.title}`));
-		this.counter.content = this.ink.line(
-			context.total > 1 ? paint.dim(`step ${context.index} / ${context.total}`) : "",
-		);
+		this.drawCounter();
 		this.wordmark.visible = this.isWelcome();
 		this.place();
+	}
+
+	/**
+	 * A network call is running: the chrome says so, in the one place that is on every screen.
+	 *
+	 * A screen that shows nothing while it waits for a provider is a screen a person decides is broken, and every flow
+	 * in this repository waits on something — a completion, a catalog, a container. The spinner rides beside the step
+	 * counter rather than in a body, because it has to move whether or not the body knows how to tick.
+	 */
+	setBusy(on: boolean): void {
+		this.busy = on;
+		this.drawCounter();
+	}
+
+	/** One turn of the spinner's clock. The screen owns the timer; the frame owns what it draws. */
+	tick(): void {
+		if (this.busy) this.drawCounter();
+	}
+
+	private drawCounter(): void {
+		const { paint } = this.style;
+		const step = this.whereabouts.total > 1 ? `step ${this.whereabouts.index} / ${this.whereabouts.total}` : "";
+		const marker = this.busy ? `${spinnerFrame(this.style.glyphs)} ` : "";
+		this.counter.content = this.ink.line(`${paint.accent(marker)}${paint.dim(step)}`);
 	}
 
 	/** The keys this screen carries. They are dropped rather than wrapped when the window is too narrow for all of them. */
