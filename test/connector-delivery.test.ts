@@ -7,7 +7,8 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DELIVERY_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { DELIVERY_ENTRY_KIND, NOTICE_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
 import { connectConnector, connectorHome, entriesOf, replyTurns, serveConnector, until } from "./support/connector.ts";
 
 /** Every entry of one kind, as plain JSON. */
@@ -31,6 +32,57 @@ async function say(
 		content: [{ type: "text", text }],
 	});
 	assert.equal(outcome.status, "accepted");
+}
+
+/**
+ * How many ordinary entries it takes to close the door's window over an older one.
+ *
+ * The view the door watches holds the newest 50 entries and drops back to 50 once it would hold more than 100, so these
+ * many appends behind a reply put it out of the window. A smaller number leaves it in, and the window then answers
+ * correctly by accident — which is the bug: every test with fewer than 50 entries between a send and its acknowledgement
+ * cannot tell the window from the record.
+ */
+const BEHIND_THE_WINDOW = 100;
+
+/** One committed send with no turn behind it: the outbox's contract is an `app.reply` entry, and only that. */
+async function owe(
+	served: Awaited<ReturnType<typeof serveConnector>>,
+	deliveryId: string,
+	text: string,
+): Promise<void> {
+	const conversation = await served.server.runtime.conversation();
+	await conversation.commit(
+		(tx) =>
+			tx.appendEntry(conversation.id, {
+				kind: REPLY_ENTRY_KIND,
+				data: { deliveryId, blocks: [{ type: "text", text }], target: { connector: "telegram", ref: "team" } },
+			}),
+		BACKGROUND_CONTEXT,
+	);
+}
+
+/** The acknowledgement a delivery wrote, without a connector having to answer one: the transcript is the record. */
+async function acknowledge(served: Awaited<ReturnType<typeof serveConnector>>, deliveryId: string): Promise<void> {
+	const conversation = await served.server.runtime.conversation();
+	await conversation.commit(
+		(tx) =>
+			tx.appendEntry(conversation.id, {
+				kind: DELIVERY_ENTRY_KIND,
+				data: { deliveryId, status: "delivered" },
+			}),
+		BACKGROUND_CONTEXT,
+	);
+}
+
+/** Ordinary transcript traffic: one entry per commit, the way a turn's steps arrive. */
+async function fill(served: Awaited<ReturnType<typeof serveConnector>>, count: number): Promise<void> {
+	const conversation = await served.server.runtime.conversation();
+	for (let index = 0; index < count; index += 1) {
+		await conversation.commit(
+			(tx) => tx.appendEntry(conversation.id, { kind: "test.filler", data: { index } }),
+			BACKGROUND_CONTEXT,
+		);
+	}
 }
 
 describe("a committed send", () => {
@@ -167,6 +219,113 @@ describe("a committed send", () => {
 			}
 		} finally {
 			await served.close();
+		}
+	});
+
+	it("is still sent after enough entries land behind it to close the window", async () => {
+		const served = await serveConnector();
+		try {
+			// Nothing is connected, so the reply is owed and nothing can deliver it while the window moves on: this is the
+			// long turn, the paused loop, the connector that has not reconnected yet.
+			await owe(served, "owed-behind-the-window", "the long turn's answer");
+			await fill(served, BEHIND_THE_WINDOW);
+			const connected = await connectConnector(served);
+			try {
+				await until(
+					async () => (await acks(served)).length === 1,
+					"the acknowledgement of a reply 100 entries back",
+				);
+				await served.server.connectors.flush();
+				assert.equal(connected.deliveries.length, 1, "sent once");
+				assert.equal(connected.deliveries[0]?.text, "the long turn's answer");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+});
+
+describe("a notice", () => {
+	it("answers duplicate to a resend after enough entries land behind it to close the window", async () => {
+		const served = await serveConnector();
+		try {
+			const connected = await connectConnector(served);
+			try {
+				const first = await connected.connector.notice({
+					text: "the channel was muted for an hour",
+					appendId: "note-behind-the-window",
+				});
+				assert.equal(first.status, "accepted");
+				await fill(served, BEHIND_THE_WINDOW);
+				const again = await connected.connector.notice({
+					text: "the channel was muted for an hour",
+					appendId: "note-behind-the-window",
+				});
+				assert.equal(again.status, "duplicate", "the same append is the same act, however far back it is");
+				assert.equal((await entries(served, NOTICE_ENTRY_KIND)).length, 1, "one notice in the transcript");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+});
+
+describe("a restart", () => {
+	it("reads past one page of the transcript, and a settled reply stays settled", async () => {
+		const home = await connectorHome();
+		// Two pages and a half of filler: the boot scan has to page, and it has to page from the end that still holds a
+		// reply together with the acknowledgement that settled it. A seed that read the other way round would keep the
+		// reply and lose the ack, and the outbox would send a message the transcript already settled.
+		const before = await serveConnector({ home, storage: "sqlite" });
+		try {
+			await owe(before, "settled-long-ago", "this was delivered before the restart");
+			await fill(before, 150);
+			await acknowledge(before, "settled-long-ago");
+			await fill(before, 150);
+		} finally {
+			await before.close();
+		}
+		const after = await serveConnector({ home, storage: "sqlite" });
+		try {
+			const connected = await connectConnector(after);
+			try {
+				await after.server.connectors.flush();
+				assert.equal(connected.deliveries.length, 0, "a reply whose ack the transcript holds is not owed");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await after.close();
+		}
+	});
+
+	it("sends what was owed before it, from the transcript rather than the window", async () => {
+		const home = await connectorHome();
+		// sqlite, because the point is that the next boot reads what the last one left: a store that forgets proves nothing.
+		const before = await serveConnector({ home, storage: "sqlite" });
+		try {
+			await owe(before, "owed-across-a-restart", "before the restart");
+			// More than a seed page (128), so the boot scan has to page to reach it.
+			await fill(before, 150);
+		} finally {
+			await before.close();
+		}
+		const after = await serveConnector({ home, storage: "sqlite" });
+		try {
+			const connected = await connectConnector(after);
+			try {
+				await until(() => connected.deliveries.length === 1, "the reply the boot scan found");
+				assert.equal(connected.deliveries[0]?.deliveryId, "owed-across-a-restart");
+				assert.equal(connected.deliveries[0]?.text, "before the restart");
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await after.close();
 		}
 	});
 });
