@@ -89,6 +89,7 @@ line to put it in.
 | `mason.queue_overflow` | the turn is busy and the append asked to be refused rather than queued |
 | `mason.invalid_request` | the call is not a call this side makes |
 | `mason.not_authenticated` | the credential did not open the attachment upload |
+| `mason.internal` | mason itself failed, and not on the caller's account: the same call may work on a retry |
 
 ## Attachments
 
