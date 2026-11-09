@@ -1,8 +1,8 @@
 /**
  * HTTP + WebSocket server: the connector door, a liveness probe, and the attachment endpoints.
  *
- * There is no conversational socket and no browser application. A person speaks to mason through a connector, and the
- * only credential on this surface is the connector's own. A panel is sibling's to build, not mason's.
+ * There is no browser application. A person speaks to Mason through a connector, and the only credential on this
+ * surface is the connector's own.
  */
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
