@@ -1,6 +1,6 @@
 # Agent guide
 
-Mason is an agent runtime for building, connecting, and running AI agents. Sibling is a separate project; do not modify it here.
+Mason is an agent runtime for building, connecting, and running AI agents.
 
 ## Read what you need
 
