@@ -10,8 +10,8 @@ what was found, and what was done about it.
 
 ## Scope
 
-`git rev-list --all` at `79050f2`: 503 commits over 54 refs — 15 branches, 39 remote branches, no tags. Every object that
-becomes visible on the public switch.
+`git rev-list --all` on `79050f2`, the tip of `main` when the scan ran: 503 commits over 54 refs — 15 branches, 39
+remote branches, no tags. Every object that becomes visible on the public switch.
 
 ## What was searched
 
@@ -23,12 +23,13 @@ becomes visible on the public switch.
 
 ## Findings
 
-**No credential was ever committed.** No credential file, no private key, no provider key, no live bot token. The only
-token-shaped string in the history is the placeholder `123456789:AAF-abcdefghijklmnopqrstuvwxyz012345` in test fixtures
-under `integrations/telegram/test/`, which is a literal and not a secret.
+**No credential was ever committed.** No credential file, no private key, no provider key, no live bot token. Every
+match the patterns found is a literal in a test fixture: the placeholder `123456789:AAF-abcdefghijklmnopqrstuvwxyz012345`
+and a truncated `bot123456789:AAF-failed` under `integrations/telegram/test/`, and `sk-ant-api03-abcdefghijklmnop` typed
+into an API-key screen fixture in `test/support/screens.ts`.
 
 **Maintainer home paths in two research notes.** `docs/research/pi-config.md` and `docs/research/openbot/README.md`
-named the maintainer's home directory. Scrubbed in this lane to `/home/user/`, so each sentence stays true.
+named the maintainer's home directory. Scrubbed in this lane to a neutral one, so each sentence stays true.
 
 **A prior product's name in superseded revisions.** It appears in historical revisions of `AGENTS.md`, `GLOSSARY.md`,
 `deploy/README.md`, several ADRs, research notes, and two source files, across 469 commits. The working tree no longer

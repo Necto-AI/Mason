@@ -13,7 +13,7 @@ anything else. Nothing uses write-to-temp-then-rename: atomicity comes from the 
 `writeFileSync`.
 
 All code paths were read on 2026-11-07 from the compiled `dist/` of `@earendil-works/pi-coding-agent` and
-`@earendil-works/pi-ai` under `/home/denis/dev/mason/node_modules/`, unless a doc path or absolute home path is
+`@earendil-works/pi-ai` under `/home/user/dev/mason/node_modules/`, unless a doc path or absolute home path is
 given.
 
 ## 1. The directory model
@@ -44,15 +44,15 @@ documentation table in `pi-coding-agent/docs/configuration.md` (section "Agent d
 `keybindings.json`, `mcp.json`, `AGENTS.md`/`AGENTS.override.md`/`SYSTEM.md`/`APPEND_SYSTEM.md`, `extensions/`,
 `skills/`, `prompts/`, and `themes/`.
 
-The live home confirms the map, read from `/home/denis/.pi/agent/` on 2026-11-07: `settings.json`, `auth.json`,
+The live home confirms the map, read from `/home/user/.pi/agent/` on 2026-11-07: `settings.json`, `auth.json`,
 `models.json`, `models-store.json`, `trust.json`, `security.json`, `env.json`, plus directories `extensions/`,
 `sessions/`, `git/` (installed git packages), `npm/`, `skills/`, `memory-reviews/`, `pi-web-access/`,
 `pi-subagents/`, `web-search-cache/`, `tmp/`, and loose extension-owned files `gmail.json`, `mem0.json`,
 `pi-voice.json`, `web-search.json`. Every file other than the six JSON stores is owned by installed packages or
 extensions, not by pi core: searching all `@earendil-works` packages on this machine for `security.json` or
 `env.json` matches nothing, while the pi-setup checkout names both
-(`/home/denis/.pi/agent/git/github.com/DenisSud/pi-setup/extensions/env/index.ts` and
-`/home/denis/.pi/agent/git/github.com/DenisSud/pi-setup/lib/credentials.ts`, both read 2026-11-07). In this home,
+(`/home/user/.pi/agent/git/github.com/DenisSud/pi-setup/extensions/env/index.ts` and
+`/home/user/.pi/agent/git/github.com/DenisSud/pi-setup/lib/credentials.ts`, both read 2026-11-07). In this home,
 `env.json` is a flat map of env-var names to secret values (values redacted here) and `security.json` holds
 `profiles`/`rbw`/`guard` keys, secret-tooling state used by the pi-setup extensions — their role and shape are
 the evidence; no values are recorded here.
@@ -99,7 +99,7 @@ provider — written only
 by the catalog refresh machinery, refreshed when the stored `checkedAt` is older than
 `REMOTE_CATALOG_REFRESH_INTERVAL_MS` (4 hours), merged only when the remote `Last-Modified` is newer than the
 builtin data (`pi-coding-agent/dist/core/remote-catalog-provider.js`; live example, read 2026-11-07:
-`/home/denis/.pi/agent/models-store.json` holds `opencode-go` and `opencode` entries of 32 and 61 models with
+`/home/user/.pi/agent/models-store.json` holds `opencode-go` and `opencode` entries of 32 and 61 models with
 `lastModified`, `etag`, `checkedAt`; `PI_OFFLINE` disables the network half, `model-runtime.js` sets
 `modelNetworkEnabled` from `process.env.PI_OFFLINE === undefined`).
 
@@ -240,7 +240,7 @@ from `/model` ("Opening `/model` reloads the file", `pi-coding-agent/docs/models
 ## 5. First run
 
 Before a first run the directory need not exist; `getAgentDir` is a pure path computation and nothing validates it
-at boot. Reading `/home/denis/dev/mason/node_modules/@earendil-works/pi-coding-agent/docs/configuration.md` is the
+at boot. Reading `/home/user/dev/mason/node_modules/@earendil-works/pi-coding-agent/docs/configuration.md` is the
 only spec of what will appear. What actually creates what:
 
 - `settings.json` is created by the one-time interactive setup — and by nothing else. `shouldRunFirstTimeSetup`
@@ -267,14 +267,14 @@ only spec of what will appear. What actually creates what:
 - `models-store.json` is created when a first catalog refresh publishes an entry: on a fresh fetch of a newer
   catalog, and also on a 404 or 501 which persists a `checkedAt`-only record so the next attempt knows it was
   checked (`remote-catalog-provider.js`; permissions in the live home are `0600`, dated 2026-11-07
-  at `/home/denis/.pi/agent/models-store.json`).
+  at `/home/user/.pi/agent/models-store.json`).
 - `models.json` is never created by pi: a missing file just loads as an empty provider configuration
   (`model-config.js` `load`, `ENOENT` branch) — author inference from the doc framing too ("use custom model
   configuration only when Pi does not already include the provider", `pi-coding-agent/docs/models.md`).
 - Directory scaffolding (`extensions/`, `skills/`, `prompts/`, `themes/`, `bin/`, `npm/`, `git/`) is created when
   packages or resources are installed or loaded, not at startup — author inference: no startup code path in
   `main.js` creates them, and in the live home their content is all package-sourced (inventory at
-  `/home/denis/.pi/agent/`, 2026-11-07).
+  `/home/user/.pi/agent/`, 2026-11-07).
 
 ## Questions this raises for a shared-config home
 

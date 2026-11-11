@@ -7,7 +7,7 @@ parity would cost. Reports are numbered in dependency order; each one cites the 
 - **Researched:** 2026-10-26
 - **Upstream:** `ef13020`, dated 2026-10-25
 - **Citations:** every `path:line` in these reports points into the clone at
-  `/home/denis/dev/research/openbot` at that commit, not into mason.
+  `/home/user/dev/research/openbot` at that commit, not into mason.
 
 Start with [00-SUMMARY.md](00-SUMMARY.md) — one page, the verdicts, and the reading order.
 
