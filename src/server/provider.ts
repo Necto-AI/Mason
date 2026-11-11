@@ -16,7 +16,13 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Models, TextContent } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import {
+	type FauxResponseStep,
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxText,
+	fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentModelRef } from "./runtime.ts";
 
@@ -28,8 +34,36 @@ export interface ProviderAccess {
 	readonly faux: boolean;
 }
 
+/**
+ * The script the offline provider holds for a *served* bot: how many answers, and what they say.
+ *
+ * `mason up` under `PI_FAUX_MODEL=1` is not the wizard's case. The wizard makes one completion and reads the words, so
+ * one plain "ok" is the whole script; a served bot has to reach a person, and the only thing that reaches a person is
+ * the `send` tool. A turn scripted as text alone therefore answers nothing at all — the turn runs, the answer is
+ * recorded as working notes and no reader is sent it, which is a process that looks alive and cannot speak.
+ *
+ * So each answer is a pair: the `send` call that delivers the words, then the round that closes the turn. `PI_FAUX_REPEAT`
+ * says how many pairs the queue holds and `PI_FAUX_TEXT` says what they deliver, so a recorded demo or an end-to-end
+ * script can run a whole session against a deterministic provider without any pretence of a hosted model. Unset, it is
+ * one pair saying "ok".
+ */
+export function fauxSessionScript(env: NodeJS.ProcessEnv): FauxResponseStep[] {
+	const parsed = Number.parseInt(env.PI_FAUX_REPEAT ?? "", 10);
+	// A number a person typed, not a request for a queue nobody can drain: the cap is the demo's, not a limit on turns.
+	const repeat = Number.isFinite(parsed) ? Math.min(500, Math.max(1, parsed)) : 1;
+	const text = env.PI_FAUX_TEXT !== undefined && env.PI_FAUX_TEXT.trim() !== "" ? env.PI_FAUX_TEXT : "ok";
+	const script: FauxResponseStep[] = [];
+	for (let index = 0; index < repeat; index += 1) {
+		script.push(fauxAssistantMessage([fauxToolCall("send", { text })], { stopReason: "toolUse" }));
+		script.push(fauxAssistantMessage(fauxText("sent")));
+	}
+	return script;
+}
+
 /** Open the catalogs: pi's builtin providers with the network off, or the scripted offline provider. */
-export async function openProviders(options: { readonly faux?: boolean } = {}): Promise<ProviderAccess> {
+export async function openProviders(
+	options: { readonly faux?: boolean; readonly env?: NodeJS.ProcessEnv } = {},
+): Promise<ProviderAccess> {
 	if (options.faux === true) {
 		const faux = fauxProvider();
 		const models = createModels();
