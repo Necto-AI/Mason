@@ -114,5 +114,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          # The notes are a file, not a summary of the log: the tag is cut by a person who knows what changed, and a
+          # generated list of commit subjects cannot state prerequisites, supported platforms or limitations — the three
+          # things a stranger needs before `npm install -g`. A version without its file fails here rather than
+          # publishing notes that do not describe the release.
+          notes="docs/release-notes/${GITHUB_REF_NAME#v}.md"
+          test -f "$notes"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$notes"
           gh release upload "$GITHUB_REF_NAME" .release/mason-*.tgz
