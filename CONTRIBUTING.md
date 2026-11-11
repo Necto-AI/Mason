@@ -31,7 +31,9 @@ Before opening a pull request, also run the generated-document and package check
 npm run gen:surface:check
 npm run check:docs
 npm run check:code
+npm run check:metadata
 npm run prove:connector
+npm run prove:package
 ```
 
 CI runs the full validation set on pull requests. The corresponding commands and repository structure are described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

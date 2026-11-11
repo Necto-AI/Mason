@@ -77,7 +77,7 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
    TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: the relay's transcript endpoint, the value compose.telegram.yaml defaults to
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
-   REPO_DIR=/home/denis/dev/clinical-compass  # optional: the checkout bound into the tool machine, read-write
+   REPO_DIR=/srv/checkout                 # required: the checkout bound into the tool machine, read-write
    HTTPS_PROXY=http://vpn:1080            # optional: the model's egress, when the provider is not reachable directly
    NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr  # …and the names that must not go through it
    ```
@@ -648,7 +648,7 @@ Two things are a deployment's decision and not the image's:
   A user token sees every repository its scopes allow; a fine-grained token scoped to the one project is the better
   answer and is a decision about which repositories the agent should be able to push to.
 - **`REPO_DIR`.** A checkout bound read-write at its host path, so a path in a report, an issue and a prompt means the
-  same thing on the host and inside the container. Default `/home/denis/dev/clinical-compass`; the bind source must
+  same thing on the host and inside the container. It has no default: `deploy/.env` must set it, and the bind source must
   exist or the container will not start.
 
 The image is no longer a fence by default. `mason-env` joins `mason-out` in `compose.yaml`, which is an ordinary bridge
