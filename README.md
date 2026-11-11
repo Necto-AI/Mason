@@ -8,7 +8,8 @@ a hosted service.
 <img src="docs/media/mason-demo.gif" alt="mason onboard, then a conversation in mason chat" width="880">
 
 The recording runs on a deterministic local model (`PI_FAUX_MODEL=1`), not a hosted one: the bot answers the same words
-every time, and no provider, key or network is involved.
+every time, and no provider, key or network is involved. It is a throwaway home under `/tmp`, which is why the connector
+credential it prints is one that was discarded.
 
 ## Install
 
