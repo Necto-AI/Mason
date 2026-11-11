@@ -9,6 +9,12 @@
  *
  * `PI_FAUX_MODEL=1` is what makes it a proof rather than a mock: `mason init` still verifies with one real completion,
  * the offline provider answers it, and the wizard's provider screen behaves exactly as it does for a keyed provider.
+ *
+ * This is the one file that drives the real renderer, so it is also the one file that needs what the renderer needs: Node
+ * 26.4 or newer, and `@opentui/core`'s native half for the platform. A checkout without them fails in `openScreen`
+ * before the first question rather than skipping, because a skipped proof reads as a green one. A capture the renderer
+ * refuses while it presents a frame is retried inside the harness (`test/support/screen.ts`), which is where #177
+ * belongs: a test that had to know about the refusal would be a test that flakes on a loaded runner.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -289,7 +295,7 @@ describe("a first run on a terminal", () => {
 		/** Wait for the screen a person would be looking at, then answer it. */
 		const at = async (needle: string, keys: readonly string[]): Promise<void> => {
 			for (let attempt = 0; attempt < 400; attempt += 1) {
-				const shown = harness.frame();
+				const shown = await harness.frame();
 				if (shown.includes(needle)) {
 					seen.push(needle);
 					frames.push(shown);
@@ -299,7 +305,7 @@ describe("a first run on a terminal", () => {
 				}
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
-			throw new Error(`the screen never showed "${needle}"; it showed:\n${harness.frame()}`);
+			throw new Error(`the screen never showed "${needle}"; it showed:\n${await harness.frame()}`);
 		};
 		const ENTER = KeyCodes.RETURN;
 		const DOWN = KeyCodes.ARROW_DOWN;

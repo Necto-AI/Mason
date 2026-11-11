@@ -168,7 +168,7 @@ describe("the screens", () => {
 				shot.type?.(harness);
 				await harness.settle();
 				await harness.settle();
-				assert.equal(harness.frame(), GOLDENS[`${shot.id} ${size.columns}`]);
+				assert.equal(await harness.frame(), GOLDENS[`${shot.id} ${size.columns}`]);
 				await harness.dispose();
 			});
 		}
@@ -182,12 +182,12 @@ describe("the screens", () => {
 			{ value: "advanced", label: "Advanced", description: "every answer" },
 		]);
 		await harness.settle();
-		assert.match(harness.frame(), /▌ Quickstart/);
+		assert.match(await harness.frame(), /▌ Quickstart/);
 		await harness.press("\x1b[B");
-		assert.match(harness.frame(), /▌ Advanced/);
-		assert.doesNotMatch(harness.frame(), /▌ Quickstart/);
+		assert.match(await harness.frame(), /▌ Advanced/);
+		assert.doesNotMatch(await harness.frame(), /▌ Quickstart/);
 		await harness.press("\x1b[B");
-		assert.match(harness.frame(), /▌ Quickstart/, "down from the last row lands on the first");
+		assert.match(await harness.frame(), /▌ Quickstart/, "down from the last row lands on the first");
 		await harness.press("\x1b[A");
 		await harness.press("\r");
 		assert.equal(await answering, "advanced");
@@ -209,17 +209,17 @@ describe("the screens", () => {
 		await harness.press("p");
 		await harness.press("e");
 		await harness.press("n");
-		assert.match(harness.frame(), /❯ open/, "the query is drawn as a line a person typed into");
-		assert.match(harness.frame(), /▌ openrouter/);
-		assert.match(harness.frame(), /2 of 4/, "the count says how much of the list is left");
-		assert.doesNotMatch(harness.frame(), /anthropic/);
+		assert.match(await harness.frame(), /❯ open/, "the query is drawn as a line a person typed into");
+		assert.match(await harness.frame(), /▌ openrouter/);
+		assert.match(await harness.frame(), /2 of 4/, "the count says how much of the list is left");
+		assert.doesNotMatch(await harness.frame(), /anthropic/);
 		await harness.press("c");
-		assert.match(harness.frame(), /▌ opencode-go/, "the filter narrows as the word grows");
-		assert.doesNotMatch(harness.frame(), /openrouter/);
+		assert.match(await harness.frame(), /▌ opencode-go/, "the filter narrows as the word grows");
+		assert.doesNotMatch(await harness.frame(), /openrouter/);
 		await harness.press("\x7f");
-		assert.match(harness.frame(), /▌ openrouter/, "backspace widens it again");
+		assert.match(await harness.frame(), /▌ openrouter/, "backspace widens it again");
 		await harness.press("\x1b");
-		assert.match(harness.frame(), /▌ anthropic/, "escape cleared the filter, and did not cancel the question");
+		assert.match(await harness.frame(), /▌ anthropic/, "escape cleared the filter, and did not cancel the question");
 		// The rejection handler is attached before the key that causes it: a promise rejected in the tick a keypress runs in is
 		// an unhandled rejection, and the runner fails the test for it before the assertion below ever sees the promise.
 		const cancelled = assert.rejects(answering, Cancelled);
@@ -236,10 +236,10 @@ describe("the screens", () => {
 		void harness.screen.select("provider.id", "Which provider?", [{ value: "faux", label: "faux" }]);
 		await harness.settle();
 		for (const char of "zzz") await harness.press(char);
-		assert.match(harness.frame(), /no match/);
+		assert.match(await harness.frame(), /no match/);
 		await harness.press("\r");
 		await harness.settle();
-		assert.match(harness.frame(), /no match/, "the question is still the one being asked");
+		assert.match(await harness.frame(), /no match/, "the question is still the one being asked");
 		await harness.dispose();
 	});
 
@@ -253,9 +253,9 @@ describe("the screens", () => {
 		]);
 		await harness.settle();
 		for (const char of "gpt-5") await harness.press(char);
-		assert.match(harness.frame(), /0 of 2/, "the count is of the rows the query kept, not of the pinned row");
+		assert.match(await harness.frame(), /0 of 2/, "the count is of the rows the query kept, not of the pinned row");
 		assert.match(
-			harness.frame(),
+			await harness.frame(),
 			/▌ \+ a model id I type myself/,
 			"the escape row is still the row a keypress is on",
 		);
@@ -274,14 +274,18 @@ describe("the screens", () => {
 			no: "skip it",
 		});
 		await harness.settle();
-		const idle = harness.rows()[0] ?? "";
+		const idle = (await harness.rows())[0] ?? "";
 		assert.match(idle, /◇ Provider +step 2 \/ 7$/, "the step counter, and nothing before it");
 		harness.screen.busy(true);
 		await harness.settle();
-		assert.match(harness.rows()[0] ?? "", /◇ Provider +\S+ step 2 \/ 7$/, "the spinner rides beside the counter");
+		assert.match(
+			(await harness.rows())[0] ?? "",
+			/◇ Provider +\S+ step 2 \/ 7$/,
+			"the spinner rides beside the counter",
+		);
 		harness.screen.busy(false);
 		await harness.settle();
-		assert.match(harness.rows()[0] ?? "", /◇ Provider +step 2 \/ 7$/, "and it stops with the call");
+		assert.match((await harness.rows())[0] ?? "", /◇ Provider +step 2 \/ 7$/, "and it stops with the call");
 		await harness.dispose();
 	});
 
@@ -296,7 +300,7 @@ describe("the screens", () => {
 			})),
 		);
 		await long.settle();
-		assert.match(long.frame(), /❯ type to filter/);
+		assert.match(await long.frame(), /❯ type to filter/);
 		await long.dispose();
 
 		const short = await openScreen();
@@ -305,7 +309,11 @@ describe("the screens", () => {
 			{ value: "b", label: "beta" },
 		]);
 		await short.settle();
-		assert.doesNotMatch(short.frame(), /type to filter/, "three rows and a caret line is more chrome than list");
+		assert.doesNotMatch(
+			await short.frame(),
+			/type to filter/,
+			"three rows and a caret line is more chrome than list",
+		);
 		await short.dispose();
 	});
 
@@ -322,16 +330,16 @@ describe("the screens", () => {
 		wide.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void wide.screen.select("welcome.mode", "How would you like to start?", choices);
 		await wide.settle();
-		assert.match(wide.frame(), /▌ Quickstart {2}the defaults/, "a wide window has the column");
+		assert.match(await wide.frame(), /▌ Quickstart {2}the defaults/, "a wide window has the column");
 		await wide.dispose();
 
 		const narrow = await openScreen({ columns: 88, rows: 30 });
 		narrow.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void narrow.screen.select("welcome.mode", "How would you like to start?", choices);
 		await narrow.settle();
-		assert.doesNotMatch(narrow.frame(), /▌ Quickstart {2}the defaults/, "a narrow one has not");
+		assert.doesNotMatch(await narrow.frame(), /▌ Quickstart {2}the defaults/, "a narrow one has not");
 		assert.match(
-			narrow.frame(),
+			await narrow.frame(),
 			/\n {3}the defaults, and only the questions they cannot answer\n/,
 			"it is one line under the list",
 		);
@@ -349,17 +357,17 @@ describe("the screens", () => {
 			},
 		]);
 		await harness.settle();
-		assert.match(harness.frame(), /▌ Quickstart {2}the defaults/);
+		assert.match(await harness.frame(), /▌ Quickstart {2}the defaults/);
 		harness.setup.resize(70, 24);
 		await harness.settle();
 		await harness.settle();
-		const rows = harness.frame().split("\n");
+		const rows = (await harness.frame()).split("\n");
 		assert.ok(
 			rows.every((row) => widthOf(row) <= 70),
 			`nothing is wider than the window:\n${rows.join("\n")}`,
 		);
-		assert.match(harness.frame(), /◇ Welcome/, "the frame survives");
-		assert.doesNotMatch(harness.frame(), /▌ Quickstart {2}the defaults/, "so does the description rule");
+		assert.match(await harness.frame(), /◇ Welcome/, "the frame survives");
+		assert.doesNotMatch(await harness.frame(), /▌ Quickstart {2}the defaults/, "so does the description rule");
 		await harness.dispose();
 	});
 
@@ -368,8 +376,8 @@ describe("the screens", () => {
 		harness.screen.where({ title: "Welcome", index: 1, total: 7 });
 		void harness.screen.select("welcome.mode", "Start?", [{ value: "quickstart", label: "Quickstart" }]);
 		await harness.settle();
-		assert.match(harness.frame(), /enter select/);
-		assert.doesNotMatch(harness.frame(), /ctrl\+c/, "the least important hint is the one dropped");
+		assert.match(await harness.frame(), /enter select/);
+		assert.doesNotMatch(await harness.frame(), /ctrl\+c/, "the least important hint is the one dropped");
 		await harness.dispose();
 	});
 
@@ -378,8 +386,12 @@ describe("the screens", () => {
 		harness.screen.where({ title: "Done", index: 1, total: 1 });
 		void harness.screen.note("done", "Done", { lines: ["x"] });
 		await harness.settle();
-		assert.doesNotMatch(harness.frame(), /step 1 \/ 1/);
-		assert.doesNotMatch(harness.frame(), /mason {2,}/, "a flow of one is not a flow, so it carries no wordmark");
+		assert.doesNotMatch(await harness.frame(), /step 1 \/ 1/);
+		assert.doesNotMatch(
+			await harness.frame(),
+			/mason {2,}/,
+			"a flow of one is not a flow, so it carries no wordmark",
+		);
 		await harness.dispose();
 	});
 
@@ -401,7 +413,7 @@ describe("a secret", () => {
 			flag: "--key <key>",
 		});
 		await harness.press(..."sk-live-0123456789".split(""));
-		const shown = harness.frame();
+		const shown = await harness.frame();
 		assert.ok(shown.includes("•".repeat("sk-live-0123456789".length)), shown);
 		assert.ok(
 			shown.includes(` ${String("sk-live-0123456789".length)}`),
@@ -456,16 +468,16 @@ describe("a page", () => {
 			lines: Array.from({ length: 40 }, (_, index) => `line ${index}`),
 		});
 		await harness.settle();
-		assert.match(harness.frame(), /line 0/);
+		assert.match(await harness.frame(), /line 0/);
 		assert.doesNotMatch(
-			harness.frame(),
+			await harness.frame(),
 			/line 39/,
 			"the page is longer than the window, which is what this is about",
 		);
-		assert.match(harness.frame(), /↑↓ scroll/, "the footer says the page goes on below the fold");
+		assert.match(await harness.frame(), /↑↓ scroll/, "the footer says the page goes on below the fold");
 		for (let index = 0; index < 40; index += 1) harness.setup.mockInput.pressKey("\x1b[B");
 		await harness.settle();
-		assert.match(harness.frame(), /line 39/, "the arrows reached the scroll region, not the page");
+		assert.match(await harness.frame(), /line 39/, "the arrows reached the scroll region, not the page");
 		await harness.press("\r");
 		await reading;
 		await harness.dispose();
@@ -478,8 +490,8 @@ describe("a page", () => {
 			lines: Array.from({ length: 5 }, (_, index) => `line ${index}`),
 		});
 		await harness.settle();
-		assert.doesNotMatch(harness.frame(), /↑↓ scroll/);
-		assert.match(harness.frame(), /line 4/);
+		assert.doesNotMatch(await harness.frame(), /↑↓ scroll/);
+		assert.match(await harness.frame(), /line 4/);
 		await harness.press("\r");
 		await reading;
 		await harness.dispose();
@@ -494,14 +506,14 @@ describe("a progress screen", () => {
 		await harness.settle();
 		progress.update([{ label: "provider and model", state: "fail", detail: "the provider did not answer" }]);
 		await harness.settle();
-		assert.match(harness.frame(), /the provider did not answer/);
+		assert.match(await harness.frame(), /the provider did not answer/);
 		const key = progress.key([
 			{ key: "r", label: "retry what failed" },
 			{ key: "enter", label: "stop here" },
 		]);
 		await harness.settle();
-		assert.match(harness.frame(), /retry what failed/, "the key carries its own label, not the keycode");
-		assert.match(harness.frame(), /stop here/);
+		assert.match(await harness.frame(), /retry what failed/, "the key carries its own label, not the keycode");
+		assert.match(await harness.frame(), /stop here/);
 		await harness.press("r");
 		assert.equal(await key, "r");
 		// A key that was not offered is not an answer: the screen is still waiting for one of the two.
@@ -520,11 +532,11 @@ describe("a progress screen", () => {
 			{ label: "minting the credential", state: "run" },
 		]);
 		await harness.settle();
-		const first = harness.frame();
+		const first = await harness.frame();
 		harness.screen.busy(true);
 		await new Promise((resolve) => setTimeout(resolve, 120));
 		await harness.settle();
-		const second = harness.frame();
+		const second = await harness.frame();
 		assert.notEqual(first, second, "the running row moved");
 		assert.ok(
 			[...first, ...second].some((char) => utf8.spinner.includes(char)),
@@ -555,16 +567,16 @@ describe("a journey", () => {
 			});
 			await harness.settle();
 			assert.match(
-				harness.frame(),
+				await harness.frame(),
 				/ctrl\+o opens https:\/\/console\.anthropic\.com\/settings\/keys, create a key and copy it/,
 				"the address itself, not its host: the path is what takes you to the key",
 			);
-			assert.match(harness.frame(), /ctrl\+o open/, "the key is in the footer, or the line is a lie");
+			assert.match(await harness.frame(), /ctrl\+o open/, "the key is in the footer, or the line is a lie");
 			await harness.press("\x0f");
 			await new Promise((resolve) => setTimeout(resolve, 200));
 			await harness.settle();
 			assert.match(
-				harness.frame(),
+				await harness.frame(),
 				/could not open console\.anthropic\.com: open https:\/\/console\.anthropic\.com\/settings\/keys yourself/,
 			);
 			const cancelled = assert.rejects(answering, Cancelled);
@@ -588,7 +600,7 @@ describe("a journey", () => {
 		await harness.settle();
 		await harness.press("\r");
 		assert.equal(await answering, "", "enter on an empty optional field answers with nothing, not a refusal");
-		assert.doesNotMatch(harness.frame(), /this answer is required/);
+		assert.doesNotMatch(await harness.frame(), /this answer is required/);
 		await harness.dispose();
 	});
 
@@ -613,7 +625,7 @@ describe("a journey", () => {
 			)
 			.catch(() => undefined);
 		await harness.settle();
-		const rows = harness.rows();
+		const rows = await harness.rows();
 		const wrapped = rows.find((row) => /^\s{1,6}(up|machine|and)\b/.test(row));
 		assert.equal(wrapped, undefined, `no description continuation at the body's left edge:\n${rows.join("\n")}`);
 		assert.ok(
@@ -627,7 +639,7 @@ describe("a journey", () => {
 		const harness = await openScreen();
 		void harness.screen.secret("token", "The bot token");
 		await harness.settle();
-		assert.doesNotMatch(harness.frame(), /ctrl\+o/);
+		assert.doesNotMatch(await harness.frame(), /ctrl\+o/);
 		await harness.dispose();
 	});
 });
@@ -648,7 +660,11 @@ describe("the plain path", () => {
 		shot.type?.(plain);
 		await plain.settle();
 		await plain.settle();
-		assert.equal(plain.frame(), coloured.frame(), "the same text, with or without a terminal that has colour");
+		assert.equal(
+			await plain.frame(),
+			await coloured.frame(),
+			"the same text, with or without a terminal that has colour",
+		);
 		const painted = plain.setup
 			.captureSpans()
 			.lines.flatMap((line) => line.spans)
@@ -689,13 +705,13 @@ describe("the components on their own", () => {
 		const list = new ChoiceList(geometry(harness), { question: "Which model?", choices: many, maxVisible: 5 });
 		harness.mount(list.build());
 		await harness.settle();
-		assert.match(harness.frame(), /▌ model-0/);
-		assert.match(harness.frame(), /1-5 of 20/);
+		assert.match(await harness.frame(), /▌ model-0/);
+		assert.match(await harness.frame(), /1-5 of 20/);
 		for (let index = 0; index < 6; index += 1) list.handleKey(key("down"));
 		list.reflect?.();
 		await harness.settle();
-		assert.match(harness.frame(), /▌ model-6/);
-		assert.match(harness.frame(), /3-7 of 20/);
+		assert.match(await harness.frame(), /▌ model-6/);
+		assert.match(await harness.frame(), /3-7 of 20/);
 		await harness.dispose();
 	});
 
@@ -704,7 +720,7 @@ describe("the components on their own", () => {
 		const short = new NoteView(geometry(prose), { title: "Done", lines: ["one", "two"] });
 		prose.mount(short.build());
 		await prose.settle();
-		assert.doesNotMatch(prose.frame(), /╭/);
+		assert.doesNotMatch(await prose.frame(), /╭/);
 		assert.equal(
 			short.rows,
 			4,
@@ -719,7 +735,7 @@ describe("the components on their own", () => {
 		});
 		page.mount(long.build());
 		await page.settle();
-		assert.match(page.frame(), /╭/, "a page read before a decision gets an edge");
+		assert.match(await page.frame(), /╭/, "a page read before a decision gets an edge");
 		await page.dispose();
 	});
 
@@ -735,7 +751,7 @@ describe("the components on their own", () => {
 		);
 		harness.mount(list.build());
 		await harness.settle();
-		const text = harness.frame();
+		const text = await harness.frame();
 		assert.match(text, /✓ provider answered/);
 		// The detail sits under the label, and the label starts one column past the mark: two columns, in a body mounted with
 		// no frame around it. Through a screen the frame's own margin and inset add three more.
@@ -758,7 +774,7 @@ describe("the components on their own", () => {
 		};
 		harness.mount(text.build());
 		await harness.settle();
-		assert.match(harness.frame(), /❯ denis/);
+		assert.match(await harness.frame(), /❯ denis/);
 		text.handleKey(key("a"));
 		text.accept("alice");
 		text.handleKey(key("enter"));
@@ -770,7 +786,7 @@ describe("the components on their own", () => {
 		text.reflect?.();
 		await harness.settle();
 		assert.equal(submitted, "alice", "a rejected value is not submitted");
-		assert.match(harness.frame(), /lowercase letters only/);
+		assert.match(await harness.frame(), /lowercase letters only/);
 		await harness.dispose();
 	});
 
