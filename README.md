@@ -24,6 +24,12 @@ npm install -g mason-agent
 mason onboard
 ```
 
+Or with Nix, from a checkout:
+
+```sh
+nix run github:DenisSud/mason            # or: nix profile install github:DenisSud/mason
+```
+
 ## First run
 
 `mason onboard` is the first run in one command. It asks for a provider, a model and a key, and checks the key with one
