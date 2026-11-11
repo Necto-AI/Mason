@@ -1,9 +1,8 @@
 # Deploying mason
 
-Three containers of our own. `mason` is the server: the repo run from source, the agent's home on a volume, and the
+Two containers of our own. `mason` is the server: the repo run from source, the agent's home on a volume, and the
 connector socket on 8787. `mason-env` is the machine the agent's tools actually run on: ubuntu
-24.04 and an sshd, reached only by mason, with no route out. `mason-asr` is mason's own speech-to-text, which is what
-turns a voice note from a phone into words (see "The transcription service" below). The split is not packaging taste —
+24.04 and an sshd, reached only by mason, with no route out. The split is not packaging taste —
 every `read`, `write`, `edit` and `bash` call already goes through `@earendil-works/pi-env`, so the
 boundary between thinking and doing was in the code before it was in a compose file. A deployment may add one more
 container per integration (see "An integration" below); those are other people's images, not this repo's.
@@ -12,13 +11,12 @@ container per integration (see "An integration" below); those are other people's
 host loopback :8787 ──► mason ──ssh──► mason-env        (no ports; in on mason-internal, out on mason-out)
                           │
                           ├── mason-mcp ──► integration containers   (no ports; each also on mason-edge, or on
-                          │        │                                  mason-egress with the vpn sidecar)
-                          │        └────► mason-asr                  (no ports; Ogg/Opus in, words out)
+                          │                                          mason-egress with the vpn sidecar)
                           ├── mason-edge ──► the internet            (mason's route to the model provider; the
                           │                                          vpn sidecar, and an integration's upstream)
-                          ├── mason-out ───► the internet            (mason-env and mason-asr: a bridge apart,
-                          │                                          so that mason-edge cannot reach either)
-                          └── volumes: mason-agent (both containers), mason-service, env-keys, asr-models,
+                          ├── mason-out ───► the internet            (mason-env: a bridge apart, so that
+                          │                                          mason-edge cannot reach it)
+                          └── volumes: mason-agent (both containers), mason-service, env-keys,
                                       mason-inbox (mason-env and the telegram relay)
 ```
 
@@ -75,11 +73,10 @@ directories on one filesystem, reached by the loopback SSH daemon. That is a lay
    TELEGRAM_CONNECTOR_CREDENTIAL=…          # optional: issued once by `npm run connector -- add telegram`
    TELEGRAM_ALLOWED_CHATS=-1001234567890   # optional: the chat ids or @usernames the bot may relay, comma-separated
    COMPOSE_EXTRA_FILES=compose.telegram.yaml  # optional: extra compose files, space-separated, relative to deploy/
-   TELEGRAM_ASR_URL=http://mason-asr:8100/transcribe  # optional: the relay's transcript endpoint, the value compose.telegram.yaml defaults to
    GH_TOKEN=gho_…                          # optional: the `gh` credential the tool machine uses (see "the env image")
    REPO_DIR=/srv/checkout                 # required: the checkout bound into the tool machine, read-write
    HTTPS_PROXY=http://vpn:1080            # optional: the model's egress, when the provider is not reachable directly
-   NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr  # …and the names that must not go through it
+   NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram  # …and the names that must not go through it
    ```
 
 3. **Provider credentials**, in the directory `MASON_PI_AGENT_DIR` names. This is pi's own layout, unchanged — two
@@ -333,8 +330,8 @@ repo, no TypeScript, no extension, nothing in `src/` to change.
    enable | disable` inside the container is the writer that validates the file, and it says the same thing.
 
 **Nothing is published.** `mason-mcp` is `internal: true`: no gateway, no route out, no DNS beyond the compose
-network, joined by mason, the integration containers and `mason-asr` — the three things that answer to mason, and
-nothing that answers to somebody else. No integration declares `ports:` — mason reaches it by name, so it needs none —
+network, joined by mason and the integration containers — the two things that answer to mason, and nothing that answers
+to somebody else. No integration declares `ports:` — mason reaches it by name, so it needs none —
 and a published port would be a second door into a service holding a credential, with no token of mason's in front of
 it. mason keeps `mason-edge` for the model provider, and an integration keeps it for its upstream — or, where the
 upstream is not reachable from this host, the integration joins `mason-egress` instead and the proxy sidecar beside it
@@ -397,15 +394,15 @@ relay does — two lines in `deploy/.env`, and nothing else:
 
 ```
 HTTPS_PROXY=http://vpn:1080
-NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr
+NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram
 ```
 
 - The server installs an undici dispatcher that reads those variables (`src/server/http-proxy.ts`, the same dispatcher
   pi's own CLI installs), so the model client inherits it. Nothing else in the stack changes and the integrations that
   already use the proxy are unaffected.
-- **`NO_PROXY` is the part that bites.** Everything mason calls by name — the integrations on `mason-mcp`, the
-  transcriber — is not reachable through the sidecar, and a name that is not listed is a request that goes out and never
-  comes back. The compose default lists the names this repository ships; a deployment that adds an integration adds its
+- **`NO_PROXY` is the part that bites.** Everything mason calls by name — the integrations on `mason-mcp` — is not
+  reachable through the sidecar, and a name that is not listed is a request that goes out and never comes back. The
+  compose default lists the names this repository ships; a deployment that adds an integration adds its
   service name here too.
 - The sidecar lives in `compose.telegram.yaml`, so a stack that runs no Telegram integration has nothing to point at: an
   unreachable provider on such a host needs its own proxy container, not two lines in `.env`.
@@ -413,66 +410,6 @@ NO_PROXY=localhost,127.0.0.1,mason-env,mason-telegram,mason-asr
   stripped. No line means the model is going out directly, which is the default and the common case.
 - A failed run is re-armed by the server itself (`[run-retry]`, four attempts over ~20 minutes) whether or not a browser
   is open, so a provider that is down is a bot that is slow rather than a bot that is gone.
-
-## The transcription service: `mason-asr`
-
-A voice note from a phone is Ogg/Opus at 48 kHz, and for a long time that was a container nobody in this stack could
-read: posted to a WAV-only endpoint it came back as an empty transcript, which is worse than an error because the agent
-then answered a sentence nobody had said. So the stack runs mason's own speech-to-text beside the relay — `asr/` in
-this repository, one container, one POST, one JSON body. The model is `nvidia/parakeet-tdt-0.6b-v3` as three ONNX
-graphs, a featurizer, an encoder and a greedy decoder, run by onnxruntime: no NeMo and no PyTorch in the image. It
-is in `compose.yaml` and not in an extra file because every stack may want a voice note read, and a stack that runs no
-relay simply never calls it.
-
-**What it costs.** CPU only: no GPU, no CUDA runtime in the image, one core busy while a note is transcribed and nothing
-between notes. ~1.3 GB of ONNX weights in the `${MASON_STACK:-mason}-asr-models` volume, fetched once on the first boot
-(or copied in, below) and never backed up, because weights are a download rather than state. At the measured rtf 0.07 a
-15 s voice note is about a second of it, and a five-second one about a third.
-
-**What it accepts.** Anything ffmpeg reads: Ogg/Opus (what a phone records), MP3, M4A/MP4, WebM, FLAC, AMR, and WAV.
-Internally there is one format — 16 kHz mono float32 — and ffmpeg resamples and downmixes into it, so the container a
-phone produces is a container this service takes. A WAV is the exception that keeps its fast path: it is parsed
-in-process and must already be 16 kHz mono (the browser client resamples before it posts), so a 44.1 kHz stereo WAV is
-refused by a message that says to resample first rather than quietly resampled here. Headerless PCM16 is still read, but
-it has to be declared (`Content-Type: application/octet-stream` or `audio/pcm`) — bytes that say nothing about
-themselves go to ffmpeg instead of being guessed at, which is the rule that closed this bug. A body nothing can decode
-is a `400` naming the format it looked like, never a `200` with an empty transcript.
-
-**How a relay reaches it.** By name, on `mason-mcp`: `http://mason-asr:8100/transcribe`, which is the default
-`TELEGRAM_ASR_URL` in `compose.telegram.yaml` names. POST the file's bytes — or the same bytes as one
-`multipart/form-data` part named `file`, which is what the Telegram relay sends — and read `text` out of the answer.
-The rest of that body (`words`, `durationMs`, `elapsedMs`, `rtf`, `model`) is the service's own report and the relay
-ignores it. No token and no published port: the network is the authentication here, exactly as it is for an MCP
-endpoint, and the only containers that can resolve the name are mason and the integrations. `mason-env` is not one of
-them.
-
-**What it is on.** `mason-mcp` is the inbound half, and `mason-out` is the outbound one: an ordinary bridge with a
-gateway, shared with `mason-env` and with no integration, because a transcriber holds what a person said and the bridge
-that carries an integration with a reachable upstream has no business reaching it. The only request the service makes
-is the first boot's fetch of the weights from Hugging Face, which is why that membership can go once the volume is
-seeded (below). It is not on `mason-edge`. Its healthcheck reads `/health`, and its start period covers a model load of
-5 to 15 s and, on a first boot, a 1.3 GB fetch, so a slow start is not a restart loop.
-
-**Seeding the volume instead of downloading.** The first boot with an empty volume fetches the weights and says so
-(`[asr] /models holds no encoder-model.fp16.onnx: fetching the ONNX export from Hugging Face once`). A fetch that fails
-names the URL that failed, logs a line about seeding the volume, and exits non-zero — the container stays down rather
-than answering `200` with no model behind it. Where Hugging Face is unreachable from the host — this deployment proxies
-Telegram's API for much the same reason — copy an existing model directory in once and the fetch never happens:
-
-```sh
-cd deploy
-podman volume create "${MASON_STACK:-mason}-asr-models"     # or let the first `up` create it
-podman run --rm --entrypoint sh -v "${MASON_STACK:-mason}-asr-models":/models \
-  -v "$PWD/../asr/models":/seed:ro "${MASON_STACK:-mason}-asr:local" -c 'cp -a /seed/. /models/'
-podman compose -f compose.yaml -f compose.podman.yaml up -d mason-asr
-```
-
-The image is `${MASON_STACK:-mason}-asr:local`, so `up -d --build` has to have built it once. `ASR_MODEL_BASE_URL`
-points the fetch at a mirror instead, and `ASR_ENCODER`/`ASR_DECODER` choose the precision — the volume has to hold the
-pair those name, and `fp16`/`int8` is what `asr/fetch_models.py` downloads by default.
-
-A stack that seeds the volume this way can drop `mason-out` from the `mason-asr` service in `compose.yaml`: the weights
-are then the whole of what the container needs, and it has no route out at all.
 
 ## When it looks broken but is not
 
@@ -514,11 +451,10 @@ declaration or a missing restart, never the door.
 ## What to back up
 
 **Two volumes, and both of them.** Every volume is named `${MASON_STACK}-…` on the host, so the default stack's are
-`mason-agent`, `mason-service`, `mason-env-keys`, `mason-asr-models` and `mason-inbox`, plus `mason-telegram-data`
-when the relay runs; the commands below use the first two of those names. `mason-inbox` is deliberately not one of
-them, and neither is `asr-models`: the inbox holds the files a chat sent, which are somebody else's documents and
-which the sweep deletes after a week anyway, and the model volume holds weights that one command refills (see "The
-transcription service"). `mason-agent` is the agent: `profile.md`, the dated log, `journal/`, `skills/` (the shipped
+`mason-agent`, `mason-service`, `mason-env-keys` and `mason-inbox`, plus `mason-telegram-data` when the relay runs; the
+commands below use the first two of those names. `mason-inbox` is deliberately not one of them: it holds the files a
+chat sent, which are somebody else's documents and which the sweep deletes after a week anyway. `mason-agent` is the
+agent: `profile.md`, the dated log, `journal/`, `skills/` (the shipped
 ones seeded on first boot), `routines.json`, `workspace/` and the git repository its memory is committed to. `mason-service` is the server: `soul.md`, `config.json` (the connector credential hashes — no plaintext credential lives
 here), `integrations.json` (the integrations mason reaches, and each one's connector grant), `data/agent.sqlite` (the
 transcript and the routine state), `data/seeded-skills.json` (which shipped skills this home was seeded with), `ssh/`
@@ -549,12 +485,12 @@ keypair comes with `mason-service`, and the host key is re-pinned on the next bo
   to clone, `gh` and `curl`. Delete that line to put the fence back; with it, a tool can also send out what it can read.
   `mason-out` and not `mason-edge`, because the address is the same and the channel is not (below).
 - mason itself is on `mason-edge` only because it is the one thing that should reach the model provider.
-- `mason-mcp` is a second `internal: true` network: mason, the integration containers and `mason-asr`, and nobody else.
+- `mason-mcp` is a second `internal: true` network: mason and the integration containers, and nobody else.
   Nothing on it publishes a port, and `mason-env` is not a member (see "An integration" above).
-- `mason-out` is an ordinary bridge with a gateway, and it carries mason's own outbound services: `mason-env` and
-  `mason-asr`. No integration is ever a member, so the tool machine and the transcriber are out of reach of every image
-  a third party built, and it is that membership rather than a policy that keeps them out. It is where the tool
-  machine's internet and the transcriber's one-way-out both live; `mason-edge` keeps its own.
+- `mason-out` is an ordinary bridge with a gateway, and it carries the one mason container that is outbound-only:
+  `mason-env`. No integration is ever a member, so the tool machine is out of reach of every image a third party built,
+  and it is that membership rather than a policy that keeps it out. It is where the tool machine's internet lives;
+  `mason-edge` keeps its own.
 - `mason-egress` is the last, also `internal: true`, and its only reachable address is `http://vpn:1080`. Its members
   are the `vpn` sidecar, the integrations told to reach the internet through it, and mason itself — mason because a host
   that filters the model provider needs the model to leave through the same sidecar, and for no other reason: mason

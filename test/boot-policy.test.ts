@@ -61,8 +61,8 @@ for (const file of COMPOSE_FILES) {
 	test(`every service in ${file} is restored at boot`, async () => {
 		const text = await read(file);
 		const declared = services(text);
-		// The five services this deployment runs, named: a dropped block or a commented name must fail this file, not hide.
-		const expected = file.endsWith("compose.yaml") ? ["mason-env", "mason", "mason-asr"] : ["mason-telegram", "vpn"];
+		// The four services this deployment runs, named: a dropped block or a commented name must fail this file, not hide.
+		const expected = file.endsWith("compose.yaml") ? ["mason-env", "mason"] : ["mason-telegram", "vpn"];
 		assert.deepEqual(
 			declared.map((service) => service.name).sort(),
 			[...expected].sort(),
