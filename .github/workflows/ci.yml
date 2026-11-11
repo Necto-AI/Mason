@@ -123,6 +123,24 @@ jobs:
       - run: npm run e2e:first-run
         timeout-minutes: 5
 
+  # The flake, because it is a second way to install mason and nothing else would notice it rot. `buildNpmPackage`
+  # reruns the npm dependency cache and the build from scratch here — 3 minutes of work — which is the price of a second
+  # artifact that a stranger is told to trust with `nix run`.
+  nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#mason --print-build-logs
+      # No arguments is usage, and usage is exit 1: the packaged command dispatches, and a wrapper that cannot find
+      # `dist/` would fail some other way and say so in its own words.
+      - name: the packaged command is the one npm installs
+        run: |
+          out=$(./result/bin/mason 2>&1 || true)
+          echo "$out" | grep -q "mason onboard"
+          echo "$out" | grep -q "mason chat"
+
   # The deploy image, built from the commit. Two failures this catches that no source check can: a `COPY . /app` that
   # carries the operator's `deploy/.env` into a layer, and a `packages/*/dist` the image never builds, so a clean clone
   # boots with `ERR_MODULE_NOT_FOUND` under `restart: always`.
