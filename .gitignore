@@ -20,9 +20,7 @@ dist/
 # Scratch (agent working notes, handoff reports)
 .scratch/
 
-# Python (asr/)
-asr/.venv/
-asr/models/
+# Python
 __pycache__/
 *.pyc
 
