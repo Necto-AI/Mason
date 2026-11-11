@@ -216,7 +216,10 @@ export const AppendSchema = union([
 export type AppendArgs = Static<typeof AppendSchema>;
 
 /** What came of an append. `duplicate` is mason's answer to an id it has already claimed, and it is a success. */
-export const AppendResultSchema = obj({ outcome: union([lit("accepted"), lit("duplicate")]), entryId: opt(str()) });
+export const AppendResultSchema = obj(
+	{ outcome: union([lit("accepted"), lit("duplicate")]), entryId: opt(str()) },
+	{ open: true },
+);
 export type AppendResult = Static<typeof AppendResultSchema>;
 
 /**
@@ -233,36 +236,40 @@ export const DeliverSchema = obj(
 export type DeliverArgs = Static<typeof DeliverSchema>;
 
 /** What a connector answers a delivery with. `uncertain` exists because a lost send and a lost answer look identical. */
-export const AckSchema = obj({
-	status: union([lit("delivered"), lit("duplicate"), lit("uncertain"), lit("rejected")]),
-	detail: opt(str()),
-});
+export const AckSchema = obj(
+	{
+		status: union([lit("delivered"), lit("duplicate"), lit("uncertain"), lit("rejected")]),
+		detail: opt(str()),
+	},
+	{ open: true },
+);
 export type AckStatus = "delivered" | "duplicate" | "uncertain" | "rejected";
 export type DeliveryAck = Static<typeof AckSchema>;
 
 export const ControlSchema = obj({ op: str(), requestId: opt(str()), instructions: opt(str()) }, { open: true });
 export type ControlArgs = Static<typeof ControlSchema>;
 
-export const ControlResultSchema = obj({
-	handled: bool(),
-	op: str(),
-	reply: opt(str()),
-	status: opt(map(unknown())),
-});
+export const ControlResultSchema = obj(
+	{ handled: bool(), op: str(), reply: opt(str()), status: opt(map(unknown())) },
+	{ open: true },
+);
 export type ControlResult = Static<typeof ControlResultSchema>;
 
 /** One place this connector may be sent to, as the operator declared it, with what the channel can render. */
 export const TargetSchema = obj({ id: str(), label: str(), capabilities: arr(str()) }, { open: true });
 export type Target = Static<typeof TargetSchema>;
 
-export const LimitsSchema = obj({
-	submissionsPerMinute: int(),
-	firesPerMinute: int(),
-	controlsPerMinute: int(),
-	attachmentsPerMinute: int(),
-	attachmentBytes: int(),
-	attachmentTtlMs: int(),
-});
+export const LimitsSchema = obj(
+	{
+		submissionsPerMinute: int(),
+		firesPerMinute: int(),
+		controlsPerMinute: int(),
+		attachmentsPerMinute: int(),
+		attachmentBytes: int(),
+		attachmentTtlMs: int(),
+	},
+	{ open: true },
+);
 
 /**
  * The handshake, as state: what this connector is granted, readable as soon as its reference to `mason.peer` is ready.
@@ -271,18 +278,21 @@ export const LimitsSchema = obj({
  * and Chord's `get` already waits for a snapshot. A reconnect re-reads it, and the grant is a boot-time fact, so the
  * value cannot change under a live socket.
  */
-export const SessionSchema = obj({
-	protocol: int(),
-	commands: arr(str()),
-	targets: arr(TargetSchema),
-	kinds: arr(str()),
-	limits: LimitsSchema,
-});
+export const SessionSchema = obj(
+	{ protocol: int(), commands: arr(str()), targets: arr(TargetSchema), kinds: arr(str()), limits: LimitsSchema },
+	{ open: true },
+);
 export type Session = Static<typeof SessionSchema>;
 
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* The two contracts                                                                                                 */
 /* ---------------------------------------------------------------------------------------------------------------- */
+
+/**
+ * Both `input` schemas stay closed, and that is not an exception to rule 9: the input is the handshake, validated before
+ * a link exists, and two peers that disagree about it are refused rather than degraded. Rule 9 is about what crosses an
+ * established link; a field added to the handshake is a major-2 change, and every object a caller sees after it is open.
+ */
 
 /**
  * Mason's half, served at `mason`. The object is per connector: its principal is the credential's, and the `session`

@@ -78,9 +78,9 @@ services:
 
       # A checkout the agent works in on behalf of a person, at its host path so that every path in a report, an issue
       # and a prompt means the same thing on the host and in the container. Read-write: the worker commits, branches and
-      # pushes. Defaults to the clinical-compass checkout on the deploy host; set REPO_DIR in `deploy/.env` to move it,
-      # and leave it pointing at a directory that exists — a bind of a missing path is a container that will not start.
-      - ${REPO_DIR:-/home/user/dev/clinical-compass}:${REPO_DIR:-/home/user/dev/clinical-compass}
+      # pushes. Required, and not defaulted to a directory on somebody's machine: set REPO_DIR in `deploy/.env`, and leave
+      # it pointing at a directory that exists — a bind of a missing path is a container that will not start.
+      - ${REPO_DIR:?set REPO_DIR in deploy/.env}:${REPO_DIR:?set REPO_DIR in deploy/.env}
     # No daemon in the image and none started here: mason uploads `pi-env` over the connection and verifies its SHA-256
     # on the far side before it runs (vendor/pi/packages/env/src/ssh.ts, deployDaemon).
 

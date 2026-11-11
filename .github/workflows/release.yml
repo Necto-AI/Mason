@@ -53,6 +53,8 @@ jobs:
       - run: npm run check:docs
       - run: npm run check:code
       - run: npm run check:licence
+      # The manifests against the tree they describe…
+      - run: npm run check:metadata
       - run: npm test
       # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second
       # onboard, a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket
@@ -64,16 +66,19 @@ jobs:
       - run: npm run e2e:first-run
         timeout-minutes: 5
       - run: npm run test:packages
+      # The artifact the release publishes, built here as it is on a pull request: `dist` is what the tarball ships, and
+      # the deployment reference is the one copy whose absence is silent.
+      - run: npm run build
+      - run: test -f dist/docs/agent/README.md
+      # …and the tarball as a stranger installs it: packed, unpacked outside the tree, onboarded there, and asked for
+      # its prompt.
+      - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: a release that only runs from
       # source is not a release.
       - run: npm run prove:connector
 
-      # The consumer's tarball ships `dist`, which nothing above builds (the dev path stays source-from-types and
-      # `ci` rightly never builds it, so a tag is where the compile has to happen; `npm pack` runs the same build
-      # itself through `prepack`, so a publish by hand from any checkout ships the compiled tree too). The two workspace packages pack
-      # beside it, protocol first, in the same order the publish below keeps. The copies to attach land in
-      # `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in the next one packed.
-      - run: npm run build
+      # The copies to attach land in `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in
+      # the next one packed. Each package's `prepack` runs its build, protocol first, in the order the publish below keeps.
       - run: |
           mkdir .release
           npm pack --workspace mason-protocol --workspace mason-connector --pack-destination .release/
