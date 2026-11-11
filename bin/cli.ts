@@ -69,19 +69,22 @@ Commands (the npm scripts, mapped thin):
   mason init                   the common store: provider, model, a key verified before it is written
   mason new <name>             one bot under the root: a home, its soul and skills, a first connector
   mason bots                   the bots under the root, and which one a command targets
-  mason doctor                 nine read-only checks over one bot; exit 1 on any failure
-  mason status                 one line: the bot, its model, its integrations, whether mason is up
-  mason up                     serve the bot (the server this checkout starts with npm run dev)
-  mason setup                  install a connector: grant, credential, compose project, container
-  mason chat                   talk to the bot from this terminal, through the console connector
-  mason integration …          add|remove|enable|disable|list: the services mason reaches
-  mason connector …            list|add|revoke: the credentials a connector opens its socket with
-  mason prompt                 print the prompt a turn would send, rendered by the faux provider
+  mason doctor [-b <name>]     nine read-only checks over one bot; exit 1 on any failure
+  mason status [-b <name>]     one line: the bot, its model, its integrations, whether mason is up
+  mason up [-b <name>]         serve the bot (the server this checkout starts with npm run dev)
+  mason setup [-b <name>]      install a connector for that bot: grant, credential, compose project, container
+  mason chat [-b <name>]       talk to the bot from this terminal, through the console connector
+  mason integration … [-b <name>]   add|remove|enable|disable|list: the services that bot reaches
+  mason connector … [-b <name>]     list|add|revoke: the credentials a connector opens its socket with
+  mason prompt [-b <name>]     print the prompt a turn would send, rendered by the faux provider
   mason surface                render the door tables (docs/SURFACE.md), relative to the current directory
-  mason eval                   run the behaviour scenarios
+  mason eval [-b <name>]       run the behaviour scenarios
 
-The root is $MASON_ROOT, else ~/.mason; a bot is one directory under it, and $MASON_HOME names one home directly.
--b <name> (or MASON_BOT) picks the bot when the root holds several; it goes after the command, as
+A bot is one directory under the root, and an integration and a connector belong to one bot and never to the root:
+\`mason setup -b bob --connector …\` writes into bob's home and touches nobody else's. In a root holding more than one bot
+\`-b\` is required, and the refusal names the bots; $MASON_BOT says the same thing.
+
+The root is $MASON_ROOT, else ~/.mason, and $MASON_HOME names one home directly instead. \`-b\` goes after the command, as
 \`mason status -b bob\`. The one unauthenticated door is /api/health; everything else speaks the connector's credential.
 Stop a running bot: SIGINT or SIGTERM.`);
 	process.exit(process.argv[2] === "--help" || process.argv[2] === "-h" ? 0 : 1);
