@@ -13,9 +13,10 @@ import { fauxSessionScript } from "../src/server/provider.ts";
 /** The tool calls in one message, as `{name, arguments}`. */
 function calls(message: { content: unknown }): Array<{ name: string; arguments: unknown }> {
 	if (!Array.isArray(message.content)) return [];
-	return message.content.filter(
-		(part: { type?: string }) => part.type === "toolCall",
-	) as Array<{ name: string; arguments: unknown }>;
+	return message.content.filter((part: { type?: string }) => part.type === "toolCall") as Array<{
+		name: string;
+		arguments: unknown;
+	}>;
 }
 
 test("a served bot's script delivers through send, then closes the turn", () => {
