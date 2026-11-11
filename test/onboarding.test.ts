@@ -260,31 +260,11 @@ describe("the flow", () => {
 		assert.equal(narrow.asked.find((question) => question.id === "review.action")?.value, undefined);
 	});
 
-	test("a connector's own questions become its flags, and an optional one left empty is no flag at all", async () => {
-		const { code, calls } = await drive(
-			quickstart({
-				"connector.kind": "telegram",
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
-				"connector.owner": "@denis",
-			}),
-		);
-		assert.equal(code, 0);
-		const setup = calls.find((call) => call.startsWith("setup"));
-		assert.equal(
-			setup,
-			"setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc --env TELEGRAM_ALLOWED_CHATS=@denis " +
-				"--owner @denis --targets @denis",
-			"the token and the chat are flags; the proxy nobody needs is not a flag with an empty value",
-		);
-	});
-
 	test("an optional question the plan left empty is answered, not refused, when the operation asks it", async () => {
-		// The operation asks its own optional questions — no proxy, no targets of its own — and the plan answered them
-		// by not answering. A refusal here is the bug the connector step would fail with on a `--connector telegram` run.
+		// The operation asks its own optional questions — a proxy nobody needs, no targets of its own — and the plan
+		// answered them by not answering. A refusal here is the bug the connector step would fail without a screen.
 		const prompter = answeredPrompter();
-		assert.equal(await prompter.text("HTTPS_PROXY", { fallback: "", required: false }), "");
+		assert.equal(await prompter.text("SOME_OPTIONAL", { fallback: "", required: false }), "");
 		assert.equal(await prompter.text("targets", { required: false }), "", "no fallback is the empty answer");
 		await assert.rejects(prompter.text("a token", { required: true }), /bug in the flow/);
 	});
@@ -352,12 +332,11 @@ describe("the connectors page", () => {
 			"provider.id": "faux",
 			"provider.model": "faux-1",
 			"agent.name": "alice",
-			"connector.kind": ["console", "telegram"],
-			"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-			"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-			"connector.env.HTTPS_PROXY": "",
+			"connector.kind": ["console", "custom"],
+			"connector.url": "ws://127.0.0.1:8083/api/connector",
 			"connector.owner": "@denis",
-			"connector.start": false,
+			"connector.targets": "@denis",
+			"connector.events": "",
 			"connectors.list": ["add", "continue"],
 			"review.action": "apply",
 			"done.action": "finish",
@@ -369,8 +348,7 @@ describe("the connectors page", () => {
 			calls.filter((call) => call.startsWith("setup")),
 			[
 				"setup --connector console",
-				"setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc --env TELEGRAM_ALLOWED_CHATS=@denis " +
-					"--owner @denis --targets @denis --no-start",
+				"setup --connector custom --url ws://127.0.0.1:8083/api/connector --owner @denis --targets @denis",
 			],
 		);
 		// The review is where a person reads the plan back: one block per connector, each naming what it may send.
@@ -381,15 +359,15 @@ describe("the connectors page", () => {
 		assert.match(read, /Connector 1/);
 		assert.match(read, /Connector 2/);
 		assert.match(read, /console/);
-		assert.match(read, /telegram/);
+		assert.match(read, /custom/);
 		assert.match(read, /\/stop/, "each block says what that connector may send");
 		// And the progress list is one row per connector, both done.
 		const rows = screen.progressRows.get("apply.steps") ?? [];
 		assert.deepEqual(
 			rows
-				.filter((row) => row.label.includes("console") || row.label.includes("telegram"))
+				.filter((row) => row.label.includes("console") || row.label.includes("custom"))
 				.map((row) => `${row.label}: ${row.state}`),
-			["console: credential: ok", "telegram: credential and project: ok"],
+			["console: credential: ok", "custom: credential: ok"],
 		);
 	});
 
@@ -406,13 +384,11 @@ describe("the connectors page", () => {
 					init: ["--provider", "faux", "--model", "faux-1"],
 					setup: [
 						"--connector",
-						"telegram",
+						"custom",
+						"--url",
+						"ws://127.0.0.1:8083/api/connector",
 						"--owner",
 						"@denis",
-						"--env",
-						"TELEGRAM_BOT_TOKEN=123:abc",
-						"--env",
-						"TELEGRAM_ALLOWED_CHATS=@denis",
 						"--connector",
 						"console",
 					],
@@ -421,7 +397,7 @@ describe("the connectors page", () => {
 		);
 		assert.equal(code, 0);
 		assert.ok(screen.asked.some((question) => question.id === "connector.flags"));
-		for (const id of ["connector.kind", "connector.owner", "connector.env.TELEGRAM_BOT_TOKEN", "connectors.list"])
+		for (const id of ["connector.kind", "connector.owner", "connectors.list"])
 			assert.ok(!screen.asked.some((question) => question.id === id), `nothing asked ${id}: a flag answered it`);
 		assert.equal(calls.filter((call) => call.startsWith("setup")).length, 2, "both were installed, and nobody asked");
 	});
@@ -429,17 +405,17 @@ describe("the connectors page", () => {
 	test("a connector dropped on the page is left out of the install", async () => {
 		const { code, calls } = await drive({
 			...quickstart(),
-			"connector.kind": ["console", "telegram"],
-			"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-			"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-			"connector.env.HTTPS_PROXY": "",
+			"connector.kind": ["console", "custom"],
+			"connector.url": "ws://127.0.0.1:8083/api/connector",
 			"connector.owner": "@denis",
+			"connector.targets": "@denis",
+			"connector.events": "",
 			"connectors.list": ["add", "remove:0", "continue"],
 		});
 		assert.equal(code, 0);
 		const setup = calls.filter((call) => call.startsWith("setup"));
 		assert.deepEqual(setup.length, 1, "the console was dropped before anything was written");
-		assert.match(setup[0] ?? "", /^setup --connector telegram/);
+		assert.match(setup[0] ?? "", /^setup --connector custom --url/);
 	});
 
 	test("dropping the last one asks for a connector again, rather than installing nothing", async () => {
@@ -483,27 +459,6 @@ describe("the connectors page", () => {
 			quiet.screen.asked.find((question) => question.id === "provider.key")?.journey,
 			undefined,
 			"a provider with no row gets no line: the wizard does not invent an address",
-		);
-	});
-
-	test("a connector's secret variable says which page issues it", async () => {
-		const { screen } = await drive(
-			quickstart({
-				"connector.kind": "telegram",
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
-				"connector.owner": "@denis",
-			}),
-		);
-		assert.equal(
-			screen.asked.find((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN")?.journey?.url,
-			"https://t.me/BotFather",
-		);
-		assert.equal(
-			screen.asked.find((question) => question.id === "connector.owner")?.journey,
-			undefined,
-			"a question whose answer is not on a website carries no journey",
 		);
 	});
 
@@ -673,7 +628,7 @@ describe("what the disk already answers", () => {
 	});
 
 	test("a seeded connector the flags only half answered asks for the rest before it installs", async () => {
-		// `--connector telegram` names the connector and nothing else: the token and the owner are still owed, and a plan
+		// `--connector custom` names the connector and nothing else: the url and the owner are still owed, and a plan
 		// that went straight to the install would fail inside mason setup on a question nobody was shown.
 		const { code, screen, calls } = await drive(
 			{
@@ -681,46 +636,27 @@ describe("what the disk already answers", () => {
 				"provider.id": "faux",
 				"provider.model": "faux-1",
 				"agent.name": "alice",
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
+				"connector.url": "ws://127.0.0.1:8083/api/connector",
 				"connector.owner": "@denis",
 				"connectors.list": "continue",
 				"review.action": "apply",
 				"done.action": "finish",
 			},
-			{ flags: { setup: ["--connector", "telegram"] } },
+			{ flags: { setup: ["--connector", "custom"] } },
 		);
 		assert.equal(code, 0);
 		assert.ok(!screen.asked.some((question) => question.id === "connector.flags"), "half an answer is not an answer");
 		assert.ok(!screen.asked.some((question) => question.id === "connector.kind"), "the flag named the kind");
 		assert.ok(
-			screen.asked.some((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN"),
-			"the token was asked",
+			screen.asked.some((question) => question.id === "connector.url"),
+			"the url was asked",
 		);
 		assert.ok(
 			screen.asked.some((question) => question.id === "connector.owner"),
 			"so was the owner",
 		);
 		const setup = calls.find((call) => call.startsWith("setup"));
-		assert.match(setup ?? "", /^setup --connector telegram --env TELEGRAM_BOT_TOKEN=123:abc/);
-		assert.match(setup ?? "", /--owner @denis/);
-	});
-
-	test("--no-start still means no start when the rest of the connector is asked on screen", async () => {
-		const { code, calls } = await drive(
-			quickstart({
-				"welcome.mode": "advanced",
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
-				"connector.owner": "@denis",
-			}),
-			{ flags: { setup: ["--connector", "telegram", "--no-start"] } },
-		);
-		assert.equal(code, 0);
-		const setup = calls.find((call) => call.startsWith("setup")) ?? "";
-		assert.match(setup, /--no-start/, "the flag is not spent by the questions the flags did not answer");
+		assert.equal(setup, "setup --connector custom --url ws://127.0.0.1:8083/api/connector --owner @denis");
 	});
 
 	test("a flag that names a connector this build does not ship is a picker, not a lost run", async () => {
@@ -743,25 +679,20 @@ describe("what the disk already answers", () => {
 		// a half-seeded plan is not "answered on the command line", whatever the flag said.
 		const { code, screen } = await drive(
 			quickstart({
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
+				"connector.url": "ws://127.0.0.1:8083/api/connector",
 				"connector.owner": "@denis",
 				"connectors.list": ["continue", "continue"],
 				"review.action": [CANCEL, "apply"],
 			}),
-			{ flags: { setup: ["--connector", "telegram"] } },
+			{ flags: { setup: ["--connector", "custom"] } },
 		);
 		assert.equal(code, 0);
 		assert.ok(
 			!screen.asked.some((question) => question.id === "connector.flags"),
 			"nothing claims the flags answered it",
 		);
-		assert.equal(
-			screen.asked.filter((question) => question.id === "connector.permissions").length,
-			1,
-			"the questions were asked once: what a re-entry shows is the page, with the answers it already has",
-		);
+		const urls = screen.asked.filter((question) => question.id === "connector.url");
+		assert.equal(urls.length, 1, "the answers given once are the plan's: a re-entry does not ask them again");
 		assert.equal(
 			screen.asked.filter((question) => question.id === "connectors.list").length,
 			2,
@@ -773,23 +704,6 @@ describe("what the disk already answers", () => {
 		);
 		const review = screen.asked.filter((question) => question.id === "review.action").at(-1);
 		assert.ok(review?.choices?.includes("connector"), "the review can go back into a step it asked itself");
-	});
-
-	test("an empty --env NAME= is not an answer, and the screen asks for it", async () => {
-		const { code, screen } = await drive(
-			quickstart({
-				"connector.env.TELEGRAM_BOT_TOKEN": "123:abc",
-				"connector.env.TELEGRAM_ALLOWED_CHATS": "@denis",
-				"connector.env.HTTPS_PROXY": "",
-				"connector.owner": "@denis",
-			}),
-			{ flags: { setup: ["--connector", "telegram", "--owner", "@denis", "--env", "TELEGRAM_BOT_TOKEN="] } },
-		);
-		assert.equal(code, 0);
-		assert.ok(
-			screen.asked.some((question) => question.id === "connector.env.TELEGRAM_BOT_TOKEN"),
-			"an empty flag value is the question, unanswered",
-		);
 	});
 
 	test("an events pair that is not kind=hook is refused on its own screen, not as a lost run", async () => {
@@ -976,11 +890,20 @@ describe("the name a bot may have", () => {
 		// to it and not to the second one.
 		const seeded = preseed({
 			init: [],
-			setup: ["--connector", "telegram", "--owner", "@denis", "--connector", "console"],
+			setup: [
+				"--connector",
+				"custom",
+				"--url",
+				"ws://127.0.0.1:8083/api/connector",
+				"--owner",
+				"@denis",
+				"--connector",
+				"console",
+			],
 		});
 		assert.deepEqual(
 			seeded.connectors?.map((plan) => plan.kind),
-			["telegram", "console"],
+			["custom", "console"],
 		);
 		assert.equal(seeded.connectors?.[0]?.owner, "@denis");
 		assert.equal(seeded.connectors?.[1]?.owner, undefined, "the second connector took none of the first one's flags");

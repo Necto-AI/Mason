@@ -28,6 +28,7 @@ import {
 	masonPort,
 	planConnector,
 } from "../src/setup/plan.ts";
+import { TELEGRAM_CATALOG } from "./support/catalog.ts";
 
 const homes: string[] = [];
 after(async () => {
@@ -63,9 +64,9 @@ describe("a catalog connector", () => {
 	test("plans the grant, the source and the project, and writes nothing", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const entry = await catalogEntry("telegram");
+		const entry = await catalogEntry("telegram", TELEGRAM_CATALOG);
 
-		const plan = await planConnector(telegram, paths, { mint: fixedMint() });
+		const plan = await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
 
 		assert.equal(plan.name, "telegram");
 		assert.equal(plan.source, `catalog:telegram@${entry.version}`);
@@ -114,18 +115,18 @@ describe("a catalog connector", () => {
 
 	test("two calls with the same answers and the same mint are equal", async () => {
 		const home = await emptyHome();
-		const first = await planConnector(telegram, housePaths(home), { mint: fixedMint() });
-		const second = await planConnector(telegram, housePaths(home), { mint: fixedMint() });
+		const first = await planConnector(telegram, housePaths(home), { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
+		const second = await planConnector(telegram, housePaths(home), { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
 		assert.deepEqual(second, first);
 		// The default mint is randomness, so it is the one thing that must differ between two runs.
-		const random = await planConnector(telegram, housePaths(home));
+		const random = await planConnector(telegram, housePaths(home), { catalog: TELEGRAM_CATALOG });
 		assert.notEqual(random.credential?.record.sha256, first.credential?.record.sha256);
 	});
 
 	test("a home that already grants it plans no entry, and mints nothing", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const granted = await planConnector(telegram, paths, { mint: fixedMint() });
+		const granted = await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
 		await writeIntegration(paths, "telegram", granted.entry ?? assert.fail("no entry to write"));
 		await mkdir(join(home, "service"), { recursive: true });
 		const record: ConnectorCredential = {
@@ -142,7 +143,7 @@ describe("a catalog connector", () => {
 			`services:\n  telegram:\n    environment:\n      MASON_CONNECTOR_CREDENTIAL: "masonc_held"\n`,
 		);
 
-		const plan = await planConnector(telegram, paths, { mint: fixedMint() });
+		const plan = await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
 
 		assert.equal(plan.entry, undefined, "a grant that is there is added to, never rewritten");
 		assert.equal(plan.credential, undefined, "the credential the home holds is reused, not minted again");
@@ -164,7 +165,10 @@ describe("a catalog connector", () => {
 			}),
 		);
 		// No compose file: the plaintext the container was given is gone, and the hash is all that is left.
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_rotated", "con_rotated") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_rotated", "con_rotated"),
+		});
 		assert.equal(plan.credential?.replace, true);
 		assert.equal(plan.credential?.record.id, "con_rotated");
 		assert.match(plan.writes[0]?.text ?? "", /MASON_CONNECTOR_CREDENTIAL: "masonc_rotated"/);
@@ -179,7 +183,7 @@ describe("a connector already running somewhere else", () => {
 		const plan = await planConnector(
 			{ kind: "url", name: "custom", url, owner: "denis", targets: [], events: {} },
 			housePaths(home),
-			{ mint: fixedMint() },
+			{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 		);
 		assert.equal(plan.source, `url:${url}`);
 		assert.equal(plan.image, undefined, "nothing is pulled for a connector mason does not run");
@@ -206,7 +210,7 @@ describe("a connector already running somewhere else", () => {
 				events: { mail: "check-mail" },
 			},
 			housePaths(home),
-			{ mint: fixedMint() },
+			{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 		);
 		assert.deepEqual(
 			plan.grant.targets?.map((target) => [target.id, target.label]),
@@ -231,7 +235,7 @@ describe("the connector whose grant is fixed in code", () => {
 				source: `url:ws://127.0.0.1:${masonPort()}/api/connector`,
 			},
 			housePaths(home),
-			{ mint: fixedMint() },
+			{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 		);
 		assert.deepEqual(plan.grant, consoleGrant());
 		assert.equal(plan.description, CONSOLE_DESCRIPTION);
@@ -249,7 +253,7 @@ describe("a plan refuses what it can see is wrong, before anything is written", 
 			planConnector(
 				{ kind: "url", name: "custom", url: "http://127.0.0.1:9999", owner: "denis", targets: [], events: {} },
 				housePaths(home),
-				{ mint: fixedMint() },
+				{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 			),
 			/not a WebSocket URL/,
 		);
@@ -269,20 +273,22 @@ describe("a plan refuses what it can see is wrong, before anything is written", 
 					events: { mail: "check-mail" },
 				},
 				housePaths(home),
-				{ mint: fixedMint() },
+				{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 			),
 			/the kind "mail" fires "check-mail", which is not a hook/,
 		);
 		assert.deepEqual(await readdir(home), []);
 	});
 
-	test("a name the catalog does not ship", async () => {
+	test("a name the shipped catalog does not hold", async () => {
 		const home = await emptyHome();
+		// The shipped file is empty in 0.1.0, so this reads it and not a fixture: the refusal has to name the two
+		// connectors a person can actually install.
 		await assert.rejects(
 			planConnector({ kind: "catalog", name: "npm-slack", env: {}, owner: "denis" }, housePaths(home), {
 				mint: fixedMint(),
 			}),
-			/there is no connector "npm-slack"/,
+			/there is no connector "npm-slack".*--connector console/s,
 		);
 	});
 });
@@ -304,7 +310,7 @@ describe("a plan is about one home and reads the one it is given", () => {
 				},
 			}),
 		);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint() });
+		const plan = await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint() });
 		const { connectors } = await readInstalls(paths);
 		assert.deepEqual(plan.previous, connectors.telegram);
 	});
