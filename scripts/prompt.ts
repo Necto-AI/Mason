@@ -8,12 +8,12 @@
  *
  * Two reasons it is a script and not prose in a document. A prompt described by hand is a description that drifts from
  * the one the model receives, and every section here can read a file that changed a minute ago. And the turn costs
- * nothing: the model is the faux provider, the storage is memory, and `service/data` is a temporary directory, so
- * nothing durable is written to the operator's home.
+ * nothing: the model is the faux provider, the storage is memory, and the data directory is a temporary one that the
+ * render removes, so nothing durable is written to the operator's home or left in `$TMPDIR`.
  *
  * `--json` prints the same answer as data, for a diff or another program.
  */
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -103,11 +103,12 @@ async function rendered(runtime: AgentRuntime): Promise<Rendered> {
  */
 export async function runPrompt(argv: readonly string[]): Promise<number> {
 	let runtime: AgentRuntime | undefined;
+	// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
+	let dataDir: string | undefined;
 	try {
 		const args = parseArgs(takeBot(argv));
 		const home = housePaths(args.home).home;
-		// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
-		const dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
+		dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
 		runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
 			houseHome: home,
 			dataDir,
@@ -140,7 +141,10 @@ export async function runPrompt(argv: readonly string[]): Promise<number> {
 		console.error(`[prompt] ${error instanceof Error ? error.message : String(error)}`);
 		return 1;
 	} finally {
+		// After the close, because the runtime is still writing while it shuts down. A render that failed halfway has one
+		// too, and it goes the same way.
 		await runtime?.close();
+		if (dataDir !== undefined) await rm(dataDir, { recursive: true, force: true });
 	}
 }
 
