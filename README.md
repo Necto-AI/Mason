@@ -1,65 +1,84 @@
 # mason
 
-One process, one bot, one person. mason runs continuously on a machine with Node 26, answers through a connector
-(the person's words come in over it, the agent's replies go out through it), and keeps everything it is in one home:
-`$MASON_HOME`, else `~/.mason`. The full story of how it is assembled lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+mason is an agent runtime developers use to build, connect and run agents — not a finished personal assistant, and not
+a hosted service.
 
-## Install, and the first run
+## The demo
+
+<img src="docs/media/mason-demo.gif" alt="mason onboard, then a conversation in mason chat" width="880">
+
+The recording runs on a deterministic local model (`PI_FAUX_MODEL=1`), not a hosted one: the bot answers the same words
+every time, and no provider, key or network is involved.
+
+## Install
+
+Node.js 26.4.0 or newer, and npm 11.
+
+The floor is the onboarding TUI's: its renderer loads its native half through `node:ffi`, which does not exist below
+26.4. One floor covers everything — the runtime, the CLI, onboarding and the TUI — so there is no second version to
+check.
 
 ```sh
 npm install -g mason-agent
 mason onboard
 ```
 
-`mason onboard` is the first run in one command: it initialises the root (`~/.mason`, or `$MASON_ROOT`), asks for a
-provider, a model and a key — verified with one real completion before anything is written — creates the first bot, and
-installs its first connector. Then `mason up` serves it. `mason new <name>` adds a bot, `mason bots` lists them, `-b`
-picks one, and `mason doctor` proves a configuration with nine read-only checks.
+## First run
 
-`mason setup` stays the day-2 connector command: it offers the ones this release knows (`catalog/connectors.json`), asks
-what the one you pick needs, and writes the integration entry, its grant and its credential. A connector that runs as a
-container also gets a compose project, started with `restart: always` — the half of "it comes back after a reboot" a file
-can carry, with the other half (`podman-restart.service`, and linger) printed when it is missing. The connector connects
-when the socket is there.
-
-Every step has a flag — `--connector`, `--url`, `--env K=V`, `--owner`, `--no-start`, `--yes` — so a CI job drives the
-same flow with no terminal. `mason chat` talks to the bot from this terminal through the built-in console connector, with
-no Telegram at all.
-
-Everything is scriptable: `--yes` takes the flags and asks nothing, and the integration list is read once, at boot, so
-changing it is a restart.
-
-## What a stranger reaches
-
-`/api/health` is the only path that answers without a credential, and it answers one word. `/api/connector` is the
-connector's JSON-RPC socket; it takes the `Authorization: Bearer masonc_…` credential `mason connector add` printed once.
-There is no owner token and no panel: a person speaks through a connector, and a UI does the same.
-
-## The commands the installed package answers
-
-`mason onboard`, `mason init`, `mason new`, `mason bots`, `mason doctor`, `mason status`, `mason up`, `mason setup`,
-`mason chat`, `mason integration …`, `mason connector …`, `mason prompt`, `mason surface`, `mason eval`. They are the npm scripts of a checkout, mapped thin; the checkout's developer docs are in `docs/` and
-work from a source checkout with `npm run dev`, whose tests run with `npm test`.
-
-## How a release goes out
+`mason onboard` is the first run in one command. It asks for a provider, a model and a key, and checks the key with one
+real completion before it writes anything. It names the first bot and installs the console connector, the one way to
+talk to it in this release. It writes the root (`~/.mason`, or `$MASON_ROOT`) and the bot's home under it: the soul,
+the profile, the skills, the connector's grant and the credential it opens its socket with. Run it again and it asks
+nothing; it reports what is there.
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+mason up     # serve the bot, so its connector socket answers
+mason chat   # a conversation in this terminal, through the console connector
 ```
 
-A `v*` tag starts the `release` workflow: the same checks CI runs, then the three packages published with npm
-provenance, protocol first, and the three tarballs attached to the GitHub release. Publishing holds no secret: it
-is npm trusted publishing, configured once per package on npmjs.com (package settings, Trusted Publisher, naming
-this repository and the workflow file).
+`mason onboard` ends with `mason doctor`, the read-only checks over what it just wrote. `mason chat --once "hello"`
+sends one message, prints the answer and exits, for a script or a pipe.
 
-## The workspace packages inside the tarball
+## What it is, and how it runs
 
-The server imports `mason-protocol` (the connector wire contract) bare. The packages are not on the registry yet
-(#124), so `npm run build` copies exactly the packages the emitted imports name — today that is `mason-protocol`,
-nothing else — into `dist/node_modules` under that bare name, and that is the copy an installed bot resolves. It
-shadows any `mason-protocol` the consuming project installed: this runtime speaks its pinned copy, deliberately. When #124 publishes, the same commit moves it to an ordinary dependency
-and drops the vendoring.
+One process per bot, and one owner per bot: the actor a connector's grant names is the person whose words are the
+owner's, and anybody else's are refused.
+
+A bot's home holds everything it is — soul, profile, skills, routines, credentials, its database, and the workspace its
+tools run in — and nothing about it lives outside that home. Sessions are durable, so a restart is a pause and not a
+reset; a routine's timer or an event a connector fires can wake the bot with nobody typing.
+
+Connectors are the only door a person speaks through: words arrive on a connector's socket, and the reply goes back the
+same way. There is no web UI, no owner token and no panel. `/api/health` is the one path that answers without a
+credential, and it answers one word.
+
+## Connectors and integrations
+
+Two words, two jobs. A **connector** is how a person talks to a bot. An **integration** is a service or tool the bot
+operates.
+
+v0.1.0 ships one connector: the console, which is `mason chat` in the terminal the bot runs in. It is built in because
+there is nothing to install — the command opens the same socket every other connector opens. Telegram is not in this
+release.
+
+`mason integration add|remove|enable|disable|list` is how a bot gains a service. `mason status` says what one bot is and
+whether it is up, and `mason doctor` checks it.
+
+## Current limitations
+
+- **0.1.0.** Expect breaking changes between releases; nothing here promises a stable API.
+- **Console only.** There is no web UI, and no second way to reach a bot.
+- **One owner per bot, one process per bot.** There is no multi-user access.
+- **Container connectors need podman**, and none ship in this release: the Telegram image is unpublished (#151).
+- **Single host.** The runtime, the home and the machine its tools run on are one machine.
+- **Configuration is JSON files** under the home. They can be hand-edited, but you should not need to.
+
+## Development
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the development setup, the checks to run and how to propose a change. Defects
+and proposals go to the [issue tracker](https://github.com/DenisSud/mason/issues).
 
 ## Licence
 
-AGPL-3.0-only, in [`LICENSE`](LICENSE), published packages included.
+AGPL-3.0-only. The terms are in [LICENSE](LICENSE), and the source is
+[github.com/DenisSud/mason](https://github.com/DenisSud/mason).
