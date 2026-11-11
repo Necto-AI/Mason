@@ -28,8 +28,8 @@
 		"bots": "node --experimental-strip-types scripts/bots.ts",
 		"doctor": "node --experimental-strip-types scripts/doctor.ts",
 		"status": "node --experimental-strip-types scripts/status.ts",
-		"test": "node --experimental-strip-types --test test/*.test.ts",
-		"test:ci": "node --experimental-strip-types --test --test-concurrency=2 --test-shard=${TEST_SHARD:-1/1} test/*.test.ts",
+		"test": "node --experimental-strip-types --experimental-ffi --test test/*.test.ts",
+		"test:ci": "node --experimental-strip-types --experimental-ffi --test --test-concurrency=2 --test-shard=${TEST_SHARD:-1/1} test/*.test.ts",
 		"test:packages": "node --experimental-strip-types --experimental-sqlite --test packages/protocol/test/*.test.ts packages/connector/test/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"gen:surface": "node --experimental-strip-types scripts/surface.ts",
@@ -66,7 +66,7 @@
 		"mason": "dist/bin/mason.js"
 	},
 	"engines": {
-		"node": ">=26.4"
+		"node": ">=26.4.0"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.5.0",

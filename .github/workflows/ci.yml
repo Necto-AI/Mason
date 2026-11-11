@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: '26.4'
           # The lockfile key, so a repeat run does not spend its first ten seconds fetching what the last one installed.
           cache: npm
 
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: '26.4'
           cache: npm
       - run: bash scripts/setup.sh
       - run: npm run test:ci
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: '26.4'
           cache: npm
       - run: bash scripts/setup.sh
       - run: npm run build
@@ -117,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: '26.4'
           cache: npm
       - run: bash scripts/setup.sh
       - run: npm run e2e:first-run
