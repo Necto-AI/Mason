@@ -88,7 +88,7 @@ interface Installed {
 	readonly floor: string | undefined;
 }
 
-function installed(lock: Readonly<Record<string, InstalledEntry>>, name: string): Installed | undefined {
+function installed(lock: Readonly<Record<string, InstalledEntry>>, name: string): Installed {
 	const entry = lock[`node_modules/${name}`];
 	if (entry === undefined) return { where: name, floor: undefined };
 	// A workspace is a symlink in `node_modules` and a directory of its own in the lock; its engines are on the target.
@@ -176,7 +176,7 @@ function engines(manifest: Manifest, lock: Readonly<Record<string, InstalledEntr
 	}
 	for (const name of Object.keys(manifest.json.dependencies ?? {}).sort()) {
 		const dependency = installed(lock, name);
-		if (dependency?.floor === undefined) continue;
+		if (dependency.floor === undefined) continue;
 		const theirs = floor(dependency.floor);
 		if (theirs === undefined) {
 			problems.push(
