@@ -36,6 +36,7 @@ import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePa
 import { currentIntegrations, readIntegrations, recordIntegrationBoot, setIntegrations } from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
+import { fauxSessionScript } from "./provider.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
@@ -212,6 +213,9 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 		const faux = fauxProvider();
 		const models = createModels();
 		models.setProvider(faux.provider as Provider);
+		// This queue used to be empty here, so a server booted under `PI_FAUX_MODEL=1` answered nothing: every turn died on
+		// "No more faux responses queued", which reads as a dead bot rather than as a script that was never loaded.
+		faux.setResponses(fauxSessionScript(env));
 		return { models, ref: options.model ?? FAUX_MODEL, faux: true };
 	}
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false });
