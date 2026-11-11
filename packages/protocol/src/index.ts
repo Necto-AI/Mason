@@ -288,10 +288,13 @@ export type Session = Static<typeof SessionSchema>;
 /* The two contracts                                                                                                 */
 /* ---------------------------------------------------------------------------------------------------------------- */
 
-/**
+/*
  * Both `input` schemas stay closed, and that is not an exception to rule 9: the input is the handshake, validated before
  * a link exists, and two peers that disagree about it are refused rather than degraded. Rule 9 is about what crosses an
  * established link; a field added to the handshake is a major-2 change, and every object a caller sees after it is open.
+ *
+ * `test/rules.test.ts`, "both handshake inputs stay closed, and that is not an exception to rule 9", is the test that pins
+ * it.
  */
 
 /**

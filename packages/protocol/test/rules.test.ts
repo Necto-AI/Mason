@@ -32,7 +32,7 @@ function closedObjects(node: unknown, path: string, found: string[]): void {
 	for (const [keyword, value] of Object.entries(schema)) closedObjects(value, `${path}.${keyword}`, found);
 }
 
-test("every object a peer validates is open, because major 1 is additions only", () => {
+test("every exported object schema is open, because major 1 is additions only", () => {
 	const broken: string[] = [];
 	for (const [name, schema] of exportedSchemas()) closedObjects(schema, name, broken);
 	assert.deepEqual(
@@ -41,8 +41,25 @@ test("every object a peer validates is open, because major 1 is additions only",
 		"rule 9 of PROTOCOL.md: an object a peer validates is open, or the next field it adds is refused. " +
 			"Annotate the object with `{ open: true }`.",
 	);
-	// A schema named here but never exported would pass the walk by not existing: the two lists have to be the same list.
+	// A module that exported nothing would make the walk pass vacuously: the count is what says it read something.
 	assert.ok(exportedSchemas().length >= 10, "the exported schemas were not read, so nothing above was checked");
+});
+
+/**
+ * The handshake is the one closed pair, and it is not an exception to rule 9: it is validated before a link exists, so
+ * a field added to it is a major-2 change rather than a degradation. `src/index.ts` promises this, and this is the test
+ * that promise names.
+ */
+test("both handshake inputs stay closed, and that is not an exception to rule 9", () => {
+	assert.equal(protocol.CONTRACTS.length, 2, "the walk below reads the contracts, so it has to see both");
+	for (const contract of protocol.CONTRACTS) {
+		const input = contract.input as unknown as Readonly<Record<string, unknown>>;
+		assert.equal(
+			input.additionalProperties,
+			false,
+			`${contract.name}: the handshake refuses a field it does not know`,
+		);
+	}
 });
 
 test("the error table is the code set, both ways", () => {
