@@ -27,10 +27,7 @@ for (const size of [WIDE, NARROW]) {
 		shot.type?.(harness);
 		await harness.settle();
 		await harness.settle();
-		const rows = harness
-			.frame()
-			.split("\n")
-			.map((row) => `\t${JSON.stringify(row)},`);
+		const rows = (await harness.frame()).split("\n").map((row) => `\t${JSON.stringify(row)},`);
 		body.push(`/** ${shot.section} at ${size.columns}x${size.rows}. */`);
 		body.push(`export const ${name(shot.id, size.columns)} = [`, ...rows, '].join("\\n");', "");
 		await harness.dispose();
