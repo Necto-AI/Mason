@@ -4,9 +4,9 @@
 # deploy/mason.Dockerfile`). That is not a convention to be tidied later: the TypeScript is run from source, and the
 # `@earendil-works/*` packages come from npm like every other dependency.
 # Fully qualified on purpose: a host whose podman defines no `unqualified-search-registries` (NixOS ships none) refuses
-# a bare `node:22-bookworm-slim` at build time — `short-name "node:22-bookworm-slim" did not resolve to an alias` — and
+# a bare `node:26-bookworm-slim` at build time — `short-name "node:26-bookworm-slim" did not resolve to an alias` — and
 # the deploy is meant to build on such a host.
-FROM docker.io/library/node:22-bookworm-slim
+FROM docker.io/library/node:26-bookworm-slim
 
 # The uid and gid the agent runs as, and the numbers the two shared volumes are owned by. mason-env is built with the
 # same values (deploy/env.Dockerfile); they have to agree, or the workspace is one container's and not the other's.
