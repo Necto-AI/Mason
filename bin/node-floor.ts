@@ -44,3 +44,23 @@ export function tooOld(current: string): string | null {
 	if (compare(running, parse(NODE_FLOOR) as readonly [number, number, number]) >= 0) return null;
 	return `mason needs Node.js ${NODE_FLOOR} or newer; this is ${current.trim()}.\nThe onboarding wizard loads its native renderer through node:ffi, which does not exist below ${NODE_FLOOR}.\nInstall a newer Node (\`nvm install 26\`, \`fnm use 26\`, or your system's package) and run this again.`;
 }
+
+/**
+ * The flags a child process needs for the renderer to load, on the versions where `node:ffi` is still opt-in.
+ *
+ * `node:ffi` arrived in Node 26.1 behind `--experimental-ffi` and became available by default in 26.9. The floor this
+ * file enforces is 26.4, which is below that line, so on the versions mason claims to support but does not default the
+ * module, every process that might load the wizard has to be handed the flag. Without it the first screen a person
+ * sees fails with OpenTUI's "native FFI is not available for this runtime yet" — which names neither mason nor the
+ * version, and is exactly the failure the floor check above exists to stop happening.
+ *
+ * It returns nothing at 26.9 and above: the flag is still accepted there, but passing an experimental flag to a
+ * process that no longer needs it is a thing to explain to the next reader for no reason.
+ */
+export function ffiFlags(current: string): readonly string[] {
+	const match = /^v?(\d+)\.(\d+)/.exec(current.trim());
+	if (match === null) return [];
+	const major = Number(match[1]);
+	const minor = Number(match[2]);
+	return major === 26 && minor < 9 ? ["--experimental-ffi"] : [];
+}
