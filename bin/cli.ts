@@ -20,6 +20,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { takeBot as takeBotArgs } from "../src/server/root.ts";
+import { ffiFlags } from "./node-floor.ts";
 
 /** The checkout root and the install share this file's relative neighbourhood, computed once from where it runs. */
 const here = dirname(fileURLToPath(import.meta.url));
@@ -49,9 +50,14 @@ const SCRIPTS: Readonly<Record<string, string>> = {
  * the type-stripping flag, the same one the npm scripts carry. One wrapper, both answers.
  */
 function scriptLoader(target: string): { readonly path: string; readonly flags: readonly string[] } {
+	// The renderer's flag is added for every child rather than for the commands that are known to render today: which
+	// noun opens a wizard is a second fact to keep right, and a command that grows a prompt is not the place to find
+	// out it was missed. `ffiFlags` answers nothing from Node 26.9 on, so this costs a supported-but-old version one
+	// process flag and costs nothing anywhere else.
+	const ffi = ffiFlags(process.versions.node);
 	const candidate = join(here, target.replace(/\.ts$/, ".js"));
-	if (existsSync(candidate)) return { path: candidate, flags: [] };
-	return { path: join(here, target), flags: ["--experimental-strip-types"] };
+	if (existsSync(candidate)) return { path: candidate, flags: ffi };
+	return { path: join(here, target), flags: ["--experimental-strip-types", ...ffi] };
 }
 
 function usage(): never {

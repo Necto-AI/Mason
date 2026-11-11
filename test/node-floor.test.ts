@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { NODE_FLOOR, tooOld } from "../bin/node-floor.ts";
+import { ffiFlags, NODE_FLOOR, tooOld } from "../bin/node-floor.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -61,4 +61,16 @@ test("node-floor itself imports nothing, so it is safe on the version it refuses
 	const source = readFileSync(join(root, "bin", "node-floor.ts"), "utf8");
 	assert.doesNotMatch(source, /^\s*import\s/m, "an import here would be evaluated before the check that reads it");
 	assert.doesNotMatch(source, /^\s*export\s[^;]*from\s/m, "a re-export is an import with a friendly name");
+});
+
+test("the renderer's flag is handed to a child exactly where node:ffi is still opt-in", () => {
+	// node:ffi arrived in 26.1 behind --experimental-ffi and became default-on in 26.9. The floor is 26.4, so every
+	// supported version below 26.9 needs the flag and every version from 26.9 does not.
+	for (const needs of ["26.4.0", "26.4.1", "26.8.2", "v26.5.0"]) {
+		assert.deepEqual(ffiFlags(needs), ["--experimental-ffi"], `${needs} still needs the flag`);
+	}
+	for (const free of ["26.9.0", "26.11.1", "27.0.0", "28.1.0", "24.22.2"]) {
+		assert.deepEqual(ffiFlags(free), [], `${free} does not`);
+	}
+	assert.deepEqual(ffiFlags("not-a-version"), [], "an unreadable version adds no flag rather than a wrong one");
 });
