@@ -3,6 +3,13 @@ name: ci
 # The compiler and the suite, on every push to main and every pull request. Before this file existed, `main` carried a
 # type error in a test and nothing noticed: the suite runs with `--experimental-strip-types`, which erases types without
 # reading them, and `tsc` was not a dependency of the project at all.
+#
+# Six jobs rather than one, because the suite is the long pole and the rest of the checks do not read its output. The
+# numbers are this runner's, measured on one commit. Node's default with two cores is one test file at a time
+# (`availableParallelism() - 1`) and the suite took 135 seconds that way. Two at a time took 66 to 118 depending on the
+# run, three took 76 to 89 and four took 115 to 140: past two, the contention costs more than the overlap wins. Two
+# shards at two files each took 47 to 64, which is why the suite is two jobs and not one: on a runner this noisy, half
+# the work twice beats all of it once, and the shards come out even.
 on:
   push:
     branches: [main]
@@ -13,15 +20,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The static half: everything that reads the tree and writes nothing. No test file is imported here, so a failure names
+  # the document, the ceiling or the manifest that is wrong.
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 26
+          # The lockfile key, so a repeat run does not spend its first ten seconds fetching what the last one installed.
+          cache: npm
 
       # The same recipe a fresh clone runs (`devenv shell -- setup`): the root install, then the two packages the tests
       # and the runtime import from `dist`. No submodule and no Rust: `@earendil-works/*` are ordinary dependencies and
@@ -47,19 +58,42 @@ jobs:
       # packages, each declared Node floor against its dependencies', and no maintainer's home path in a file a stranger
       # reads. No build needed: the `dist` entries are the ones `prepack` writes, and `prove:package` proves they arrive.
       - run: npm run check:metadata
-      - run: npm test
-      # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second
-      # onboard, a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket
-      # on `bob`'s home in that root, against a server this script opens because no environment variable scripts the
-      # faux provider. `test/onboard.test.ts` spawns the CLI too, but only for the short-lived commands, and
-      # `test/chat.test.ts` opens its server in-process: no test starts `mason up` as a process and checks the bot it
-      # serves, and the assertion that the run left no home halves at the root it made and wrote no `~/.mason` under
-      # its scratch HOME lives only in this script.
-      - run: npm run e2e:first-run
-        timeout-minutes: 5
-      # The artifact the release publishes, built on every pull request. `dist` is what the tarball ships, and the
-      # deployment reference is the one copy whose absence is silent: `readDocsIndex` reads a missing directory as no
-      # pages, so the prompt loses its `docs` section and nothing fails.
+
+  # The suite, on its own jobs so it is one number on the pull request. `test:ci` is `npm test` with two files at a
+  # time; `TEST_SHARD` splits the file list, and node's sharding runs every file exactly once across the shards, so a
+  # file added to `test/` needs no list updated here. `fail-fast: false`, because a red shard says nothing about the
+  # other one and a reader wants both.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
+    env:
+      TEST_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: bash scripts/setup.sh
+      - run: npm run test:ci
+
+  # The artifact the release publishes, built where a green test does not hide it. `dist` is what the tarball ships, and
+  # the deployment reference is the one copy whose absence is silent: `readDocsIndex` reads a missing directory as no
+  # pages, so the prompt loses its `docs` section and nothing fails.
+  artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: bash scripts/setup.sh
       - run: npm run build
       - run: test -f dist/docs/agent/README.md
       - run: npm run test:packages
@@ -69,6 +103,25 @@ jobs:
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
       # an SDK, and this is the only check that says so.
       - run: npm run prove:connector
+
+  # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second onboard,
+  # a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket on `bob`'s home
+  # in that root, against a server this script opens because no environment variable scripts the faux provider.
+  # `test/onboard.test.ts` spawns the CLI too, but only for the short-lived commands, and `test/chat.test.ts` opens its
+  # server in-process: no test starts `mason up` as a process and checks the bot it serves, and the assertion that the
+  # run left no home halves at the root it made and wrote no `~/.mason` under its scratch HOME lives only in this script.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: bash scripts/setup.sh
+      - run: npm run e2e:first-run
+        timeout-minutes: 5
 
   # The deploy image, built from the commit. Two failures this catches that no source check can: a `COPY . /app` that
   # carries the operator's `deploy/.env` into a layer, and a `packages/*/dist` the image never builds, so a clean clone
