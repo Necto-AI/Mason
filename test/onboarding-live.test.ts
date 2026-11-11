@@ -308,7 +308,6 @@ describe("a first run on a terminal", () => {
 			throw new Error(`the screen never showed "${needle}"; it showed:\n${await harness.frame()}`);
 		};
 		const ENTER = KeyCodes.RETURN;
-		const DOWN = KeyCodes.ARROW_DOWN;
 		const running = runOnboarding({
 			root,
 			screen: harness.screen,
@@ -328,7 +327,7 @@ describe("a first run on a terminal", () => {
 			"e",
 			ENTER,
 		]);
-		await at("How will you talk to it?", [DOWN, ENTER]);
+		await at("How will you talk to it?", [ENTER]);
 		await at("The console connector", [ENTER]);
 		await at("Which connectors should this run install?", [ENTER]);
 		await at("The plan", [ENTER]);

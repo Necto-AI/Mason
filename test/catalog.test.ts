@@ -2,10 +2,12 @@
  * `catalog/connectors.json` and its reader (`src/server/catalog.ts`).
  *
  * What is pinned is the file the release ships and the strictness of its parse. The shipped half is a promise to a
- * stranger: `mason setup` offers exactly what parses, so an entry that lost a field is a first run that offers nothing.
- * The refusal half is the reason the parser is written by hand rather than cast — an unknown key is a typo that would
- * otherwise mean its opposite (`optonal: true` reads as required, `secred: true` echoes a bot token), and a catalog that
- * accepts one is worse than a catalog that rejects the file.
+ * stranger: `mason setup` offers exactly what parses, so the file 0.1.0 ships is empty on purpose — the console connector
+ * is built in and not an entry, and the one entry this file held named an image no workflow publishes (#151). A refusal
+ * here is the reason a first run ends with a sentence and not a container that can never connect. The refusal half is
+ * the reason the parser is written by hand rather than cast — an unknown key is a typo that would otherwise mean its
+ * opposite (`optonal: true` reads as required, `secred: true` echoes a bot token), and a catalog that accepts one is
+ * worse than a catalog that rejects the file.
  */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
@@ -30,33 +32,31 @@ function catalog(...entries: unknown[]): unknown {
 }
 
 describe("the shipped catalog", () => {
-	test("parses, and offers telegram with the env a first run asks for", async () => {
+	test("ships empty, on purpose, so a stranger is offered only what can run", async () => {
 		const parsed = await readCatalog();
-		assert.ok(parsed.connectors.length > 0, "an install that offers nothing is not a first run");
-		const telegram = await catalogEntry("telegram");
-		assert.equal(telegram.image, "ghcr.io/denissud/mason-telegram");
-		assert.equal(telegram.container.port, 8082);
-		assert.deepEqual(
-			telegram.env.map((item) => item.name),
-			["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHATS", "HTTPS_PROXY"],
+		// The console connector is built in and is not an entry; the telegram image this file used to name is not
+		// published, so offering it was a first run that ended at `403` (#151). The parser stays, and the entry comes
+		// back when its image travels with a release.
+		assert.deepEqual(parsed.connectors, [], "0.1.0 ships the built-in console connector, not a catalog entry");
+	});
+
+	test("an entry parses into the name, the image and the protocol's vocabulary", () => {
+		const [parsed] = parseCatalog(catalog(entry())).connectors;
+		assert.equal(parsed?.name, "telegram");
+		assert.equal(parsed?.image, "ghcr.io/denissud/mason-telegram");
+		assert.equal(parsed?.version, "0.2.0");
+		assert.deepEqual(parsed?.connector.capabilities, ["text", "markdown", "streaming"]);
+		assert.deepEqual(parsed?.connector.commands, ["stop", "compact", "clear", "status"]);
+	});
+
+	test("an entry it does not hold is refused by name, and says how to get a connector", async () => {
+		// A stranger who typed a catalog name this release does not ship needs the two connectors it does ship, not a
+		// list of none: the empty catalog is a decision, and the refusal has to read like one.
+		await assert.rejects(
+			catalogEntry("telegram"),
+			/ships no catalog connectors.*--connector console.*--connector custom/s,
 		);
-		// The token is the one answer setup must warn about before it echoes it into a terminal: the file says which
-		// answer that is, and `scripts/setup.ts` reads the flag (`test/wizard`-level behaviour lives there).
-		assert.equal(telegram.env[0]?.secret, true);
-		// And the proxy is the one answer a host with a direct route does not have: leaving it out still starts.
-		assert.equal(telegram.env[2]?.optional, true);
-	});
-
-	test("names no connector it cannot install, and hits the protocol's vocabulary", async () => {
-		for (const connector of (await readCatalog()).connectors) {
-			assert.match(connector.name, /^[a-z0-9][a-z0-9-]*$/, `${connector.name} is also an integration name`);
-			assert.ok(connector.image.length > 0 && connector.version.length > 0);
-			assert.ok(connector.connector.capabilities.length > 0, `${connector.name} claims nothing to carry`);
-		}
-	});
-
-	test("an entry it does not hold is refused by name, and says what there is", async () => {
-		await assert.rejects(catalogEntry("teleram"), /no connector "teleram".*telegram/s);
+		await assert.rejects(catalogEntry("teleram"), /there is no connector "teleram"/);
 	});
 });
 

@@ -43,7 +43,10 @@ export interface ConnectorInstall {
 	 */
 	readonly project?: string;
 	readonly createdAt: string;
-	/** Whether setup started it. `false` is a real state: `--no-start` wrote the files and left the container down. */
+	/**
+	 * Whether setup started it. `false` is a real state: `--no-start` wrote the files and left the container down. A
+	 * start that failed for any other reason is still a record; a pull that never landed is no record at all.
+	 */
 	readonly started: boolean;
 }
 

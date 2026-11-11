@@ -10,8 +10,11 @@
  * The parse is closed. A key this file does not know is a refusal and not a shrug, because the two failure modes are
  * not symmetric: a typo in `optional` would be read as "required" and a typo in `secret` would echo a bot token into a
  * terminal in full view. Refusing the entry names the key and costs the operator one line; ignoring it costs them the
- * thing the key was for. The shipped entries are pinned by a test for the same reason — a catalog that cannot parse is
- * a `mason setup` that offers nothing.
+ * thing the key was for. The shipped file is pinned by a test for the same reason — a catalog that cannot parse is a
+ * `mason setup` that offers nothing. It ships empty in 0.1.0, and the emptiness is deliberate: the console connector is
+ * built in and is not a catalog entry, while the one entry this file held named an image no workflow publishes, so a
+ * stranger's first run ended at a container that could never start (#151). The parser and its refusals stay; only the
+ * entry went, and the catalog gains it back when its image travels with a release.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -203,8 +206,8 @@ function entryOf(where: string, value: unknown): CatalogEntry {
 }
 
 /**
- * The file, checked. Exported for the test that holds the shipped entries to this parse without reading the filesystem
- * — and because a second reader of the same file must not grow a second opinion about what is valid.
+ * The file, checked. Exported for the test that holds the shipped file to this parse without reading the filesystem —
+ * and because a second reader of the same file must not grow a second opinion about what is valid.
  */
 export function parseCatalog(value: unknown, where = "connectors.json"): Catalog {
 	const file = record(where, "(file)", value, ["connectors"]);
@@ -220,7 +223,8 @@ export function parseCatalog(value: unknown, where = "connectors.json"): Catalog
 }
 
 /** The catalog this install ships. A file that cannot be read is a refusal naming the path, never an empty list: an
- * install that silently offers no connector is the failure a stranger cannot diagnose. */
+ * install that silently offers no connector is the failure a stranger cannot diagnose. An empty list is only the parsed
+ * file's own word for it, which is why 0.1.0's empty catalog is pinned by a test and named in the refusal below. */
 export async function readCatalog(path = CATALOG_PATH): Promise<Catalog> {
 	const text = await readFile(path, "utf8").catch((error: unknown) => {
 		throw new Error(
@@ -241,9 +245,12 @@ export async function catalogEntry(name: string, path = CATALOG_PATH): Promise<C
 	const { connectors } = await readCatalog(path);
 	const found = connectors.find((entry) => entry.name === name);
 	if (found === undefined) {
-		throw new Error(
-			`there is no connector "${name}" in the catalog: it knows ${connectors.map((entry) => entry.name).join(", ") || "none"}`,
-		);
+		const known =
+			connectors.length === 0
+				? "this release ships no catalog connectors: the terminal is built in (`--connector console`), and a connector " +
+					"already running somewhere else is `--connector custom --url <ws-url>`"
+				: `it knows ${connectors.map((entry) => entry.name).join(", ")}`;
+		throw new Error(`there is no connector "${name}" in the catalog: ${known}`);
 	}
 	return found;
 }
