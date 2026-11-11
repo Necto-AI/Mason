@@ -21,6 +21,7 @@ import { readIntegrations } from "../src/server/integrations.ts";
 import { applyPlan, type PlanNote } from "../src/setup/apply.ts";
 import { type ConnectorAnswers, type MintedCredential, planConnector } from "../src/setup/plan.ts";
 import { noopRunner, type Runner } from "../src/setup/runner.ts";
+import { TELEGRAM_CATALOG } from "./support/catalog.ts";
 
 const homes: string[] = [];
 after(async () => {
@@ -106,7 +107,10 @@ describe("applying a plan", () => {
 	test("writes the grant, the credential, the project and the record, and starts nothing", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_written", "con_written") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_written", "con_written"),
+		});
 
 		const applied = await applyPlan(plan, { runner: noopRunner, start: false });
 
@@ -157,7 +161,7 @@ describe("applying a plan", () => {
 		const paths = housePaths(home);
 		const start = { runner: noopRunner, start: false };
 		const first = await applyPlan(
-			await planConnector(telegram, paths, { mint: fixedMint("masonc_one", "con_one") }),
+			await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint("masonc_one", "con_one") }),
 			start,
 		);
 		assert.equal(first.credential, "minted");
@@ -167,7 +171,7 @@ describe("applying a plan", () => {
 
 		// A different mint, to prove it is never called: the credential the home holds is the one the project carries.
 		const again = await applyPlan(
-			await planConnector(telegram, paths, { mint: fixedMint("masonc_two", "con_two") }),
+			await planConnector(telegram, paths, { catalog: TELEGRAM_CATALOG, mint: fixedMint("masonc_two", "con_two") }),
 			start,
 		);
 
@@ -188,7 +192,10 @@ describe("applying a plan", () => {
 	test("a start that cannot happen still leaves the record written, and the failure comes back after it", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_boom", "con_boom") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_boom", "con_boom"),
+		});
 		const { runner, calls } = recordingRunner();
 		// mason is bound to loopback by default, and a container cannot reach it: the start refuses before the runner is
 		// asked to do anything, which is the failure that leaves a record saying the files are there.
@@ -218,7 +225,10 @@ describe("applying a plan", () => {
 	test("a start the plan asks for is one call to the runner, and the record says it started", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_started", "con_started") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_started", "con_started"),
+		});
 		const { runner, calls } = recordingRunner();
 		// A reachable bind and a podman that answers the two checks: this is the start a machine that can run it makes.
 		const applied = await withPodmanOnPath(() => withHost("0.0.0.0", () => applyPlan(plan, { runner, start: true })));
@@ -234,7 +244,10 @@ describe("applying a plan", () => {
 	test("a runner that rejects still leaves the record written, and the failure comes back after it", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_rejected", "con_rejected") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_rejected", "con_rejected"),
+		});
 		const boom = new Error("podman compose -f promote -p telegram up -d exited 125: no provider");
 		const applied = await withPodmanOnPath(() =>
 			withHost("0.0.0.0", () =>
@@ -258,10 +271,54 @@ describe("applying a plan", () => {
 		assert.equal(record?.started, false);
 	});
 
+	test("a failed image pull is reported as a pull, and writes no record that says installed", async () => {
+		const home = await emptyHome();
+		const paths = housePaths(home);
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_pull", "con_pull"),
+		});
+		// The shape of the error a private ghcr image gives: `compose up` exits 125 with podman's pull refusal.
+		const pulled = new Error(
+			"podman compose -f promote -p telegram up -d exited 125: Error: initializing source " +
+				"docker://ghcr.io/denissud/mason-telegram:0.2.0: reading manifest 0.2.0 in " +
+				"ghcr.io/denissud/mason-telegram: unauthorized: authentication required",
+		);
+		const applied = await withPodmanOnPath(() =>
+			withHost("0.0.0.0", () =>
+				applyPlan(plan, {
+					runner: {
+						up: async () => {
+							throw pulled;
+						},
+					},
+					start: true,
+				}),
+			),
+		);
+
+		assert.ok(applied.failure instanceof Error);
+		const line = applied.failure.message;
+		// The line a stranger reads names the image with its tag, the host it came from, and the two repairs that fit.
+		assert.match(line, /could not pull ghcr\.io\/denissud\/mason-telegram:0\.2\.0 from ghcr\.io/);
+		assert.match(line, /podman login ghcr\.io/);
+		assert.match(line, /check the image name/);
+		assert.equal(applied.failure.cause, pulled, "podman's own words travel as the cause");
+		assert.equal(applied.started, false);
+		// The files and the grant stay, so a retry does not mint a second credential — and nothing on disk says the
+		// connector is installed, which is what `mason doctor` would otherwise read as a stopped container.
+		assert.deepEqual(applied.written, [composePath(paths, "telegram")], "the project stays for the retry");
+		assert.equal(await readFile(paths.connectors, "utf8").catch(() => undefined), undefined);
+		assert.equal((await readInstalls(paths)).connectors.telegram, undefined);
+	});
+
 	test("a file that is already there is kept when the plan says only if missing", async () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
-		const plan = await planConnector(telegram, paths, { mint: fixedMint("masonc_kept", "con_kept") });
+		const plan = await planConnector(telegram, paths, {
+			catalog: TELEGRAM_CATALOG,
+			mint: fixedMint("masonc_kept", "con_kept"),
+		});
 		const kept = join(paths.serviceDir, "operator.json");
 		await mkdir(paths.serviceDir, { recursive: true });
 		await writeFile(kept, "the operator's own");
@@ -283,13 +340,22 @@ describe("applying a plan", () => {
 		const home = await emptyHome();
 		const paths = housePaths(home);
 		const start = { runner: noopRunner, start: false };
-		await applyPlan(await planConnector(telegram, paths, { mint: fixedMint("masonc_first", "con_first") }), start);
+		await applyPlan(
+			await planConnector(telegram, paths, {
+				catalog: TELEGRAM_CATALOG,
+				mint: fixedMint("masonc_first", "con_first"),
+			}),
+			start,
+		);
 		const config = await readFile(paths.config, "utf8");
 		// The plaintext the container was given is gone: only the hash in the home says what it was.
 		await rm(composePath(paths, "telegram"));
 
 		const applied = await applyPlan(
-			await planConnector(telegram, paths, { mint: fixedMint("masonc_second", "con_second") }),
+			await planConnector(telegram, paths, {
+				catalog: TELEGRAM_CATALOG,
+				mint: fixedMint("masonc_second", "con_second"),
+			}),
 			start,
 		);
 

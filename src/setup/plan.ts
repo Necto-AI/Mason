@@ -249,7 +249,7 @@ interface Described {
  * and a credential for a connector that can never open one, and a grant that fires a hook no build defines is a home
  * that refuses to boot.
  */
-async function describe(answers: ConnectorAnswers, paths: HousePaths): Promise<Described> {
+async function describe(answers: ConnectorAnswers, paths: HousePaths, catalog?: string): Promise<Described> {
 	if (answers.kind === "fixed")
 		return {
 			name: answers.name,
@@ -279,7 +279,7 @@ async function describe(answers: ConnectorAnswers, paths: HousePaths): Promise<D
 			env: {},
 		};
 	}
-	const entry = await catalogEntry(answers.name);
+	const entry = await catalogEntry(answers.name, catalog);
 	const chats = Object.entries(answers.env)
 		.filter(([variable]) => variable.endsWith(CHATS))
 		.flatMap(([, value]) => value.split(",").map((id) => id.trim()))
@@ -307,10 +307,11 @@ async function describe(answers: ConnectorAnswers, paths: HousePaths): Promise<D
 export async function planConnector(
 	answers: ConnectorAnswers,
 	paths: HousePaths,
-	options: { readonly mint?: MintCredential } = {},
+	// `catalog`: the shipped file unless a test names a fixture, so the entry-fed half stays pinned while 0.1.0 ships none.
+	options: { readonly mint?: MintCredential; readonly catalog?: string } = {},
 ): Promise<Plan> {
 	const mint = options.mint ?? randomMint;
-	const described = await describe(answers, paths);
+	const described = await describe(answers, paths, options.catalog);
 	const { integrations } = await readIntegrations(paths);
 	const issued = await listConnectorCredentials(paths.home);
 	const { connectors } = await readInstalls(paths);

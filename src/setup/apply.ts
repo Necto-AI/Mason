@@ -8,14 +8,16 @@
  * Two promises from the code it replaces are kept here, both about order. Every store write goes through the writer that
  * owns it — so `integrations.json` is still validated, merged and staged, and `config.json` still holds only the hash —
  * and the install record is written even when the start failed, with the failure going back to the caller afterwards. A
- * start that fails therefore costs a bad `podman` line and not a home that forgets what it installed.
+ * start that fails therefore costs a bad `podman` line and not a home that forgets what it installed. The one exception
+ * is the image pull: a pull that never landed is not an install, so no record is written and `mason doctor` has nothing
+ * to claim. The files and the grant stay, because the next attempt should not mint a second credential.
  */
 import { readFile } from "node:fs/promises";
 import { writeTextAtomic } from "../server/atomic.ts";
 import { updateConfig } from "../server/auth.ts";
 import { writeInstall } from "../server/install-state.ts";
 import { writeIntegration } from "../server/integrations.ts";
-import { bootPolicyFix, checkPodman, listening, loopbackRefusal } from "../server/podman.ts";
+import { bootPolicyFix, checkPodman, listening, loopbackRefusal, PullFailure, pullFailure } from "../server/podman.ts";
 import { masonPort, type Plan, type PlannedCredential } from "./plan.ts";
 import type { Runner } from "./runner.ts";
 
@@ -44,7 +46,10 @@ export interface AppliedPlan {
 	readonly credential?: "minted" | "rotated";
 	/** Whether the runner started the project. */
 	readonly started: boolean;
-	/** The start that failed. The record is written either way, and the caller raises this after it prints the notes. */
+	/**
+	 * The start that failed. The record is written either way, unless the failure was the image pull: a failed pull is
+	 * not an install, and the caller raises this after it prints the notes.
+	 */
 	readonly failure?: unknown;
 }
 
@@ -115,7 +120,7 @@ export async function applyPlan(plan: Plan, options: ApplyOptions): Promise<Appl
 	}
 
 	let started = false;
-	/** A start that failed after the files were written: the record goes in, and the failure goes back after it. */
+	/** Why the start did not happen. The record still goes in, unless the image is what failed. */
 	let failure: unknown;
 	if (plan.project !== undefined) {
 		if (plan.credential?.replace === true) {
@@ -171,21 +176,24 @@ export async function applyPlan(plan: Plan, options: ApplyOptions): Promise<Appl
 				const boot = await bootPolicyFix();
 				if (boot !== undefined) advice(boot);
 			} catch (error) {
-				failure = error;
+				// A pull's own error is the report: it names the image, the registry host and the repair.
+				failure = (plan.image === undefined ? undefined : pullFailure(plan.image, error)) ?? error;
 			}
 		}
 	}
 
-	await writeInstall(paths, name, {
-		source: plan.source,
-		...(plan.image === undefined ? {} : { image: plan.image }),
-		...(plan.version === undefined ? {} : { version: plan.version }),
-		...(plan.project === undefined ? {} : { project: plan.project.name }),
-		createdAt: plan.previous?.createdAt ?? new Date().toISOString(),
-		// A `--no-start` run says nothing about a container that is already up, so it says nothing: it keeps what the last
-		// run recorded rather than reporting it stopped.
-		started: options.start ? started : (plan.previous?.started ?? false),
-	});
+	// A failed pull is not an install: no record, so `mason doctor` has no container to claim.
+	if (!(failure instanceof PullFailure))
+		await writeInstall(paths, name, {
+			source: plan.source,
+			...(plan.image === undefined ? {} : { image: plan.image }),
+			...(plan.version === undefined ? {} : { version: plan.version }),
+			...(plan.project === undefined ? {} : { project: plan.project.name }),
+			createdAt: plan.previous?.createdAt ?? new Date().toISOString(),
+			// A `--no-start` run says nothing about a container that is already up, so it says nothing: it keeps what the last
+			// run recorded rather than reporting it stopped.
+			started: options.start ? started : (plan.previous?.started ?? false),
+		});
 	return {
 		notes,
 		written,

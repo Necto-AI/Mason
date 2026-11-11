@@ -1,0 +1,27 @@
+{
+	"connectors": [
+		{
+			"name": "telegram",
+			"description": "Telegram, for one person or a group chat",
+			"image": "ghcr.io/denissud/mason-telegram",
+			"version": "0.2.0",
+			"connector": {
+				"capabilities": ["text", "markdown", "streaming"],
+				"commands": ["stop", "compact", "clear", "status"]
+			},
+			"env": [
+				{ "name": "TELEGRAM_BOT_TOKEN", "secret": true, "prompt": "bot token from @BotFather" },
+				{
+					"name": "TELEGRAM_ALLOWED_CHATS",
+					"prompt": "chat ids or @usernames, comma separated"
+				},
+				{
+					"name": "HTTPS_PROXY",
+					"optional": true,
+					"prompt": "proxy for Telegram's API, if this host needs one"
+				}
+			],
+			"container": { "port": 8082 }
+		}
+	]
+}

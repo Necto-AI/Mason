@@ -163,6 +163,53 @@ export async function up(composeFile: string, project: string, options: PodmanOp
 	return `${stdout}${stderr}`.trim();
 }
 
+/**
+ * The registry host an image is pulled from: the first path segment when it names one, and Docker Hub when it does not.
+ *
+ * An image reference's first segment is a host only when it contains a dot or a port, or is `localhost`; a bare
+ * `owner/name` is Docker Hub's, and `podman login docker.io` is the command for it.
+ */
+export function imageRegistry(image: string): string {
+	const [first = ""] = image.split("/");
+	const namesHost = image.includes("/") && (first.includes(".") || first.includes(":") || first === "localhost");
+	return namesHost ? first : "docker.io";
+}
+
+/**
+ * What podman says when the image itself is the problem: a private repository, a missing manifest or a misspelled name.
+ *
+ * Narrow on purpose. "not found" alone is also what a missing binary or a stopped container says, and sending a person
+ * to `podman login` for those is advice that cannot be followed.
+ */
+const PULL_REFUSAL =
+	/unauthorized|authentication required|denied|pull access denied|manifest unknown|name unknown|failed to pull|unable to pull|error pulling|initializing source docker:\/\/|\b403\b|\b404\b/i;
+
+/**
+ * A start that failed because the image could not be pulled: the one failure that is not an install.
+ *
+ * A class rather than a message test at the caller, because `apply.ts` decides whether to write the install record from
+ * the kind of failure, and a string that happens to read like a pull is not the same fact.
+ */
+export class PullFailure extends Error {}
+
+/**
+ * `podman compose up`'s failure, when it was the image that could not be pulled, as the one line to print.
+ *
+ * The line names the image with its tag, the registry host it came from, and the two repairs a person can try there —
+ * log in to that host, or check the image name. `undefined` means the start failed for another reason and keeps the
+ * driver's own error.
+ */
+export function pullFailure(image: string, error: unknown): PullFailure | undefined {
+	const message = error instanceof Error ? error.message : String(error);
+	if (!PULL_REFUSAL.test(message)) return undefined;
+	const host = imageRegistry(image);
+	return new PullFailure(
+		`could not pull ${image} from ${host}: the image is private, unpublished or misspelled. Run ` +
+			`\`podman login ${host}\` and check the image name, then \`mason setup\` again`,
+		{ cause: error },
+	);
+}
+
 /** `podman compose down`: stops the project and removes its container. The rendered file stays; `up` reuses it. */
 export async function down(composeFile: string, project: string, options: PodmanOptions = {}): Promise<string> {
 	const { stdout, stderr } = await (options.runner ?? spawnRunner)("podman", compose(["down"], composeFile, project));

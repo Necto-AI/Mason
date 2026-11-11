@@ -15,12 +15,15 @@ import {
 	type CommandRunner,
 	checkPodman,
 	down,
+	imageRegistry,
 	listening,
 	logs,
 	loopbackRefusal,
 	type ProbeOutput,
 	type Prober,
+	PullFailure,
 	ps,
+	pullFailure,
 	spawnProbe,
 	up,
 } from "../src/server/podman.ts";
@@ -106,6 +109,27 @@ describe("the four verbs", () => {
 	test("a failure keeps podman's own words, which is the whole of what the operator gets", async () => {
 		const { run } = recorder({ "podman compose": new Error("podman compose -f x up -d exited 125: no such image") });
 		await assert.rejects(up("/x/compose.yaml", "p", { runner: run }), /exited 125: no such image/);
+	});
+});
+
+describe("the one start failure that is not an install", () => {
+	test("the registry host is the first segment when it names one, and Docker Hub when it does not", () => {
+		assert.equal(imageRegistry("ghcr.io/denissud/mason-telegram:0.2.0"), "ghcr.io");
+		assert.equal(imageRegistry("mason-telegram:0.2.0"), "docker.io");
+		assert.equal(imageRegistry("localhost:5000/team/connector:1"), "localhost:5000");
+	});
+
+	test("a pull refusal names the image, the host and the repair, and keeps podman's words as the cause", () => {
+		const error = new Error("podman compose up -d exited 125: unauthorized: authentication required");
+		const failure = pullFailure("ghcr.io/denissud/mason-telegram:0.2.0", error);
+		assert.ok(failure instanceof PullFailure);
+		assert.match(failure.message, /could not pull ghcr\.io\/denissud\/mason-telegram:0\.2\.0 from ghcr\.io/);
+		assert.match(failure.message, /podman login ghcr\.io/);
+		assert.equal(failure.cause, error);
+	});
+
+	test("another failure is not a pull, so the caller keeps the driver's own error", () => {
+		assert.equal(pullFailure("ghcr.io/x/y:1", new Error("podman compose up -d exited 125: no provider")), undefined);
 	});
 });
 

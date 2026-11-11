@@ -5,26 +5,22 @@
  * no TTY: that is the promise the wizard makes (a thin shell over functions that take answers), and a test that called
  * `runSetup` in-process would prove the functions and not the flags. What is pinned is the whole outcome of a first run —
  * the entry, the grant, the credential *hash*, the install record — plus the two promises that make a second run safe:
- * an existing connector is not touched, and running it again mints nothing and rewrites nothing.
+ * an existing connector is not touched, and running it again mints nothing and rewrites nothing. The connectors here are
+ * the two 0.1.0 offers, console and custom; the catalog path needs an entry the release does not ship, so its plan and
+ * apply are pinned against a fixture (`test/setup-plan.test.ts`, `test/setup-apply.test.ts`).
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { readComposeCredential } from "../src/server/connector-compose.ts";
-import {
-	listConnectorCredentials,
-	mintConnectorCredential,
-	revokeConnectorCredential,
-} from "../src/server/connectors.ts";
+import { listConnectorCredentials } from "../src/server/connectors.ts";
 import { housePaths } from "../src/server/house.ts";
 
-import { readInstalls, writeInstall } from "../src/server/install-state.ts";
+import { readInstalls } from "../src/server/install-state.ts";
 import { readIntegrations } from "../src/server/integrations.ts";
 
 const run = promisify(execFile);
@@ -132,122 +128,6 @@ describe("a first run with the console connector", () => {
 		assert.equal((await listConnectorCredentials(paths.home)).length, 1, "and none is minted");
 		assert.equal(await readFile(paths.integrations, "utf8"), grant);
 		assert.equal(await readFile(paths.connectors, "utf8"), records, "the record's createdAt is the first run's");
-	});
-});
-
-describe("a start that cannot happen", () => {
-	test("records what it wrote, and names the change instead of a stack trace", async () => {
-		const home = await tempHome();
-		// mason is bound to loopback by default, and a container cannot reach it: setup refuses before starting anything,
-		// and the record says the files are there and the container is not.
-		const result = await setup(
-			[
-				"--connector",
-				"telegram",
-				"--env",
-				"TELEGRAM_BOT_TOKEN=123:fake",
-				"--env",
-				"TELEGRAM_ALLOWED_CHATS=8811",
-				"--owner",
-				"8811",
-				"--yes",
-			],
-			home,
-		);
-		assert.equal(result.code, 1);
-		assert.match(result.stderr, /HOST=0\.0\.0\.0 mason up/);
-		const paths = housePaths(home);
-		assert.equal((await readInstalls(paths)).connectors.telegram?.started, false);
-		// The files that make the second attempt cheap are all there, including the project setup rendered.
-		assert.match(await readFile(join(paths.connectorsDir, "telegram", "compose.yaml"), "utf8"), /restart: always/);
-	});
-});
-
-describe("the credential a container is given", () => {
-	/** The value the rendered project hands the container, unescaped, as the container would read it. */
-	async function composeCredential(home: string): Promise<string | undefined> {
-		const paths = housePaths(home);
-		return readComposeCredential(join(paths.connectorsDir, "telegram", "compose.yaml"));
-	}
-
-	/** The hash mason holds, so the value in the file can be checked against what the server would accept. */
-	function sha256(value: string): string {
-		return createHash("sha256").update(value, "utf8").digest("hex");
-	}
-
-	const answers = [
-		"--connector",
-		"telegram",
-		"--env",
-		"TELEGRAM_BOT_TOKEN=123:fake",
-		"--env",
-		"TELEGRAM_ALLOWED_CHATS=8811",
-		"--owner",
-		"8811",
-		"--yes",
-		"--no-start",
-	];
-
-	test("is one mason accepts: the file's value hashes to the record that was minted", async () => {
-		const home = await tempHome();
-		const result = await setup(answers, home);
-		assert.equal(result.code, 0, result.stderr);
-		const value = await composeCredential(home);
-		assert.equal(typeof value, "string");
-		const records = await listConnectorCredentials(housePaths(home).home);
-		assert.deepEqual(
-			records.filter((record) => record.connector === "telegram").map((record) => record.sha256),
-			[sha256(value ?? "")],
-		);
-	});
-
-	test("a --no-start run does not report a running container as stopped", async () => {
-		const home = await tempHome();
-		assert.equal((await setup(answers, home)).code, 0);
-		// A home that was started once, then asked to write without starting: the record says it is up because it is.
-		const paths = housePaths(home);
-		const record = (await readInstalls(paths)).connectors.telegram;
-		assert.ok(record !== undefined);
-		await writeInstall(paths, "telegram", { ...record, started: true });
-		assert.equal((await setup(answers, home)).code, 0);
-		assert.equal((await readInstalls(paths)).connectors.telegram?.started, true);
-	});
-
-	test("is replaced when it was rotated elsewhere, which is the one case a file can lie about", async () => {
-		// `mason connector add <name> --replace` is a rotation mas on does not perform, so the file's line survives it:
-		// only the hash says whether the plaintext in the project is still the credential this home holds.
-		const home = await tempHome();
-		assert.equal((await setup(answers, home)).code, 0);
-		const paths = housePaths(home);
-		const before = await composeCredential(home);
-		await mintConnectorCredential(paths.home, "telegram", { replace: true });
-		assert.equal((await setup(answers, home)).code, 0);
-		const after = await composeCredential(home);
-		assert.notEqual(after, before, "a plaintext whose hash is gone is not reused");
-		const live = (await listConnectorCredentials(paths.home)).filter((record) => record.connector === "telegram");
-		assert.deepEqual(
-			live.map((record) => record.sha256),
-			[sha256(after ?? "")],
-			"and the project matches what is live",
-		);
-	});
-
-	test("is replaced when the home no longer holds it, so a revoke is not a container that crash-loops", async () => {
-		const home = await tempHome();
-		assert.equal((await setup(answers, home)).code, 0);
-		const paths = housePaths(home);
-		const before = await composeCredential(home);
-		for (const record of await listConnectorCredentials(paths.home))
-			await revokeConnectorCredential(paths.home, record.id);
-		assert.equal((await setup(answers, home)).code, 0);
-		const after = await composeCredential(home);
-		assert.notEqual(after, before, "a credential nobody holds any more is not reused");
-		const live = (await listConnectorCredentials(paths.home)).filter((record) => record.connector === "telegram");
-		assert.deepEqual(
-			live.map((record) => record.sha256),
-			[sha256(after ?? "")],
-			"and exactly one is live",
-		);
 	});
 });
 
@@ -375,10 +255,20 @@ describe("a headless run that cannot answer", () => {
 		assert.match(custom.stderr, /who owns this chat\?.*--owner/s);
 	});
 
-	test("says what it does not know how to install yet", async () => {
+	test("a catalog connector this release does not ship is refused by name", async () => {
 		const home = await tempHome();
-		const result = await setup(["--connector", "npm-slack", "--yes", "--no-start"], home);
-		assert.equal(result.code, 1);
-		assert.match(result.stderr, /there is no connector "npm-slack"/);
+		// 0.1.0's catalog is empty on purpose (#151): the refusal has to say what a stranger can install instead, and
+		// nothing may be written before it does.
+		const telegram = await setup(["--connector", "telegram", "--yes", "--no-start"], home);
+		assert.equal(telegram.code, 1);
+		assert.match(telegram.stderr, /there is no connector "telegram"/);
+		assert.match(telegram.stderr, /--connector console/);
+		assert.match(telegram.stderr, /--connector custom --url/);
+		const paths = housePaths(home);
+		assert.equal(await readFile(paths.integrations, "utf8").catch(() => undefined), undefined);
+
+		const unknown = await setup(["--connector", "npm-slack", "--yes", "--no-start"], home);
+		assert.equal(unknown.code, 1);
+		assert.match(unknown.stderr, /there is no connector "npm-slack"/);
 	});
 });

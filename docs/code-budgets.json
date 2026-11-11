@@ -6,7 +6,7 @@
 		"packages/protocol/src": 240,
 		"scripts": 4308,
 		"src/server": 6811,
-		"src/setup": 396,
+		"src/setup": 397,
 		"src/shared": 54,
 		"src/tui": 1713
 	}

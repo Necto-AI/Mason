@@ -12,7 +12,6 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { catalogEntry } from "../src/server/catalog.ts";
 import {
 	composePath,
 	homeId,
@@ -36,10 +35,9 @@ async function temporaryHome(): Promise<ReturnType<typeof housePaths>> {
 
 /** The options setup builds for one catalog entry: the image with its tag, the wiring, then the answers. */
 async function telegramOptions(home: string): Promise<Parameters<typeof renderCompose>[0]> {
-	const entry = await catalogEntry("telegram");
 	return {
-		connector: entry.name,
-		image: `${entry.image}:${entry.version}`,
+		connector: "telegram",
+		image: "ghcr.io/denissud/mason-telegram:0.2.0",
 		home,
 		env: {
 			MASON_CONNECTOR_URL: "ws://host.containers.internal:8787/api/connector",
