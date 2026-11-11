@@ -18,7 +18,7 @@
  * Run with `npm run prove:package`.
  */
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,8 +30,11 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 /** The package a stranger installs, and the one this script packs. */
 const PACKAGE = "mason-agent";
 
-/** The line the prompt's `docs` section is a list of: the index, at the path the deployment mounts. */
-const DOCS_INDEX = "/mason/docs/README.md";
+/**
+ * The reference's front page, as the tarball carries it. The mount is `/mason/docs`; `dist/docs/agent` is its source.
+ * The prompt's grounding line names it too, so the index beside it is the half a missing copy empties.
+ */
+const DOCS_FRONT_PAGE = join("dist", "docs", "agent", "README.md");
 
 interface Run {
 	readonly code: number;
@@ -98,16 +101,21 @@ async function main(): Promise<void> {
 				readonly prompt: string;
 				readonly sections: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 			};
-			const docs = rendered.sections.find((section) => section.key === "docs");
-			if (docs === undefined || docs.text.trim() === "") {
-				throw new Error(`the prompt's docs section is empty: ${DOCS_INDEX} is not in the tarball`);
+			// A listed page, not the grounding line: the line is a constant in the section, while a `- /mason/docs/` line
+			// can only exist if the installed `dist/docs/agent` was read. README is the one page the index leaves out, so
+			// the tarball's copy is checked directly.
+			const listed =
+				rendered.sections
+					.find((section) => section.key === "docs")
+					?.text.split("\n")
+					.filter((line) => line.startsWith("- /mason/docs/")) ?? [];
+			const [first] = listed;
+			if (first === undefined) {
+				throw new Error("the prompt's docs section lists no page: the tarball carries no deployment reference");
 			}
-			if (!docs.text.includes(DOCS_INDEX) || !rendered.prompt.includes(DOCS_INDEX)) {
-				throw new Error(`the docs section does not name ${DOCS_INDEX}`);
-			}
-			process.stdout.write(
-				`     ${docs.text.split("\n").length} lines of docs index, ${rendered.sections.length} sections\n`,
-			);
+			if (!rendered.prompt.includes(first)) throw new Error(`the docs index never reached the prompt: ${first}`);
+			await access(join(installed, DOCS_FRONT_PAGE));
+			process.stdout.write(`     ${listed.length + 1} pages of docs index, ${rendered.sections.length} sections\n`);
 		});
 	} finally {
 		await rm(workspace, { recursive: true, force: true });
@@ -118,7 +126,7 @@ async function main(): Promise<void> {
 }
 
 /**
- * The environment a stranger's first run has: a home of its own, a root under it, and no target inherited from whatever
+ * The environment a stranger's first run has: a home of its own, a root beside it, and no target inherited from whatever
  * session started this script. The port is this run's, so a bot already serving on 8787 is not mistaken for this one.
  */
 function environment(home: string, masonRoot: string): NodeJS.ProcessEnv {
@@ -148,7 +156,7 @@ function run(file: string, args: readonly string[], cwd: string, env: NodeJS.Pro
 
 async function typescriptIn(dir: string): Promise<string[]> {
 	const found: string[] = [];
-	for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [] as [])) {
+	for (const entry of await readdir(dir, { withFileTypes: true })) {
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) found.push(...(await typescriptIn(path)));
 		else if (isSource(entry.name)) found.push(relative(dir, path));
