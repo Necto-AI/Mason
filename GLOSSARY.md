@@ -223,3 +223,8 @@ _Avoid_: conversation, history, chat log
 **projection**:
 The whitelist that turns a conversation into a transcript. Anything it does not name does not cross.
 _Avoid_: serializer, mapper, view
+
+**revision**:
+The counter on the conversation a client holds, and the transitions that produced it: a frame whose revision is not
+greater than the one held is a frame already applied. Mason owns it, because a Chord diff carries ops and no number.
+_Avoid_: version, sequence, cursor, timestamp
