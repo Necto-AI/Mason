@@ -16,18 +16,10 @@ import {
 	masonError,
 	type PeerRef,
 	PROTOCOL_MAJOR,
-	parseSendAddress,
 	SessionSchema,
-	sendAddress,
 } from "../src/index.ts";
 
-test("one send address, both ways, and text that is not one", () => {
-	assert.equal(sendAddress("telegram", "home"), "telegram/home");
-	assert.deepEqual(parseSendAddress("telegram/home"), { connector: "telegram", target: "home" });
-	assert.equal(parseSendAddress("no-slash"), undefined);
-	assert.equal(parseSendAddress("/home"), undefined);
-	assert.equal(parseSendAddress("telegram/"), undefined);
-	assert.equal(parseSendAddress("two/slashes/here"), undefined);
+test("one connector lives at one host name, and its name is the credential's", () => {
 	assert.equal(connectorHost("telegram"), "connector:telegram");
 });
 
@@ -62,7 +54,6 @@ test("the shape the type says and the shape the schema validates are one shape",
 	const session = {
 		protocol: 1,
 		commands: ["stop"],
-		targets: [{ id: "dm", label: "the direct conversation", capabilities: ["text"] }],
 		kinds: ["chat.message"],
 		limits: {
 			submissionsPerMinute: 60,
@@ -89,7 +80,7 @@ test("the shape the type says and the shape the schema validates are one shape",
 		"an append is one of three things",
 	);
 
-	const delivery = { deliveryId: "d-1", blocks: [{ type: "text", text: "hi" }], target: "dm" };
+	const delivery = { deliveryId: "d-1", blocks: [{ type: "text", text: "hi" }], ref: "chat-1" };
 	assert.equal(compile(DeliverSchema).check(delivery), true);
 	assert.equal(compile(AckSchema).check({ status: "delivered" }), true);
 	assert.equal(compile(AckSchema).check({ status: "sent" }), false);

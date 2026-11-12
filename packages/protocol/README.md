@@ -4,14 +4,13 @@ The mason connector protocol, major 1: two Chord contracts, and the shapes they 
 
 - [`PROTOCOL.md`](PROTOCOL.md) is the prose: the ten rules, the two contracts, addresses, acknowledgements, errors.
 - `src/index.ts` is the contracts themselves — `mason.peer` and `mason.connector` — plus the constants every
-  implementation would otherwise hard-code differently: the host names, the error codes, the send address, the approval
-  metadata key.
+  implementation would otherwise hard-code differently: the host names, the error codes, the approval metadata key.
 
 There is no JSON Schema any more. Chord validates what a contract declares, so the contract *is* the schema, and a second
 copy of it would be a document that starts disagreeing with the one the runtime enforces.
 
 ```ts
-import { CONTRACT, MasonPeer, MasonConnector, ERROR_CODE, parseSendAddress } from "mason-protocol";
+import { CONTRACT, MasonPeer, MasonConnector, ERROR_CODE, connectorHost } from "mason-protocol";
 ```
 
 Installing this package is what a connector does to know what it is talking to. The SDK is separate:

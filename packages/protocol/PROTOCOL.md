@@ -10,7 +10,7 @@ Chord's, and a peer that speaks Chord speaks this.
 
 | member | what it does |
 |---|---|
-| state `session` | the handshake: this connector's commands, targets, granted kinds and budgets |
+| state `session` | the handshake: this connector's commands, granted kinds and budgets |
 | `append(append)` | hands mason one of three things: a person's words, an event, or a notice |
 | `control(op)` | spends one control out of the `session.commands` vocabulary |
 
@@ -25,7 +25,7 @@ There is no third contract and no method registry. A peer may call what the cont
 ## The ten rules
 
 1. **One socket, one connector.** The credential stamps it; nothing on the socket may name another.
-2. **Mason routes; the connector points.** No vendor tool, no other connector, no other target.
+2. **Mason routes; the connector points.** No vendor tool, no other connector, no address of the model's own.
 3. **Inbound is an append at the edge:** `submission`, `event`, `notice`. Never an assistant message, a tool result, a
    delivery, a reply or a compaction.
 4. **The type is the trust contract.** A `submission` is a person's words; an `event` is a claim, fenced, never an
@@ -34,23 +34,22 @@ There is no third contract and no method registry. A peer may call what the cont
    never retried.
 6. **An address is opaque:** connector-minted, returned byte for byte, never parsed. A delivery with no address goes to
    the connector's default.
-7. **Targets live in mason's grant file, not on the socket.** The session confirms them; the set cannot change without a
-   restart.
-8. **Mason's prompt names every addressable thing.** A name that stops resolving fails at delivery with a sentence,
-   never silently.
+7. **One person, one surface.** At most one enabled connector holds the `user` face; mason refuses the boot of a
+   deployment that grants it to two, and the refusal names the rule.
+8. **An answer goes back where the words came from.** A delivery carries the `ref` the turn's append carried, and no
+   other address exists: no grant, no prompt and no model names one.
 9. **Within major 1, additions only.** Unknown fields are ignored on both sides: every object in the contract is `open`.
 10. **Nothing crosses the wire that the projection does not name.**
 
 ## Addresses
 
-Two kinds, and they are not the same thing:
+There is one kind:
 
-- A **target** is one place a connector may be sent to, declared by the operator in the entry's `connector.targets`. The
-  model names one as `<connector>/<target>`, and a delivery carries `target: "<target>"`.
 - A **ref** is an opaque address the connector minted on an append and put in `origin.ref`. Mason stores it in the
   transcript and returns it as `ref` on the delivery that answers that append. Mason never parses it.
 
-A delivery with neither goes to whatever the connector treats as its default.
+A delivery with no `ref` goes to whatever the connector treats as its default. There is no second address and no
+`target` field: the turn's origin is the only destination an answer has.
 
 An events-only connector can therefore raise an alert with an `origin` and be answered, which is the whole reason the
 two inbound methods became one append.
@@ -100,7 +99,10 @@ Bytes never cross the contract. A connector `POST`s them to `/api/connector/atta
 
 The contract names carry no version suffix. Chord's own `version` field on each contract is the number that changes, and
 a provider that breaks a consumer must declare an adapter. Within major 1 the envelope only grows: a field added is a
-field a peer ignores, and every object here has `additionalProperties: true` for exactly that reason.
+field a peer ignores, and every object here has `additionalProperties: true` for exactly that reason. A field may also
+be retired inside major 1 for the same reason: an open object binds whether or not it carries one, so a deployed
+connector keeps working with `session.targets` and `delivery.target` gone and simply reads no targets. Major 1 stays the
+version (#200); a bump would refuse every connector already deployed to remove two fields nobody has to bind.
 
 ## What an SDK has to implement
 
