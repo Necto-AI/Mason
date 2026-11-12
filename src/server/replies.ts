@@ -176,11 +176,7 @@ export function replyRecordOf(entry: EntryRecord): ReplyRecord | undefined {
 	const raw = data.target as Record<string, unknown> | undefined;
 	const address =
 		typeof raw === "object" && raw !== null && typeof raw.connector === "string"
-			? {
-					connector: raw.connector,
-					...(typeof raw.target === "string" ? { target: raw.target } : {}),
-					...(typeof raw.ref === "string" ? { ref: raw.ref } : {}),
-				}
+			? { connector: raw.connector, ...(typeof raw.ref === "string" ? { ref: raw.ref } : {}) }
 			: undefined;
 	return {
 		deliveryId: data.deliveryId,
