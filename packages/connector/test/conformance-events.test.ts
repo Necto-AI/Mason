@@ -18,7 +18,7 @@ test("an events-only connector passes the published conformance suite", async ()
 		"the no-user refusal ran, because this fixture's grant names an owner",
 	);
 	assert.ok(
-		result.skipped.some((name) => name.startsWith("delivery/")),
-		"an alarm has no target, so nothing is delivered to it",
+		result.passed.some((name) => name.startsWith("delivery/")),
+		"the delivery cases ran: being handed a message back is not the same face as carrying a person's words",
 	);
 });

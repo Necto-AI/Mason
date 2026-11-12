@@ -109,6 +109,66 @@ async function load(
 	return { file: raw.file, integrations };
 }
 
+/**
+ * At most one enabled entry may carry a person's words: the rule the boot refuses a home for.
+ *
+ * One bot has one person and one interface, and a second enabled `connector.user` is a second surface claiming to be
+ * where the answer arrives. That claim is where #199's and #200's lost answers lived: one grant's words came back
+ * addressed to the other's, and nothing in the file said which was the person's chat. So the boot refuses the home,
+ * with the rule in the sentence, rather than discovering it from a message that went somewhere nobody read.
+ *
+ * Called by the boot and by nothing else (`runtime.ts`), which is why the file's other readers still work: `mason setup`
+ * keeps writing what the operator asked for — and names the state its own write made — and `status` and `doctor` keep
+ * reporting the file as it is. A disabled entry is not counted — switching one off is how an operator keeps a second
+ * grant on disk without it ever speaking.
+ *
+ * `test/runtime-boot.test.ts`, "two enabled connectors that carry a person's words refuse the boot", pins it.
+ */
+export function assertOneUserGrant(where: string, integrations: Record<string, Integration>): void {
+	const speaking = userGrantNames(integrations).map((name) => `"${name}"`);
+	if (speaking.length <= 1) return;
+	throw new Error(
+		`${where}: ${speaking.join(" and ")} are enabled and each holds a "connector.user" grant. One bot works for one ` +
+			"person and answers where their words came from, so at most one enabled connector may carry a person's words: " +
+			"switch one of them off, by hand",
+	);
+}
+
+/**
+ * The enabled entries that hold a person's words, by name: the rule's one reading.
+ *
+ * The boot refuses a home where there is more than one (`assertOneUserGrant` above), and every command that can make the
+ * second — `mason setup`, `mason chat`, `npm run integration -- enable` — says so in its own output, from the one sentence
+ * below. Two spellings of "who may speak" would drift apart, and the sentence a person reads on the way in would then
+ * disagree with the one that stops the boot.
+ *
+ * `test/runtime-boot.test.ts`, `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin it.
+ */
+export function userGrantNames(integrations: Record<string, Integration>): string[] {
+	return Object.entries(integrations)
+		.filter(([, integration]) => integration.enabled && integration.connector?.user !== undefined)
+		.map(([name]) => name);
+}
+
+/**
+ * What a writer says when its own write left more than one enabled connector holding a person's words: one sentence
+ * naming the home the boot will refuse, or `undefined` when the write left one surface or none.
+ *
+ * The refusal stays the boot's (`assertOneUserGrant`), so this is the word on the way in: `mason setup`, `mason chat` and
+ * `npm run integration -- enable` each call it after their own write, and one sentence means the note a person reads and
+ * the refusal that stops the boot cannot disagree.
+ *
+ * `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin the three writers.
+ */
+export function secondUserGrantNote(integrations: Record<string, Integration>): string | undefined {
+	const speaking = userGrantNames(integrations);
+	if (speaking.length <= 1) return undefined;
+	return (
+		`this home grants a person's words to ${speaking.map((name) => `"${name}"`).join(" and ")}: one bot works for one ` +
+		"person, so mason refuses this home at boot until one of them is switched off, by hand"
+	);
+}
+
 /** The file as it is, checked for shape and not for entries: the one reader a migration may use, because a migration's
  * whole job is a file that the boot would refuse. */
 async function loadRaw(

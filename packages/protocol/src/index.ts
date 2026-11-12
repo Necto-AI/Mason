@@ -45,25 +45,7 @@ export function connectorHost(name: string): string {
 	return `${CONNECTOR_HOST_PREFIX}${name}`;
 }
 
-/**
- * A send address, as the model names it: `<connector>/<target>`. The target is the operator's, out of the entry's
- * `connector.targets`; the model never sees a vendor's own chat id.
- */
-export function sendAddress(connector: string, target: string): string {
-	return `${connector}/${target}`;
-}
-
-/** The two halves of a send address, or `undefined` when the text is not one. */
-export function parseSendAddress(text: string): { readonly connector: string; readonly target: string } | undefined {
-	const at = text.indexOf("/");
-	if (at <= 0 || at === text.length - 1) return undefined;
-	const connector = text.slice(0, at);
-	const target = text.slice(at + 1);
-	if (connector.includes(" ") || target.includes(" ") || target.includes("/")) return undefined;
-	return { connector, target };
-}
-
-/** The content a connector may claim it renders. A target narrows this further, because a channel may not carry files. */
+/** The content a connector may claim it renders. */
 export const CAPABILITIES = ["text", "markdown", "files", "approvals", "streaming"] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -225,14 +207,11 @@ export type AppendResult = Static<typeof AppendResultSchema>;
 /**
  * One delivery, in the one direction mason initiates it.
  *
- * `target` is a target out of the entry's grant, named by the model as `<connector>/<target>`; `ref` is the opaque
- * address the connector put on the append a turn came from. Neither means the connector's own default. The id is the
+ * `ref` is the opaque address the connector put on the append a turn came from: a delivery goes back where the words
+ * came from, and there is nowhere else to send one. Its absence means the connector's own default. The id is the
  * delivery's identity for good: a connector that sees it twice has the message once.
  */
-export const DeliverSchema = obj(
-	{ deliveryId: str(), blocks: arr(BlockSchema), target: opt(str()), ref: opt(str()) },
-	{ open: true },
-);
+export const DeliverSchema = obj({ deliveryId: str(), blocks: arr(BlockSchema), ref: opt(str()) }, { open: true });
 export type DeliverArgs = Static<typeof DeliverSchema>;
 
 /** What a connector answers a delivery with. `uncertain` exists because a lost send and a lost answer look identical. */
@@ -255,10 +234,6 @@ export const ControlResultSchema = obj(
 );
 export type ControlResult = Static<typeof ControlResultSchema>;
 
-/** One place this connector may be sent to, as the operator declared it, with what the channel can render. */
-export const TargetSchema = obj({ id: str(), label: str(), capabilities: arr(str()) }, { open: true });
-export type Target = Static<typeof TargetSchema>;
-
 export const LimitsSchema = obj(
 	{
 		submissionsPerMinute: int(),
@@ -279,7 +254,7 @@ export const LimitsSchema = obj(
  * value cannot change under a live socket.
  */
 export const SessionSchema = obj(
-	{ protocol: int(), commands: arr(str()), targets: arr(TargetSchema), kinds: arr(str()), limits: LimitsSchema },
+	{ protocol: int(), commands: arr(str()), kinds: arr(str()), limits: LimitsSchema },
 	{ open: true },
 );
 export type Session = Static<typeof SessionSchema>;

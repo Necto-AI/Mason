@@ -1,8 +1,8 @@
 /**
  * A fake mason, as a Chord host: the *server* half of the protocol, implemented for real.
  *
- * It is deliberately not a mock. It enforces the grant, the one owner actor, the targets, the budgets and the
- * deduplication, because a mock that says yes to everything proves nothing about a connector that has to survive a no.
+ * It is deliberately not a mock. It enforces the grant, the one owner actor, the budgets and the deduplication, because
+ * a mock that says yes to everything proves nothing about a connector that has to survive a no.
  * Both hosts run over a real Chord link (`memoryLinkPair`), so what a case exercises is the protocol, not a stand-in.
  *
  * What it is not: mason. The conformance suite checks the connector's side of the contract, and a real mason checks
@@ -21,7 +21,6 @@ import {
 	masonError,
 	type Session,
 	SessionSchema,
-	type Target,
 } from "mason-protocol";
 import type { Fetcher } from "../attachments.ts";
 
@@ -35,13 +34,11 @@ export interface FakeMasonGrants {
 	/** The event kinds this entry's grant names. A kind absent from this list is refused. */
 	readonly kinds?: readonly string[];
 	readonly commands?: readonly ControlOp[];
-	/** The places this connector may be sent to, as the operator declared them. */
-	readonly targets?: readonly Target[];
 }
 
 export interface DeliveryRecord {
 	readonly deliveryId: string;
-	readonly args: { readonly deliveryId: string; readonly blocks: readonly unknown[]; readonly target?: string };
+	readonly args: { readonly deliveryId: string; readonly blocks: readonly unknown[]; readonly ref?: string };
 	sentAt: number;
 	ack?: DeliveryAck;
 	attempts: number;
@@ -81,7 +78,7 @@ export interface FakeMason {
 	deliver(params: {
 		readonly deliveryId: string;
 		readonly blocks: readonly unknown[];
-		readonly target?: string;
+		readonly ref?: string;
 	}): Promise<DeliveryAck | undefined> | DeliveryAck | undefined;
 }
 
@@ -126,7 +123,6 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	const session: Session = {
 		protocol: 1,
 		commands: [...(granted.commands ?? [])],
-		targets: [...(granted.targets ?? [])],
 		kinds: [...(granted.kinds ?? [])],
 		limits,
 	};
@@ -323,7 +319,7 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	function deliver(params: {
 		readonly deliveryId: string;
 		readonly blocks: readonly unknown[];
-		readonly target?: string;
+		readonly ref?: string;
 	}): Promise<DeliveryAck | undefined> | DeliveryAck | undefined {
 		const record: DeliveryRecord = {
 			deliveryId: params.deliveryId,

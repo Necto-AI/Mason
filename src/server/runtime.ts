@@ -33,7 +33,13 @@ import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
-import { currentIntegrations, readIntegrations, recordIntegrationBoot, setIntegrations } from "./integrations.ts";
+import {
+	assertOneUserGrant,
+	currentIntegrations,
+	readIntegrations,
+	recordIntegrationBoot,
+	setIntegrations,
+} from "./integrations.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { fauxSessionScript } from "./provider.ts";
@@ -244,8 +250,11 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	await ensureHouse(house, DEFAULT_SOUL);
 	// The integration list, once, before anything can run: the tool surface and the prompt section are decided at boot,
 	// and a file that cannot be read is refused here rather than leaving the process with fewer tools than the operator
-	// configured and no way to notice.
-	setIntegrations((await readIntegrations(house)).integrations);
+	// configured and no way to notice. A second enabled entry holding a person's words is refused here for the same
+	// reason: two surfaces claiming to be the answer's destination is #200's class, and one bot has one person.
+	const booted = (await readIntegrations(house)).integrations;
+	assertOneUserGrant(house.integrations, booted);
+	setIntegrations(booted);
 	// What this boot read, so `mason doctor` can say the file moved under it. Best effort: a home without a writable data
 	// directory still serves, it just cannot answer "restart to apply".
 	await recordIntegrationBoot(house);

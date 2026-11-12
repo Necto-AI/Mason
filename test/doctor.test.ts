@@ -308,7 +308,6 @@ describe("the boot's record", () => {
 			description: "the team chat",
 			connector: {
 				user: { owner: "8811" },
-				targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 				events: {
 					hooks: { "chat.message": "team-chat", "mail.arrived": "check-mail", "alarm.ringing": "quiet-one" },
 				},

@@ -353,7 +353,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		const args: DeliverArgs = {
 			deliveryId: record.deliveryId,
 			blocks: record.blocks as DeliverArgs["blocks"],
-			...(address.target === undefined ? {} : { target: address.target }),
 			...(address.ref === undefined ? {} : { ref: address.ref }),
 		};
 		const ack = await callConnector(name, args);
@@ -396,7 +395,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		return {
 			protocol: PROTOCOL_MAJOR,
 			commands: [...(grant.commands ?? [])],
-			targets: (grant.targets ?? []).map((target) => ({ ...target, capabilities: [...target.capabilities] })),
 			kinds: Object.keys(grant.events?.hooks ?? {}).sort(),
 			limits: {
 				submissionsPerMinute: CONNECTOR_SUBMISSION_LIMIT,
@@ -440,8 +438,8 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		grant: ConnectorGrant,
 		args: Extract<AppendArgs, { type: "submission" }>,
 	): Promise<AppendResult> {
-		// Everything in the grant is a ceiling, and the user face is the first of them: an entry granted only targets or
-		// events is a connector that may be sent to and may raise alerts, and its words are not a person's.
+		// Everything in the grant is a ceiling, and the user face is the first of them: an entry granted only events is a
+		// connector that may raise alerts, and its words are not a person's.
 		if (grant.user === undefined) {
 			throw masonError(
 				ERROR_CODE.faceNotGranted,

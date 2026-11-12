@@ -291,11 +291,11 @@ describe("durable harness + pi-env", () => {
 				.filter((entry) => entry.kind === "pi.system")
 				.flatMap((entry) => Object.values(sectionsOf(entry.model?.[0])))
 				.join("\n");
-			// The section names the one operation and both of its targets, because it is resident in every turn: `send`,
-			// which goes back where the turn came from, and `to` for the turn that has no origin.
+			// The section names the one operation and where it goes, because it is resident in every turn: `send`, back where
+			// the turn came from, and no address of the model's own.
 			assert.match(system, /words reach them through `send`/);
 			assert.match(system, /A send goes back wherever the turn came from/);
-			assert.match(system, /name one with `send`'s `to`/);
+			assert.match(system, /no address of your own goes with it/);
 		} finally {
 			await runtime.close();
 		}

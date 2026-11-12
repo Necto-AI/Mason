@@ -261,11 +261,11 @@ describe("the flow", () => {
 	});
 
 	test("an optional question the plan left empty is answered, not refused, when the operation asks it", async () => {
-		// The operation asks its own optional questions — a proxy nobody needs, no targets of its own — and the plan
-		// answered them by not answering. A refusal here is the bug the connector step would fail without a screen.
+		// The operation asks its own optional questions — a proxy nobody needs — and the plan answered them by not
+		// answering. A refusal here is the bug the connector step would fail without a screen.
 		const prompter = answeredPrompter();
 		assert.equal(await prompter.text("SOME_OPTIONAL", { fallback: "", required: false }), "");
-		assert.equal(await prompter.text("targets", { required: false }), "", "no fallback is the empty answer");
+		assert.equal(await prompter.text("ANOTHER", { required: false }), "", "no fallback is the empty answer");
 		await assert.rejects(prompter.text("a token", { required: true }), /bug in the flow/);
 	});
 
@@ -335,7 +335,6 @@ describe("the connectors page", () => {
 			"connector.kind": ["console", "custom"],
 			"connector.url": "ws://127.0.0.1:8083/api/connector",
 			"connector.owner": "@denis",
-			"connector.targets": "@denis",
 			"connector.events": "",
 			"connectors.list": ["add", "continue"],
 			"review.action": "apply",
@@ -348,10 +347,10 @@ describe("the connectors page", () => {
 			calls.filter((call) => call.startsWith("setup")),
 			[
 				"setup --connector console",
-				"setup --connector custom --url ws://127.0.0.1:8083/api/connector --owner @denis --targets @denis",
+				"setup --connector custom --url ws://127.0.0.1:8083/api/connector --owner @denis",
 			],
 		);
-		// The review is where a person reads the plan back: one block per connector, each naming what it may send.
+		// The review is where a person reads the plan back: one block per connector, each naming what it may do.
 		const read = [
 			...(screen.asked.find((question) => question.id === "review.action")?.preface ?? []),
 			...screen.pages.filter((page) => page.id === "review.read").flatMap((page) => page.page.lines),
@@ -408,7 +407,6 @@ describe("the connectors page", () => {
 			"connector.kind": ["console", "custom"],
 			"connector.url": "ws://127.0.0.1:8083/api/connector",
 			"connector.owner": "@denis",
-			"connector.targets": "@denis",
 			"connector.events": "",
 			"connectors.list": ["add", "remove:0", "continue"],
 		});
@@ -713,7 +711,6 @@ describe("what the disk already answers", () => {
 				"connector.kind": "custom",
 				"connector.url": "ws://127.0.0.1:8083/api/connector",
 				"connector.owner": "@denis",
-				"connector.targets": "",
 				"connector.events": ["stop", "wake=retry"],
 			}),
 		);

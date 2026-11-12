@@ -270,7 +270,6 @@ const TELEGRAM = {
 	enabled: true,
 	connector: {
 		user: { owner: "8811" },
-		targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 	},
 } as const;
 
@@ -319,6 +318,25 @@ test("a connector turn is queued to its origin, under the id the entry and the s
 	}
 });
 
+test("a connector the operator switched off mid-turn is refused, and nothing is addressed to it", async () => {
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	// The boot's snapshot still says the turn's words came from telegram, and the operator switched it off in the file
+	// while the turn was running: sending there would land where nobody is reading, which the refusal says out loud.
+	setIntegrations({ telegram: { ...TELEGRAM, enabled: false } as never });
+	try {
+		const appended: unknown[] = [];
+		const result = await sendTool.execute(
+			{ text: "Nothing until Thursday." },
+			apiFor({ callId: "call-12", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
+			{} as never,
+		);
+		assert.match(outputText(result.output), /cannot deliver: "telegram" is not an enabled connector/);
+		assert.deepEqual(appended, [], "nothing is committed to a connector that can no longer be reached");
+	} finally {
+		setIntegrations({});
+	}
+});
+
 test("a fire that named its conversation answers in it, and one that did not records the work and reaches nobody", async () => {
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	setIntegrations({ telegram: TELEGRAM as never });
@@ -357,29 +375,28 @@ test("a fire that named its conversation answers in it, and one that did not rec
 	assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined);
 });
 
-test("a named target is used for a turn that has no origin, and a room the entry does not permit is refused", async () => {
+test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
+	// The schema refuses the argument before a call reaches `execute`: `send` declares one property and closes the object,
+	// so a model replaying an older prompt's `to` is told `invalid_arguments` rather than having the field quietly dropped.
+	assert.equal(
+		(sendTool.parameters as { readonly additionalProperties?: unknown }).additionalProperties,
+		false,
+		"an argument the schema does not declare is refused, not ignored",
+	);
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	setIntegrations({ telegram: TELEGRAM as never });
 	try {
 		const appended: unknown[] = [];
-		const sent = await sendTool.execute(
-			{ text: "the brief", to: "telegram/team" },
+		// This call bypasses that check, which is the point: an address that does arrive routes nothing. `send` has no
+		// address parameter any more, so the words cannot be sent past the turn's own origin — and this turn has none, so
+		// the message is recorded and nobody is reached. Naming a connector that exists does not make it a destination.
+		const named = await sendTool.execute(
+			{ text: "the brief", to: "telegram/team" } as never,
 			apiFor({ callId: "call-11", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
 			{} as never,
 		);
-		assert.equal(outputText(sent.output), "queued for delivery to telegram/team");
-		assert.deepEqual((appended[0] as { data: { target?: unknown } }).data.target, {
-			connector: "telegram",
-			target: "team",
-		});
-
-		const refused = await sendTool.execute(
-			{ text: "elsewhere", to: "telegram/nowhere" },
-			apiFor({ callId: "call-12", entries: hookTurn("[ROUTINE: morning brief]") }),
-			{} as never,
-		);
-		assert.match(outputText(refused.output), /cannot deliver:/);
-		assert.match(outputText(refused.output), /not granted the target/);
+		assert.match(outputText(named.output), /nobody was reached/, "the named address reaches nobody");
+		assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined, "nothing was addressed");
 	} finally {
 		setIntegrations({});
 	}

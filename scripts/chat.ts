@@ -15,7 +15,9 @@
  *
  * The entry itself is written here if it is missing, so `mason chat` works on a home where setup only installed
  * Telegram. That write goes through the same `writeIntegration` the boot reads, so a grant that could not be served
- * fails here rather than at the next start.
+ * fails here rather than at the next start. The write also names the home it just made when it leaves two enabled
+ * connectors holding a person's words, which the boot refuses: writing it silently would leave `mason up` as the first to
+ * say the rule. The refusal itself stays the boot's, as it does for every writer.
  */
 
 import { readFile } from "node:fs/promises";
@@ -27,7 +29,7 @@ import { writeFileAtomic } from "../src/server/atomic.ts";
 import type { ConnectorGrant } from "../src/server/connectors.ts";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
-import { readIntegrations, writeIntegration } from "../src/server/integrations.ts";
+import { readIntegrations, secondUserGrantNote, writeIntegration } from "../src/server/integrations.ts";
 
 /** The built-in entry's name. It is also the name the connector says in its hello, and mason refuses a mismatch. */
 export const CONSOLE = "console";
@@ -35,15 +37,14 @@ export const CONSOLE = "console";
 /** The one line the model is told about this entry. It carries no MCP server, so nothing reads it yet — a person does. */
 export const CONSOLE_DESCRIPTION = "The terminal, built in: talk to the bot with no Telegram at all";
 
-/** The actor and the conversation the console serves. Fixed here because this file is the connector that serves them. */
+/** The actor the console serves, and the address it mints on every append: where a send goes back to. */
 const OWNER = "local";
 const TERMINAL = "terminal";
 
-/** What the console is granted: the owner's words, one place to be sent to, and every control the protocol has. */
+/** What the console is granted: the owner's words and every control the protocol has. */
 export function consoleGrant(): ConnectorGrant {
 	return {
 		user: { owner: OWNER },
-		targets: [{ id: TERMINAL, label: "the terminal this bot runs in", capabilities: ["text", "markdown"] }],
 		commands: [...CONTROL_OPS],
 	};
 }
@@ -53,6 +54,11 @@ export function consoleGrant(): ConnectorGrant {
  *
  * A home that already granted `console` keeps its own grant: the entry is a permission, and a command that silently
  * widened one would be the thing AGENTS rule 8 exists against. `false` says the entry was already there as granted.
+ *
+ * The one thing the write says out loud is the home it may have just made unstartable: the boot allows one enabled
+ * connector holding a person's words (`assertOneUserGrant`), and on a home whose user face is another connector this
+ * grant is the second. The caller prints that note after its own "granted" line, so the output tells the write and
+ * then the state the write made. `test/chat.test.ts` pins the line.
  */
 export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 	const { integrations } = await readIntegrations(paths);
@@ -65,6 +71,11 @@ export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 		connector: consoleGrant(),
 	});
 	return true;
+}
+
+/** The home a just-made console grant may have made unstartable, in the rule's one sentence; undefined says it is fine. */
+export async function secondUserGrantAdvice(paths: HousePaths): Promise<string | undefined> {
+	return secondUserGrantNote((await readIntegrations(paths)).integrations);
 }
 
 export interface ChatArgs {
@@ -212,8 +223,11 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 	let paths: HousePaths;
 	try {
 		paths = housePaths();
-		if (await ensureConsole(paths))
+		if (await ensureConsole(paths)) {
 			console.log(dim(`[chat] granted the built-in "${CONSOLE}" connector in ${paths.integrations}`));
+			const note = await secondUserGrantAdvice(paths);
+			if (note !== undefined) console.log(dim(`[chat] ${note}`));
+		}
 	} catch (error) {
 		console.error(`[chat] ${error instanceof Error ? error.message : String(error)}`);
 		return 1;

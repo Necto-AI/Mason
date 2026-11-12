@@ -44,13 +44,11 @@ export interface Logger {
 /** Discards everything. The default, because a library that logs to the console by default is a library that does. */
 export const silentLogger: Logger = { info() {}, warn() {}, error() {} };
 
-/** What mason sends a connector: one delivery, and the address it is for. */
+/** What mason sends a connector: one delivery, and the address the turn came from. */
 export interface Delivery {
 	readonly deliveryId: string;
 	readonly blocks: readonly ContentBlock[];
-	/** A target out of mason's grant, for a message the model addressed. */
-	readonly target?: string;
-	/** The opaque address this connector minted on the append the turn came from. */
+	/** The opaque address this connector minted on the append the turn came from. Absent means its own default. */
 	readonly ref?: string;
 }
 
@@ -288,8 +286,8 @@ export function createConnector(config: ConnectorConfig): Connector {
 	/**
 	 * Open one link, and wait for the handshake to be readable.
 	 *
-	 * Chord's `get` waits for the snapshot, so the session is the handshake: the connector learns its targets, its
-	 * control vocabulary and its budgets from the object's state, and there is no separate hello to answer.
+	 * Chord's `get` waits for the snapshot, so the session is the handshake: the connector learns its control vocabulary,
+	 * the kinds it may raise and its budgets from the object's state, and there is no separate hello to answer.
 	 */
 	async function connect(): Promise<Session> {
 		const link = config.link(config.url, { credential: config.credential });

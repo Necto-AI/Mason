@@ -75,15 +75,13 @@ export const TONE = `Write as a colleague would message them: plain sentences, y
  * model writes outside it is working notes nobody reads.
  *
  * The call is `send`, and it is the same call everywhere — the transcript, a chat, a schedule. Where it goes is the
- * turn's origin, read from the transcript, so the model does not choose that; what it may choose is a target, and only
- * when nothing wrote to the turn. This section names one operation and the rule that keeps it one: never another
- * medium's tool.
+ * turn's origin, read from the transcript, and nothing else: there is no address to name, so this section names one
+ * operation and the rule that keeps it one — never another medium's tool, never an address.
  */
 export const DELIVERY_INVARIANT = `Nothing you write in a turn reaches them: words reach them through \`send\`, and everything else is a
 working note. A send goes back wherever the turn came from — the connector that carried the words, or the transcript —
-so never reach for a chat by another tool's name. A turn nobody wrote to (a schedule, a retry) records the message and
-says nobody was reached: then name one with \`send\`'s \`to\`, as "<connector>/<target>" out of the addresses below.
-Answer every turn with a send, even one line.`;
+so never reach for a chat by another tool's name, and no address of your own goes with it: a turn nobody wrote to
+records the message and says nobody was reached. Answer every turn with a send, even one line.`;
 
 /** Roughly 1200 tokens of profile: enough for who he is and how he wants to be treated, and no more. */
 const PROFILE_MAX_CHARS = 4_800;
@@ -105,20 +103,16 @@ absorbed it, never silently. All of it lands inside \`agent/\`, and \`service/so
 was worth keeping, that is one line in the send.`;
 
 /**
- * What the model is told about the services it can reach: a name and one line for a tool server, an address for every
- * place a message may be sent to, and the event kinds a service raises.
- *
- * Every addressable thing is named here, because the operator's grant is the whole list and a model that has to guess a
- * chat id guesses wrong. `send`'s `to` is written exactly as it appears below, so a name that stops resolving fails at
- * delivery with a sentence naming the addresses that do exist rather than silently landing nowhere.
+ * What the model is told about the services it can reach: a name and one line for a tool server, and the event kinds a
+ * service raises.
  *
  * Health, tool counts and schemas are deliberately absent. Health changes between turns and a resident section that
  * changed with it would re-price the prefix on every reconnect; a schema belongs to the tool, and the tool is described
- * when a script asks for it.
+ * when a script asks for it. A send's destination is absent for a different reason: it is the turn's own origin, read
+ * from the transcript, so there is no list of places for the model to read or write.
  */
 export const INTEGRATIONS_POINTER = `Services you can reach. A service's own tools are not in your declared list: a script calls them, and
-\`searchTools("<what you want>")\` finds the name. A line that says "send to" is a place you may send to, named exactly
-that way in \`send\`'s \`to\`.`;
+\`searchTools("<what you want>")\` finds the name.`;
 
 /**
  * The lines, sorted, so two renders of one file are the same bytes and a file someone reordered renders equally.
@@ -130,9 +124,6 @@ function renderIntegrations(): string | undefined {
 		if (!integration.enabled) continue;
 		if (integration.mcp !== undefined && integration.description !== undefined) {
 			lines.push(`${name}: ${integration.description}`);
-		}
-		for (const target of integration.connector?.targets ?? []) {
-			lines.push(`send to ${name}/${target.id}: ${target.label}`);
 		}
 		const kinds = Object.keys(integration.connector?.events?.hooks ?? {}).sort();
 		if (kinds.length > 0) lines.push(`${name} raises events: ${kinds.join(", ")}`);

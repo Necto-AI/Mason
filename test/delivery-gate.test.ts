@@ -266,6 +266,29 @@ function keeper(kept: string[]): Extension {
 	return defineExtension({ name: "keeper", tools: [keep, check] });
 }
 
+/**
+ * A turn that writes one of mason's own working notes before it answers: a compaction's summary, or the prompt a turn
+ * was planned with. Both carry a `user`-role message, which is what made the newest-input read take one for the person's
+ * own words (#199). A tool writes it because a test cannot reach into a running turn any other way, and `EntryDraft`
+ * carries the messages, so the entry is the one a real compaction commits.
+ */
+function workingNote(kind: "pi.compaction" | "pi.system", text: string): Extension {
+	const tool = defineTool({
+		name: "writeWorkingNote",
+		description: "Write mason's own working note into the transcript, the way a compaction does.",
+		parameters: Type.Object({}),
+		execute: async (_arguments, api, context) => {
+			await api.commit(
+				(tx) =>
+					tx.appendEntry(api.conversationId, { kind, model: [{ role: "user", content: text, timestamp: 0 }] }),
+				context,
+			);
+			return { output: [{ type: "text", text: `${kind} written` }], details: {} };
+		},
+	});
+	return defineExtension({ name: "working-note", tools: [tool] });
+}
+
 /** One round of work that changes nothing: the count is the point, not the output. */
 function probed(id: string, what: string): FauxResponseStep {
 	return call("check", { what }, id);
@@ -434,7 +457,6 @@ test("a fire that named its address routes the reply back to it", async () => {
 		enabled: true,
 		connector: {
 			user: { owner: "8811" },
-			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -659,7 +681,6 @@ test("a fire that named its conversation keeps its origin through the reflection
 		enabled: true,
 		connector: {
 			user: { owner: "8811" },
-			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -689,6 +710,62 @@ test("a fire that named its conversation keeps its origin through the reflection
 		setIntegrations({});
 	}
 });
+
+/**
+ * #199's deterministic repro, in two halves of the same rule: a working note written after the person's words and before
+ * the answer.
+ *
+ * The newest input is what a turn's origin is read from, and both of these entries carry a `user`-role message, so a read
+ * that finds the newest input by its text takes the summary for the person and the send commits unaddressed — the answer
+ * is lost with nothing recording it as failed. The predicate refuses the kind instead, and the reply comes back
+ * addressed to the chat that wrote, with the submission it answers.
+ */
+for (const note of [
+	{ kind: "pi.compaction", text: "Summary so far: the person asked about the migration." },
+	{ kind: "pi.system", text: "The plan this turn was given: migrate the notes." },
+] as const) {
+	test(`a ${note.kind} entry written before the send keeps the turn's origin`, async () => {
+		const directory = await temporary();
+		const script = recorder([call("writeWorkingNote", {}, "note"), deliver("The migration is done."), said("Done.")]);
+		const telegram = { enabled: true, connector: { user: { owner: "8811" } } };
+		const { setIntegrations } = await import("../src/server/integrations.ts");
+		await seedRoutine(directory);
+		const { settled, entries } = await runTurn(
+			directory,
+			script,
+			[workingNote(note.kind, note.text)],
+			async (runtime) => {
+				setIntegrations({ telegram: telegram as never });
+				fires += 1;
+				return runtime.hooks.fire("team-chat", {
+					payload: "Migrate the notes.",
+					requestId: `delivery-gate:working-note:${fires}`,
+					origin: { connector: "telegram", ref: "team", messageId: "m7" },
+				});
+			},
+		);
+		try {
+			assert.equal(settled.status, "done");
+			assert.ok(
+				entries.some((entry) => entry.kind === note.kind),
+				"the working note is in the transcript the send reads",
+			);
+			const reply = entries.find((entry) => entry.kind === "app.reply");
+			assert.deepEqual(
+				(reply?.data as { target?: unknown }).target,
+				{ connector: "telegram", ref: "team" },
+				"the answer is addressed to the chat that carried the words",
+			);
+			assert.deepEqual(
+				(reply?.data as { origin?: unknown }).origin,
+				{ connector: "telegram", ref: "team", messageId: "m7" },
+				"and the reply records whose submission it answers",
+			);
+		} finally {
+			setIntegrations({});
+		}
+	});
+}
 
 test("nine tool rounds is under the ask, in the same turn shape that asks at ten", async () => {
 	const directory = await temporary();

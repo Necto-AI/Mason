@@ -4,12 +4,9 @@ The Telegram connector this home is granted: it carries a person's messages in, 
 
 ## Addressing
 
-Your grant lists the places you may be sent to, each with an id and a label. They are in your prompt's integrations
-section as `<connector>/<target>`, which is exactly what `send`'s `to` accepts. A place that is not in the list is
-refused, and the refusal names the ones that are.
-
-A message that arrives carries an origin, so `send` with no `to` goes back to the chat it came from — a group answers in
-the group, a direct message answers in the direct message.
+A message that arrives carries an origin, and `send` goes back there — a group answers in the group, a direct message
+answers in the direct message. There is no list of places to be sent to and no `to` argument: the chat that wrote is the
+one that hears back.
 
 ## What it carries
 

@@ -28,7 +28,6 @@ async function withFixture(
 		connector: chat.name,
 		granted: {
 			owner: "owner-1",
-			targets: chat.faces.targets ?? [],
 			kinds: chat.faces.kinds ?? [],
 			commands: chat.faces.commands ?? [],
 		},
@@ -97,7 +96,7 @@ test("a delivery settled before a restart is a duplicate after it, and nobody is
 		const first = await open();
 		const ack = await mason.deliver({
 			deliveryId: "restart-delivery",
-			target: "dm",
+			ref: "chat-1",
 			blocks: [{ type: "text", text: "hello" }],
 		});
 		assert.equal(ack?.status, "delivered");
@@ -108,7 +107,7 @@ test("a delivery settled before a restart is a duplicate after it, and nobody is
 		try {
 			const again = await mason.deliver({
 				deliveryId: "restart-delivery",
-				target: "dm",
+				ref: "chat-1",
 				blocks: [{ type: "text", text: "hello" }],
 			});
 			assert.equal(again?.status, "duplicate");

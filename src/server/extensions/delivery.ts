@@ -10,8 +10,8 @@
  * - **delivered** — the transcript is the reader; the entry the call commits *is* the delivery.
  * - **queued** — a connector is the reader; the entry is the durable outbox, and the link delivers it, resends it after a
  *   reconnect, and records the acknowledgement. Saying "delivered" here would be a promise this process cannot keep.
- * - **nobody reached** — an event with no origin that named no address. The work is recorded and the model is told that
- *   no person has it, which is the truth; a message nobody received is the worst outcome the arrangement exists to avoid.
+ * - **nobody reached** — an event with no origin. The work is recorded and the model is told that no person has it, which
+ *   is the truth; a message nobody received is the worst outcome the arrangement exists to avoid.
  *
  * `replay` is explicit, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would commit
  * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
@@ -27,7 +27,6 @@
  */
 import type { Message } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
-import { parseSendAddress, sendAddress } from "mason-protocol";
 import { Type } from "typebox";
 import {
 	DELIVERY_REMINDER,
@@ -48,18 +47,20 @@ import {
 } from "../replies.ts";
 import { nestedRefusal } from "./nested.ts";
 
-const SendParams = Type.Object({
-	text: Type.String({
-		minLength: 1,
-		description: "What the reader sees, written in full — this text is the message, not a note about it",
-	}),
-	to: Type.Optional(
-		Type.String({
-			description:
-				'Where to send when this turn has no origin, as "<connector>/<target>" out of the addresses you were told about — a scheduled routine naming the chat it reports to. Omit it to answer whoever started the turn.',
+/**
+ * What `send` takes. Closed on purpose: a prompt before #200 taught the model a `to` argument, and a model replaying one
+ * must be told the argument does not exist — the framework's argument check refuses it as `invalid_arguments` — rather
+ * than have the field quietly dropped. `test/delivery.test.ts` pins the schema beside the case that names an address.
+ */
+const SendParams = Type.Object(
+	{
+		text: Type.String({
+			minLength: 1,
+			description: "What the reader sees, written in full — this text is the message, not a note about it",
 		}),
-	),
-});
+	},
+	{ additionalProperties: false },
+);
 
 /**
  * What a script is told instead of a delivery nobody would see: what happened, and what to do about it. Code mode turns
@@ -69,9 +70,9 @@ const SendParams = Type.Object({
 const SEND_NESTED_REFUSAL =
 	"send cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call send from the turn.";
 
-/** What the model is told when nothing that carries words started this turn and it named no address. */
+/** What the model is told when nothing that carries words started this turn. */
 const NOBODY_REACHED =
-	'recorded, but nobody was reached: this turn came from an event with no address behind it and no target was named, so the message is in the transcript and no person was sent it. To reach someone, call send again with {to:"<connector>/<target>"} naming one of the addresses you were told about.';
+	"recorded, but nobody was reached: this turn came from an event that named no conversation, so the message is in the transcript and no person was sent it. There is nowhere else to send it: no address exists to name, so do not call send again for it.";
 
 /** Where a send goes, and whether the recording of it is also a delivery. */
 interface ChosenAddress {
@@ -95,14 +96,14 @@ function textOf(message: Message): string {
 
 export const sendTool = defineTool({
 	name: SEND_TOOL,
-	description: `Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A send goes back where the turn came from — the connector that carried the words, or the transcript itself — so never try to reach a chat by another tool's name. When the turn came from an event with no address behind it, name one with to: "<connector>/<target>", out of the addresses the prompt lists, or the message is recorded and nobody is reached. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.`,
+	description: `Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A send goes back where the turn came from — the connector that carried the words, or the transcript itself — and there is no other address to name, so never try to reach a chat by another tool's name. When the turn came from an event that named no conversation, the message is recorded and nobody is reached: that is the truth, and nowhere else can be reached from this turn. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.`,
 	parameters: SendParams,
 	replay: "unsafe",
-	execute: async ({ text, to }, api, context) => {
+	execute: async ({ text }, api, context) => {
 		const nested = nestedRefusal(api, SEND_NESTED_REFUSAL);
 		if (nested !== undefined) return nested;
 		const origin = await readTurnOrigin(api, context);
-		const chosen = chooseAddress(origin, to);
+		const chosen = chooseAddress(origin);
 		if ("reason" in chosen) return { output: [{ type: "text", text: chosen.reason }] };
 		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text }];
 		const record: ReplyRecord = {
@@ -124,9 +125,10 @@ export const sendTool = defineTool({
 						...(record.address === undefined
 							? {}
 							: {
+									// The entry's key keeps the name `target` for replies already committed: renaming a durable key is
+									// a data migration, and this is not the wire field #200 retired. ADR 0015 says so.
 									target: {
 										connector: record.address.connector,
-										...(record.address.target === undefined ? {} : { target: record.address.target }),
 										...(record.address.ref === undefined ? {} : { ref: record.address.ref }),
 									},
 								}),
@@ -151,48 +153,24 @@ export const sendTool = defineTool({
 
 /** What the model is told the call did, in one sentence it can act on. */
 function outcomeText(record: ReplyRecord): string {
-	if (record.address === undefined) {
-		return record.origin === undefined
-			? "delivered to the transcript"
-			: "delivered to the transcript: this turn's origin is a connector, but the send was addressed here";
-	}
-	// A target the model named reads back as the address it wrote, so a mistake is visible in the same words it used. An
-	// address that came from the turn's origin is the connector alone: the `ref` is opaque, and printing it as if it were
-	// a target would teach a name nothing accepts.
-	const where =
-		record.address.target === undefined
-			? record.address.connector
-			: sendAddress(record.address.connector, record.address.target);
-	return `queued for delivery to ${where}`;
+	// The connector alone: it is where the words arrived, and the `ref` is the address it minted, opaque to the model.
+	return record.address === undefined
+		? "delivered to the transcript"
+		: `queued for delivery to ${record.address.connector}`;
 }
 
 /**
  * Where the send goes, or why it cannot go anywhere.
  *
- * The origin decides unless the model named an address: a routine has no origin, and an address the operator did not
- * grant is refused rather than silently redirected to a target the connector may not be sent to.
+ * The origin decides, and it is the only address a send has: a turn a connector carried goes back to that connector, and
+ * a turn nothing carried is recorded in the transcript. A connector the operator switched off mid-turn is refused rather
+ * than silently landing somewhere nobody reads.
  */
-function chooseAddress(origin: TurnOrigin, to: string | undefined): ChosenAddress | { readonly reason: string } {
-	if (to !== undefined && to.trim() !== "") {
-		const parsed = parseSendAddress(to.trim());
-		if (parsed === undefined) {
-			return {
-				reason: `cannot deliver: "${to}" is not an address. Write it as "<connector>/<target>", out of the list above.`,
-			};
-		}
-		const address: SendAddress = { connector: parsed.connector, target: parsed.target };
-		const reachable = reachableAddress(currentIntegrations(), address);
-		if (!reachable.ok) return { reason: `cannot deliver: ${reachable.reason}` };
-		return { address };
-	}
-	// A person's words through a connector and an event that named its address are the same destination: both carry an
-	// origin, and the send goes back to it.
+function chooseAddress(origin: TurnOrigin): ChosenAddress | { readonly reason: string } {
 	const carried = origin.kind === "local" ? undefined : origin.origin;
 	if (carried !== undefined) {
 		const address = addressOfOrigin(carried);
 		const reachable = reachableAddress(currentIntegrations(), address);
-		// A connector that was switched off mid-turn is not a destination; the send is still the turn's answer, so the call
-		// fails with a sentence the model can act on rather than silently landing somewhere nobody reads.
 		return reachable.ok ? { address } : { reason: `cannot deliver: ${reachable.reason}` };
 	}
 	if (origin.kind === "local") return {};

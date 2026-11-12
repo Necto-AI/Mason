@@ -30,10 +30,7 @@ const chat = {
 	name: "external-chat",
 	version: "0.1.0",
 	faces: {
-		targets: [
-			{ id: "dm", label: "the direct conversation", capabilities: ["text", "markdown", "files"] },
-			{ id: "alerts", label: "the alerts channel", capabilities: ["text"] },
-		],
+		owner: "8811",
 		kinds: ["chat.message"],
 		commands: ["stop", "compact", "clear", "status"],
 	},

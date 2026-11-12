@@ -370,8 +370,8 @@ export type { ConversationId };
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
 	// A refused boot is one sentence, not a stack trace: `mason up` is the repair `doctor` names, and the reasons it can
-	// refuse — several bots and no target, a hook a connector fires that no build defines, no model configured — are all
-	// things the operator fixes by reading the sentence.
+	// refuse — several bots and no target, two connectors that each hold a person's words, a hook a connector fires that
+	// no build defines, no model configured — are all things the operator fixes by reading the sentence.
 	let server: RunningServer;
 	try {
 		server = await startServer();

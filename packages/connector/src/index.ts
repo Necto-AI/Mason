@@ -16,7 +16,6 @@ export type {
 	ErrorCode,
 	Origin,
 	Session,
-	Target,
 } from "mason-protocol";
 export {
 	APPROVAL,
@@ -33,9 +32,7 @@ export {
 	MasonPeer,
 	masonError,
 	PROTOCOL_MAJOR,
-	parseSendAddress,
 	SUBMISSION_MODES,
-	sendAddress,
 } from "mason-protocol";
 export {
 	type AttachmentClient,

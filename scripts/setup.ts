@@ -27,7 +27,6 @@ import { podmanRunner } from "../src/setup/runner.ts";
 import { CONSOLE, CONSOLE_DESCRIPTION, consoleGrant, runChat } from "./chat.ts";
 import {
 	CONNECTOR_QUESTION,
-	CONVERSATIONS_QUESTION,
 	choosePrompter,
 	EVENTS_QUESTION,
 	MissingAnswer,
@@ -38,8 +37,8 @@ import {
 /**
  * One connector's answers on the command line: the flags from its `--connector` up to the next one.
  *
- * A repeated `--connector` is a second connector, and `--url`/`--env`/`--owner`/`--targets`/`--events`/`--no-start` belong to
- * the connector they follow — which is what `mason onboard --connector telegram --owner @me --connector console` promises.
+ * A repeated `--connector` is a second connector, and `--url`/`--env`/`--owner`/`--events`/`--no-start` belong to the
+ * connector they follow — which is what `mason onboard --connector telegram --owner @me --connector console` promises.
  * The same fields sit on `SetupArgs` for the last of them, so everything that reads one connector reads as it did.
  */
 export interface SetupConnector {
@@ -47,8 +46,6 @@ export interface SetupConnector {
 	readonly url?: string;
 	readonly env: ReadonlyMap<string, string>;
 	readonly owner?: string;
-	/** A `url:` connector's targets, comma separated as `id` or `id=label`. Absent means ask. */
-	readonly targets?: string;
 	/** A `url:` connector's event kinds, `kind=hook` pairs comma separated. Absent means ask. */
 	readonly events?: string;
 	readonly start: boolean;
@@ -73,7 +70,6 @@ export function usage(): string {
   --url <ws-url>       a connector already running somewhere else; implies --connector custom
   --env NAME=value     one answer a connector needs; repeatable, and it answers a question so nothing is asked
   --owner <id>         who owns this chat: the id the connector will send for the person mason works for
-  --targets <id,id=label>  a url: connector's send targets (default: one per chat the connector asks for)
   --events <kind=hook>   a url: connector's event kinds, comma separated (default: none)
   --no-start           write everything and leave the container down
   --yes                take every flag it has and ask nothing; what CI and a script use
@@ -90,7 +86,6 @@ interface Segment {
 	url?: string;
 	env: Map<string, string>;
 	owner?: string;
-	targets?: string;
 	events?: string;
 	start: boolean;
 }
@@ -133,8 +128,11 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 				break;
 			case "--targets":
 			case "--conversations":
-				current().targets = value();
-				break;
+				// A retired spelling, refused with the rule rather than as unknown: a script that used it yesterday
+				// reads why it is gone. `test/setup.test.ts` pins the sentence.
+				throw new Error(
+					`${flag} named a place to be sent to; a send goes back to the connector that carried the words, so a grant names faces and event kinds only`,
+				);
 			case "--events":
 				current().events = value();
 				break;
@@ -272,20 +270,8 @@ async function ask(one: SetupConnector, prompter: Prompter): Promise<ConnectorAn
 		// connector that can never open a socket — and asked about before the owner, so a bad address costs one answer.
 		requireInstallable(parseSource(`url:${url}`));
 		const owner = one.owner ?? (await prompter.text(OWNER_QUESTION, OWNER));
-		// The grant a connector mason does not run is still written here, not by hand (#147): its owner, the targets
-		// it will send, and the kinds it may fire. The wizard asks each one, and each has a flag, so a script answers the
-		// same questions a person does.
-		const targets =
-			one.targets !== undefined
-				? splitIds(one.targets)
-				: splitIds(
-						await prompter.text(CONVERSATIONS_QUESTION, {
-							hint: "the ids it will send for its rooms and people, as it sends them; empty means the owner's",
-							flag: "--targets <id,id=label>",
-							fallback: "",
-							required: false,
-						}),
-					);
+		// The grant a connector mason does not run is still written here, not by hand (#147): its owner and the kinds it
+		// may fire. The wizard asks each one, and each has a flag, so a script answers the same questions a person does.
 		const events =
 			one.events !== undefined
 				? parseEvents(one.events, "--events")
@@ -298,7 +284,7 @@ async function ask(one: SetupConnector, prompter: Prompter): Promise<ConnectorAn
 						}),
 						EVENTS_QUESTION,
 					);
-		return { kind: "url", name, url, owner, targets, events };
+		return { kind: "url", name, url, owner, events };
 	}
 	const entry = await catalogEntry(name);
 	const env: Record<string, string> = {};
@@ -380,10 +366,8 @@ export async function runSetup(
 			else
 				console.log(
 					`[setup] next: give the credential above to the connector at ${one.url ?? "its url"}. Its grant names ` +
-						`${plan.grant.targets?.length ?? 0} target(s) and ` +
-						`${Object.keys(plan.grant.events?.hooks ?? {}).length} event kind(s): change either with ` +
-						`\`mason setup --connector ${plan.name} --url ${one.url ?? "<url>"} --targets <ids> ` +
-						"--events <kind=hook>`",
+						`${Object.keys(plan.grant.events?.hooks ?? {}).length} event kind(s): change them with ` +
+						`\`mason setup --connector ${plan.name} --url ${one.url ?? "<url>"} --events <kind=hook>\``,
 				);
 			if (applied.credential === "minted")
 				console.log("[setup] the credential was printed once, above: mason keeps only its hash.");

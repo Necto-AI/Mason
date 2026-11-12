@@ -5,8 +5,8 @@ command is the connector, and it opens the same socket every other connector ope
 
 ## Addressing
 
-One place, `console/terminal`, and it is also where a message typed at the prompt comes back: the console acts as the
-owner, so your sends reach the person at the keyboard without a `to`.
+A message typed at the prompt comes back to that prompt: the console acts as the owner and mints the address, so
+`send` reaches the person at the keyboard without naming anything.
 
 ## What it carries
 

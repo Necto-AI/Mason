@@ -46,7 +46,7 @@ import type { Glyphs, Paint } from "../src/tui/style.ts";
 import { CONSOLE } from "./chat.ts";
 import { parseArgs as parseInitArgs, runInit } from "./init.ts";
 import { runNew } from "./new.ts";
-import { parseEvents as parseGrantEvents, parseArgs as parseSetupArgs, runSetup, splitIds } from "./setup.ts";
+import { parseEvents as parseGrantEvents, parseArgs as parseSetupArgs, runSetup } from "./setup.ts";
 import { MissingAnswer, type Prompter } from "./wizard.ts";
 
 /** `kind=hook` pairs, as the grant carries them. */
@@ -59,8 +59,6 @@ export interface ConnectorDraft {
 	readonly url?: string;
 	readonly env: Readonly<Record<string, string>>;
 	readonly owner?: string;
-	/** The places the connector may be sent to, as `id` or `id=label`. */
-	readonly targets: readonly string[];
 	readonly events: Events;
 	/** Whether setup runs a container for it: the console and a `custom` connector run somewhere else. */
 	readonly container: boolean;
@@ -130,9 +128,9 @@ export interface OnboardingOptions {
 /**
  * The prompter the operations get: the plan answered everything before the first write, so a question now is a bug.
  *
- * The one exception is an *optional* question, which the plan answered by not answering it — an empty `HTTPS_PROXY`, no
- * targets of its own. That is the same answer `scriptedPrompter` gives a `--yes` run, so the two paths agree; a
- * required question, or a pick, is a question the plan should have collected, and it fails as a bug in this file.
+ * The one exception is an *optional* question, which the plan answered by not answering it — an empty `HTTPS_PROXY`.
+ * That is the same answer `scriptedPrompter` gives a `--yes` run, so the two paths agree; a required question, or a
+ * pick, is a question the plan should have collected, and it fails as a bug in this file.
  */
 export function answeredPrompter(): Prompter {
 	const refuse = (): never => {
@@ -237,7 +235,6 @@ function setupArgs(connector: ConnectorDraft): string[] {
 	if (connector.url !== undefined) args.push("--url", connector.url);
 	for (const [name, value] of Object.entries(connector.env)) args.push("--env", `${name}=${value}`);
 	if (connector.owner !== undefined && connector.owner !== "") args.push("--owner", connector.owner);
-	if (connector.targets.length > 0) args.push("--targets", connector.targets.join(","));
 	const events = Object.entries(connector.events).map(([kind, hook]) => `${kind}=${hook}`);
 	if (events.length > 0) args.push("--events", events.join(","));
 	if (connector.container && !connector.start) args.push("--no-start");
@@ -594,7 +591,7 @@ async function permissionLines(kind: string): Promise<string[]> {
 
 /**
  * One connector's questions, in the order its answers need them: the kind, then its own variables, who owns it, and — on
- * an advanced run — where it may be sent, what it may fire, and whether it starts.
+ * an advanced run — what it may fire, and whether it starts.
  *
  * `base` is what a flag or an earlier pass already answered. What it holds is not asked again, which is how
  * `--connector telegram --owner @denis` reaches the page with only the token outstanding, and how a step re-entered from
@@ -629,7 +626,6 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 			kind,
 			description: "The terminal, built in: talk to the bot with no Telegram at all",
 			env: {},
-			targets: [],
 			events: {},
 			container: false,
 			start: false,
@@ -650,16 +646,6 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 			...(previous?.owner === undefined ? {} : { value: previous.owner }),
 			flag: "--owner <id>",
 		});
-		const targets = advanced
-			? splitIds(
-					await screen.text("connector.targets", "Which places may it be sent to?", {
-						hint: "one per place it can reach, comma separated as id or id=label; empty means nowhere",
-						...(previous === undefined ? {} : { value: previous.targets.join(", ") }),
-						required: false,
-						flag: "--targets <id,id=label>",
-					}),
-				)
-			: [];
 		const raw = advanced
 			? await screen.text("connector.events", "Which event kinds may it fire?", {
 					hint: "kind=hook pairs, comma separated; empty means none",
@@ -688,7 +674,6 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 			url,
 			env: {},
 			owner,
-			targets,
 			events,
 			container: false,
 			start: false,
@@ -718,11 +703,8 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 			continue;
 		}
 		const optional = variable.optional === true;
-		const chats = variable.name.endsWith("_CHATS");
-		const question = chats
-			? "Which places may it be sent to, and how does it answer for them?"
-			: variable.prompt.charAt(0).toUpperCase() + variable.prompt.slice(1);
-		const hint = chats ? "chat ids or @usernames, comma separated: the places it may be sent to" : variable.prompt;
+		const question = variable.prompt.charAt(0).toUpperCase() + variable.prompt.slice(1);
+		const hint = variable.prompt;
 		// The page that issues a secret is named on the question, and only when this build has been there: a guessed
 		// address is worse than none, and it is the table in `src/tui/journeys.ts` that decides.
 		const journey = variable.secret === true ? variableJourney(variable.name) : undefined;
@@ -746,9 +728,6 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 			hint: `on ${entry.name} that is the id it sends for the person mason works for, such as your user id or @username`,
 			flag: "--owner <id>",
 		}));
-	const chats = Object.entries(answers)
-		.filter(([name]) => name.endsWith("_CHATS"))
-		.flatMap(([, value]) => splitIds(value));
 	// `--no-start` is a flag like any other: it says no to this question wherever the question is asked, and a run that
 	// asked for the token on screen still must not start a container the command line said not to start.
 	const start =
@@ -765,7 +744,6 @@ async function askConnector(ctx: Context, base?: ConnectorDraft): Promise<Connec
 		description: entry.description,
 		env: answers,
 		owner,
-		targets: chats,
 		events: {},
 		container: true,
 		start,
@@ -993,7 +971,6 @@ async function review(ctx: Context): Promise<Direction> {
 		const connectorPairs: Array<readonly [string, string]> = [["type", plan.kind]];
 		if (plan.url !== undefined) connectorPairs.push(["url", plan.url]);
 		if (plan.owner !== undefined) connectorPairs.push(["owner", plan.owner]);
-		if (plan.targets.length > 0) connectorPairs.push(["send to", plan.targets.join(", ")]);
 		const events = Object.entries(plan.events);
 		if (events.length > 0)
 			connectorPairs.push(["events", events.map(([event, hook]) => `${event} → ${hook}`).join(", ")]);
@@ -1372,7 +1349,6 @@ export function preseed(flags: { readonly init: readonly string[]; readonly setu
 				...(one.url === undefined ? {} : { url: one.url }),
 				env: Object.fromEntries(one.env),
 				...(one.owner === undefined ? {} : { owner: one.owner }),
-				targets: one.targets === undefined ? [] : splitIds(one.targets),
 				events: events === undefined || typeof events === "string" ? {} : events,
 				container: one.connector !== undefined && one.connector !== CONSOLE && one.connector !== "custom",
 				start: one.start,

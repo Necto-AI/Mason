@@ -38,7 +38,6 @@ export function usage(): string {
   --url <ws-url>         a connector already running somewhere else; implies --connector custom
   --env NAME=value       one answer a connector needs; repeatable
   --owner <id>           who owns this chat
-  --conversations <ids>  a url: connector's conversations
   --events <kind=hook>   a url: connector's event kinds
   --no-start             write the connector's files and leave its container down
   --yes                  take the flags it has and ask nothing

@@ -301,17 +301,13 @@ describe("a notice", () => {
 });
 
 describe("the session", () => {
-	it("is state a connector reads once, and it names the targets, the vocabulary and the budgets", async () => {
+	it("is state a connector reads once, and it names the vocabulary and the budgets", async () => {
 		const served = await serveConnector();
 		try {
 			const connected = await connectConnector(served);
 			try {
 				const session = connected.connector.status().session;
 				assert.ok(session !== undefined, "the session is there after start");
-				assert.deepEqual(
-					session.targets.map((target) => target.id),
-					["team", "dm"],
-				);
 				assert.deepEqual(session.commands, ["stop", "compact", "clear", "status"]);
 				assert.deepEqual(session.kinds, ["chat.message"]);
 				assert.equal(session.limits.submissionsPerMinute > 0, true);

@@ -20,6 +20,7 @@ import { promisify } from "node:util";
 import { RETIRED_GRANT_KEYS } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
+	assertOneUserGrant,
 	type Integration,
 	readIntegrations,
 	removeIntegration,
@@ -264,7 +265,7 @@ describe("the integration list on disk", () => {
 		assert.match(message, /is not one of them/);
 	});
 
-	it("reads a user face that names one owner and the places it may be sent to, and refuses the keys a room needed", async () => {
+	it("reads a user face that names one owner, and refuses the keys a room needed", async () => {
 		const paths = await temporaryHome();
 		await writeRaw(
 			paths,
@@ -272,17 +273,13 @@ describe("the integration list on disk", () => {
 				integrations: {
 					telegram: {
 						enabled: true,
-						connector: { user: { owner: "8811" }, targets: [{ id: "team", label: "the team chat" }] },
+						connector: { user: { owner: "8811" } },
 					},
 				},
 			}),
 		);
 		const booted = (await readIntegrations(paths)).integrations.telegram?.connector;
 		assert.equal(booted?.user?.owner, "8811");
-		assert.deepEqual(
-			booted?.targets?.map((target) => [target.id, target.label]),
-			[["team", "the team chat"]],
-		);
 
 		// Each retired key is a file whose reader believes it still decides who may speak (#126). The refusal names the key
 		// rather than reading past a setting that no longer exists.
@@ -308,17 +305,23 @@ describe("the integration list on disk", () => {
 			assert.match(refused, /by hand/, key);
 		}
 
-		// The room list was carried in two spellings. The one outside the face is the same removal and its own refusal: it
-		// names `targets`, because a place this connector may be sent to is an entry in the grant now, not a room.
+		// The room list and the places a message may be sent to were carried in three spellings. Every one is the same
+		// removal, and every refusal names the rule that replaced them: a send goes back where the words came from.
 		for (const [connector, retiredPath] of [
 			[{ user: { owner: "8811" }, conversations: [] }, "connector.conversations"],
 			[{ user: { owner: "8811", conversations: [] } }, "connector.user.conversations"],
+			[{ user: { owner: "8811" }, targets: [] }, "connector.targets"],
 		] as const) {
 			await writeRaw(paths, JSON.stringify({ integrations: { telegram: { enabled: true, connector } } }));
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(retiredPath.replaceAll(".", "\\.")), retiredPath);
-			assert.match(refused, /targets/, retiredPath);
+			assert.match(refused, /a send goes back to the connector that carried the words/, retiredPath);
 			assert.match(refused, /by hand/, retiredPath);
+			// The user face's own list is refused by the face's reader; the block's list is refused here. A `connector.targets`
+			// that was a grant's only face would otherwise take two boots to repair — this key gone, then "grants nothing" —
+			// so that refusal names the face to write instead, and one edit is enough.
+			if (retiredPath === "connector.targets")
+				assert.match(refused, /a grant that grants nothing is refused too/, retiredPath);
 		}
 
 		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries
@@ -445,7 +448,6 @@ describe("the integration command", () => {
 						connector: {
 							commands: ["stop"],
 							user: { owner: "8811" },
-							targets: [{ id: "8811", label: "the DM with Denis" }],
 						},
 					},
 				},
@@ -481,7 +483,7 @@ describe("the integration command", () => {
 				integrations: {
 					github: {
 						...github,
-						connector: { user: { owner: "8811" }, targets: [{ id: "dm", label: "a DM" }] },
+						connector: { user: { owner: "8811" } },
 					},
 				},
 			}),
@@ -489,6 +491,36 @@ describe("the integration command", () => {
 		const listed = await integration(paths.home, "list");
 		assert.match(listed.stdout, /connector \(user\)/);
 		assert.doesNotMatch(listed.stdout, /secret|credential/i);
+	});
+
+	it("names the home an enable makes the boot refuse", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					console: { enabled: true, connector: { user: { owner: "local" } } },
+					telegram: { enabled: false, connector: { user: { owner: "8811" } } },
+				},
+			}),
+		);
+
+		const enabled = await integration(paths.home, "enable", "telegram");
+		assert.match(enabled.stdout, /enabled telegram/);
+		// The write lands — the enforcement is the boot's — and the command says what its own write made, as `mason setup`
+		// and `mason chat` do, with the same sentence.
+		assert.match(
+			enabled.stdout,
+			/this home grants a person's words to "console" and "telegram": one bot works for one person, so mason refuses this home at boot until one of them is switched off, by hand/,
+		);
+		const refused = (await readIntegrations(paths)).integrations;
+		assert.throws(() => assertOneUserGrant(paths.integrations, refused), /at most one enabled connector may carry a/);
+
+		// Switching one off is the repair, it says nothing about the rule, and the boot takes the home again.
+		const disabled = await integration(paths.home, "disable", "telegram");
+		assert.doesNotMatch(disabled.stdout, /person's words/);
+		const repaired = (await readIntegrations(paths)).integrations;
+		assert.doesNotThrow(() => assertOneUserGrant(paths.integrations, repaired));
 	});
 
 	it("prints the home and the file it edits when it is asked how to be used", async () => {

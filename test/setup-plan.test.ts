@@ -72,10 +72,7 @@ describe("a catalog connector", () => {
 		assert.equal(plan.source, `catalog:telegram@${entry.version}`);
 		assert.equal(plan.image, `${entry.image}:${entry.version}`);
 		assert.equal(plan.version, entry.version);
-		// The chats the entry's answers named become the grant's targets, with the chat id as the label.
-		assert.deepEqual(plan.grant.targets, [
-			{ id: "8811", label: "8811", capabilities: [...entry.connector.capabilities] },
-		]);
+		// The answer setup asks for is the grant's one actor; where a message goes is the connector that carried it.
 		assert.deepEqual(plan.grant.user, { owner: "8811", capabilities: [...entry.connector.capabilities] });
 		assert.deepEqual(plan.grant.commands, [...entry.connector.commands]);
 		// The entry is the one the boot will read: enabled, described, and granted.
@@ -178,22 +175,25 @@ describe("a catalog connector", () => {
 describe("a connector already running somewhere else", () => {
 	const url = "ws://127.0.0.1:9999/api/connector";
 
-	test("plans a grant with the owner as its one target when none was named", async () => {
+	test("plans a grant that names the owner and nothing else it was not given", async () => {
 		const home = await emptyHome();
 		const plan = await planConnector(
-			{ kind: "url", name: "custom", url, owner: "denis", targets: [], events: {} },
+			{ kind: "url", name: "custom", url, owner: "denis", events: {} },
 			housePaths(home),
 			{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 		);
 		assert.equal(plan.source, `url:${url}`);
 		assert.equal(plan.image, undefined, "nothing is pulled for a connector mason does not run");
-		assert.deepEqual(plan.grant.targets, [{ id: "denis", label: "denis", capabilities: ["text", "markdown"] }]);
+		assert.deepEqual(plan.grant, {
+			user: { owner: "denis" },
+			commands: ["stop", "compact", "clear", "status"],
+		});
 		assert.equal(plan.grant.events, undefined);
 		assert.deepEqual(plan.writes, [], "no container, no project, no file");
 		assert.equal(plan.project, undefined);
 	});
 
-	test("plans the targets and the event hooks it was given", async () => {
+	test("plans the event hooks it was given", async () => {
 		const home = await emptyHome();
 		await mkdir(join(home, "agent"), { recursive: true });
 		await writeFile(
@@ -206,18 +206,10 @@ describe("a connector already running somewhere else", () => {
 				name: "custom",
 				url,
 				owner: "denis",
-				targets: ["denis", "-100200"],
 				events: { mail: "check-mail" },
 			},
 			housePaths(home),
 			{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
-		);
-		assert.deepEqual(
-			plan.grant.targets?.map((target) => [target.id, target.label]),
-			[
-				["denis", "denis"],
-				["100200", "-100200"],
-			],
 		);
 		assert.deepEqual(plan.grant.events, { hooks: { mail: "check-mail" } });
 	});
@@ -251,7 +243,7 @@ describe("a plan refuses what it can see is wrong, before anything is written", 
 		const home = await emptyHome();
 		await assert.rejects(
 			planConnector(
-				{ kind: "url", name: "custom", url: "http://127.0.0.1:9999", owner: "denis", targets: [], events: {} },
+				{ kind: "url", name: "custom", url: "http://127.0.0.1:9999", owner: "denis", events: {} },
 				housePaths(home),
 				{ catalog: TELEGRAM_CATALOG, mint: fixedMint() },
 			),
@@ -269,7 +261,6 @@ describe("a plan refuses what it can see is wrong, before anything is written", 
 					name: "custom",
 					url: "ws://127.0.0.1:9999/api/connector",
 					owner: "denis",
-					targets: [],
 					events: { mail: "check-mail" },
 				},
 				housePaths(home),
