@@ -128,7 +128,10 @@ test("the conversation member carries the read model and nothing else", () => {
 		readonly const?: unknown;
 		readonly enum?: readonly unknown[];
 	};
-	const member = MasonPeer.description.variants.default?.conversation as unknown as { kind: string; schema: JsonSchema };
+	const member = MasonPeer.description.variants.default?.conversation as unknown as {
+		kind: string;
+		schema: JsonSchema;
+	};
 	assert.equal(member.kind, "state");
 	assert.deepEqual(Object.keys(member.schema.properties ?? {}).sort(), [
 		"activeRunTaskId",
@@ -139,7 +142,7 @@ test("the conversation member carries the read model and nothing else", () => {
 		"transcript",
 		"transitions",
 	]);
-	const rows = member.schema.properties?.transcript.items?.anyOf ?? [];
+	const rows: readonly JsonSchema[] = member.schema.properties?.transcript.items?.anyOf ?? [];
 	assert.deepEqual(
 		rows.map((row) => row.properties?.kind.const),
 		["user", "delivered", "event", "notice"],
