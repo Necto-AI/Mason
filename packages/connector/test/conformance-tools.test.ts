@@ -11,8 +11,8 @@ test("a tools-only connector passes the published conformance suite", async () =
 	);
 	assert.ok(result.passed.length > 0, "the suite ran something");
 	assert.ok(
-		result.skipped.some((name) => name.startsWith("delivery/")),
-		"a tool server has nowhere to be sent to",
+		result.passed.some((name) => name.startsWith("delivery/")),
+		"the delivery cases ran: being handed a message back needs no face of its own",
 	);
 	assert.ok(
 		result.skipped.some((name) => name.startsWith("event/")),

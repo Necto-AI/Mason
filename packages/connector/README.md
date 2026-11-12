@@ -25,8 +25,8 @@ const connector = createConnector({
 			return { status: "delivered", detail: "sent" };
 		},
 		async onSession(session) {
-			// The handshake: the targets mason may send to, the controls this socket may spend, the granted kinds.
-			console.log(session.targets, session.commands, session.kinds);
+			// The handshake: the controls this socket may spend, the kinds it may raise, and its budgets.
+			console.log(session.commands, session.kinds, session.limits);
 		},
 	},
 });
@@ -89,7 +89,7 @@ import { runConformance } from "mason-connector/testkit";
 const result = await runConformance({
 	name: "telegram",
 	faces: {
-		targets: [{ id: "home", label: "the direct conversation", capabilities: ["text", "files"] }],
+		owner: "8811",
 		kinds: ["chat.message"],
 		commands: ["stop", "compact", "clear", "status"],
 	},
@@ -101,7 +101,7 @@ if (result.failed.length > 0) throw new Error(`${result.failed[0].name}: ${resul
 
 `runConformance` builds the connector itself, against a fake mason that serves `mason.peer` over a real Chord link, and
 drives every case the protocol defines: the session as state, submissions and their duplicate ids, events and an
-ungranted kind, a notice that starts nothing, delivery to a target and to the default, the duplicate answer, a lost
+ungranted kind, a notice that starts nothing, a delivery carrying the address it came from, the duplicate answer, a lost
 acknowledgement collapsing after a reconnect, an uncertain send that is never retried, the control vocabulary, a spent
 budget, the journal replaying a call made while the link was down, and attachments with a cap. A case for a face the
 fixture does not implement is skipped, and the report says which.

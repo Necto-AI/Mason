@@ -10,7 +10,7 @@
  * wraps every handler so it can see what the connector was actually asked to do. A fixture that built its own connector
  * would be the thing certifying itself.
  */
-import type { ControlOp, Session, Target } from "mason-protocol";
+import type { ControlOp, Session } from "mason-protocol";
 import { AttachmentError } from "../attachments.ts";
 import {
 	type Connector,
@@ -30,8 +30,6 @@ export interface ConformanceFaces {
 	 * notices and answer controls, and it may not carry a person's words.
 	 */
 	readonly owner?: string;
-	/** The places this medium can be sent to, as the operator would declare them. */
-	readonly targets?: readonly Target[];
 	/** The `kind` strings this connector raises. */
 	readonly kinds?: readonly string[];
 	readonly commands?: readonly ControlOp[];
@@ -65,7 +63,7 @@ export interface ConformanceContext {
 export interface ConformanceCase {
 	readonly name: string;
 	/** The faces the fixture must declare for this case to mean anything. A case about a face's absence does not use it. */
-	readonly needs?: ReadonlyArray<"targets" | "kinds" | "commands" | "owner">;
+	readonly needs?: ReadonlyArray<"kinds" | "commands" | "owner">;
 	/**
 	 * A grant this case is measured against instead of the one the fixture's faces describe. A case whose subject is a
 	 * refusal cannot be staged with a fixture that declares the face, and the refusal is the door's to make.
@@ -129,7 +127,7 @@ export async function runConformance(
 	return { passed, skipped, failed };
 }
 
-function hasFace(fixture: ConformanceFixture, face: "targets" | "kinds" | "commands" | "owner"): boolean {
+function hasFace(fixture: ConformanceFixture, face: "kinds" | "commands" | "owner"): boolean {
 	if (face === "owner") return (fixture.faces.owner ?? "owner-1") !== "";
 	const value = fixture.faces[face];
 	return Array.isArray(value) && value.length > 0;
@@ -209,7 +207,6 @@ function grantsOf(fixture: ConformanceFixture): FakeMasonGrants {
 		// `owner: ""` is the fixture that declares no user face, which is `null` to the fake: absent is not the same
 		// statement as "nobody", and a fixture that says nobody is testing the door's first refusal.
 		owner: fixture.faces.owner === "" ? null : (fixture.faces.owner ?? "owner-1"),
-		targets: fixture.faces.targets ?? [],
 		kinds: fixture.faces.kinds ?? [],
 		commands: fixture.faces.commands ?? [],
 	};
@@ -237,30 +234,22 @@ export async function waitFor(predicate: () => boolean, what: string, timeoutMs 
 	fail(what, `never became true within ${timeoutMs} ms`);
 }
 
-/** The first target a fixture declared, or a failure: a case that needs one cannot run without it. */
-function targetOf(fixture: ConformanceFixture): Target {
-	const target = fixture.faces.targets?.[0];
-	if (target === undefined) fail("fixture", "a connector with targets needs at least one");
-	return target;
-}
-
 export function conformanceCases(): readonly ConformanceCase[] {
 	return [
 		{
-			name: "session/the grant is state, and it names the targets and the vocabulary",
+			name: "session/the grant is state, and it names the vocabulary and the budgets",
 			async run({ connector, fixture, observed }) {
 				const session = connector.status().session;
 				if (session === undefined) fail("session", "no session after start");
 				equal(session.protocol, 1, "session protocol major");
 				equal(observed.sessions.length, 1, "onSession calls");
-				equal(session.targets.length, fixture.faces.targets?.length ?? 0, "targets in the session");
 				equal(session.commands.length, fixture.faces.commands?.length ?? 0, "commands in the session");
 				if (session.limits.submissionsPerMinute <= 0) fail("session", "a submissions budget of zero");
 			},
 		},
 		{
 			name: "submission/one logical operation, and a resend collapses onto it",
-			needs: ["targets"],
+			needs: ["owner"],
 			async run({ connector, mason }) {
 				const first = await connector.submit({
 					content: [{ type: "text", text: "one" }],
@@ -356,31 +345,20 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
-			name: "delivery/a delivery to a target reaches the handler and is acked",
-			needs: ["targets"],
-			async run({ mason, observed, fixture }) {
+			name: "delivery/a delivery carries the address the turn came from",
+			async run({ mason, observed }) {
 				const ack = await mason.deliver({
 					deliveryId: "d-1",
-					target: targetOf(fixture).id,
+					ref: "chat-1",
 					blocks: [{ type: "text", text: "hello" }],
 				});
 				equal(ack?.status, "delivered", "delivery ack");
 				equal(observed.deliveries.length, 1, "deliveries the handler saw");
-				equal(observed.deliveries[0]?.target, targetOf(fixture).id, "the target the handler saw");
-			},
-		},
-		{
-			name: "delivery/a delivery with no address goes to the connector's default",
-			needs: ["targets"],
-			async run({ mason, observed }) {
-				const ack = await mason.deliver({ deliveryId: "d-default", blocks: [{ type: "text", text: "hello" }] });
-				equal(ack?.status, "delivered", "delivery ack");
-				equal(observed.deliveries[0]?.target, undefined, "the target of an unaddressed delivery");
+				equal(observed.deliveries[0]?.ref, "chat-1", "the address the handler saw: where the words came from");
 			},
 		},
 		{
 			name: "delivery/a resend under the same id is a duplicate and never a second send",
-			needs: ["targets"],
 			async run({ mason, observed }) {
 				await mason.deliver({ deliveryId: "d-2", blocks: [{ type: "text", text: "once" }] });
 				const again = await mason.deliver({ deliveryId: "d-2", blocks: [{ type: "text", text: "once" }] });
@@ -390,7 +368,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 		},
 		{
 			name: "delivery/a lost acknowledgement is resent after a reconnect and collapses",
-			needs: ["targets"],
 			async run({ mason, observed }) {
 				mason.loseNextAck();
 				const first = await mason.deliver({ deliveryId: "d-3", blocks: [{ type: "text", text: "unknown" }] });
@@ -406,7 +383,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 		},
 		{
 			name: "delivery/a send that may have happened is uncertain and never retried",
-			needs: ["targets"],
 			async run(context) {
 				const { mason } = context;
 				let attempts = 0;
@@ -445,7 +421,7 @@ export function conformanceCases(): readonly ConformanceCase[] {
 		},
 		{
 			name: "budget/a refusal for a spent budget keeps the call journaled and sends it once",
-			needs: ["targets"],
+			needs: ["owner"],
 			async run({ connector, mason }) {
 				mason.exhaust("submissions");
 				const outcome = await connector.submit({
@@ -482,7 +458,7 @@ export function conformanceCases(): readonly ConformanceCase[] {
 		},
 		{
 			name: "journal/a call made with no link is sent once the link is back",
-			needs: ["targets"],
+			needs: ["owner"],
 			async run({ mason, connector }) {
 				mason.kill("the link went away");
 				const outcome = await connector.submit({

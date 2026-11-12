@@ -31,7 +31,7 @@ a `unit` carrying the state snapshot.
 ```json
 { "t": "hold", "id": 1, "at": "mason", "token": { "name": "mason.peer", "scope": "remote", "version": 1, "input": {…}, … }, "principal": … }
 { "t": "shape", "id": 1, "variant": "default", "members": ["append", "control"], "contract": "…", "state": ["session"] }
-{ "t": "unit", "id": 1, "values": { "session": { "protocol": 1, "commands": [], "targets": [], "kinds": [], "limits": {…} } } }
+{ "t": "unit", "id": 1, "values": { "session": { "protocol": 1, "commands": [], "kinds": [], "limits": {…} } } }
 ```
 
 The `token` is the contract's description, which is what the provider validates against. A connector obtains it from
