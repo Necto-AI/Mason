@@ -112,11 +112,8 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 	return [...fold.items, ...tail];
 }
 
-/**
- * The id prefix of the notice a run that died leaves, and the one spelling of it: the read model reads it back to tell
- * an ended run that failed from one that finished.
- */
-export const FAILED_NOTICE_PREFIX = "failed:";
+/** The id prefix of the notice a run that died leaves: the fold and the row it becomes spell it once. */
+const FAILED_NOTICE_PREFIX = "failed:";
 
 /**
  * The committed rows of a transcript, folded once so a later revision can reuse them.

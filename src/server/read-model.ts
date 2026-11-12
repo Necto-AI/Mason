@@ -14,7 +14,7 @@
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { ConversationState, ConversationTransition } from "mason-protocol";
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
-import { FAILED_NOTICE_PREFIX, type TranscriptFold, foldTranscript, projectQueued } from "./projection.ts";
+import { type TranscriptFold, foldTranscript, projectQueued } from "./projection.ts";
 import { deriveRunStatus, isBusy, liveOf } from "./status.ts";
 
 /** The empty conversation: revision zero, nothing to read, nothing to report. */
@@ -47,15 +47,21 @@ export function createReadModel(): ReadModel {
 			const queue = projectQueued(view);
 			const run = deriveRunStatus(view);
 			const busy = isBusy(view);
-			const runTaskId = busy ? liveOf(view)?.run?.taskId : undefined;
+			const live = liveOf(view);
+			const runTaskId = busy ? live?.run?.taskId : undefined;
 			const activeRunTaskId = runTaskId === undefined ? undefined : String(runTaskId);
+			// The commit that ends a run either records why it ended without an answer or it does not: `pi.live` says which,
+			// and it says it in that same commit, so a client is told the truth rather than a guess from the transcript.
+			const failedRunTaskId = live?.runFailure === undefined ? undefined : String(live.runFailure.taskId);
 			if (sameState(value, { transcript, queue, run, busy, activeRunTaskId })) {
 				called = true;
 				return value;
 			}
 			const revision = value.revision + 1;
 			// Read before the assignment: `transitionsOf` reads the value this one replaces.
-			const transitions = called ? transitionsOf(value, { transcript, queue, busy, activeRunTaskId }, revision) : [];
+			const transitions = called
+				? transitionsOf(value, { transcript, queue, busy, activeRunTaskId, failedRunTaskId }, revision)
+				: [];
 			called = true;
 			value = {
 				revision,
@@ -78,6 +84,8 @@ interface Change {
 	readonly run: ConversationState["run"];
 	readonly busy: boolean;
 	readonly activeRunTaskId: string | undefined;
+	/** The run `pi.live` says ended without an answer, when it does: the one an ending is errored for. */
+	readonly failedRunTaskId?: string | undefined;
 }
 
 /** Whether two values say the same thing to a reader: the check that keeps a revision a report of a change. */
@@ -134,7 +142,7 @@ function transitionsOf(before: ConversationState, after: Omit<Change, "run">, re
 		if (!waiting.has(item.id)) transitions.push({ kind: "queue.withdrawn", revision, queueId: item.id });
 	}
 	if (before.busy && !after.busy) {
-		const errored = after.transcript.some((row) => row.id.startsWith(FAILED_NOTICE_PREFIX) && !known.has(row.id));
+		const errored = after.failedRunTaskId !== undefined && after.failedRunTaskId === before.activeRunTaskId;
 		transitions.push({
 			kind: errored ? "run.errored" : "run.stopped",
 			revision,
