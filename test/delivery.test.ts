@@ -357,13 +357,20 @@ test("a fire that named its conversation answers in it, and one that did not rec
 });
 
 test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
+	// The schema refuses the argument before a call reaches `execute`: `send` declares one property and closes the object,
+	// so a model replaying an older prompt's `to` is told `invalid_arguments` rather than having the field quietly dropped.
+	assert.equal(
+		(sendTool.parameters as { readonly additionalProperties?: unknown }).additionalProperties,
+		false,
+		"an argument the schema does not declare is refused, not ignored",
+	);
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	setIntegrations({ telegram: TELEGRAM as never });
 	try {
 		const appended: unknown[] = [];
-		// An argument a model may still write from an older prompt. `send` has no address parameter any more, so the words
-		// cannot be sent past the turn's own origin — and this turn has none, so the message is recorded and nobody is
-		// reached. Naming a connector that exists does not make it a destination.
+		// This call bypasses that check, which is the point: an address that does arrive routes nothing. `send` has no
+		// address parameter any more, so the words cannot be sent past the turn's own origin — and this turn has none, so
+		// the message is recorded and nobody is reached. Naming a connector that exists does not make it a destination.
 		const named = await sendTool.execute(
 			{ text: "the brief", to: "telegram/team" } as never,
 			apiFor({ callId: "call-11", entries: hookTurn("[ROUTINE: morning brief]") }, appended),

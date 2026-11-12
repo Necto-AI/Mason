@@ -47,12 +47,20 @@ import {
 } from "../replies.ts";
 import { nestedRefusal } from "./nested.ts";
 
-const SendParams = Type.Object({
-	text: Type.String({
-		minLength: 1,
-		description: "What the reader sees, written in full — this text is the message, not a note about it",
-	}),
-});
+/**
+ * What `send` takes. Closed on purpose: a prompt before #200 taught the model a `to` argument, and a model replaying one
+ * must be told the argument does not exist — the framework's argument check refuses it as `invalid_arguments` — rather
+ * than have the field quietly dropped. `test/delivery.test.ts` pins the schema beside the case that names an address.
+ */
+const SendParams = Type.Object(
+	{
+		text: Type.String({
+			minLength: 1,
+			description: "What the reader sees, written in full — this text is the message, not a note about it",
+		}),
+	},
+	{ additionalProperties: false },
+);
 
 /**
  * What a script is told instead of a delivery nobody would see: what happened, and what to do about it. Code mode turns
