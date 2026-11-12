@@ -47,6 +47,8 @@ import {
 	type ControlOp,
 	type ControlResult,
 	connectorHost,
+	type ConversationState,
+	ConversationStateSchema,
 	type DeliverArgs,
 	type DeliveryAck,
 	ERROR_CODE,
@@ -73,6 +75,7 @@ import {
 	type FireLimiter,
 } from "./limits.ts";
 import { type ReplyRecord, replyRecordOf } from "./replies.ts";
+import { createReadModel } from "./read-model.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
 
@@ -135,14 +138,55 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		onError: (error) => log(`[connector] ${error instanceof Error ? error.message : String(error)}`),
 	});
 
+	// The read model the `conversation` member publishes. One per door, because there is one conversation: the watch
+	// below advances it and hands the same value to every peer object's cell.
+	const model = createReadModel();
+	let state = model.value;
+	/** What each live peer object listens with: a set, so a connector that goes removes only its own subscription. */
+	const watchers = new Set<(value: ConversationState) => void>();
+
 	// The peer object is per connector: its principal is the credential's, so the state it exposes is that connector's
 	// grant and nobody else's.
 	host.serve(MasonPeer, (input, principal, self) => {
 		void input;
 		const name = principal.connector;
+		const conversation = self.state("conversation", ConversationStateSchema, { init: () => state });
+		// The door's one watch, opened and closed with this object: a socket that goes takes its subscription with it,
+		// and the door keeps one watch for the process rather than one per socket.
+		const feed = self.resource("conversation-feed", {
+			version: 1,
+			open: () => {
+				const listeners = new Set<(value: ConversationState) => void>();
+				const relay = (value: ConversationState) => {
+					for (const listener of [...listeners]) listener(value);
+				};
+				watchers.add(relay);
+				return {
+					subscribe(listener: (value: ConversationState) => void) {
+						listeners.add(listener);
+						// The value the cell was initialised with: a publish that landed between the init and this listener is not
+						// lost, and the handler ignores a revision the cell already holds.
+						listener(state);
+						return () => listeners.delete(listener);
+					},
+					stop() {
+						listeners.clear();
+						watchers.delete(relay);
+					},
+				};
+			},
+			close: (opened) => opened.stop(),
+		});
+		// The rows are shared with the previous revision on purpose: a diff that sees the same containers appends to the
+		// tail instead of replacing the transcript.
+		self.on("publish", feed, (value, ctx) => {
+			if (value.revision <= conversation.value.revision) return;
+			conversation.replace(ctx, value, { diff: true });
+		});
 		return {
 			variant: "default",
 			session: self.state("session", SessionSchema, sessionOf(name)),
+			conversation,
 			append: async (args: unknown) => append(name, args as AppendArgs),
 			control: async (args: unknown) => control(name, args as ControlArgs),
 		};
@@ -177,6 +221,13 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	const watch = await options.runtime.viewState(BACKGROUND_CONTEXT);
 	const unsubscribe = watch.subscribe((view) => {
 		latest = view;
+		const next = model.next(view);
+		if (next !== state) {
+			state = next;
+			// Every peer's cell before the outbox runs: a client is told the message committed, and the delivery of it is a
+			// decision this pass has not made yet.
+			for (const watcher of [...watchers]) watcher(next);
+		}
 		void flush();
 	});
 
