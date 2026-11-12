@@ -112,7 +112,9 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 				where,
 				name,
 				`has a retired "connector.${retiredFaces[0]}": a send goes back to the connector that carried the words, ` +
-					"so a grant names its faces and its commands and no place to be sent to. Delete that key by hand",
+					"so a grant names its faces and its commands and no place to be sent to. Delete that key by hand; if it " +
+					"was the grant's only face, write the face that stays in the same edit (`connector.user` for a chat, " +
+					"`connector.events` for one that only reports), because a grant that grants nothing is refused too",
 			),
 		);
 	}

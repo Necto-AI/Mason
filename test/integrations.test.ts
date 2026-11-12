@@ -317,6 +317,11 @@ describe("the integration list on disk", () => {
 			assert.match(refused, new RegExp(retiredPath.replaceAll(".", "\\.")), retiredPath);
 			assert.match(refused, /a send goes back to the connector that carried the words/, retiredPath);
 			assert.match(refused, /by hand/, retiredPath);
+			// The user face's own list is refused by the face's reader; the block's list is refused here. A `connector.targets`
+			// that was a grant's only face would otherwise take two boots to repair — this key gone, then "grants nothing" —
+			// so that refusal names the face to write instead, and one edit is enough.
+			if (retiredPath === "connector.targets")
+				assert.match(refused, /a grant that grants nothing is refused too/, retiredPath);
 		}
 
 		// The grant keys the approval apparatus owned were required once, so every file written before the cut carries
