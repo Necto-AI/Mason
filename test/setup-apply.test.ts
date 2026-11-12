@@ -17,7 +17,7 @@ import { composePath, projectName, readComposeCredential } from "../src/server/c
 import { listConnectorCredentials } from "../src/server/connectors.ts";
 import { housePaths } from "../src/server/house.ts";
 import { readInstalls } from "../src/server/install-state.ts";
-import { readIntegrations } from "../src/server/integrations.ts";
+import { assertOneUserGrant, readIntegrations, userGrantNames, writeIntegration } from "../src/server/integrations.ts";
 import { applyPlan, type PlanNote } from "../src/setup/apply.ts";
 import { type ConnectorAnswers, type MintedCredential, planConnector } from "../src/setup/plan.ts";
 import { noopRunner, type Runner } from "../src/setup/runner.ts";
@@ -376,5 +376,75 @@ describe("applying a plan", () => {
 			config,
 			"the copy is the store as it was, so a rotation is undoable",
 		);
+	});
+
+	test("a second enabled connector that carries a person's words is named as a home the boot will refuse", async () => {
+		const home = await emptyHome();
+		const paths = housePaths(home);
+		const start = { runner: noopRunner, start: false };
+		const first = await applyPlan(
+			await planConnector(telegram, paths, {
+				catalog: TELEGRAM_CATALOG,
+				mint: fixedMint("masonc_solo", "con_solo"),
+			}),
+			start,
+		);
+		assert.ok(
+			!advice(first.notes).some((note) => note.includes("person's words")),
+			"one enabled grant is the shape a home is for, so the first install says nothing about the rule",
+		);
+
+		// The second install is what the operator asked for, and the write lands: the refusal is the boot's, not this.
+		const applied = await applyPlan(
+			await planConnector(
+				{ kind: "url", name: "custom", url: "ws://127.0.0.1:9999/api/connector", owner: "denis", events: {} },
+				paths,
+				{ mint: fixedMint("masonc_second", "con_second") },
+			),
+			start,
+		);
+
+		const { integrations } = await readIntegrations(paths);
+		assert.deepEqual(userGrantNames(integrations), ["custom", "telegram"], "the file holds the two grants");
+		// The command says what its own write made, before `mason up` is the first to say it.
+		assert.ok(
+			advice(applied.notes).includes(
+				`this home grants a person's words to "custom" and "telegram": one bot works for one person, so mason ` +
+					"refuses this home at boot until one of them is switched off, by hand",
+			),
+			advice(applied.notes).join("\n"),
+		);
+		// And it is the boot's own rule: the state the note describes is the state `assertOneUserGrant` refuses.
+		assert.throws(
+			() => assertOneUserGrant(paths.integrations, integrations),
+			/at most one enabled connector may carry a person's words/,
+		);
+	});
+
+	test("an events-only neighbour is not a second surface, and the write says nothing about the rule", async () => {
+		const home = await emptyHome();
+		const paths = housePaths(home);
+		// A connector granted by hand that only raises events: no `connector.user`, so it is not where an answer arrives.
+		await writeIntegration(paths, "alarm", {
+			enabled: true,
+			connector: { events: { hooks: { "alarm.ringing": "workspace-check" } } },
+		});
+
+		const applied = await applyPlan(
+			await planConnector(
+				{ kind: "url", name: "custom", url: "ws://127.0.0.1:9999/api/connector", owner: "denis", events: {} },
+				paths,
+				{ mint: fixedMint("masonc_alone", "con_alone") },
+			),
+			{ runner: noopRunner, start: false },
+		);
+
+		const { integrations } = await readIntegrations(paths);
+		assert.deepEqual(userGrantNames(integrations), ["custom"], "the events face carries nobody's words");
+		assert.ok(
+			!advice(applied.notes).some((note) => note.includes("person's words")),
+			"this home boots, so there is nothing to warn about on the way in",
+		);
+		assert.doesNotThrow(() => assertOneUserGrant(paths.integrations, integrations));
 	});
 });

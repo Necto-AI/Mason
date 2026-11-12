@@ -118,21 +118,35 @@ async function load(
  * with the rule in the sentence, rather than discovering it from a message that went somewhere nobody read.
  *
  * Called by the boot and by nothing else (`runtime.ts`), which is why the file's other readers still work: `mason setup`
- * keeps writing what the operator asked for, and `status` and `doctor` keep reporting the file as it is. A disabled
- * entry is not counted — switching one off is how an operator keeps a second grant on disk without it ever speaking.
+ * keeps writing what the operator asked for — and names the state its own write made — and `status` and `doctor` keep
+ * reporting the file as it is. A disabled entry is not counted — switching one off is how an operator keeps a second
+ * grant on disk without it ever speaking.
  *
  * `test/runtime-boot.test.ts`, "two enabled connectors that carry a person's words refuse the boot", pins it.
  */
 export function assertOneUserGrant(where: string, integrations: Record<string, Integration>): void {
-	const speaking = Object.entries(integrations)
-		.filter(([, integration]) => integration.enabled && integration.connector?.user !== undefined)
-		.map(([name]) => `"${name}"`);
+	const speaking = userGrantNames(integrations).map((name) => `"${name}"`);
 	if (speaking.length <= 1) return;
 	throw new Error(
 		`${where}: ${speaking.join(" and ")} are enabled and each holds a "connector.user" grant. One bot works for one ` +
 			"person and answers where their words came from, so at most one enabled connector may carry a person's words: " +
 			"switch one of them off, by hand",
 	);
+}
+
+/**
+ * The enabled entries that hold a person's words, by name: the rule's one reading.
+ *
+ * The boot refuses a home where there is more than one (`assertOneUserGrant` above), and `mason setup` says so when its
+ * own write makes the second (`src/setup/apply.ts`). Two spellings of "who may speak" would drift apart, and the
+ * sentence a person reads on the way in would then disagree with the one that stops the boot.
+ *
+ * `test/runtime-boot.test.ts` and `test/setup-apply.test.ts` pin both halves.
+ */
+export function userGrantNames(integrations: Record<string, Integration>): string[] {
+	return Object.entries(integrations)
+		.filter(([, integration]) => integration.enabled && integration.connector?.user !== undefined)
+		.map(([name]) => name);
 }
 
 /** The file as it is, checked for shape and not for entries: the one reader a migration may use, because a migration's

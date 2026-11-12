@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import { writeTextAtomic } from "../server/atomic.ts";
 import { updateConfig } from "../server/auth.ts";
 import { writeInstall } from "../server/install-state.ts";
-import { writeIntegration } from "../server/integrations.ts";
+import { readIntegrations, userGrantNames, writeIntegration } from "../server/integrations.ts";
 import { bootPolicyFix, checkPodman, listening, loopbackRefusal, PullFailure, pullFailure } from "../server/podman.ts";
 import { masonPort, type Plan, type PlannedCredential } from "./plan.ts";
 import type { Runner } from "./runner.ts";
@@ -102,6 +102,15 @@ export async function applyPlan(plan: Plan, options: ApplyOptions): Promise<Appl
 	if (plan.entry !== undefined) {
 		await writeIntegration(paths, name, plan.entry);
 		advice(`wrote the grant for "${name}" to ${paths.integrations}`);
+		// The boot refuses a home with two enabled connectors that carry a person's words (`assertOneUserGrant`), and this
+		// write may have just made one: said in the command's own output, because otherwise the first word about it is
+		// `mason up` refusing to start.
+		const speaking = userGrantNames((await readIntegrations(paths)).integrations);
+		if (speaking.length > 1)
+			advice(
+				`this home grants a person's words to ${speaking.map((one) => `"${one}"`).join(" and ")}: one bot works ` +
+					"for one person, so mason refuses this home at boot until one of them is switched off, by hand",
+			);
 	} else if (plan.previous?.source !== undefined && plan.previous.source !== plan.source) {
 		// The url lives in the install record, not the grant: a second run with a different `--url` moves it, and a run
 		// that did that silently was a wizard reporting success while the connector kept dialling the old address.
