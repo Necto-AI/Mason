@@ -59,7 +59,7 @@ const chatIntegrations = {
 	integrations: {
 		telegram: {
 			enabled: true,
-			connector: { user: { owner: "8811" }, targets: [{ id: "team", label: "the team chat" }] },
+			connector: { user: { owner: "8811" } },
 		},
 	},
 };

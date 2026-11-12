@@ -91,26 +91,14 @@ export function integrationsFile(options: { readonly noOwner?: boolean; readonly
 						// The operator's ceiling on what this connector may claim it renders.
 						capabilities: ["text", "markdown", "files", "approvals", "streaming"],
 					},
-					// The places it may be sent to. Two, so a test can prove one is reachable and the other is not guessed.
-					targets: [
-						{ id: "team", label: "the team chat", capabilities: ["text", "markdown", "files"] },
-						{ id: "dm", label: "the direct conversation", capabilities: ["text"] },
-					],
 					events: { hooks: { "chat.message": "team-chat" } },
 				},
 			},
-			// A second connector, off by default: the outbox claims the door reads owed replies for every open link, and a test
-			// with one connector cannot tell a per-connector pass from a whole-door one.
+			// A second connector, only when a test asks for one: the outbox claims the door reads owed replies for every open
+			// link, and a test with one connector cannot tell a per-connector pass from a whole-door one. It raises events and
+			// carries nobody's words, because a second enabled user face is refused at the boot (`test/runtime-boot.test.ts`).
 			...(options.second === true
-				? {
-						slack: {
-							enabled: true,
-							connector: {
-								user: { owner: "777" },
-								targets: [{ id: "dm", label: "the other chat", capabilities: ["text"] }],
-							},
-						},
-					}
+				? { slack: { enabled: true, connector: { events: { hooks: { "alarm.ringing": "workspace-check" } } } } }
 				: {}),
 			"alarm-only": {
 				enabled: true,
@@ -126,7 +114,7 @@ export async function connectorHome(options: { readonly noOwner?: boolean; reado
 	readonly paths: HousePaths;
 	readonly directory: string;
 	readonly credential: string;
-	/** Set when the file carries the second user-face entry. */
+	/** Set when the file carries the second entry: the one that raises events and holds no user face. */
 	readonly secondCredential?: string;
 	/** A credential for the entry whose connector is switched off: minting succeeds, opening the socket does not. */
 	readonly offCredential?: string;

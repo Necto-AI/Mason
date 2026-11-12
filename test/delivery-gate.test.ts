@@ -457,7 +457,6 @@ test("a fire that named its address routes the reply back to it", async () => {
 		enabled: true,
 		connector: {
 			user: { owner: "8811" },
-			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");
@@ -682,7 +681,6 @@ test("a fire that named its conversation keeps its origin through the reflection
 		enabled: true,
 		connector: {
 			user: { owner: "8811" },
-			targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 		},
 	};
 	const { setIntegrations } = await import("../src/server/integrations.ts");

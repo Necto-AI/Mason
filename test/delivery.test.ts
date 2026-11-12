@@ -270,7 +270,6 @@ const TELEGRAM = {
 	enabled: true,
 	connector: {
 		user: { owner: "8811" },
-		targets: [{ id: "team", label: "the team chat", capabilities: ["text"] }],
 	},
 } as const;
 
