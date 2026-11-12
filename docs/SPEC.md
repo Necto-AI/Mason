@@ -364,7 +364,7 @@ and the exit-code shape — printing one repair command per failure and exiting 
 
 `service/integrations.json` carries `"version": "0.1"`: every wizard write stamps it, a file without one is `0.1`, and any
 other value is refused with both versions named. The setup wizard writes a `url:` connector's grant — owner,
-conversations, event kinds — through the same writer the boot reads, so no grant needs hand-written JSON and a hand edit
+event kinds, controls — through the same writer the boot reads, so no grant needs hand-written JSON and a hand edit
 stays valid input. The boot records the hash it read in `service/data/boot.json`, which is how doctor says "restart to
 apply".
 

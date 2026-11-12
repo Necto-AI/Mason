@@ -125,8 +125,10 @@ export const sendTool = defineTool({
 						...(record.address === undefined
 							? {}
 							: {
-									target: {
-										connector: record.address.connector,
+										// The entry's key keeps the name `target` for replies already committed: renaming a durable key is
+										// a data migration, and this is not the wire field #200 retired. ADR 0015 says so.
+										target: {
+											connector: record.address.connector,
 										...(record.address.ref === undefined ? {} : { ref: record.address.ref }),
 									},
 								}),

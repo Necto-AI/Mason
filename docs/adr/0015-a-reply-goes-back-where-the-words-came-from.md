@@ -22,9 +22,11 @@ schedule, a retry, an event with no origin — records the message in the transc
 reached, rather than guessing a chat.
 
 Retired with it: `connector.targets`, `deliver.target`, `TargetSchema` and `Target`, `SessionSchema.targets`,
-`sendAddress`, `parseSendAddress`, the prompt's "send to" lines, the `--targets` flag and the wizard's question. A grant
-that still carries `connector.targets` is refused by the boot with a sentence naming this rule, because a file whose
-operator believes mason knows a room is a file that will be edited to no effect.
+`sendAddress`, `parseSendAddress`, the prompt's "send to" lines, the `--targets` and `--conversations` flags and the
+wizard's question. A grant that still carries `connector.targets` is refused by the boot with a sentence naming this
+rule, because a file whose operator believes mason knows a room is a file that will be edited to no effect. One name
+stays by intent: the committed `app.reply` entry stores its address under the data key `target`, because entries are
+already on disk under it and renaming a durable key is a data migration — the wire field is what is gone.
 
 **2. `PROTOCOL_MAJOR` stays 1.** Every object on the wire is `open` in both directions, so a deployed connector still
 binds: it sees no `session.targets`, and a `delivery.target` it never receives costs it nothing. A major bump would refuse
