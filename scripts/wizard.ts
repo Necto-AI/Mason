@@ -135,9 +135,6 @@ export const OWNER_QUESTION = "who owns this chat?";
 /** The connector list's question. Setup's `--connector` answers this one, and no other pick. */
 export const CONNECTOR_QUESTION = "Which connector do you want to talk through?";
 
-/** The conversations a connector's grant allows, asked when `--conversations` was not passed. */
-export const CONVERSATIONS_QUESTION = "which conversations may it carry? (ids, comma separated)";
-
 /** The event kinds a connector may fire, asked when `--events` was not passed: `kind=hook`, comma separated. */
 export const EVENTS_QUESTION = "which event kinds may it fire? (kind=hook, comma separated, empty for none)";
 
