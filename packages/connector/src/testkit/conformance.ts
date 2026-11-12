@@ -358,6 +358,18 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
+			name: "delivery/a delivery with no address goes to the connector's default",
+			async run({ mason, observed }) {
+				const ack = await mason.deliver({ deliveryId: "d-default", blocks: [{ type: "text", text: "hello" }] });
+				equal(ack?.status, "delivered", "delivery ack");
+				equal(
+					observed.deliveries.at(-1)?.ref,
+					undefined,
+					"the address an unaddressed delivery reaches the handler with",
+				);
+			},
+		},
+		{
 			name: "delivery/a resend under the same id is a duplicate and never a second send",
 			async run({ mason, observed }) {
 				await mason.deliver({ deliveryId: "d-2", blocks: [{ type: "text", text: "once" }] });
