@@ -57,7 +57,8 @@ export function consoleGrant(): ConnectorGrant {
  *
  * The one thing the write says out loud is the home it may have just made unstartable: the boot allows one enabled
  * connector holding a person's words (`assertOneUserGrant`), and on a home whose user face is another connector this
- * grant is the second. `test/chat.test.ts` pins the line.
+ * grant is the second. The caller prints that note after its own "granted" line, so the output tells the write and
+ * then the state the write made. `test/chat.test.ts` pins the line.
  */
 export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 	const { integrations } = await readIntegrations(paths);
@@ -69,9 +70,12 @@ export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 		description: existing?.description ?? CONSOLE_DESCRIPTION,
 		connector: consoleGrant(),
 	});
-	const note = secondUserGrantNote((await readIntegrations(paths)).integrations);
-	if (note !== undefined) console.log(dim(`[chat] ${note}`));
 	return true;
+}
+
+/** The home a just-made console grant may have made unstartable, in the rule's one sentence; undefined says it is fine. */
+export async function secondUserGrantAdvice(paths: HousePaths): Promise<string | undefined> {
+	return secondUserGrantNote((await readIntegrations(paths)).integrations);
 }
 
 export interface ChatArgs {
@@ -219,8 +223,11 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 	let paths: HousePaths;
 	try {
 		paths = housePaths();
-		if (await ensureConsole(paths))
+		if (await ensureConsole(paths)) {
 			console.log(dim(`[chat] granted the built-in "${CONSOLE}" connector in ${paths.integrations}`));
+			const note = await secondUserGrantAdvice(paths);
+			if (note !== undefined) console.log(dim(`[chat] ${note}`));
+		}
 	} catch (error) {
 		console.error(`[chat] ${error instanceof Error ? error.message : String(error)}`);
 		return 1;
