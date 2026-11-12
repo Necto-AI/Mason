@@ -46,9 +46,9 @@ import {
 	type ControlArgs,
 	type ControlOp,
 	type ControlResult,
-	connectorHost,
 	type ConversationState,
 	ConversationStateSchema,
+	connectorHost,
 	type DeliverArgs,
 	type DeliveryAck,
 	ERROR_CODE,
@@ -74,8 +74,8 @@ import {
 	CONNECTOR_SUBMISSION_LIMIT,
 	type FireLimiter,
 } from "./limits.ts";
-import { type ReplyRecord, replyRecordOf } from "./replies.ts";
 import { createReadModel } from "./read-model.ts";
+import { type ReplyRecord, replyRecordOf } from "./replies.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
 

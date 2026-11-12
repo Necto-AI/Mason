@@ -3,9 +3,9 @@
 		"bin": 118,
 		"evals": 565,
 		"packages/connector/src": 2533,
-		"packages/protocol/src": 240,
+		"packages/protocol/src": 260,
 		"scripts": 4308,
-		"src/server": 6811,
+		"src/server": 6860,
 		"src/setup": 397,
 		"src/shared": 54,
 		"src/tui": 1713
