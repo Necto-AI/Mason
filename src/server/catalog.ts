@@ -33,10 +33,8 @@ const NAME = /^[a-z0-9][a-z0-9-]*$/;
 /**
  * One thing a person types at `mason setup`. The value becomes a compose environment variable and goes no further.
  *
- * One name is load-bearing beyond the container: an env whose name ends in `_CHATS` is the list of conversations the
- * grant allows, comma separated. A user face needs a room to carry words in, the connector's own grant names them, and
- * this is where setup learns them without asking a second question (#145: the wizard asks who owns the chat, and the
- * rooms follow from the answer the connector already needs).
+ * Nothing here reaches the grant: the connector's own admission rules read these (who may write to it, which chats it
+ * serves), and mason keeps one actor — the owner setup asks for (#145).
  */
 export interface CatalogEnv {
 	readonly name: string;

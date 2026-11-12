@@ -22,7 +22,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type Capability, CONTROL_OPS, type ControlOp, type Target } from "mason-protocol";
+import { type Capability, CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { catalogEntry } from "../server/catalog.ts";
 import { composePath, projectName, readComposeCredential, renderCompose } from "../server/connector-compose.ts";
 import {
@@ -36,12 +36,6 @@ import type { HousePaths } from "../server/house.ts";
 import { type ConnectorInstall, parseSource, readInstalls, requireInstallable } from "../server/install-state.ts";
 import { type Integration, readIntegrations } from "../server/integrations.ts";
 import { RETRY_HOOK_ID } from "../server/run-retry.ts";
-
-/**
- * The env whose answer names the conversations the grant allows: `TELEGRAM_ALLOWED_CHATS` today, and any connector that
- * carries words declares one, because a user face needs a room. The convention is documented on `CatalogEnv`.
- */
-const CHATS = "_CHATS";
 
 /** The answers a catalog entry asked for, by variable name: only the variables that were given a value. */
 export type EnvAnswers = Readonly<Record<string, string>>;
@@ -69,8 +63,6 @@ export type ConnectorAnswers =
 			readonly name: string;
 			readonly url: string;
 			readonly owner: string;
-			/** The places it may be sent to. Empty means the owner's, because a grant with nowhere to send is a mute bot. */
-			readonly targets: readonly string[];
 			/** Each kind it may fire and the routine it wakes. */
 			readonly events: Readonly<Record<string, string>>;
 	  }
@@ -174,37 +166,18 @@ const randomMint: MintCredential = (connector) => {
 	};
 };
 
-/** The angle brackets an address cannot carry: lowercase, digits and dashes, starting with one of the first two. */
-function targetId(raw: string): string {
-	const slug = raw
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, "-")
-		.replace(/-+/g, "-")
-		.replace(/^-|-$/g, "");
-	return /^[a-z0-9]/.test(slug) ? slug : `t-${slug}`.replace(/-+$/, "");
-}
-
-/** One target per chat, with an id the model can write and the chat id as the label. */
-function targetsOf(ids: readonly string[], capabilities: readonly Capability[]): readonly Target[] {
-	return ids.map((id) => ({ id: targetId(id), label: id, capabilities: [...capabilities] }));
-}
-
 /**
- * What the grant says for a catalog connector: the owner, the places it may be sent to, and the ceiling the catalog
- * declares.
+ * What the grant says for a catalog connector: the owner, and the ceiling the catalog declares.
  *
- * The chats the connector asks for become targets, because a target is mason's word for "somewhere you may send to" and
- * a chat id is the medium's. The id the model writes is derived from it and the label is the id itself, which is all a
- * setup run knows about a chat.
+ * The answer setup asks for, the person's own id, is the grant's one actor. Where a message goes is not a grant: a
+ * connector is answered where its words came from.
  */
 function catalogGrant(
 	entry: { readonly capabilities: readonly Capability[]; readonly commands: readonly ControlOp[] },
 	owner: string,
-	chats: readonly string[],
 ): ConnectorGrant {
 	return {
 		user: { owner, capabilities: [...entry.capabilities] },
-		targets: targetsOf(chats.length === 0 ? [owner] : chats, entry.capabilities),
 		commands: [...entry.commands],
 	};
 }
@@ -268,9 +241,6 @@ async function describe(answers: ConnectorAnswers, paths: HousePaths, catalog?: 
 			description: `A connector already running at ${url}`,
 			grant: {
 				user: { owner },
-				// A connector with no chat named still gets one target: its owner. A grant with no place to send is a bot
-				// that can never answer, and the wizard's job is a home that works before it is edited.
-				targets: targetsOf(answers.targets.length === 0 ? [owner] : answers.targets, ["text", "markdown"]),
 				...(Object.keys(answers.events).length === 0 ? {} : { events: { hooks: answers.events } }),
 				commands: [...CONTROL_OPS],
 			},
@@ -280,14 +250,10 @@ async function describe(answers: ConnectorAnswers, paths: HousePaths, catalog?: 
 		};
 	}
 	const entry = await catalogEntry(answers.name, catalog);
-	const chats = Object.entries(answers.env)
-		.filter(([variable]) => variable.endsWith(CHATS))
-		.flatMap(([, value]) => value.split(",").map((id) => id.trim()))
-		.filter((id) => id !== "");
 	return {
 		name: entry.name,
 		description: entry.description,
-		grant: catalogGrant(entry.connector, answers.owner, chats),
+		grant: catalogGrant(entry.connector, answers.owner),
 		source: `catalog:${entry.name}@${entry.version}`,
 		image: `${entry.image}:${entry.version}`,
 		version: entry.version,

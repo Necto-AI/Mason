@@ -35,15 +35,14 @@ export const CONSOLE = "console";
 /** The one line the model is told about this entry. It carries no MCP server, so nothing reads it yet — a person does. */
 export const CONSOLE_DESCRIPTION = "The terminal, built in: talk to the bot with no Telegram at all";
 
-/** The actor and the conversation the console serves. Fixed here because this file is the connector that serves them. */
+/** The actor the console serves, and the address it mints on every append: where a send goes back to. */
 const OWNER = "local";
 const TERMINAL = "terminal";
 
-/** What the console is granted: the owner's words, one place to be sent to, and every control the protocol has. */
+/** What the console is granted: the owner's words and every control the protocol has. */
 export function consoleGrant(): ConnectorGrant {
 	return {
 		user: { owner: OWNER },
-		targets: [{ id: TERMINAL, label: "the terminal this bot runs in", capabilities: ["text", "markdown"] }],
 		commands: [...CONTROL_OPS],
 	};
 }
