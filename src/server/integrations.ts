@@ -137,16 +137,36 @@ export function assertOneUserGrant(where: string, integrations: Record<string, I
 /**
  * The enabled entries that hold a person's words, by name: the rule's one reading.
  *
- * The boot refuses a home where there is more than one (`assertOneUserGrant` above), and `mason setup` says so when its
- * own write makes the second (`src/setup/apply.ts`). Two spellings of "who may speak" would drift apart, and the
- * sentence a person reads on the way in would then disagree with the one that stops the boot.
+ * The boot refuses a home where there is more than one (`assertOneUserGrant` above), and every command that can make the
+ * second — `mason setup`, `mason chat`, `npm run integration -- enable` — says so in its own output, from the one sentence
+ * below. Two spellings of "who may speak" would drift apart, and the sentence a person reads on the way in would then
+ * disagree with the one that stops the boot.
  *
- * `test/runtime-boot.test.ts` and `test/setup-apply.test.ts` pin both halves.
+ * `test/runtime-boot.test.ts`, `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin it.
  */
 export function userGrantNames(integrations: Record<string, Integration>): string[] {
 	return Object.entries(integrations)
 		.filter(([, integration]) => integration.enabled && integration.connector?.user !== undefined)
 		.map(([name]) => name);
+}
+
+/**
+ * What a writer says when its own write left more than one enabled connector holding a person's words: one sentence
+ * naming the home the boot will refuse, or `undefined` when the write left one surface or none.
+ *
+ * The refusal stays the boot's (`assertOneUserGrant`), so this is the word on the way in: `mason setup`, `mason chat` and
+ * `npm run integration -- enable` each call it after their own write, and one sentence means the note a person reads and
+ * the refusal that stops the boot cannot disagree.
+ *
+ * `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin the three writers.
+ */
+export function secondUserGrantNote(integrations: Record<string, Integration>): string | undefined {
+	const speaking = userGrantNames(integrations);
+	if (speaking.length <= 1) return undefined;
+	return (
+		`this home grants a person's words to ${speaking.map((name) => `"${name}"`).join(" and ")}: one bot works for one ` +
+		"person, so mason refuses this home at boot until one of them is switched off, by hand"
+	);
 }
 
 /** The file as it is, checked for shape and not for entries: the one reader a migration may use, because a migration's

@@ -8,10 +8,15 @@
  *
  * The long turn is scripted as a model step that takes its time to return, because that is the only reliable way to have
  * a turn in flight when the person types `/stop`: a fast reply would prove the control mapping and not the stop.
+ *
+ * One case needs no socket at all: the grant is written before anything connects, and on a home whose user face is another
+ * connector that write is the second surface the boot refuses.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -22,6 +27,8 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import { housePaths } from "../src/server/house.ts";
+import { assertOneUserGrant, readIntegrations, userGrantNames, writeIntegration } from "../src/server/integrations.ts";
 import { SEND_TOOL } from "../src/shared/contract.ts";
 import { household } from "./support/chat.ts";
 
@@ -103,6 +110,43 @@ describe("mason chat", () => {
 		);
 		assert.equal(result.code, 1);
 		assert.match(result.stderr, /start it with `mason up`/);
+	});
+
+	test("a console grant written into a home that already has a user face names the refused home", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "mason-chat-face-"));
+		const paths = housePaths(join(directory, "house"));
+		try {
+			// A home whose user face is another connector: the console grant this run writes is the second one, and the boot
+			// allows one enabled connector to carry a person's words.
+			await writeIntegration(paths, "telegram", { enabled: true, connector: { user: { owner: "8811" } } });
+			const result = await run(
+				process.execPath,
+				["--experimental-strip-types", script, "--once", "hi", "--url", "ws://127.0.0.1:1/api/connector"],
+				{ cwd: root, env: { ...process.env, MASON_HOME: paths.home } },
+			).then(
+				(ok) => ({ stdout: ok.stdout, stderr: ok.stderr }),
+				(error: { stdout?: string; stderr?: string }) => ({
+					stdout: error.stdout ?? "",
+					stderr: error.stderr ?? "",
+				}),
+			);
+			// The grant lands — the enforcement is the boot's — and the command says what its own write made, rather than
+			// leaving `mason up` to be the first to say the rule.
+			const { integrations } = await readIntegrations(paths);
+			assert.deepEqual(userGrantNames(integrations), ["console", "telegram"], "the file holds the two grants");
+			assert.match(
+				result.stdout,
+				/this home grants a person's words to "console" and "telegram": one bot works for one person, so mason refuses this home at boot until one of them is switched off, by hand/,
+				result.stdout + result.stderr,
+			);
+			// And the state the line names is the state the boot refuses: one reading, so the two cannot disagree.
+			assert.throws(
+				() => assertOneUserGrant(paths.integrations, integrations),
+				/at most one enabled connector may carry a person's words/,
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("/stop during a turn settles as stopped, and the answer never arrives", async () => {

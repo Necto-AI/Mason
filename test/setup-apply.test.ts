@@ -3,9 +3,10 @@
  *
  * The tests apply real plans to a temporary home with `noopRunner`, so most of them need no podman and start nothing: what
  * is pinned is what `mason setup` has always written — the grant, the credential's hash, the project, the record — plus
- * the two promises that make a second run safe, and the order the failures keep: the record is written even when the
- * start did not happen, and the failure comes back afterwards. The two tests that do start ask a runner that records the
- * one call, and a `podman` shim first on `PATH` so the checks before the start answer yes.
+ * the two promises that make a second run safe, the note that names a home the boot will refuse when a write makes a
+ * second enabled user grant, and the order the failures keep: the record is written even when the start did not happen,
+ * and the failure comes back afterwards. The two tests that do start ask a runner that records the one call, and a
+ * `podman` shim first on `PATH` so the checks before the start answer yes.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

@@ -35,10 +35,11 @@ every connector already deployed in order to remove two fields that nothing has 
 in. The refusal is the **boot's**, at the read `openAgentRuntime` does, and not the file reader's: `mason setup`, the
 wizard's write path, `status` and `doctor` keep reading the file as the operator wrote it, which is what lets them report
 and fix the home the boot refused. A disabled second grant is how an operator keeps one on disk without it speaking. The
-write that makes the second one still lands — the enforcement point is the boot — and the command names the home it just
-made in its own output, because a command that reports success for a home that cannot start is the quiet failure this
-rule exists to end. Both readings of "who may speak" are one function (`userGrantNames`), so the sentence on the way in
-and the one that stops the boot cannot disagree.
+write that makes the second one still lands — the enforcement point is the boot — and every command that can make it
+(`mason setup`, `mason chat`, `npm run integration -- enable`) names the home it just made in its own output, because a
+command that reports success for a home that cannot start is the quiet failure this rule exists to end. Both readings
+of "who may speak" are one function (`userGrantNames`), and all three commands say it with one sentence
+(`secondUserGrantNote`), so the note on the way in and the refusal that stops the boot cannot disagree.
 
 **4. The kinds are refused by kind.** The newest-input read that establishes a turn's origin skips `pi.compaction` and
 `pi.system` entries by their `kind`, not by matching the text of a delivery reminder or a reflection ask. Both carry a
@@ -64,6 +65,8 @@ caller read the same function, so a retry cannot resume a compaction that landed
   beside one user grant boots.
 - `test/setup-apply.test.ts` — a second enabled user grant written by `mason setup` is named in the command's notes, and
   an events-only neighbour is not.
+- `test/chat.test.ts` and the command cases in `test/integrations.test.ts` — the console grant and an `enable` that make
+  the second surface name the home the boot will refuse.
 - `test/integrations.test.ts` — `connector.targets` is refused with this rule in the sentence.
 - `packages/protocol/test/contracts.test.ts` — the session and delivery shapes the removal leaves behind.
 

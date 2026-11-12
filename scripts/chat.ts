@@ -15,7 +15,9 @@
  *
  * The entry itself is written here if it is missing, so `mason chat` works on a home where setup only installed
  * Telegram. That write goes through the same `writeIntegration` the boot reads, so a grant that could not be served
- * fails here rather than at the next start.
+ * fails here rather than at the next start. The write also names the home it just made when it leaves two enabled
+ * connectors holding a person's words, which the boot refuses: writing it silently would leave `mason up` as the first to
+ * say the rule. The refusal itself stays the boot's, as it does for every writer.
  */
 
 import { readFile } from "node:fs/promises";
@@ -27,7 +29,7 @@ import { writeFileAtomic } from "../src/server/atomic.ts";
 import type { ConnectorGrant } from "../src/server/connectors.ts";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
-import { readIntegrations, writeIntegration } from "../src/server/integrations.ts";
+import { readIntegrations, secondUserGrantNote, writeIntegration } from "../src/server/integrations.ts";
 
 /** The built-in entry's name. It is also the name the connector says in its hello, and mason refuses a mismatch. */
 export const CONSOLE = "console";
@@ -52,6 +54,10 @@ export function consoleGrant(): ConnectorGrant {
  *
  * A home that already granted `console` keeps its own grant: the entry is a permission, and a command that silently
  * widened one would be the thing AGENTS rule 8 exists against. `false` says the entry was already there as granted.
+ *
+ * The one thing the write says out loud is the home it may have just made unstartable: the boot allows one enabled
+ * connector holding a person's words (`assertOneUserGrant`), and on a home whose user face is another connector this
+ * grant is the second. `test/chat.test.ts` pins the line.
  */
 export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 	const { integrations } = await readIntegrations(paths);
@@ -63,6 +69,8 @@ export async function ensureConsole(paths: HousePaths): Promise<boolean> {
 		description: existing?.description ?? CONSOLE_DESCRIPTION,
 		connector: consoleGrant(),
 	});
+	const note = secondUserGrantNote((await readIntegrations(paths)).integrations);
+	if (note !== undefined) console.log(dim(`[chat] ${note}`));
 	return true;
 }
 

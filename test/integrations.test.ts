@@ -20,6 +20,7 @@ import { promisify } from "node:util";
 import { RETIRED_GRANT_KEYS } from "../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import {
+	assertOneUserGrant,
 	type Integration,
 	readIntegrations,
 	removeIntegration,
@@ -485,6 +486,36 @@ describe("the integration command", () => {
 		const listed = await integration(paths.home, "list");
 		assert.match(listed.stdout, /connector \(user\)/);
 		assert.doesNotMatch(listed.stdout, /secret|credential/i);
+	});
+
+	it("names the home an enable makes the boot refuse", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					console: { enabled: true, connector: { user: { owner: "local" } } },
+					telegram: { enabled: false, connector: { user: { owner: "8811" } } },
+				},
+			}),
+		);
+
+		const enabled = await integration(paths.home, "enable", "telegram");
+		assert.match(enabled.stdout, /enabled telegram/);
+		// The write lands — the enforcement is the boot's — and the command says what its own write made, as `mason setup`
+		// and `mason chat` do, with the same sentence.
+		assert.match(
+			enabled.stdout,
+			/this home grants a person's words to "console" and "telegram": one bot works for one person, so mason refuses this home at boot until one of them is switched off, by hand/,
+		);
+		const refused = (await readIntegrations(paths)).integrations;
+		assert.throws(() => assertOneUserGrant(paths.integrations, refused), /at most one enabled connector may carry a/);
+
+		// Switching one off is the repair, it says nothing about the rule, and the boot takes the home again.
+		const disabled = await integration(paths.home, "disable", "telegram");
+		assert.doesNotMatch(disabled.stdout, /person's words/);
+		const repaired = (await readIntegrations(paths)).integrations;
+		assert.doesNotThrow(() => assertOneUserGrant(paths.integrations, repaired));
 	});
 
 	it("prints the home and the file it edits when it is asked how to be used", async () => {
