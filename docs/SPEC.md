@@ -12,7 +12,7 @@ what the model may call, and what may cross the wire — and never the rendering
    `Connection` to the `pi-env` daemon), and wakes the agent without a person's input: a routine's timer, or an event a
    connector fires (§3.3).
 2. **Six tools, one reply path:** `read`, `write`, `edit`, `bash`, `send` and `codemode`. A service's tools are reached
-   only from a script, through the live catalog (§4.1e). `send` targets the turn's origin — or a named `<connector>/<target>` — and commits an `app.reply`
+   only from a script, through the live catalog (§4.1e). `send` goes back to the turn's origin and commits an `app.reply`
    entry, which the outbox sends (§4.1d).
 3. **The projection:** `src/server/projection.ts` derives `transcript`, `queued` and `agentStatus` from the durable view,
    and the durable `ConversationView` itself never crosses (§4.1a).
@@ -30,7 +30,8 @@ narrow job and a small context, that returns a report; it has no home, no voice 
 
 A connector carries the person's words. Its entry declares the one actor whose words are the owner's, so mason needs no
 roster, no pairing link and no second credential class: `/api/health` is the only path that answers without one
-(§4.1b).
+(§4.1b). One person is one surface as well: at most one **enabled** entry may hold the `user` face, and a home with two
+refuses the boot with a sentence naming the rule (`docs/adr/0015-a-reply-goes-back-where-the-words-came-from.md`).
 
 ---
 
@@ -66,7 +67,7 @@ mason/
 │       ├── integration-status.ts      # What the boot's connections came to, for the report
 │       ├── commands.ts                # The four controls, and the claim that makes a control id an identity
 │       ├── hooks.ts                   # What wakes the bot: a routine's timer, a connector's event
-│       ├── replies.ts                 # What a turn's send is: its address, its origin, and the entry carrying both
+│       ├── replies.ts                 # What a turn's send is: its origin, and the entry carrying it
 │       ├── projection.ts              # The wire boundary: what a reader sees
 │       ├── status.ts                  # AgentStatus, derived from the committed view
 │       ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
@@ -191,7 +192,7 @@ export interface EventHookConfig {
      - Anything else is a **gesture** — the run supervisor, a caller with no `requestId` — and `gestureRequestId()` gives each its own random key: an act is an intent, so two acts are two fires, and a fire after a restart cannot collide with one from before it.
      A named delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
   5. An event fire steers: `whenBusyFor("hook")` places it in the turn in flight, and pi-durable puts it at the boundary after the tool round that is running, so a message arriving mid-work is read by that work. The case that decided it: a queued chat message cancelling a poster sat twenty-eight minutes and the poster went out anyway. A fire that asks for a follow-up gets one: a routine whose report has nothing to interrupt for says so at the submit (`src/server/admission.ts`).
-  6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The answer is one Mason-owned call, `send` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript and targets it, or a target the model named when nothing wrote to the turn. No template names a vendor's tool: the instruction says where its words came from, not which tool a medium exposes. An event with no origin records the send and answers the model that nobody was reached — a message nobody received is the failure this arrangement exists to avoid. An origin naming a connector other than the socket's own cannot arrive: the socket is the connector, and the grant is the ceiling.
+  6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The answer is one Mason-owned call, `send` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript and targets it. No template names a vendor's tool: the instruction says where its words came from, not which tool a medium exposes. An event with no origin records the send and answers the model that nobody was reached — a message nobody received is the failure this arrangement exists to avoid. An origin naming a connector other than the socket's own cannot arrive: the socket is the connector, and the grant is the ceiling.
 - **Where the wake rules come from.** A **routine** is the agent's own timer, an entry `{ name, intervalSeconds, prompt }` of `agent/routines.json` (§3.5), and nothing is built in: an absent file is zero routines, what a deployment ships. Validation gates the file: a name is `[a-z0-9-]` and unique, an interval at least 30 seconds, a non-empty prompt. A malformed file is one notice, the last good set armed. The agent edits it with `write` — there is no tool to build — and the edit re-arms the set: a new name arms, a removed one stops, a changed interval or prompt resets its slot.
 - **The boot scan.** `lastFiredAt`, `fireCount`, `nextFireAt` persist in `service/data/routines-state.json` (`0600`), never inside `agent/`. On start, a routine waits the remainder of its persisted `nextFireAt` instead of a fresh interval — a wake that was pending survives the restart — and a past-due slot fires once from its own slot key: a long downtime is one catch-up fire, never a stampede of the missed slots.
 - **The supervisor's lifecycle hook.** `retry-failed-run` is defined where it fires, `src/server/run-retry.ts`: disabled, no interval, nothing schedules it.
@@ -484,9 +485,9 @@ upgrade carries `Authorization: Bearer masonc_…`, verified against the hash in
 becomes the child host `connector:<name>` with the principal the credential stamped; a second socket for one connector
 supersedes the first, closed with a reason. No ping, no version handshake, no frame of our own.
 
-**The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the `commands` the
-grant holds, the `targets` it may be sent to, the event `kinds` and their routine, the limits — re-read whenever it
-changes. Nothing is accepted before it resolves, which is what `host.get` already does.
+**The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the `commands` the grant
+holds, the event `kinds` and their routine, the limits — re-read whenever it changes. Nothing is accepted before it
+resolves, which is what `host.get` already does.
 
 **Admission is one append.** `append` takes an `appendId`, an optional opaque `origin` (`{ref, messageId?, actor?}`) and
 one of three types. `submission` places ordinary human conversation: an `app.connector` entry whose `data.origin` is the
@@ -507,12 +508,12 @@ images also passed as image blocks.
 **One send, and an outbox that survives a restart.** `send` commits an `app.reply` entry — the delivery id is
 `reply:<callId>` — and the outbox (`src/server/connector.ts`) calls `deliver` on `mason.connector` for every committed
 reply with no `app.delivery` entry yet, in entry order, under a 15-second deadline on the `deliver` call and a 10-second
-one on binding the reference. The address is the turn's origin, or a `<connector>/<target>` the model named; a target the
-grant does not hold is refused with a sentence, never rerouted. The acknowledgement is written down: `delivered` and
-`duplicate` settle it, `uncertain` is recorded and never retried, `rejected` is recorded with its detail. A send that was
-never acknowledged stays owed and is resent after a reconnect under the same id, where the connector's own ledger answers
-`duplicate` or `uncertain`. One send, one destination: no fan-out, no second copy by another path. A turn nobody wrote
-to records the send and says nobody was reached instead of claiming a delivery.
+one on binding the reference. The address is the turn's origin: a delivery goes back to the connector that carried the
+words, and no other address exists. The acknowledgement is written down: `delivered` and `duplicate` settle it,
+`uncertain` is recorded and never retried, `rejected` is recorded with its detail. A send that was never acknowledged
+stays owed and is resent after a reconnect under the same id, where the connector's own ledger answers `duplicate` or
+`uncertain`. One send, one destination: no fan-out, no second copy. A turn nobody wrote to records the
+send and says nobody was reached instead of claiming a delivery.
 
 **Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a
 content id and answers `{contentId, size, expiresAt}`. The store is `service/data/attachments/<connector>/`, durable

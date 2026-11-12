@@ -22,8 +22,8 @@ A fire carries an origin only when the sender could name a place to answer. So:
 
 - a fire with an origin: `send` goes back there, and that is the whole routing decision;
 - a fire with none (a schedule, a retry, a service with no chat): `send` records the message and tells you nobody was
-  reached. If you know where it should go, name it with `send`'s `to` as `<connector>/<target>` — the addresses are in
-  your prompt's integrations section.
+  reached. There is no address to name: a send carries no destination of yours, so the turn says what happened rather
+  than guessing a chat.
 
 ## Routines
 

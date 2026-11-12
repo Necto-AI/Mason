@@ -125,13 +125,15 @@ way to speak to anyone, never a deployment.
 _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
 **delivery**:
-One outbound act: mason calls `deliver` on the connector that owes an answer, with one address and the blocks to send.
-The words were already committed, so a delivery follows the transcript rather than duplicating it.
+One outbound act: mason calls `deliver` on the connector that owes an answer, with the address the turn's words came
+from and the blocks to send. The words were already committed, so a delivery follows the transcript rather than
+duplicating it.
 _Avoid_: message, notification
 
 **send**:
-The one mason-owned tool a turn uses to reach its reader: it addresses the turn's origin, or a target for a turn nobody
-wrote to, and commits an `app.reply` entry.
+The one mason-owned tool a turn uses to reach its reader: it answers where the turn's words came from and commits an
+`app.reply` entry. There is no address for a model to name, so a turn nobody wrote to records the send and says nobody
+was reached.
 _Avoid_: reply (the former name), send_to_user, message
 
 **delivery id**:
@@ -165,11 +167,6 @@ _Avoid_: integration (that is the entry), plugin, client, app
 The one inbound call: a submission, an event or a notice, each with an id mason dedupes forever and an origin it never
 parses. One call for three shapes is what lets an events-only connector be answered.
 _Avoid_: submit, fire, envelope
-
-**target**:
-One place a connector may be sent to, declared in `connector.targets` and named as `<connector>/<target>`. Unlike a
-**ref** it is a name a person wrote, and one mason can refuse.
-_Avoid_: conversation, room, destination
 
 **payload**:
 The data an event carries. It reaches the model fenced as untrusted data and never becomes an instruction.
