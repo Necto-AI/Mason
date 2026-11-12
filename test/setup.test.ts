@@ -210,6 +210,20 @@ describe("a connector that is already running somewhere else", () => {
 		assert.equal(await readFile(paths.integrations, "utf8").catch(() => undefined), undefined);
 	});
 
+	test("a retired address flag is refused with the rule, not as unknown", async () => {
+		const home = await tempHome();
+		// `--conversations` was a spelling of `--targets`, and both named a place to be sent to. A script that used
+		// either yesterday reads why it is gone, in the same sentence the boot and the grant reader use.
+		for (const flag of ["--targets", "--conversations"]) {
+			const result = await setup(["--connector", "custom", flag, "8811", "--yes", "--no-start"], home);
+			assert.equal(result.code, 1);
+			assert.match(result.stderr, new RegExp(`${flag} named a place to be sent to`));
+			assert.match(result.stderr, /a send goes back to the connector that carried the words/);
+			const paths = housePaths(home);
+			assert.equal(await readFile(paths.integrations, "utf8").catch(() => undefined), undefined);
+		}
+	});
+
 	test("a url that is not a socket is refused before anything is written", async () => {
 		const home = await tempHome();
 		const result = await setup(

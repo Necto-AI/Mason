@@ -126,6 +126,13 @@ export function parseArgs(argv: readonly string[]): SetupArgs {
 			case "--owner":
 				current().owner = value();
 				break;
+			case "--targets":
+			case "--conversations":
+				// A retired spelling, refused with the rule rather than as unknown: a script that used it yesterday
+				// reads why it is gone. `test/setup.test.ts` pins the sentence.
+				throw new Error(
+					`${flag} named a place to be sent to; a send goes back to the connector that carried the words, so a grant names faces and event kinds only`,
+				);
 			case "--events":
 				current().events = value();
 				break;
