@@ -318,6 +318,25 @@ test("a connector turn is queued to its origin, under the id the entry and the s
 	}
 });
 
+test("a connector the operator switched off mid-turn is refused, and nothing is addressed to it", async () => {
+	const { setIntegrations } = await import("../src/server/integrations.ts");
+	// The boot's snapshot still says the turn's words came from telegram, and the operator switched it off in the file
+	// while the turn was running: sending there would land where nobody is reading, which the refusal says out loud.
+	setIntegrations({ telegram: { ...TELEGRAM, enabled: false } as never });
+	try {
+		const appended: unknown[] = [];
+		const result = await sendTool.execute(
+			{ text: "Nothing until Thursday." },
+			apiFor({ callId: "call-12", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
+			{} as never,
+		);
+		assert.match(outputText(result.output), /cannot deliver: "telegram" is not an enabled connector/);
+		assert.deepEqual(appended, [], "nothing is committed to a connector that can no longer be reached");
+	} finally {
+		setIntegrations({});
+	}
+});
+
 test("a fire that named its conversation answers in it, and one that did not records the work and reaches nobody", async () => {
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	setIntegrations({ telegram: TELEGRAM as never });

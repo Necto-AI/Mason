@@ -206,7 +206,8 @@ export function textOfBlocks(blocks: readonly ContentBlock[]): string {
  * the words.
  *
  * The check is the operator's configuration, read from the boot's snapshot — the same answer the session gives, so a
- * send can never address a connector the operator switched off mid-turn.
+ * send can never address a connector the operator switched off mid-turn. The refusal is pinned by `test/delivery.test.ts`,
+ * "a connector the operator switched off mid-turn is refused, and nothing is addressed to it".
  */
 export function reachableAddress(
 	integrations: Record<string, Integration>,
