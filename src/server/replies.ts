@@ -4,7 +4,7 @@
  * A turn always has an **origin** — the connector that carried the person's words, or the transcript itself when
  * nobody carried them — and `send` addresses it. The model never names a vendor's tool, and an event's instruction never
  * names one either: the routing is mason's, decided from what actually started the turn rather than from prose in a
- * prompt.
+ * prompt. Nor does it name an address: there is no other destination to name (#200).
  *
  * Three shapes, and they differ in where the words land, not in how they are committed:
  *
@@ -12,9 +12,9 @@
  *   outbox delivers it;
  * - mason wrote the words (a routine, a retry): the transcript is the medium, so the send is committed and that is the
  *   delivery;
- * - nothing that carries words started the turn (a schedule, a retry, an event from a service with no reader), and the
- *   model named no address: the send is still committed — the work is recorded — and the result says nobody was reached.
- *   Claiming a delivery nobody received is the one outcome the whole arrangement exists to avoid.
+ * - nothing that carries words started the turn (a schedule, an event from a service with no reader): the send is still
+ *   committed — the work is recorded — and the result says nobody was reached. Claiming a delivery nobody received is
+ *   the one outcome the whole arrangement exists to avoid.
  *
  * ## Where the origin lives
  *
@@ -33,11 +33,9 @@ import type { Actor, ContentBlock, Origin } from "mason-protocol";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder, isReflectionAsk } from "../shared/contract.ts";
 import type { Integration } from "./integrations.ts";
 
-/** Where a send goes: one connector, and one address on it. */
+/** Where a send goes: one connector, and the address it minted on the append the turn came from. */
 export interface SendAddress {
 	readonly connector: string;
-	/** A target out of the entry's `connector.targets`, for a message the model addressed. */
-	readonly target?: string;
 	/** The opaque address the connector minted on the append a turn came from. */
 	readonly ref?: string;
 }
@@ -118,12 +116,26 @@ export function turnOriginOf(entries: readonly EntryRecord[]): TurnOrigin {
 }
 
 /**
+ * The entry kinds that are mason's own working notes and never a turn's input, whatever their messages look like.
+ *
+ * A compaction's summary is a `user`-role message (`pi.compaction`), and so is the prompt a turn was planned with
+ * (`pi.system`): reading either as the newest input is what made #199 erase a turn's origin mid-turn, so the kinds are
+ * refused here rather than recognised by what their text says.
+ */
+const NOT_INPUT_KINDS: ReadonlySet<string> = new Set(["pi.compaction", "pi.system"]);
+
+/**
  * Whether an entry is an input at all. A connector entry is always the sender's words: anything a person may type is
  * what the wire carried, including the first words a gate prints, and only mason's own side writes a gate's words. The
  * delivery reminder and the reflection ask are things the model reads mid-turn, not words a person sent, so a turn that
- * began with a person keeps its origin even after a gate wrote the newest entry in the transcript.
+ * began with a person keeps its origin even after a gate wrote the newest entry in the transcript. An entry kind that is
+ * a working note is not an input whatever its text says: that is the half of this rule a kind decides (#199).
+ *
+ * `test/delivery-gate.test.ts` pins both halves: a compaction between the person's entry and the send, and a system
+ * entry that carries a user-role message.
  */
 export function isInputEntry(entry: EntryRecord): boolean {
+	if (NOT_INPUT_KINDS.has(entry.kind)) return false;
 	const text = userText(entry);
 	if (entry.kind === CONNECTOR_ENTRY_KIND) return text !== undefined;
 	return text !== undefined && !isDeliveryReminder(text) && !isReflectionAsk(text);
@@ -194,10 +206,11 @@ export function textOfBlocks(blocks: readonly ContentBlock[]): string {
 }
 
 /**
- * Whether an address is one this boot can reach: the connector is enabled, and a named target is one its grant lists.
+ * Whether an address is one this boot can reach: the connector is enabled, and it is still the connector that carried
+ * the words.
  *
  * The check is the operator's configuration, read from the boot's snapshot — the same answer the session gives, so a
- * send can never address a target the connector was not granted.
+ * send can never address a connector the operator switched off mid-turn.
  */
 export function reachableAddress(
 	integrations: Record<string, Integration>,
@@ -206,15 +219,6 @@ export function reachableAddress(
 	const integration = integrations[address.connector];
 	if (integration === undefined || !integration.enabled || integration.connector === undefined) {
 		return { ok: false, reason: `"${address.connector}" is not an enabled connector` };
-	}
-	if (address.target === undefined) return { ok: true };
-	const target = integration.connector.targets?.find((entry) => entry.id === address.target);
-	if (target === undefined) {
-		const known = (integration.connector.targets ?? []).map((entry) => entry.id).join(", ") || "none";
-		return {
-			ok: false,
-			reason: `"${address.connector}" is not granted the target "${address.target}" (it has: ${known})`,
-		};
 	}
 	return { ok: true };
 }

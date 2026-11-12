@@ -28,6 +28,7 @@ import {
 	fauxText,
 	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
+import type { Conversation } from "@earendil-works/pi-durable";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
 import { RETRY_HOOK, RETRY_HOOK_ID } from "../src/server/run-retry.ts";
@@ -78,6 +79,23 @@ async function temporaryHome(file: unknown = integrations): Promise<HousePaths> 
 /** The first line of the retry hook's instruction, which is how the factory tells the resumed turn from the parked one. */
 const RETRY_INSTRUCTION = `[ROUTINE: ${RETRY_HOOK.name}]`;
 
+/**
+ * One of mason's own working notes, committed the way a compaction commits its summary mid-turn.
+ *
+ * A raw commit rather than a submission: the entry changes what the model sees, so a submission would queue it behind
+ * the run already going, and the transcript the retry reads would not hold it where a real compaction puts it.
+ */
+async function writeCompaction(conversation: Conversation, text: string): Promise<void> {
+	await conversation.commit(
+		(tx) =>
+			tx.appendEntry(conversation.id, {
+				kind: "pi.compaction",
+				model: [{ role: "user", content: text, timestamp: 0 }],
+			}),
+		BACKGROUND_CONTEXT,
+	);
+}
+
 /** The text a message carries: a plain string, or its text blocks joined. */
 function textOfMessage(message: { readonly content?: unknown }): string {
 	const content = message.content;
@@ -115,6 +133,33 @@ function failingModel(): ResolvedModel {
 /** The parked turn fails, the retry answers — one step per generation, and the factory reads the context to tell them apart. */
 function retryOnlyModel(): ResolvedModel {
 	return scriptedModel(Array.from({ length: 8 }, () => ANSWER_ONLY_THE_RETRY));
+}
+
+/**
+ * The model under the failure: that generation waits for a working note to land and then dies.
+ *
+ * The compaction has to be written while the run is in flight and before its error, because that is the order a turn
+ * that compacts before it answers leaves behind — the error entry is what the supervisor slices the transcript at.
+ */
+function compactionThenFailure(compact: () => Promise<void>): FauxResponseStep {
+	return async () => {
+		await compact();
+		return fauxAssistantMessage("", { stopReason: "error", errorMessage: "the provider is down" });
+	};
+}
+
+/** A faux provider whose script is set after the server exists: the failure under test needs the conversation it writes. */
+function stagedModel(): {
+	readonly access: ResolvedModel;
+	readonly script: (steps: readonly FauxResponseStep[]) => void;
+} {
+	const faux = fauxProvider();
+	const models = createModels();
+	models.setProvider(faux.provider);
+	return {
+		access: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true },
+		script: (steps) => faux.setResponses([...steps]),
+	};
 }
 
 /** A provider that answers each generation with the next step, one per call, and errors once the script runs out. */
@@ -266,6 +311,43 @@ describe("a retry of a turn somebody was waiting on", () => {
 					CHAT,
 					"the answer is owed to the chat, not to a transcript nobody in it can read",
 				);
+			} finally {
+				await server.close();
+			}
+		});
+	});
+});
+
+describe("a retry of a turn that compacted before it failed", () => {
+	it("answers in the chat the failed turn was answering, not in the transcript a summary came from", async () => {
+		await withSchedule(async () => {
+			const staged = stagedModel();
+			const server = await serve(await temporaryHome(chatIntegrations), staged.access);
+			try {
+				const conversation = await server.runtime.conversation();
+				staged.script([
+					compactionThenFailure(() =>
+						writeCompaction(conversation, "Summary so far: the chat asked whether the migration is possible."),
+					),
+					...Array.from({ length: 8 }, () => ANSWER_ONLY_THE_RETRY),
+				]);
+				// A person wrote in the chat, and the fire carries where those words came from.
+				await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?", origin: CHAT });
+
+				await waitFor(server.runtime, (all) => all.some((entry) => entry.kind === REPLY_ENTRY_KIND), 20_000);
+				const all = await entries(server.runtime);
+				assert.ok(
+					all.some((entry) => entry.kind === "pi.compaction"),
+					"the compaction is in the history the retry reads its origin from",
+				);
+				const retry = all.find((entry) => entry.kind === HOOK_ENTRY_KIND && entry.hookId === RETRY_HOOK_ID);
+				assert.deepEqual(
+					retry?.data.origin,
+					CHAT,
+					"the retry resumes the failed turn, not the summary that landed after its words",
+				);
+				const reply = all.find((entry) => entry.kind === REPLY_ENTRY_KIND);
+				assert.deepEqual(reply?.data.target, CHAT, "the answer is still owed to the chat that is waiting");
 			} finally {
 				await server.close();
 			}

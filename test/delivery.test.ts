@@ -357,29 +357,21 @@ test("a fire that named its conversation answers in it, and one that did not rec
 	assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined);
 });
 
-test("a named target is used for a turn that has no origin, and a room the entry does not permit is refused", async () => {
+test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	setIntegrations({ telegram: TELEGRAM as never });
 	try {
 		const appended: unknown[] = [];
-		const sent = await sendTool.execute(
-			{ text: "the brief", to: "telegram/team" },
+		// An argument a model may still write from an older prompt. `send` has no address parameter any more, so the words
+		// cannot be sent past the turn's own origin — and this turn has none, so the message is recorded and nobody is
+		// reached. Naming a connector that exists does not make it a destination.
+		const named = await sendTool.execute(
+			{ text: "the brief", to: "telegram/team" } as never,
 			apiFor({ callId: "call-11", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
 			{} as never,
 		);
-		assert.equal(outputText(sent.output), "queued for delivery to telegram/team");
-		assert.deepEqual((appended[0] as { data: { target?: unknown } }).data.target, {
-			connector: "telegram",
-			target: "team",
-		});
-
-		const refused = await sendTool.execute(
-			{ text: "elsewhere", to: "telegram/nowhere" },
-			apiFor({ callId: "call-12", entries: hookTurn("[ROUTINE: morning brief]") }),
-			{} as never,
-		);
-		assert.match(outputText(refused.output), /cannot deliver:/);
-		assert.match(outputText(refused.output), /not granted the target/);
+		assert.match(outputText(named.output), /nobody was reached/, "the named address reaches nobody");
+		assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined, "nothing was addressed");
 	} finally {
 		setIntegrations({});
 	}

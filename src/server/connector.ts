@@ -353,7 +353,6 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		const args: DeliverArgs = {
 			deliveryId: record.deliveryId,
 			blocks: record.blocks as DeliverArgs["blocks"],
-			...(address.target === undefined ? {} : { target: address.target }),
 			...(address.ref === undefined ? {} : { ref: address.ref }),
 		};
 		const ack = await callConnector(name, args);
