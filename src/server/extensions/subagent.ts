@@ -114,10 +114,9 @@ export interface SubagentOptions {
 	readonly role: AgentRole;
 }
 
-/** A child found or created for this call: its conversation id, and whether this call is the one that made it. */
+/** The child this call made, or one a previous execution of it already made. */
 interface Child {
 	readonly id: ConversationId;
-	readonly created: boolean;
 }
 
 /** The memo name the child's id is kept under, on the tool task: the durable answer to "did I make one already?". */
@@ -237,14 +236,14 @@ async function findOrCreateChild(
 	plan: { readonly role: AgentRole; readonly turns: number; readonly cwd?: string; readonly readOnly: boolean },
 ): Promise<Child> {
 	const remembered = await api.memo<number>(CHILD_MEMO, context);
-	if (remembered !== undefined) return { id: remembered as ConversationId, created: false };
+	if (remembered !== undefined) return { id: remembered as ConversationId };
 	const child = await api.commit(async (tx) => {
 		const owned = await tx.scanConversations({ ownerTaskId: api.taskId }, 1);
 		const existing = owned.items[0];
-		if (existing !== undefined) return { id: existing.id, created: false };
+		if (existing !== undefined) return { id: existing.id };
 		const record = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
 		await configure(tx, record.id, childChange(plan));
-		return { id: record.id, created: true };
+		return { id: record.id };
 	}, context);
 	await api.memo(CHILD_MEMO, child.id as unknown as number, context);
 	return child;
