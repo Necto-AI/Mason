@@ -11,6 +11,7 @@ Chord's, and a peer that speaks Chord speaks this.
 | member | what it does |
 |---|---|
 | state `session` | the handshake: this connector's commands, granted kinds and budgets |
+| state `conversation` | the conversation a person reads — transcript rows, queue, run status — with its revision and diffs |
 | `append(append)` | hands mason one of three things: a person's words, an event, or a notice |
 | `control(op)` | spends one control out of the `session.commands` vocabulary |
 
@@ -21,6 +22,37 @@ Chord's, and a peer that speaks Chord speaks this.
 | `deliver(delivery)` | sends one message to one address; the return value is the acknowledgement |
 
 There is no third contract and no method registry. A peer may call what the contract declares.
+
+## The conversation
+
+`conversation` is mason's read model as one state member: what a chat window renders, and nothing the model wrote for
+itself. Chord carries it — a snapshot when the member is first held and after a reconnect, then diffs, which is why the
+protocol has no envelope, no sequence number and no cursor of its own.
+
+| field | what it is |
+|---|---|
+| `revision` | a counter mason owns: it rises by one for every published value within one mason process, and starts again at 0 when mason restarts |
+| `transcript` | the reader's rows, in order: `user`, `delivered` (a message, `streaming` while the model writes it), `event`, `notice` |
+| `queue` | the submissions waiting behind the running turn, each with `withdrawable` |
+| `run` | one token: `idle`, `generating`, `running_tools`, `retrying`, `compacting` |
+| `busy` | whether a turn is running; `activeRunTaskId` names it when it is |
+| `transitions` | the transitions that produced *this* revision, and no others: `message.committed`, `run.started`, `run.stopped`, `run.errored`, `queue.added`, `queue.withdrawn` |
+
+A `delivered` row streams under the id the committed row carries, so a message a person watches arrive becomes the row
+it settles into: one message, one id, one row. Continuity is by id, not by presence: a row can leave the transcript for
+the tool phase of a turn and return committed under the same id a revision later, so a client keyed by id keeps its
+place. A revision that reports nothing carries an empty `transitions`; a snapshot describes the revision it is, never a
+history to replay.
+
+Two frames carry this member: a snapshot, and the diffs that follow it. A snapshot is authoritative — a client applies
+the one it is handed, whatever revision it carries. A diff is applied to what the client holds and kept only when its
+revision is greater than the held one; a diff that is not greater is one already applied, and dropping it is what makes a
+reconnect safe. The counter is mason's and process-scoped: it starts again at 0 with every mason process, so a restarted
+mason hands a client holding revision 42 a snapshot at revision 1, and the snapshot is the frame that wins.
+
+Chord 1 has no event member on a contract, so a transition reaches a client as the state member's frame for its
+revision rather than as a frame of its own. What the client is promised is the kind and its subject — a row id, a run
+task id or a queue id — so it reacts to what happened without re-deriving the transcript to find out.
 
 ## The ten rules
 
@@ -103,6 +135,12 @@ field a peer ignores, and every object here has `additionalProperties: true` for
 be retired inside major 1 for the same reason: an open object binds whether or not it carries one, so a deployed
 connector keeps working with `session.targets` and `delivery.target` gone and simply reads no targets. Major 1 stays the
 version (#200); a bump would refuse every connector already deployed to remove two fields nobody has to bind.
+
+A **member** may be added inside major 1 as well, and `conversation` is the first one: binding is directional, so a
+provider has to cover what its consumer names and is free to offer more. A connector deployed before the member existed
+names `session`, `append` and `control`, and those are what it is served; it receives no `conversation` frames at all,
+because Chord streams only the members a consumer's own contract declares. The compatibility test in `test/` freezes the
+description such a connector holds and binds it to the served contract, which is the proof rather than the promise.
 
 ## What an SDK has to implement
 

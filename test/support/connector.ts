@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
+import { createHost, type StateEvent } from "@earendil-works/chord";
 import { createModels } from "@earendil-works/pi-ai/models";
 import {
 	type FauxResponseStep,
@@ -21,7 +22,14 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { type Connector, type ConnectorHandlers, createConnector, nodeWebSocketLink } from "mason-connector";
 import { MemoryStore } from "mason-connector/store/memory";
-import { errorCodeOf } from "mason-protocol";
+import {
+	type ConversationState,
+	connectorHost,
+	errorCodeOf,
+	MasonConnector,
+	MasonPeer,
+	type PeerRef,
+} from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../../src/server/house.ts";
@@ -298,6 +306,42 @@ export async function entriesOf(server: RunningServer): Promise<readonly Record<
 	const conversation = await server.runtime.conversation();
 	const page = await conversation.entries({}, 1000, undefined, { signal: AbortSignal.timeout(5_000) } as never);
 	return page.items as unknown as Record<string, unknown>[];
+}
+
+/**
+ * One raw Chord client holding `mason.peer`: the socket the SDK connector itself opens, with the state member read.
+ *
+ * The SDK is the right client for the protocol's methods and the wrong one for this: it reads `session` once and gives
+ * away nothing else, so a test that wanted the conversation's frames would be testing the SDK's copy of them. This
+ * holds the peer's reference directly, so what a case sees is what Chord put on the wire.
+ */
+export interface HeldPeer {
+	readonly ref: PeerRef;
+	/** Every state frame of `conversation`, in the order the link delivered it. */
+	readonly frames: StateEvent<ConversationState>[];
+	close(): Promise<void>;
+}
+
+export async function holdPeer(
+	served: ServedConnector,
+	options: { readonly name?: string; readonly credential?: string } = {},
+): Promise<HeldPeer> {
+	const principal = { connector: options.name ?? "telegram" };
+	const host = createHost({
+		name: connectorHost(principal.connector),
+		self: principal,
+		onError: () => {},
+	});
+	// The door calls `deliver` on the outbox's own schedule; a client that answers it keeps the log free of "unanswered".
+	host.serve(MasonConnector, () => ({ variant: "default", deliver: async () => ({ status: "delivered" as const }) }));
+	const link = nodeWebSocketLink(WebSocket as never)(served.url, {
+		credential: options.credential ?? served.credential,
+	});
+	host.connect(link, { principal });
+	const ref = (await host.get(MasonPeer, {})) as unknown as PeerRef;
+	const frames: StateEvent<ConversationState>[] = [];
+	ref.conversation.events((event) => frames.push(event));
+	return { ref, frames, close: () => host.close() };
 }
 
 /** A minimal entry lookup by kind, for assertions that only care that a kind exists. */

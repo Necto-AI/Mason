@@ -719,6 +719,10 @@ test("a fire that named its conversation keeps its origin through the reflection
  * that finds the newest input by its text takes the summary for the person and the send commits unaddressed — the answer
  * is lost with nothing recording it as failed. The predicate refuses the kind instead, and the reply comes back
  * addressed to the chat that wrote, with the submission it answers.
+ *
+ * From Step 2 the same turn has a second, client-visible half: the state a client applies carries one reply row for it,
+ * under one id. That is the assertion that outlives the delivery removal — the recorded origin says where the answer
+ * went, and the row says the reader got it.
  */
 for (const note of [
 	{ kind: "pi.compaction", text: "Summary so far: the person asked about the migration." },
@@ -730,7 +734,7 @@ for (const note of [
 		const telegram = { enabled: true, connector: { user: { owner: "8811" } } };
 		const { setIntegrations } = await import("../src/server/integrations.ts");
 		await seedRoutine(directory);
-		const { settled, entries } = await runTurn(
+		const { settled, entries, transcript } = await runTurn(
 			directory,
 			script,
 			[workingNote(note.kind, note.text)],
@@ -761,6 +765,11 @@ for (const note of [
 				{ connector: "telegram", ref: "team", messageId: "m7" },
 				"and the reply records whose submission it answers",
 			);
+			// One message, one row: the id is the one the streaming row carried, so a client that watched the answer
+			// arrive does not get a second row when it commits.
+			const delivered = transcript.filter((row) => row.kind === "delivered");
+			assert.equal(delivered.length, 1, "the reader's state carries exactly one reply row for the turn");
+			assert.deepEqual(delivered[0], { kind: "delivered", id: "reply:sent", text: "The migration is done." });
 		} finally {
 			setIntegrations({});
 		}

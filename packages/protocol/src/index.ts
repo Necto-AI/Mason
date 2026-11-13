@@ -5,7 +5,8 @@
  *
  * - **`mason.peer`** is served by mason and reached by the connector. It is how a connector hands mason something — a
  *   person's words, an event, a notice — and how it asks for a control. Its `session` state is the handshake: the grant
- *   as the connector sees it, readable once the reference is ready.
+ *   as the connector sees it, readable once the reference is ready. Its `conversation` state is the conversation a
+ *   person reads — rows, queue, run status — with a monotonic revision and diff frames, for a client that renders it.
  * - **`mason.connector`** is served by the connector at `connector:<name>` and reached by mason. It is one method,
  *   `deliver`, and its answer is the acknowledgement.
  *
@@ -22,10 +23,25 @@ import {
 	hostFamily,
 	hostNamed,
 	method,
+	type Readable,
 	type RemoteContract,
 	remote,
 } from "@earendil-works/chord";
-import { arr, bool, int, lit, map, num, obj, opt, type Static, str, union, unknown } from "@earendil-works/pi-schema";
+import {
+	arr,
+	bool,
+	int,
+	lit,
+	map,
+	num,
+	obj,
+	oneOf,
+	opt,
+	type Static,
+	str,
+	union,
+	unknown,
+} from "@earendil-works/pi-schema";
 
 /** The major version. Two peers that disagree about it cannot talk, and Chord refuses the link rather than degrading. */
 export const PROTOCOL_MAJOR = 1;
@@ -259,6 +275,82 @@ export const SessionSchema = obj(
 );
 export type Session = Static<typeof SessionSchema>;
 
+/**
+ * One row of the reader's transcript, exactly as mason's projection emits it.
+ *
+ * The vocabulary is mason's own (`src/shared/contract.ts`), restated here because the wire validates it; the projection
+ * is typed against both spellings, so a field added on one side and not the other is a type error rather than a row a
+ * client silently drops. Nothing here is the model's working notes: an entry kind this does not name never crosses.
+ */
+export const TranscriptItemSchema = union([
+	obj({ kind: lit("user"), id: str(), text: str(), author: opt(str()), at: opt(num()) }, { open: true }),
+	obj({ kind: lit("delivered"), id: str(), text: str(), failed: opt(bool()), streaming: opt(bool()) }, { open: true }),
+	obj({ kind: lit("event"), id: str(), name: str() }, { open: true }),
+	obj({ kind: lit("notice"), id: str(), text: str() }, { open: true }),
+]);
+
+/** One queued submission, labelled for the reader. `withdrawable` is false once the inbox has taken it. */
+export const QueuedItemSchema = obj(
+	{ id: int(), mode: str(), text: str(), author: opt(str()), withdrawable: bool() },
+	{ open: true },
+);
+
+/** What the conversation is doing, as one token a client maps to its own words. */
+export const RunStatusSchema = oneOf(["idle", "generating", "running_tools", "retrying", "compacting"] as const);
+
+/** The six transitions a revision can report, in the one vocabulary both sides spell. */
+export const CONVERSATION_TRANSITIONS = [
+	"message.committed",
+	"run.started",
+	"run.stopped",
+	"run.errored",
+	"queue.added",
+	"queue.withdrawn",
+] as const;
+export type ConversationTransitionKind = (typeof CONVERSATION_TRANSITIONS)[number];
+
+/**
+ * One thing that happened, named by the revision that reports it: the client reacts without re-deriving the transcript.
+ *
+ * The transition that `message.committed` names is a transcript row under `rowId`; a run transition names
+ * `runTaskId`; a queue transition names the queued submission under `queueId`, as `queue[].id` holds it.
+ */
+export const ConversationTransitionSchema = obj(
+	{
+		kind: oneOf(CONVERSATION_TRANSITIONS),
+		revision: int(),
+		rowId: opt(str()),
+		runTaskId: opt(str()),
+		queueId: opt(int()),
+	},
+	{ open: true },
+);
+export type ConversationTransition = Static<typeof ConversationTransitionSchema>;
+
+/**
+ * The conversation a person reads, as state: the projection mason already derives, plus the revision that orders it.
+ *
+ * A snapshot is authoritative: a client applies the one it is handed whatever revision it carries. A *diff* is applied
+ * to what the client holds and kept only when its `revision` is greater — one that is not greater is a diff already
+ * applied, and dropping it is what makes a reconnect safe. The counter is process-scoped and starts again at 0 with
+ * mason, so a restart converges on the snapshot. The `transitions` are the ones that produced *this* revision and no
+ * others: a revision with nothing to report carries an empty list, and a snapshot's own transitions describe the
+ * snapshot, never a history a client would have to replay.
+ */
+export const ConversationStateSchema = obj(
+	{
+		revision: int(),
+		transcript: arr(TranscriptItemSchema),
+		queue: arr(QueuedItemSchema),
+		run: RunStatusSchema,
+		busy: bool(),
+		activeRunTaskId: opt(str()),
+		transitions: arr(ConversationTransitionSchema),
+	},
+	{ open: true },
+);
+export type ConversationState = Static<typeof ConversationStateSchema>;
+
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* The two contracts                                                                                                 */
 /* ---------------------------------------------------------------------------------------------------------------- */
@@ -274,7 +366,9 @@ export type Session = Static<typeof SessionSchema>;
 
 /**
  * Mason's half, served at `mason`. The object is per connector: its principal is the credential's, and the `session`
- * state the factory exposes is that connector's grant and nobody else's.
+ * state the factory exposes is that connector's grant and nobody else's. The `conversation` member is the one
+ * conversation mason serves and every connector reads the same one: one state member with its diffs, which is why a
+ * connector that never names it still binds (rule 9), and why nothing else on the wire carries a transcript.
  *
  * Annotated `RemoteContract` rather than left inferred: the inferred type names `MethodSpec` and the rest of the
  * contract internals, which chord does not export, so a declaration file cannot be written from it.
@@ -285,7 +379,7 @@ export const MasonPeer: RemoteContract = remote(CONTRACT.peer, {
 	host: hostNamed(MASON_HOST),
 	variants: {
 		default: {
-			state: { session: SessionSchema },
+			state: { session: SessionSchema, conversation: ConversationStateSchema },
 			methods: {
 				append: method(AppendSchema, AppendResultSchema),
 				control: method(ControlSchema, ControlResultSchema),
@@ -321,6 +415,8 @@ export const CONTRACTS: readonly AnyContract[] = [MasonPeer, MasonConnector];
 export interface PeerRef {
 	readonly variant: "default";
 	readonly session: { readonly value: Session };
+	/** The conversation, snapshot and diffs: `events()` is the deltas, `value` the revision a client last applied. */
+	readonly conversation: Readable<ConversationState>;
 	append(args: AppendArgs): Promise<AppendResult>;
 	control(args: ControlArgs): Promise<ControlResult>;
 }

@@ -7,12 +7,15 @@ import {
 	AppendSchema,
 	CONTRACT,
 	CONTRACTS,
+	CONVERSATION_TRANSITIONS,
 	ControlResultSchema,
+	ConversationStateSchema,
 	chordCodeFor,
 	connectorHost,
 	DeliverSchema,
 	ERROR_CODE,
 	errorCodeOf,
+	MasonPeer,
 	masonError,
 	type PeerRef,
 	PROTOCOL_MAJOR,
@@ -85,4 +88,68 @@ test("the shape the type says and the shape the schema validates are one shape",
 	assert.equal(compile(AckSchema).check({ status: "delivered" }), true);
 	assert.equal(compile(AckSchema).check({ status: "sent" }), false);
 	assert.equal(compile(ControlResultSchema).check({ handled: true, op: "stop" }), true);
+
+	// The conversation is the read model, and the type a client reads it with is the schema the wire validates.
+	const conversation = {
+		revision: 3,
+		transcript: [
+			{ kind: "user" as const, id: "1", text: "Check the deploy." },
+			{ kind: "delivered" as const, id: "reply:m1", text: "Half a sen", streaming: true },
+			{ kind: "event" as const, id: "4", name: "chat.message" },
+			{ kind: "notice" as const, id: "failed:5", text: "Something went wrong, and the turn did not finish." },
+		],
+		queue: [{ id: 7, mode: "followUp", text: "Then check the logs.", withdrawable: true }],
+		run: "generating" as const,
+		busy: true,
+		activeRunTaskId: "task-1",
+		transitions: [{ kind: "run.started" as const, revision: 3, runTaskId: "task-1" }],
+	} satisfies PeerRef["conversation"]["value"];
+	assert.equal(compile(ConversationStateSchema).check(conversation), true);
+	assert.equal(compile(ConversationStateSchema).check({ ...conversation, revision: "3" }), false);
+	assert.equal(
+		compile(ConversationStateSchema).check({ ...conversation, transitions: [{ kind: "run.paused", revision: 3 }] }),
+		false,
+		"a transition is one of the six the protocol names",
+	);
+});
+
+/**
+ * What the conversation member declares, read from the description a link actually carries.
+ *
+ * The Appiary client reads exactly these fields and no others; a field added here without the client reading it is a
+ * field the wire pays for and nobody uses, and a field the client reads that is not here is a frame it cannot get.
+ */
+test("the conversation member carries the read model and nothing else", () => {
+	type JsonSchema = {
+		readonly properties?: Record<string, any>;
+		readonly required?: readonly string[];
+		readonly anyOf?: readonly JsonSchema[];
+		readonly items?: JsonSchema;
+		readonly const?: unknown;
+		readonly enum?: readonly unknown[];
+	};
+	const member = MasonPeer.description.variants.default?.conversation as unknown as {
+		kind: string;
+		schema: JsonSchema;
+	};
+	assert.equal(member.kind, "state");
+	assert.deepEqual(Object.keys(member.schema.properties ?? {}).sort(), [
+		"activeRunTaskId",
+		"busy",
+		"queue",
+		"revision",
+		"run",
+		"transcript",
+		"transitions",
+	]);
+	const rows: readonly JsonSchema[] = member.schema.properties?.transcript.items?.anyOf ?? [];
+	assert.deepEqual(
+		rows.map((row) => row.properties?.kind.const),
+		["user", "delivered", "event", "notice"],
+	);
+	// A streamed message has to be the row it settles into: same id, plus the two marks a client renders.
+	const delivered = rows[1];
+	assert.deepEqual(delivered?.required, ["kind", "id", "text"]);
+	assert.deepEqual(Object.keys(delivered?.properties ?? {}), ["kind", "id", "text", "failed", "streaming"]);
+	assert.deepEqual(member.schema.properties?.transitions.items?.properties?.kind.enum, [...CONVERSATION_TRANSITIONS]);
 });

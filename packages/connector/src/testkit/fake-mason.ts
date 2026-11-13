@@ -13,6 +13,8 @@ import {
 	type ConnectorRef,
 	type ControlOp,
 	type ControlResult,
+	type ConversationState,
+	ConversationStateSchema,
 	connectorHost,
 	type DeliveryAck,
 	ERROR_CODE,
@@ -126,6 +128,15 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		kinds: [...(granted.kinds ?? [])],
 		limits,
 	};
+	/** A conversation nothing has happened in: revision 0, no rows, no queue, no run. */
+	const emptyConversation: ConversationState = {
+		revision: 0,
+		transcript: [],
+		queue: [],
+		run: "idle",
+		busy: false,
+		transitions: [],
+	};
 
 	const host: Host<{ connector: string }> = createHost({
 		name: "mason",
@@ -136,6 +147,9 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 	host.serve(MasonPeer, (_input, _principal, self) => ({
 		variant: "default",
 		session: self.state("session", SessionSchema, session),
+		// The contract declares the conversation and mason always serves it, so the fake does too. The connector SDK reads
+		// `session`; a case that renders the conversation belongs with the client that renders it, not with the connector.
+		conversation: self.state("conversation", ConversationStateSchema, emptyConversation),
 		append: async (args: unknown) => append(args as never),
 		control: async (args: unknown) => control(args as never),
 	}));

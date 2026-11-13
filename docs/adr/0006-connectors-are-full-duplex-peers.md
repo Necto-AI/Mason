@@ -1,6 +1,7 @@
 # A connector is a full-duplex peer; mason is the only thing in the middle
 
-**Status:** Accepted, amended 2026-11-02 (what #101 shipped, and the two places it simplified this proposal)
+**Status:** Accepted, amended 2026-11-02 (what #101 shipped, and the two places it simplified this proposal), and
+amended 2026-11-12 (a state subscription returns, as one member, for the one interface that renders the conversation)
 
 **Date:** 2026-10-26
 
@@ -36,7 +37,8 @@ type.
 4. **No state subscription.** A connector renders what it is sent: a reply, streamed and then final, and a control's
    answer. The projection stays the wire boundary for mason's own reading of the transcript; sending it to a connector
    was a second copy of a surface the connector already owns, and the first version of this contract had to carry a
-   snapshot, a delta and a sequence number to keep the copy honest. It is gone.
+   snapshot, a delta and a sequence number to keep the copy honest. It is gone. *(Amended 2026-11-12: the state is back,
+   as one member, because the connector that reads it is no longer a surface of its own — see the last section.)*
 
 5. **Credentials follow the grant.** A connector credential (hashed in `config.json`, revocable, read per connection) is
    bound to its entry, with the entry's declared powers: faces, `commands`, event kinds, the approval policy. It is the
@@ -110,3 +112,58 @@ Two places where the implementation is simpler than this document proposed, both
 
 Still owed: the per-entry `prompt` section (§3), which an operator writes in `service/integrations.json` today and which
 would wait for a client to expose it.
+
+## Amendment, 2026-11-12: the state subscription returns, as one member
+
+`#201` gives Mason one user-facing interface — Appiary — and every other external adapter a **connector** that provides
+tools and raises events and never sends a user-facing reply (ADR-0015, and decision 5 of `#201`). That client is a window
+onto mason's conversation, not a medium with a copy of its own. A delivery cannot feed it: a delivery is a message, and a
+chat window needs rows with durable ids, the flag that says a row is still being written, the queue behind the turn, the
+run state, and the same rows again after either process restarts.
+
+So `mason.peer` gains one state member, `conversation`. Decision 4 above is amended where it says otherwise, and it stays
+in place because it records what was decided and why; each of its three claims is answered here, one by one.
+
+**1. "a second copy of a surface the connector already owns".** The premise is gone. When this was written every
+connector was a place a person read the bot, so the projection duplicated what the connector already had from its own
+vendor. There is one interface now, and the connector that reads the member is the bridge to it. What crosses is not a
+copy of a surface somebody else owns: it is the surface, read by the one client that renders it.
+
+**2. "the contract had to carry a snapshot, a delta and a sequence number to keep the copy honest".** Mason no longer
+carries any of the three. Chord does: a hold sends the member's value, every later change arrives as a diff
+(`Cell.replace(…, { diff: true })` publishes `diffRevisions` ops), and a reconnect re-sends the snapshot before anything
+else. The one thing Chord does not have is a number to order frames by, so the value carries `revision`, mason's counter:
+it rises by one when something a reader can see changes, and it is process-scoped, so it starts again at 0 with the
+process. That is why the snapshot is the authoritative frame: a client applies the snapshot it is handed whatever
+revision it carries, and drops a *diff* whose revision is not greater than the one it holds, because that diff is one it
+already applied — a reconnect within a process re-sends the snapshot first, and a restart, whose counter began again,
+converges on it. That is an integer in the state, not a sequence layer on the wire.
+
+**3. "A connector renders what it is sent".** Unchanged, and now it is the whole point: what a client is sent is the
+conversation, plus the transitions that produced each revision — message committed, run started, run stopped, run
+errored, queue added, queue withdrawn — so it reacts to a named change instead of re-deriving one from a diff.
+
+The projection is still the wire boundary. The member carries exactly what the whitelist emits, and nothing else: an entry
+kind or a tool that `src/server/projection.ts` does not name still cannot cross.
+
+### The one place the mechanism differs from the specification
+
+`#201`'s Step 2 asks for the transitions "as Chord events". Chord 1.5 has no event member on a remote contract:
+`VariantDef` declares `state` and `methods`, `MemberDescriptionSchema` knows the kinds `method | state | opaque`, and a
+connection streams only the members described as `state`. `self.on` and `EventOf` are in-process facilities, not a
+channel to a consumer. So a transition rides inside the state member, as the `transitions` array of the revision it
+produced: the client receives it in that revision's own frame, and a snapshot carries its own revision's transitions and
+never a history to replay. The guarantee the step bought — a client reacts to a named transition without re-deriving
+state — is kept; the mechanism is the one the protocol allows. It is recorded here, in `packages/protocol/PROTOCOL.md`,
+and on `#201` for Gate 1.
+
+### What this does not bring back
+
+- **No target and no address.** The member is read-only. A reply still goes back where the words came from, and nothing
+  on the wire names a destination.
+- **No major bump and no second socket.** A connector that never names the member binds and is served exactly what it
+  names; `PROTOCOL_MAJOR` stays 1, and `packages/protocol/test/compat.test.ts` freezes the description such a connector
+  holds and binds it to the served contract.
+- **No delivery removal here.** `deliver`, its outbox and the acknowledgement are Step 3's to remove. Until then the
+  answer path keeps the assertion that outlives them — the committed reply records the turn's origin — with its second,
+  client-visible half beside it: one reply row for that turn, under one id.

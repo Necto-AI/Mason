@@ -108,6 +108,54 @@ function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
  * cross the wire.
  */
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
+	const { fold, tail } = foldTranscript(view);
+	return [...fold.items, ...tail];
+}
+
+/** The id prefix of the notice a run that died leaves: the fold and the row it becomes spell it once. */
+const FAILED_NOTICE_PREFIX = "failed:";
+const RUN_FAILED_NOTICE = "Something went wrong, and the turn did not finish.";
+const SILENT_NOTICE = "The agent finished without sending you a message.";
+
+/** The two notices an acknowledgement can be, by status: a message the reader has, and cannot be told it arrived. */
+const DELIVERY_NOTICE: Readonly<Record<string, string>> = {
+	uncertain: "This message may not have reached the chat: the connector could not tell whether it was sent.",
+	rejected: "This message did not reach the chat: the connector refused it.",
+};
+
+/**
+ * The committed rows of a transcript, folded once so a later revision can reuse them.
+ *
+ * Entries are append-only, so the rows a prefix of them produced never change — with one exception a later entry can
+ * move: a delivery acknowledgement that says the message may not have arrived adds a notice behind the row it settles,
+ * and a second acknowledgement for the same delivery takes it away again. Both are visible in `acks`, the delivery id
+ * and status folded so far, because a count is a proxy for that set and a swap can keep the count. Everything else an
+ * entry contributes depends on the entries before it, which is why a fold can be resumed at the entry it stopped at.
+ */
+export interface TranscriptFold {
+	/** The rows, one object per row: a later revision reuses these objects, which is what makes its diff a tail diff. */
+	readonly items: readonly TranscriptItem[];
+	/** Whether the turn being read has already been told anything, after the last entry folded. */
+	readonly spoke: boolean;
+	/** The newest entry folded, and how many there were: a view that rewrote them is not a view that appended. */
+	readonly last: string;
+	readonly count: number;
+	/** The acknowledgements folded so far, as delivery id and status: a new one can change a row already folded. */
+	readonly acks: string;
+}
+
+/**
+ * Fold the view's committed entries onto `before`, and project the round in flight beside them.
+ *
+ * `before` is the previous revision's fold, and folding onto it is what keeps a token from rebuilding the transcript:
+ * when the view only appended, the rows up to the last entry are reused object for object and only what follows is
+ * derived. A view that rewrote an entry, or a delivery notice that landed behind one, starts the fold again — the rows
+ * are then equal but not shared, and the diff that follows is still a tail diff, because equality is what a diff reads.
+ */
+export function foldTranscript(
+	view: ConversationView | undefined,
+	before?: TranscriptFold,
+): { readonly fold: TranscriptFold; readonly tail: TranscriptItem[] } {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
 	const outcomes = new Map<string, boolean>();
 	const replies = new Set<string>();
@@ -124,95 +172,103 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 			continue;
 		}
 		const delivery = deliveryRecordOf(entry);
-		if (delivery !== undefined) deliveries.set(delivery.deliveryId, delivery);
+		if (delivery === undefined) continue;
+		deliveries.set(delivery.deliveryId, delivery);
 	}
+	const acks = [...deliveries.values()].map((record) => `${record.deliveryId}:${record.status}`).join(",");
+	const id = (index: number): string => (entries[index] === undefined ? "" : String(entries[index]?.id));
+	// A turn nobody has read the start of has spoken until an entry says otherwise: the default the whole view gets.
+	const resumed =
+		before !== undefined &&
+		before.count <= entries.length &&
+		before.last === id(before.count - 1) &&
+		before.acks === acks
+			? before
+			: undefined;
+	const items: TranscriptItem[] = resumed === undefined ? [] : [...resumed.items];
+	let spoke = resumed === undefined ? true : resumed.spoke;
+	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
+		spoke = foldEntry(entries[index] as EntryRecord, deliveries, items, spoke);
+	}
+	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length, acks };
+	return { fold, tail: streamingItems(view, outcomes, replies) };
+}
 
-	const items: TranscriptItem[] = [];
-	// Whether the reader has been told anything in the turn being read: a turn that ends without it is a silence the
-	// person would otherwise have to interpret.
-	let spoke = true;
-	for (const entry of entries) {
-		if (entry.kind === HOOK_ENTRY_KIND) {
-			// A fire is a turn that owed the person words, whether it names a kind or is a routine's timer: an event is the
-			// reader's business and says so as a row of its own, and a routine's message is the row — but a fire that sent
-			// nothing is a silence, and the schedule is the schedule's business either way.
-			spoke = false;
-			const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
-			if (typeof kind === "string" && kind !== "") {
-				items.push({ kind: "event", id: String(entry.id), name: kind });
-			}
-			continue;
+/**
+ * One entry, folded into the reader's rows, and whether the turn has now spoken.
+ *
+ * The whole whitelist lives here: `foldTranscript` decides *where* to start, this decides *what one entry is allowed to
+ * become*. An entry kind this does not name contributes nothing, which is the property the tests in
+ * `test/projection.test.ts` exist to keep.
+ */
+function foldEntry(
+	entry: EntryRecord,
+	deliveries: Map<string, DeliveryRecord>,
+	items: TranscriptItem[],
+	spoke: boolean,
+): boolean {
+	if (entry.kind === HOOK_ENTRY_KIND) {
+		// A fire is a turn that owed the person words, whether it names a kind or is a routine's timer: an event is the
+		// reader's business and says so as a row of its own, and a routine's message is the row — but a fire that sent
+		// nothing is a silence, and the schedule is the schedule's business either way.
+		const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
+		if (typeof kind === "string" && kind !== "") items.push({ kind: "event", id: String(entry.id), name: kind });
+		return false;
+	}
+	if (entry.kind === NOTICE_ENTRY_KIND) {
+		// The medium talking about itself: a channel that was muted, a delivery that the network refused. It is not a
+		// turn and it never woke one, so it is a row and not a message from anybody.
+		const text = (entry.data as { text?: unknown } | undefined)?.text;
+		if (typeof text === "string" && !isBlank(text)) items.push({ kind: "notice", id: `medium:${entry.id}`, text });
+		return spoke;
+	}
+	if (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) {
+		const spoken = textOfMessage(messageOf(entry)).trim();
+		// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder, in
+		// either shape a local turn and a fired turn get, and the reflection ask at the end of a long turn.
+		const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(spoken) || isReflectionAsk(spoken));
+		if (spoken !== "" && !gate) {
+			const { text, author } = splitAuthor(spoken);
+			items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
+			return false;
 		}
-		if (entry.kind === NOTICE_ENTRY_KIND) {
-			// The medium talking about itself: a channel that was muted, a delivery that the network refused. It is not a
-			// turn and it never woke one, so it is a row and not a message from anybody.
-			const text = (entry.data as { text?: unknown } | undefined)?.text;
-			if (typeof text === "string" && !isBlank(text)) {
-				items.push({ kind: "notice", id: `medium:${entry.id}`, text });
-			}
-			continue;
+		return gate ? spoke : false;
+	}
+	if (entry.kind === REPLY_ENTRY_KIND) {
+		const record = replyRecordOf(entry);
+		if (record === undefined) return spoke;
+		const text = textOfBlocks(record.blocks);
+		if (isBlank(text)) return spoke;
+		items.push({ kind: "delivered", id: record.deliveryId, text });
+		const delivery = deliveries.get(record.deliveryId);
+		// A delivery that may not have arrived is the reader's business: the message is on screen, and whether a
+		// person received it is not something the transcript may leave implied.
+		if (delivery !== undefined && DELIVERY_NOTICE[delivery.status] !== undefined) {
+			items.push({
+				kind: "notice",
+				id: `delivery:${record.deliveryId}`,
+				text: DELIVERY_NOTICE[delivery.status] as string,
+			});
 		}
-		if (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) {
-			const spoken = textOfMessage(messageOf(entry)).trim();
-			// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder, in
-			// either shape a local turn and a fired turn get, and the reflection ask at the end of a long turn.
-			const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(spoken) || isReflectionAsk(spoken));
-			if (!gate) spoke = false;
-			if (spoken !== "" && !gate) {
-				const { text, author } = splitAuthor(spoken);
-				items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
-			}
-			continue;
+		return true;
+	}
+	if (entry.kind === "pi.assistant") {
+		// A run that died is the reader's business; the reason it died is not. One coarse line, once per run.
+		const failed = (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "error";
+		if (failed && items[items.length - 1]?.kind !== "notice") {
+			items.push({ kind: "notice", id: `${FAILED_NOTICE_PREFIX}${entry.id}`, text: RUN_FAILED_NOTICE });
+			return true;
 		}
-		if (entry.kind === REPLY_ENTRY_KIND) {
-			const record = replyRecordOf(entry);
-			if (record === undefined) continue;
-			const text = textOfBlocks(record.blocks);
-			if (isBlank(text)) continue;
-			spoke = true;
-			items.push({ kind: "delivered", id: record.deliveryId, text });
-			const delivery = deliveries.get(record.deliveryId);
-			// A delivery that may not have arrived is the reader's business: the message is on screen, and whether a
-			// person received it is not something the transcript may leave implied.
-			if (delivery !== undefined && (delivery.status === "uncertain" || delivery.status === "rejected")) {
-				items.push({
-					kind: "notice",
-					id: `delivery:${record.deliveryId}`,
-					text:
-						delivery.status === "uncertain"
-							? "This message may not have reached the chat: the connector could not tell whether it was sent."
-							: "This message did not reach the chat: the connector refused it.",
-				});
-			}
-			continue;
-		}
-		if (entry.kind === "pi.assistant") {
-			// A run that died is the reader's business; the reason it died is not. One coarse line, once per run.
-			const failed = (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "error";
-			if (failed && items[items.length - 1]?.kind !== "notice") {
-				items.push({
-					kind: "notice",
-					id: `failed:${entry.id}`,
-					text: "Something went wrong, and the turn did not finish.",
-				});
-				spoke = true;
-			}
-			// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
-			// not speech either: only the entries and calls this file forwards above count as having said something.
-			if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
-				// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
-				// person wondering whether the agent is working or gone.
-				items.push({
-					kind: "notice",
-					id: `silent:${entry.id}`,
-					text: "The agent finished without sending you a message.",
-				});
-				spoke = true;
-			}
+		// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
+		// not speech either: only the entries and calls this file forwards above count as having said something.
+		if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
+			// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
+			// person wondering whether the agent is working or gone.
+			items.push({ kind: "notice", id: `silent:${entry.id}`, text: SILENT_NOTICE });
+			return true;
 		}
 	}
-	items.push(...streamingItems(view, outcomes, replies));
-	return items;
+	return spoke;
 }
 
 /**
