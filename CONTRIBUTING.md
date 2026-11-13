@@ -9,10 +9,10 @@ Requirements: Node.js 26.4 or newer and npm. Mason runs its TypeScript from sour
 ```sh
 git clone https://github.com/DenisSud/mason.git
 cd mason
-npm install
+bash scripts/setup.sh
 ```
 
-`npm install` links the two workspace packages, and `npm run build:packages` compiles them for the runtime and tests.
+The setup script installs dependencies and builds the two workspace packages used by the runtime and tests.
 
 ## Run and test
 
