@@ -388,8 +388,8 @@ function isHttpUrl(url: string): boolean {
  * Write one entry, keeping every other entry and every other key — including the ones inside the entry being replaced
  * that mason does not understand. Returns the entry as it was stored, which is what the command prints.
  *
- * The write stamps the version, keeps a timestamped copy of the file it replaces, and lands through a rename: this is the
- * wizard's write, and a wizard that fails has to leave the file it found.
+ * The write stamps the version, keeps a timestamped copy of the file it replaces, and lands through a rename: a write
+ * that fails has to leave the file it found.
  */
 export async function writeIntegration(
 	paths: HousePaths,
@@ -468,7 +468,7 @@ export function currentIntegrations(): Record<string, Integration> {
  * The file is read once at boot and a change is a restart (`docs/SPEC.md` §4.1d). That invariant is only useful if
  * something can notice the change, so the boot records the hash it read in the server's half — never in `agent/` — and
  * `mason doctor` compares it. A missing record is not staleness: it is a home that has not booted yet, which is exactly
- * the state `mason onboard` leaves one in.
+ * the state `mason new` leaves one in.
  */
 export interface IntegrationBoot {
 	readonly version: string;

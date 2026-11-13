@@ -95,7 +95,7 @@ export interface HousePaths {
 	 */
 	readonly integrations: string;
 	/**
-	 * Which connectors `mason setup` installed, and the directory one connector's compose project is generated in
+	 * Which connectors an installer recorded, and the directory one connector's project was generated in
 	 * (`install-state.ts`). Written by the CLI alone: the server reads a connector's grant, never this, so a bad record
 	 * costs a setup and not a boot.
 	 */

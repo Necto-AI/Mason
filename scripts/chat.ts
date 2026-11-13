@@ -150,7 +150,7 @@ function fileStore(path: string): ConnectorStore {
 		return data[namespace];
 	};
 	// Whole-file writes, one at a time: two of them interleaved would leave the file holding the newer one's bytes under
-	// the older one's length. The SDK writes an acknowledgement and an outbox entry in the same turn, so this is not a
+	// the older one's length. The SDK writes a journal entry and a settled key in the same turn, so this is not a
 	// hypothetical.
 	let writing = Promise.resolve();
 	const save = (): Promise<void> => {

@@ -38,7 +38,7 @@ describe("writeFileAtomic", () => {
 	test("concurrent writes to one path leave one whole document, not two interleaved", async () => {
 		const directory = await temporaryDirectory();
 		const path = join(directory, "console-ledger.json");
-		// Two writes in one turn is the shape that broke: the acknowledgement and the outbox entry of a single delivery.
+		// Two writes in one turn is the shape that broke: a journal entry and a settled key of one act.
 		// The winner is either document; a file that parses is the whole assertion.
 		await Promise.all([
 			writeFileAtomic(path, { a: "x".repeat(400) }),

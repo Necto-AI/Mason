@@ -115,7 +115,7 @@ describe("the integration list on disk", () => {
 		const paths = await temporaryHome();
 		await writeIntegration(paths, "github", github);
 		const first = JSON.parse(await readFile(paths.integrations, "utf8")) as { version?: string };
-		assert.equal(first.version, "0.1", "every wizard write stamps the file");
+		assert.equal(first.version, "0.1", "every write stamps the file");
 
 		await writeIntegration(paths, "github", { ...github, description: "moved" });
 		const backups = (await readdir(paths.serviceDir)).filter(

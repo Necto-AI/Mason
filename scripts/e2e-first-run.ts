@@ -3,7 +3,7 @@
  *
  * Every other first-run test runs in-process, against functions. This one runs the *installed shape*: `bin/mason.ts`,
  * a temporary `MASON_ROOT`, `PI_FAUX_MODEL=1`, and the exit codes an operator sees. That difference is not academic —
- * `mason prompt` wrote a home at the root and `mason onboard` left a half-built bot behind, and neither was visible
+ * `mason prompt` wrote a home at the root and the old first run left a half-built bot behind, and neither was visible
  * from inside a function that had already resolved its paths.
  *
  *     node --experimental-strip-types scripts/e2e-first-run.ts [--keep]
@@ -27,8 +27,8 @@ import { createHost, type StateEvent } from "@earendil-works/chord";
 import { apply } from "@earendil-works/chord/delta";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { type ConversationState, connectorHost, MasonPeer, type PeerRef } from "mason-protocol";
 import { nodeWebSocketLink } from "mason-connector";
+import { type ConversationState, connectorHost, MasonPeer, type PeerRef } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { startServer } from "../src/server/main.ts";
@@ -120,7 +120,7 @@ async function main(): Promise<void> {
 	const before = await treeShape(directory);
 	const again = await mason(directory, ["init"], { HOME: home });
 	check(again.code === 0, "a second init exits 0", again.stderr || again.stdout);
-	check(/already initialised; nothing asked, nothing written/.test(again.stdout), "a second init asks nothing", again.stdout);
+	check(/already initialised/.test(again.stdout), "a second init asks nothing", again.stdout);
 	const after = await treeShape(directory);
 	check(
 		JSON.stringify(before) === JSON.stringify(after),

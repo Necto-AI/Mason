@@ -1,5 +1,5 @@
 /**
- * Proving a provider before anything is stored: the list a wizard offers, and the one real completion `mason init` makes.
+ * Proving a provider before anything is stored: the provider list, and the one real completion `mason init` makes.
  *
  * openclaw's rule is the one this file exists for — "verifies that connection, persists only the working route"
  * (`docs/research/openclaw-cli.md` §1.6). A key that is stored before it is tried is a bot that boots into a provider
@@ -7,7 +7,7 @@
  * three, sends one completion through the same `Models` the harness uses, and writes only what answered.
  *
  * The offline provider is a first-class answer here, not a test hook bolted on: `PI_FAUX_MODEL=1` plays a scripted
- * "ok", which is how a first run is driven in CI and in `test/onboard.test.ts` without a network or a key.
+ * "ok", which is how a first run is driven in CI and in `test/init.test.ts` without a network or a key.
  *
  * The provider list and the model list are pi's own catalogs (`ModelRuntime` with the network off), because a provider
  * mason does not ship a list of is a provider nobody can choose. Mason's code reads no store of pi's here: the key it
@@ -26,7 +26,7 @@ import {
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentModelRef } from "./runtime.ts";
 
-/** What a wizard talks to: the model catalog, and the runtime a key is set on when there is one. */
+/** What `mason init` talks to: the model catalog, and the runtime a key is set on when there is one. */
 export interface ProviderAccess {
 	readonly models: Models;
 	/** The runtime `setRuntimeApiKey` is called on; absent for the offline provider, which has no credential. */
@@ -37,7 +37,7 @@ export interface ProviderAccess {
 /**
  * The script the offline provider holds for a *served* bot: how many answers, and what they say.
  *
- * `mason up` under `PI_FAUX_MODEL=1` is not the wizard's case. The wizard makes one completion and reads the words, so
+ * `mason up` under `PI_FAUX_MODEL=1` is not `init`'s case. `init` makes one completion and reads the words, so
  * one plain "ok" is the whole script; a served bot has to reach a person, and the only thing that reaches a person is
  * the `send` tool. A turn scripted as text alone therefore answers nothing at all — the turn runs, the answer is
  * recorded as working notes and no reader is sent it, which is a process that looks alive and cannot speak.
@@ -87,35 +87,6 @@ export function providerIds(access: ProviderAccess): string[] {
 /** The models one provider knows, in catalog order. Empty for a provider that publishes none. */
 export function modelIds(access: ProviderAccess, provider: string): string[] {
 	return access.models.getModels(provider).map((model) => model.id);
-}
-
-/** A row a wizard can draw: the id a person picks, and one line of what it holds. */
-export interface ModelRow {
-	readonly value: string;
-	readonly label: string;
-	readonly description: string;
-}
-
-/** Thousands, rounded, because 200000 and 200k are the same answer and one of them fits beside a label. */
-function contextSize(tokens: number): string {
-	return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${tokens}`;
-}
-
-/**
- * One provider's models as a list to choose from rather than an id to remember: the catalog this build already read to
- * offer the provider, drawn per row.
- *
- * The label is the id, because the id is what gets written and what a person will type to filter. What it holds is the
- * description, in the order that decides a choice: room for a conversation, then whether it thinks, then whether it can
- * be shown a picture.
- */
-export function modelRows(access: ProviderAccess, provider: string): ModelRow[] {
-	return access.models.getModels(provider).map((model) => {
-		const facts = [`${contextSize(model.contextWindow)} context`];
-		if (model.reasoning) facts.push("reasoning");
-		if (model.input.includes("image")) facts.push("images");
-		return { value: model.id, label: model.id, description: facts.join(" · ") };
-	});
 }
 
 /**

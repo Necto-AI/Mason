@@ -29,9 +29,9 @@ export async function writeFileAtomic(path: string, value: unknown): Promise<voi
 /**
  * A counter, because two writes from one process are one process id.
  *
- * A temp name of `${path}.${pid}.tmp` is unique across processes and not within one: a connector's ledger writes its
- * delivery acknowledgement and its outbox in the same turn, both land on one descriptor, and the rename that follows
- * leaves the target holding half of each. The counter costs nothing and makes the name unique where the pid cannot.
+ * A temp name of `${path}.${pid}.tmp` is unique across processes and not within one: a connector's store writes its
+ * journal and its own keys in the same turn, both land on one descriptor, and the rename that follows leaves the target
+ * holding half of each. The counter costs nothing and makes the name unique where the pid cannot.
  */
 let writes = 0;
 

@@ -63,8 +63,7 @@ export async function runNew(
 		if (!BOT_NAME.test(name) || name === COMMON)
 			throw new Error(`"${name}" is not a bot name: lowercase letters, digits and dashes, and not "${COMMON}"`);
 		const home = botHome(root.root, name);
-		if (existsSync(home))
-			throw new Error(`bot "${name}" already exists at ${home}: this root holds one bot`);
+		if (existsSync(home)) throw new Error(`bot "${name}" already exists at ${home}: this root holds one bot`);
 		// One environment is one bot (#201): a second directory would be a root no command can name a home in, so the
 		// refusal is about the shape rather than about a name being taken.
 		const existing = root.bots[0];

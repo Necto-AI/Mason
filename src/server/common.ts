@@ -15,7 +15,7 @@
  * cannot run on.
  *
  * Every write goes through `commitStaged`: the text is built first, the file that is there is copied aside with a
- * timestamp, and only then does the rename land. A wizard that fails halfway leaves the previous file and one `.bak`
+ * timestamp, and only then does the rename land. A write that fails halfway leaves the previous file and one `.bak`
  * beside it, which is the difference between a second attempt and a lost configuration.
  *
  * Nothing here reads `~/.pi/agent`. A bot under a root takes its model from these files and the environment; pi's stores stay
@@ -225,7 +225,7 @@ export function backupPath(path: string, now = new Date()): string {
 /**
  * Write every staged file, copying the one that is there aside first.
  *
- * The copy is the promise the wizard makes: an answer that turns out to be wrong costs one `.bak`, not a configuration.
+ * The copy is the promise the write makes: an answer that turns out to be wrong costs one `.bak`, not a configuration.
  * A file that did not exist is not copied — an empty backup is a file nobody can restore anything from.
  */
 export async function commitStaged(writes: readonly StagedWrite[], now = new Date()): Promise<void> {
@@ -357,8 +357,7 @@ export async function resolveModelChoice(
 	if (own !== undefined) {
 		// A bot's override still answers with a credential, and the credential lives in the root's common store: a model
 		// chosen in one file and a key in another is one decision, and the boot sets the key it found here.
-		const auth =
-			house.root === undefined ? undefined : await readCommonAuth(house.root.root).catch(() => undefined);
+		const auth = house.root === undefined ? undefined : await readCommonAuth(house.root.root).catch(() => undefined);
 		const key = auth?.providers[own.provider]?.key;
 		return { ...own, ...(key === undefined ? {} : { key }), source: "bot" };
 	}
