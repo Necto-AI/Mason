@@ -11,7 +11,6 @@
  */
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { ConversationState, ConversationTransition } from "mason-protocol";
-import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import { foldTranscript, projectQueued, type TranscriptFold } from "./projection.ts";
 import { deriveRunStatus, isBusy, liveOf } from "./status.ts";
 
@@ -139,5 +138,3 @@ function transitionsOf(before: ConversationState, after: Change, revision: numbe
 	}
 	return news;
 }
-
-void (0 as unknown as QueuedItem | TranscriptItem);
