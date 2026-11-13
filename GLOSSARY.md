@@ -149,12 +149,13 @@ _Avoid_: tool surface, tools face
 
 **connector**:
 An external process mason admitted on `/api/connector`, with the credential minted for its integration: it appends a
-person's words or an event, and mason calls `deliver` on it. Tools are the entry's MCP server, never the socket.
+person's words or an event, and the answer is a row of the conversation it reads. Tools are the entry's MCP server,
+never the socket.
 _Avoid_: integration (that is the entry), plugin, client, app
 
 **append**:
-The one inbound call: a submission, an event or a notice, each with an id mason dedupes forever and an origin it never
-parses. One call for three shapes is what lets an events-only connector be answered.
+The one inbound call: a submission or an event, each with an id mason dedupes forever and an origin it never parses.
+One call for two shapes lets an events-only connector be answered.
 _Avoid_: submit, fire, envelope
 
 **payload**:
@@ -199,7 +200,7 @@ answer goes. Data on the entry, never prose in a prompt. A retry inherits the or
 _Avoid_: source, channel, session, conversation (there is one, and it is the transcript)
 
 **ref**:
-The address a connector mints into `origin.ref`, returned byte for byte on the delivery that answers that append. Mason
+The address a connector mints into `origin.ref`, kept byte for byte with the reply answering that append. Mason
 never parses it, so a medium with no chat ids is a connector like any other.
 _Avoid_: address, room id, conversation id
 
