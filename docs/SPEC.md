@@ -69,7 +69,7 @@ mason/
 │       ├── hooks.ts                   # What wakes the bot: a routine's timer, a connector's event
 │       ├── replies.ts                 # What a turn's send is: its origin, and the entry carrying it
 │       ├── projection.ts              # The wire boundary: what a reader sees
-│       ├── status.ts                  # AgentStatus, derived from the committed view
+│       ├── status.ts                  # the status and role lines, from the committed view
 │       ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
 │       ├── env.ts                     # pi-env Connection + RemoteExecutionEnv
 │       ├── house.ts                   # The home: agent/ and service/ paths, soul/profile reads, log, git
@@ -380,7 +380,7 @@ hash it read in `service/data/boot.json`, which is how doctor says "restart to a
 ### 4.1 `src/shared/` — the shapes both sides spell
 
 One file that imports nothing from the server: `contract.ts` holds `TranscriptItem` (`user`, `delivered`, `notice`),
-`QueuedItem`, `AgentStatus` and `HookSummary`, the entry kinds the projection reads (`app.hook`, `app.connector`,
+`QueuedItem` and `HookSummary`, the entry kinds the projection reads (`app.hook`, `app.connector`,
 `app.reply`), the send tool's name, and the author prefix (`[from <name>] `) `splitAuthor` reads as
 history (§4.1a). An interface is a connector and speaks the protocol in `packages/protocol`, never a TypeScript file of
 mason's.

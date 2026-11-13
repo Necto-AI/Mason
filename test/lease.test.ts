@@ -110,3 +110,14 @@ test("a release only removes the lease it took", async () => {
 		"the other holder's lease survived my release",
 	);
 });
+
+test("a lease file with no holder in it is debris, cleared rather than refused forever", async () => {
+	// The crash this exists for: a writer died after the file appeared and before its body landed. Nothing can be holding
+	// it, so the next writer takes it instead of being refused by a file that names nobody.
+	const { dir, checkout } = await workspace("mason-lease-debris-");
+	await mkdir(dir, { recursive: true });
+	await writeFile(await leasePath(dir, checkout), "");
+	const taken = await acquireWriteLease({ checkout, dir, writer: "after the debris" });
+	assert.equal(taken.held, true);
+	if (taken.held) await taken.lease.release();
+});

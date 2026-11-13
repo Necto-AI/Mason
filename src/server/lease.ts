@@ -27,7 +27,7 @@
  *   writer's lease.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -112,8 +112,9 @@ function abandoned(holder: LeaseHolder): boolean {
 /**
  * Take the checkout's lease, or answer who has it.
  *
- * The write is one `O_EXCL` create, which is the whole mutual exclusion: two callers racing get one file and one
- * `EEXIST`, and the loser never touches what the winner wrote. A holder that is provably gone is cleared and retried
+ * The write is one `link`, which is the whole mutual exclusion: two callers racing get one file and one `EEXIST`, and the
+ * loser never touches what the winner wrote. The file is staged complete beside it first, so a lease on disk always has a
+ * holder in it or is cleared as debris. A holder that is provably gone is cleared and retried
  * once — the crash of a previous process is the only way a lease outlives its run, and the retry is bounded so a
  * perpetual race cannot spin.
  */
@@ -135,8 +136,12 @@ export async function acquireWriteLease(input: {
 		writer: input.writer,
 	};
 	for (let attempt = 0; attempt < 2; attempt += 1) {
+		// `link` is the mutual exclusion and it lands a complete file: an `O_EXCL` write is a create and a write, so a
+		// holder that dies between them leaves a lease no reader can name and no run behind it — and nothing reaps it.
+		const staged = join(input.dir, `.${token}.staged`);
+		await writeFile(staged, `${JSON.stringify(lease)}\n`, { mode: 0o600 });
 		try {
-			await writeFile(path, `${JSON.stringify(lease)}\n`, { flag: "wx", mode: 0o600 });
+			await link(staged, path);
 			let released = false;
 			return {
 				held: true,
@@ -153,11 +158,16 @@ export async function acquireWriteLease(input: {
 		} catch (error) {
 			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
 			const holder = await holderOf(path);
-			if (attempt === 0 && holder !== undefined && abandoned(holder)) {
-				await releaseIfOurs(path, holder.token);
+			// Unreadable is not held: a file with no holder in it is one whose writer never finished announcing itself. A
+			// readable one is cleared only when its holder is provably gone, and either way the retry is bounded.
+			if (attempt === 0 && (holder === undefined || abandoned(holder))) {
+				if (holder === undefined) await unlink(path).catch(() => undefined);
+				else await releaseIfOurs(path, holder.token);
 				continue;
 			}
 			return { held: false, holder };
+		} finally {
+			await unlink(staged).catch(() => undefined);
 		}
 	}
 	return { held: false, holder: await holderOf(path) };
