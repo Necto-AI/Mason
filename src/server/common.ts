@@ -386,10 +386,11 @@ export async function readRoleMap(root: string): Promise<RoleMap | undefined> {
 }
 
 /**
- * Both roles on one model at `off`: what an install with no role map runs, and what the faux provider always does.
+ * Both roles on one model at `off`: the fallback, and what the faux provider always does.
  *
  * `off` is not a shrug. It is the level every turn ran at before this map existed: pi sends no reasoning parameter for
- * it, so an install that never asked for thinking keeps the request it had, and the map is what changes that.
+ * it, so an install whose catalog cannot serve the `subagent` role keeps the request it had, and the map is what changes
+ * that. The boot prefers `defaultRoles`, which asks the catalog first and only lands here when it has no answer.
  */
 export function derivedRoles(ref: { readonly provider: string; readonly modelId: string }): RoleMap {
 	const role: AgentRole = { provider: ref.provider, modelId: ref.modelId, thinking: "off" };

@@ -262,3 +262,43 @@ test("a bot's own model outranks the map's, and the map still decides how far it
 		await runtime.close();
 	}
 });
+
+test("a model the provider does not serve is refused, where a whole unknown provider is skipped", async () => {
+	// The catalog knows `opencode-go`; a model id it does not have under that provider is a typo that would otherwise boot
+	// and fail at the first request. A provider the catalog has never heard of is skipped, because its models may arrive
+	// with a refresh.
+	const home = await rootWithRoles({
+		main: { provider: "opencode-go", modelId: "no-such-model", thinking: "high" },
+		subagent: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" },
+	});
+	await assert.rejects(() => boot(home), /does not serve it/);
+});
+
+test("what the boot reports is the model the record runs, whatever the common default is", async () => {
+	// No `roles` key, and a default model that is not Decision 8's main one: the role adds the level and leaves the model
+	// where the precedence put it, so `doctor`, the runtime and `pi.agent` cannot name two different models.
+	const directory = await mkdtemp(join(tmpdir(), "mason-roles-report-"));
+	directories.add(directory);
+	const root = join(directory, "mason");
+	const home = join(root, "alice");
+	await mkdir(join(root, "common"), { recursive: true, mode: 0o700 });
+	await mkdir(join(home, "agent"), { recursive: true, mode: 0o700 });
+	await mkdir(join(home, "service"), { recursive: true, mode: 0o700 });
+	await writeFile(
+		commonPaths(root).settings,
+		JSON.stringify({ version: "0.1", defaultProvider: "opencode-go", defaultModel: "deepseek-v4.1-flash" }),
+	);
+	const runtime = await boot({ directory, home });
+	try {
+		assert.deepEqual(
+			{ provider: runtime.model.provider, modelId: runtime.model.modelId },
+			{ provider: "opencode-go", modelId: "deepseek-v4.1-flash" },
+		);
+		assert.deepEqual(await recordOf(runtime), {
+			model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" },
+			thinking: "high",
+		});
+	} finally {
+		await runtime.close();
+	}
+});

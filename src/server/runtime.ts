@@ -227,7 +227,7 @@ export interface ResolvedModel {
 	readonly models: Models;
 	readonly ref: AgentModelRef;
 	readonly faux: boolean;
-	/** The two roles this boot runs; absent means both run `ref` at `off` (`derivedRoles`). */
+	/** The two roles this boot runs: the main one pinned to `ref`, the child as the store or Decision 8 names it. */
 	readonly roles?: RoleMap;
 }
 
@@ -236,8 +236,9 @@ export interface ResolvedModel {
  *
  * The sentence names the model *and* the levels it does offer, because the fix is choosing one of them and the catalog is
  * the only thing that knows which: an operator who wrote `"…: "roles": {"subagent": {"…": "max"}}` for a model that
- * maps only `high` is told exactly that. A model this build's catalog does not carry is skipped rather than refused: the
- * provider resolves it at the request, and a refusal would name an empty list.
+ * maps only `high` is told exactly that. A provider the catalog does not know is skipped, because its models may simply
+ * not be loaded yet; a model that provider does not serve is refused, because a boot that accepted it would run a request
+ * that has no answer.
  */
 export function validateRoles(models: Models, roles: RoleMap, where: string): void {
 	for (const name of ROLE_NAMES) {
@@ -260,25 +261,28 @@ export function validateRoles(models: Models, roles: RoleMap, where: string): vo
 	}
 }
 
-/** Decision 8's pair: which model answers as whom when an install says nothing about roles. */
-const DEFAULT_ROLES: RoleMap = {
-	main: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "high" },
-	subagent: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" },
-};
+/** The level the main role asks for when an install names no roles: Decision 8's. */
+const MAIN_THINKING: AgentRole["thinking"] = "high";
+
+/** Decision 8's child: the model that answers as `subagent` where the catalog serves it at the level it names. */
+const SUBAGENT_ROLE: AgentRole = { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" };
 
 /**
- * The pair a store that names no `roles` runs: Decision 8's two models where the catalog serves them at the level it
- * asks for, and this boot's resolved model at `off` where it cannot — an install with no `opencode-go` credential runs
- * what it ran before the map existed rather than a model it cannot reach.
+ * The pair a store that names no `roles` runs.
+ *
+ * The main role is the model the boot already resolved, never a model of its own: `resolveModelChoice` has weighed the
+ * bot's own file, a stored map, the common default and the environment, and a map that named a different model here would
+ * run one model while `doctor`, the runtime and the boot line reported another. What the default adds to `main` is the
+ * level, and to `subagent` a model — a child nobody configured has no other reason to pick one, so it takes Decision 8's
+ * where the catalog serves it at `max`, and the resolved model at `off` where it does not.
  */
 export function defaultRoles(models: Models, ref: { readonly provider: string; readonly modelId: string }): RoleMap {
-	const fallback = derivedRoles(ref);
-	const pick = (role: AgentRole): AgentRole => {
-		const model = models.getModel(role.provider, role.modelId);
-		if (model === undefined || !getSupportedThinkingLevels(model).includes(role.thinking)) return fallback.main;
-		return role;
+	const model = models.getModel(SUBAGENT_ROLE.provider, SUBAGENT_ROLE.modelId);
+	const served = model !== undefined && getSupportedThinkingLevels(model).includes(SUBAGENT_ROLE.thinking);
+	return {
+		main: { provider: ref.provider, modelId: ref.modelId, thinking: levelOn(models, ref, MAIN_THINKING) },
+		subagent: served ? SUBAGENT_ROLE : derivedRoles(ref).subagent,
 	};
-	return { main: pick(DEFAULT_ROLES.main), subagent: pick(DEFAULT_ROLES.subagent) };
 }
 
 /**
@@ -344,20 +348,20 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 				? commonPaths(house.root?.root ?? house.home).settings
 				: "the roles this boot was given",
 		);
-	// A bot's own pick outranks the map's model (`resolveModelChoice` has already said so), but the map still decides how
-	// far it thinks: the level comes from the role, the model from the file that was more specific.
-	const roles: RoleMap =
-		choice?.source === "bot" && (choice.provider !== base.main.provider || choice.modelId !== base.main.modelId)
-			? {
-					...base,
-					main: {
-						provider: ref.provider,
-						modelId: ref.modelId,
-						thinking: levelOn(runtime, ref, base.main.thinking),
-					},
-				}
-			: base;
-	if (choice?.key !== undefined && choice.provider === ref.provider)
+	// The main role's model is the model this boot resolved, always: the bot's own file, the map, the common default and
+	// the environment have already been weighed for it, and a role that named another model would run one while `doctor`,
+	// the runtime and the boot line named the other. The map decides only how far that model thinks.
+	// A map this boot was handed takes the model's identity the way a stored one does; a bot's own file still outranks it.
+	const pinned = choice?.source === "bot" ? ref : (options.roles?.main ?? ref);
+	const roles: RoleMap = {
+		...base,
+		main: {
+			provider: pinned.provider,
+			modelId: pinned.modelId,
+			thinking: levelOn(runtime, pinned, base.main.thinking),
+		},
+	};
+	if (choice?.key !== undefined && choice.provider === pinned.provider)
 		await runtime.setRuntimeApiKey(ref.provider, choice.key);
 	// A role naming a second provider needs that provider's key too, and the only store mason keeps one in is the root's.
 	// A miss is not refused here: ModelRuntime reads its own credential store, which is where an operator may have it.
@@ -369,7 +373,7 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 				: (await readCommonAuth(house.root.root).catch(() => undefined))?.providers[provider]?.key;
 		if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
 	}
-	return { models: runtime, ref, faux: false, roles };
+	return { models: runtime, ref: pinned, faux: false, roles };
 }
 
 /** Opens storage, the harness, and the root conversation; resumes any run a previous process left unfinished. */
@@ -446,8 +450,8 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const { models, ref, faux } = access;
 		const roles = access.roles ?? derivedRoles(ref);
 
-		// Delegation, per boot like code mode: the lease files live under this process's data directory, and the child's
-		// model and level are the ones this boot resolved, so an extension built once at import time could carry neither.
+		// Delegation, per boot like code mode: the lease directory and the child's role are this boot's, so an extension
+		// built once at import time could carry neither.
 		const subagent = createSubagent({ leaseDir: options.leaseDir ?? leaseDirOf(), role: roles.subagent });
 		const extensionList: readonly Extension[] = [
 			...BASE_EXTENSIONS,
