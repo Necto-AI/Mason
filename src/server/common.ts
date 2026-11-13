@@ -406,7 +406,7 @@ export interface ModelChoice {
 	readonly provider: string;
 	readonly modelId: string;
 	readonly key?: string;
-	readonly source: "bot" | "common" | "env";
+	readonly source: "bot" | "roles" | "common" | "env";
 }
 
 /** The bot's own override, read tolerantly: a broken file is no override, not a bot that cannot start. */
@@ -443,6 +443,20 @@ export async function resolveModelChoice(
 		return { ...own, ...(key === undefined ? {} : { key }), source: "bot" };
 	}
 	if (house.root !== undefined) {
+		// The role map before the default model: both sit in the same file, and `roles.main` is the more specific answer to
+		// which model answers as whoever is writing. A malformed map is refused here rather than guessed past, and the boot
+		// is where that refusal becomes a sentence.
+		const roles = await readRoleMap(house.root.root);
+		if (roles !== undefined) {
+			const auth = await readCommonAuth(house.root.root).catch(() => undefined);
+			const key = auth?.providers[roles.main.provider]?.key;
+			return {
+				provider: roles.main.provider,
+				modelId: roles.main.modelId,
+				...(key === undefined ? {} : { key }),
+				source: "roles",
+			};
+		}
 		const { value } = await readCommonSettings(house.root.root);
 		if (value.defaultProvider !== undefined && value.defaultModel !== undefined) {
 			const auth = await readCommonAuth(house.root.root).catch(() => undefined);

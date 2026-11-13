@@ -189,6 +189,50 @@ describe("which model a bot runs", () => {
 		assert.deepEqual(await resolveModelChoice(bare, env), { provider: "env-p", modelId: "env-m", source: "env" });
 	});
 
+	test("the root's roles outrank its default model, and a bot's own settings outrank both", async () => {
+		const root = await tempRoot();
+		await writeCommonStore(root, { defaultProvider: "common-p", defaultModel: "common-m", key: "sk-common" });
+		await writeRaw(
+			commonPaths(root).settings,
+			JSON.stringify({
+				version: COMMON_VERSION,
+				defaultProvider: "common-p",
+				defaultModel: "common-m",
+				roles: {
+					main: { provider: "roles-p", modelId: "roles-m", thinking: "high" },
+					subagent: { provider: "roles-p", modelId: "roles-child", thinking: "max" },
+				},
+			}),
+		);
+		const home = join(root, "alice");
+		const house = botPaths({ root, name: "alice", home });
+		assert.deepEqual(await resolveModelChoice(house, {}), {
+			provider: "roles-p",
+			modelId: "roles-m",
+			source: "roles",
+		});
+
+		// The bot's own file is the more specific decision, and it still answers with the key the root stores.
+		await writeRaw(
+			join(home, "service", "settings.json"),
+			JSON.stringify({ defaultProvider: "bot-p", defaultModel: "bot-m" }),
+		);
+		assert.deepEqual(await resolveModelChoice(house, {}), { provider: "bot-p", modelId: "bot-m", source: "bot" });
+	});
+
+	test("a malformed role map is refused here rather than guessed past", async () => {
+		const root = await tempRoot();
+		await writeRaw(
+			commonPaths(root).settings,
+			JSON.stringify({
+				version: COMMON_VERSION,
+				roles: { main: { provider: "p", modelId: "m", thinking: "hard" } },
+			}),
+		);
+		const house = botPaths({ root, name: "alice", home: join(root, "alice") });
+		await assert.rejects(() => resolveModelChoice(house, {}), /has thinking "hard"/);
+	});
+
 	test("a bot under a root reads no common store when the root has none, and pi's settings are not consulted", async () => {
 		const root = await tempRoot();
 		const house = botPaths({ root, name: "alice", home: join(root, "alice") });

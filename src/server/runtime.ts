@@ -280,14 +280,7 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 	// directly has no store to keep one in.
 	const stored = house.root === undefined ? undefined : await readRoleMap(house.root.root);
 	const chosen = choice === undefined ? undefined : { provider: choice.provider, modelId: choice.modelId };
-	// A stored role map *is* the statement of which model answers, so it outranks the single-model choice: a store that
-	// names `main` and `subagent` and a `defaultModel` beside them would otherwise run one and report the other. A caller
-	// handing in a model is the last word, and an install with no role map chooses exactly as it always did.
-	const ref =
-		options.model ??
-		(stored === undefined ? undefined : { provider: stored.main.provider, modelId: stored.main.modelId }) ??
-		chosen ??
-		(house.root === undefined ? readPiSettingsModel() : undefined);
+	const ref = options.model ?? chosen ?? (house.root === undefined ? readPiSettingsModel() : undefined);
 	if (ref === undefined) {
 		throw new Error(
 			house.root === undefined

@@ -29,15 +29,12 @@ import {
 	AgentDoc,
 	type ConversationId,
 	type ConversationRecord,
-	createRegistry,
-	Harness,
 	LiveDoc,
 	type LiveState,
-	type Registry,
 } from "@earendil-works/pi-durable";
 import type { RoleMap } from "../src/server/common.ts";
 import { TargetDoc } from "../src/server/env.ts";
-import { SUBAGENT_TIMEOUT_MS, SUBAGENT_TOOL, SUBAGENT_TURNS } from "../src/server/extensions/subagent.ts";
+import { SUBAGENT_TOOL, SUBAGENT_TURNS } from "../src/server/extensions/subagent.ts";
 import { acquireWriteLease, leaseDirOf } from "../src/server/lease.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 import { SEND_TOOL } from "../src/shared/contract.ts";
