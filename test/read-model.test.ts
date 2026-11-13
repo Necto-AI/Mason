@@ -34,6 +34,11 @@ function retiredDeliveryEntry(id: number, deliveryId: string, status: string): E
 	return entry(id, "app.delivery", [], { data: { deliveryId, status } });
 }
 
+/** One medium notice, as the retired append shape wrote them: a row nothing reads any more. */
+function retiredNoticeEntry(id: number, text: string): Entry {
+	return entry(id, "app.notice", [], { data: { text } });
+}
+
 /** One person's words. */
 function userEntry(id: number, text: string): Entry {
 	return entry(id, "pi.user", [{ role: "user", content: text }]);
@@ -173,6 +178,29 @@ describe("what a token costs on the wire", () => {
 			state.transcript.map((row) => row.id),
 			["1", "reply:m1"],
 			"the message, and nothing about how it travelled",
+		);
+	});
+
+	it("ignores a notice entry a home written before the append shape went still holds", () => {
+		// The append shape is retired and the transcript is append-only, so a home that ran an older mason keeps its
+		// `app.notice` entries forever: a medium talking about itself, written by a call the contract no longer has. The
+		// Done-when is this row's absence: no notice row after the append shape is removed.
+		const model = createReadModel();
+		const entries = [
+			userEntry(1, "Ship it."),
+			retiredNoticeEntry(2, "the channel was muted"),
+			replyEntry(3, "reply:m1", "Shipped."),
+		];
+		const state = model.next(viewOf(entries));
+		assert.deepEqual(
+			state.transcript.map((row) => row.kind),
+			["user", "delivered"],
+			"no row for the medium's notice",
+		);
+		assert.deepEqual(
+			state.transcript.map((row) => row.id),
+			["1", "reply:m1"],
+			"the message and the reply, and nothing the medium said about itself",
 		);
 	});
 
