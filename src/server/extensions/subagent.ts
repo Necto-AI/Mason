@@ -108,7 +108,7 @@ const DelegateParams = Type.Object(
 );
 
 export interface SubagentOptions {
-	/** Where the lease files live: one directory, outside every checkout (`leaseDirOf(dataDir)`). */
+	/** Where the lease files live: the boot's `leaseDir`, or the machine-wide directory `leaseDirOf()` gives it. */
 	readonly leaseDir: string;
 	/** The role a child runs: the boot's `subagent` role, model and thinking level together. */
 	readonly role: AgentRole;

@@ -11,7 +11,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, test } from "node:test";
-import { acquireWriteLease, leaseDirOf, leasePath, leaseRefusalText } from "../src/server/lease.ts";
+import { acquireWriteLease, leasePath, leaseRefusalText } from "../src/server/lease.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -24,7 +24,7 @@ async function workspace(prefix: string): Promise<{ directory: string; checkout:
 	const checkout = join(directory, "checkout");
 	await mkdir(checkout, { recursive: true });
 	await writeFile(join(checkout, "README.md"), "# checkout\n");
-	return { directory, checkout, dir: leaseDirOf(join(directory, "data")) };
+	return { directory, checkout, dir: join(directory, "leases") };
 }
 
 test("one holder: a second writer is refused, and admitted once the first releases", async () => {

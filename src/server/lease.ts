@@ -14,9 +14,11 @@
  * - **The key is the checkout, not a file in it.** `atomic.ts` locks one store under the home for the length of a write,
  *   with a 50 × 20 ms wait and a 30 s staleness reaper. A child's run is minutes long, so the wait is wrong (refuse), the
  *   reaper is wrong (never by age), and the path is wrong.
- * - **The lock file is outside the checkout.** A child that writes tools reports `git status`, and a lease file inside the
- *   tree it leases is noise in the one output the person reads. The directory is the caller's — `service/data/leases`
- *   under the home — so two bots on one checkout still name the same file, because the key is the checkout's realpath.
+ * - **The lock file is outside the checkout, and outside the home.** A child that writes tools reports `git status`, and a
+ *   lease file inside the tree it leases is noise in the one output the person reads. The directory is machine-wide and per
+ *   user — under the temp dir — so two bots serving one checkout from two homes name the same file; a directory under one
+ *   bot's `dataDir` would give each bot its own lock and call that exclusion. A lease cannot outlive a reboot, which is
+ *   the right lifetime for one.
  * - **Refused, not reaped.** A holder that is provably gone — same host, a pid that no longer exists — is cleared and the
  *   caller retries once. Nothing is cleared because it is old: a child that has been thinking for ten minutes is a child
  *   that is still writing, and the whole point of the lease is that nobody guesses otherwise.
@@ -26,7 +28,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 /** What a lease file says: who holds the checkout, and since when. A sentence about it is built from these fields. */
@@ -55,9 +57,13 @@ export type LeaseResult =
 	| { readonly held: true; readonly lease: WriteLease }
 	| { readonly held: false; readonly holder: LeaseHolder | undefined };
 
-/** The one directory a home keeps its leases in: outside every checkout, shared by every process serving that home. */
-export function leaseDirOf(dataDir: string): string {
-	return join(dataDir, "leases");
+/**
+ * The one directory leases live in: outside every checkout and outside every home, scoped to the user, so every process
+ * on this machine that leases the same checkout names the same file.
+ */
+export function leaseDirOf(): string {
+	const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+	return join(tmpdir(), `mason-leases-${uid}`);
 }
 
 /**

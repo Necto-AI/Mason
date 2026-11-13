@@ -35,7 +35,7 @@ import {
 import type { RoleMap } from "../src/server/common.ts";
 import { TargetDoc } from "../src/server/env.ts";
 import { SUBAGENT_TOOL, SUBAGENT_TURNS } from "../src/server/extensions/subagent.ts";
-import { acquireWriteLease, leaseDirOf } from "../src/server/lease.ts";
+import { acquireWriteLease } from "../src/server/lease.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 import { SEND_TOOL } from "../src/shared/contract.ts";
 
@@ -84,6 +84,7 @@ function open(setup: Fixture, storage: "sqlite" | "memory" = "memory"): Promise<
 		houseHome: join(setup.directory, "house"),
 		storage,
 		modelAccess: setup.access,
+		leaseDir: join(setup.directory, "leases"),
 		onReport: () => {},
 	});
 }
@@ -510,7 +511,7 @@ async function checkout(directory: string): Promise<string> {
 
 /** The lease file a checkout has, if it has one: what "held" and "released" are read from. */
 async function leaseFiles(directory: string): Promise<string[]> {
-	return readdir(leaseDirOf(join(directory, "data"))).catch(() => []);
+	return readdir(join(directory, "leases")).catch(() => []);
 }
 
 test("a write-capable child writes in the checkout it was given, under the lease, and its answer names it", async () => {
@@ -560,7 +561,7 @@ test("the lease refuses a second writer and admits the review and the next write
 	const setup = await fixture("mason-subagent-lease-");
 	const path = await checkout(setup.directory);
 	const runtime = await open(setup);
-	const dir = leaseDirOf(join(setup.directory, "data"));
+	const dir = join(setup.directory, "leases");
 	try {
 		const root = await runtime.conversation();
 		// Held by somebody else: exactly the case the refusal exists for. Two writers on one checkout would read each

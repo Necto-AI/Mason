@@ -171,9 +171,9 @@ test("the status line the client receives names both roles, with model and level
 	}
 });
 
-test("an install that names no roles runs both on its own model at off, which is what it ran before", async () => {
-	// No `roles` key at all: the store names the model the boot already resolved, and nothing about thinking. `off` is
-	// the level every turn ran at before the map existed, so the request this install sends does not change.
+test("an install that names no roles runs Decision 8's pair", async () => {
+	// No `roles` key at all: the two models Decision 8 names, at the levels it names, because the catalog serves both.
+	// An install without those models falls back to its own resolved model at `off`, which is asserted below.
 	const directory = await mkdtemp(join(tmpdir(), "mason-roles-bare-"));
 	directories.add(directory);
 	const root = join(directory, "mason");
@@ -187,14 +187,15 @@ test("an install that names no roles runs both on its own model at off, which is
 	);
 	const runtime = await boot({ directory, home });
 	try {
-		assert.deepEqual(runtime.roles, {
-			main: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "off" },
-			subagent: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "off" },
-		});
-		assert.deepEqual(await recordOf(runtime), {
-			model: { provider: "opencode-go", modelId: "glm-5.3-flash" },
-			thinking: "off",
-		});
+		assert.deepEqual(runtime.roles, DECISION, "the pair is the default, not a test fixture");
+		assert.deepEqual(
+			await recordOf(runtime),
+			{
+				model: { provider: "opencode-go", modelId: "glm-5.3-flash" },
+				thinking: "high",
+			},
+			"the main turn thinks at the level its role names",
+		);
 	} finally {
 		await runtime.close();
 	}
@@ -235,4 +236,29 @@ test("the role map is refused whole when it is malformed, rather than half-read"
 		() => roleMapOf({ ...DECISION, subagent: { thinking: "max" } }, "store"),
 		/role "subagent" has no "provider"/,
 	);
+});
+
+test("a bot's own model outranks the map's, and the map still decides how far it thinks", async () => {
+	// `resolveModelChoice` puts the bot's `service/settings.json` above the root's role map, so the boot must not write
+	// the map's model over it and then report a model the run does not use.
+	const home = await rootWithRoles(DECISION);
+	// The bot's own half, which is where `resolveModelChoice` looks first.
+	await writeFile(
+		join(home.home, "service", "settings.json"),
+		JSON.stringify({ version: "0.1", defaultProvider: "opencode-go", defaultModel: "deepseek-v4.1-flash" }),
+	);
+	const runtime = await boot(home);
+	try {
+		assert.deepEqual(await recordOf(runtime), {
+			model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" },
+			thinking: "high",
+		});
+		assert.deepEqual(
+			{ provider: runtime.model.provider, modelId: runtime.model.modelId },
+			{ provider: "opencode-go", modelId: "deepseek-v4.1-flash" },
+			"what the boot reports is what the run uses",
+		);
+	} finally {
+		await runtime.close();
+	}
 });
