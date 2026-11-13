@@ -3,9 +3,9 @@
 	"description": "An agent runtime for building, connecting and running AI agents.",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/DenisSud/mason.git"
+		"url": "git+https://github.com/Necto-AI/mason.git"
 	},
-	"homepage": "https://github.com/DenisSud/mason#readme",
+	"homepage": "https://github.com/Necto-AI/mason#readme",
 	"keywords": [
 		"agent",
 		"ai",

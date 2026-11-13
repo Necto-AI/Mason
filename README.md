@@ -27,7 +27,7 @@ mason new bot
 Or with Nix, from a checkout:
 
 ```sh
-nix run github:DenisSud/mason            # or: nix profile install github:DenisSud/mason
+nix run github:Necto-AI/mason            # or: nix profile install github:Necto-AI/mason
 ```
 
 ## First run
@@ -83,9 +83,9 @@ whether it is up, and `mason doctor` checks it.
 ## Development
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the development setup, the checks to run and how to propose a change. Defects
-and proposals go to the [issue tracker](https://github.com/DenisSud/mason/issues).
+and proposals go to the [issue tracker](https://github.com/Necto-AI/mason/issues).
 
 ## Licence
 
 AGPL-3.0-only. The terms are in [LICENSE](LICENSE), and the source is
-[github.com/DenisSud/mason](https://github.com/DenisSud/mason).
+[github.com/Necto-AI/mason](https://github.com/Necto-AI/mason).

@@ -7,7 +7,7 @@ Thanks for helping improve Mason. Keep changes focused, explain the problem they
 Requirements: Node.js 26.4 or newer and npm. Mason runs its TypeScript from source and keeps its state in `node:sqlite`.
 
 ```sh
-git clone https://github.com/DenisSud/mason.git
+git clone https://github.com/Necto-AI/mason.git
 cd mason
 bash scripts/setup.sh
 ```
@@ -40,7 +40,7 @@ CI runs the full validation set on pull requests. The corresponding commands and
 
 ## Making a change
 
-1. Search [open issues](https://github.com/DenisSud/mason/issues) before starting. For substantial work, open or discuss an issue first.
+1. Search [open issues](https://github.com/Necto-AI/mason/issues) before starting. For substantial work, open or discuss an issue first.
 2. Keep one pull request focused on one issue or closely related change.
 3. Add or update tests when behavior changes. Update documentation when user-facing behavior or a contract changes.
 4. Do not commit credentials, private data, local state, or generated build output.

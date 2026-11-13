@@ -59,7 +59,7 @@
 
             meta = {
               description = "An agent runtime for building, connecting and running AI agents";
-              homepage = "https://github.com/DenisSud/mason";
+              homepage = "https://github.com/Necto-AI/mason";
               license = pkgs.lib.licenses.agpl3Only;
               mainProgram = "mason";
               platforms = [ "x86_64-linux" ];

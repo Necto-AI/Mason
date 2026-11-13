@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-[the repository's Security advisories page](https://github.com/DenisSud/mason/security/advisories/new)
+[the repository's Security advisories page](https://github.com/Necto-AI/mason/security/advisories/new)
 or on the maintainer's GitHub profile ([@DenisSud](https://github.com/DenisSud)).
 All complaints will be reviewed and investigated promptly and fairly.
 
