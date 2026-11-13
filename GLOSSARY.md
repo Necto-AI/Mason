@@ -121,8 +121,19 @@ _Avoid_: event (when a routine fired), invocation, submission
 
 **delegation**:
 One tool call that owns a conversation with a narrow job and returns a report. A conversation, not a peer: no home, no
-way to speak to anyone, never a deployment.
-_Avoid_: worker (the former name), subagent (that is the API), helper, child bot
+way to speak to anyone, never a deployment. It runs foreground: the call waits, and cancelling the parent cascades into
+it. A writer among them holds the checkout's write lease for its run.
+_Avoid_: worker (the former name), subagent (that is the API), helper, child bot, agent
+
+**role**:
+What a conversation runs on: a provider, a model and a thinking level, from `roles` in the common store. `main` is the
+conversation a person writes to; `subagent` is what a delegation runs. Recorded per conversation in `pi.agent`.
+_Avoid_: profile (that is the person), persona, preset, tier
+
+**write lease**:
+One writer at a time on one checkout, keyed on the checkout's realpath and held for a write-capable delegation's run. A
+second writer is refused, never queued; it is released at settlement, and never reaped by age.
+_Avoid_: lock (that is the store's), mutex, semaphore
 
 **send**:
 The one mason-owned tool a turn uses to reach its reader: it commits an `app.reply` entry carrying the turn's origin, and
