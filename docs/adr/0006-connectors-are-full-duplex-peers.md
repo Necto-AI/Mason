@@ -133,8 +133,11 @@ copy of a surface somebody else owns: it is the surface, read by the one client 
 carries any of the three. Chord does: a hold sends the member's value, every later change arrives as a diff
 (`Cell.replace(…, { diff: true })` publishes `diffRevisions` ops), and a reconnect re-sends the snapshot before anything
 else. The one thing Chord does not have is a number to order frames by, so the value carries `revision`, mason's counter:
-it rises by one when something a reader can see changes, and a client drops any frame whose revision is not greater than
-the one it holds. That is an integer in the state, not a sequence layer on the wire.
+it rises by one when something a reader can see changes, and it is process-scoped, so it starts again at 0 with the
+process. That is why the snapshot is the authoritative frame: a client applies the snapshot it is handed whatever
+revision it carries, and drops a *diff* whose revision is not greater than the one it holds, because that diff is one it
+already applied — a reconnect within a process re-sends the snapshot first, and a restart, whose counter began again,
+converges on it. That is an integer in the state, not a sequence layer on the wire.
 
 **3. "A connector renders what it is sent".** Unchanged, and now it is the whole point: what a client is sent is the
 conversation, plus the transitions that produced each revision — message committed, run started, run stopped, run

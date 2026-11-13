@@ -249,9 +249,11 @@ describe("the conversation a connector holds", () => {
 				pump(client, second.frames, resumedCursor);
 				assert.equal(second.frames[0]?.type, "snap", "a re-hold begins with the state, before any diff");
 				const resumed = client.value as ConversationState;
+				// The comparison holds within one mason process: a restart begins the counter again at 0, and the snapshot is
+				// applied whatever revision it carries, which is what converges the client across one.
 				assert.ok(
 					resumed.revision >= held.revision,
-					"the state a reconnecting client is handed is at least as new as the one it held",
+					"within one process, the state a reconnecting client is handed is at least as new as the one it held",
 				);
 
 				// Replaying a diff from before the reconnect is what a client must survive: it is not a later revision.

@@ -2,8 +2,9 @@
  * The conversation a person reads, as one value with a revision: what `mason.peer`'s `conversation` member publishes.
  *
  * Four things live here, and they are one publish: the memoised transcript the fold hands over, the queue, the run, and
- * the transitions that say what changed since the revision before. A client applies the snapshot it is handed and every
- * later frame whose revision is greater than the one it holds; a revision that is not greater is one it already applied.
+ * the transitions that say what changed since the revision before. A snapshot is authoritative and a client applies it
+ * whatever revision it carries; a *diff* whose revision is not greater than the one held is dropped as already applied.
+ * The counter is this process's and starts again at 0, so a restart's snapshot is what converges a client.
  *
  * A value is only published when something a reader sees actually changed. That is not an optimisation: a `replace` with
  * an equal value publishes a whole replacement of a state nobody changed, and a revision is a claim that something

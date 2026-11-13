@@ -330,10 +330,12 @@ export type ConversationTransition = Static<typeof ConversationTransitionSchema>
 /**
  * The conversation a person reads, as state: the projection mason already derives, plus the revision that orders it.
  *
- * A client applies the snapshot it is handed and every later frame whose `revision` is greater than the one it holds;
- * a revision that is not greater is a frame it already applied, and dropping it is what makes a reconnect safe. The
- * `transitions` are the ones that produced *this* revision and no others: a revision with nothing to report carries an
- * empty list, and a snapshot's own transitions describe the snapshot, never a history a client would have to replay.
+ * A snapshot is authoritative: a client applies the one it is handed whatever revision it carries. A *diff* is applied
+ * to what the client holds and kept only when its `revision` is greater — one that is not greater is a diff already
+ * applied, and dropping it is what makes a reconnect safe. The counter is process-scoped and starts again at 0 with
+ * mason, so a restart converges on the snapshot. The `transitions` are the ones that produced *this* revision and no
+ * others: a revision with nothing to report carries an empty list, and a snapshot's own transitions describe the
+ * snapshot, never a history a client would have to replay.
  */
 export const ConversationStateSchema = obj(
 	{

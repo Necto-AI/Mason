@@ -31,7 +31,7 @@ protocol has no envelope, no sequence number and no cursor of its own.
 
 | field | what it is |
 |---|---|
-| `revision` | a counter mason owns: it rises by one for every published value, and a client drops any frame whose revision is not greater than the one it holds |
+| `revision` | a counter mason owns: it rises by one for every published value within one mason process, and starts again at 0 when mason restarts |
 | `transcript` | the reader's rows, in order: `user`, `delivered` (a message, `streaming` while the model writes it), `event`, `notice` |
 | `queue` | the submissions waiting behind the running turn, each with `withdrawable` |
 | `run` | one token: `idle`, `generating`, `running_tools`, `retrying`, `compacting` |
@@ -41,6 +41,12 @@ protocol has no envelope, no sequence number and no cursor of its own.
 A `delivered` row streams under the id the committed row carries, so a message a person watches arrive becomes the row
 it settles into: one message, one id, one row. A revision that reports nothing carries an empty `transitions`; a snapshot
 describes the revision it is, never a history to replay.
+
+Two frames carry this member: a snapshot, and the diffs that follow it. A snapshot is authoritative — a client applies
+the one it is handed, whatever revision it carries. A diff is applied to what the client holds and kept only when its
+revision is greater than the held one; a diff that is not greater is one already applied, and dropping it is what makes a
+reconnect safe. The counter is mason's and process-scoped: it starts again at 0 with every mason process, so a restarted
+mason hands a client holding revision 42 a snapshot at revision 1, and the snapshot is the frame that wins.
 
 Chord 1 has no event member on a contract, so a transition reaches a client as the state member's frame for its
 revision rather than as a frame of its own. What the client is promised is the kind and its subject — a row id, a run
