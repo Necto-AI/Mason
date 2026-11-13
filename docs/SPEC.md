@@ -352,7 +352,7 @@ an earlier one's write; `auth.json` (one key per provider) is strict about shape
 whole-file rewrite that lost a key somebody just stored is the one write that cannot be retried; `runtime.json`
 (`kind`, `host`) refuses a kind this build cannot run. Every file refuses a `version` it does not read, an absent one
 meaning `0.1`, and every write is staged: the text is built first, the file it replaces is copied aside with a timestamp,
-and the rename lands last. `roles` (§3.1) is the two-entry map and outranks the default model.
+and the rename lands last. `roles` (§3.4) is the two-entry map and outranks the default model.
 Model precedence is the bot's `service/settings.json` → the root's `roles.main` → the
 common default → `PI_PROVIDER`/`PI_MODEL` → pi's own `settings.json`, that last only for a home addressed by
 `MASON_HOME`. A key from the
