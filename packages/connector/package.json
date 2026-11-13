@@ -5,7 +5,7 @@
 		"url": "git+https://github.com/DenisSud/mason.git"
 	},
 	"version": "0.1.0",
-	"description": "The TypeScript SDK for a mason connector: one Chord host, the durable journal, the delivery ledger, attachments, MCP helpers, and the fake-mason conformance suite.",
+	"description": "The TypeScript SDK for a mason connector: one Chord host, the durable journal, the conversation it holds, attachments, MCP helpers, and the fake-mason conformance suite.",
 	"license": "AGPL-3.0-only",
 	"type": "module",
 	"main": "./dist/index.js",
