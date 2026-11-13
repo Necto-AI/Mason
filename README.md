@@ -5,7 +5,7 @@ a hosted service.
 
 ## The demo
 
-<img src="docs/media/mason-demo.gif" alt="mason init and new, then a conversation in mason chat" width="880">
+<img src="docs/media/mason-demo.gif" alt="the first run, then a conversation in the terminal" width="880">
 
 The recording runs on a deterministic local model (`PI_FAUX_MODEL=1`), not a hosted one: the bot answers the same words
 every time, and no provider, key or network is involved. It is a throwaway home under `/tmp`, which is why the connector
