@@ -39,8 +39,10 @@ protocol has no envelope, no sequence number and no cursor of its own.
 | `transitions` | the transitions that produced *this* revision, and no others: `message.committed`, `run.started`, `run.stopped`, `run.errored`, `queue.added`, `queue.withdrawn` |
 
 A `delivered` row streams under the id the committed row carries, so a message a person watches arrive becomes the row
-it settles into: one message, one id, one row. A revision that reports nothing carries an empty `transitions`; a snapshot
-describes the revision it is, never a history to replay.
+it settles into: one message, one id, one row. Continuity is by id, not by presence: a row can leave the transcript for
+the tool phase of a turn and return committed under the same id a revision later, so a client keyed by id keeps its
+place. A revision that reports nothing carries an empty `transitions`; a snapshot describes the revision it is, never a
+history to replay.
 
 Two frames carry this member: a snapshot, and the diffs that follow it. A snapshot is authoritative — a client applies
 the one it is handed, whatever revision it carries. A diff is applied to what the client holds and kept only when its
