@@ -43,6 +43,7 @@ import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targ
 import { EventLog } from "./events-log.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
+import { createSubagent } from "./extensions/subagent.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
 import {
@@ -52,14 +53,18 @@ import {
 	recordIntegrationBoot,
 	setIntegrations,
 } from "./integrations.ts";
+import { leaseDirOf } from "./lease.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { fauxSessionScript } from "./provider.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
- * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
- * agent reaches the reader, so no conversation may be without it.
+ * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional for every
+ * **person-facing** conversation: it is the only way the agent reaches the reader, so no conversation a person writes to
+ * may be without it. A task-owned child is not one — it is created after boot by `delegate`, which writes its selection
+ * explicitly without `delivery`, so the send tool and both gates are absent from it and its words reach the person only
+ * as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
  *
  * Code mode and the MCP tools are not here: `openAgentRuntime` builds both per boot, because each owns something that
  * dies with the runtime — a QuickJS sandbox and one client socket per integration — and a module constant would outlive
@@ -177,7 +182,8 @@ export interface OpenAgentRuntimeOptions {
 	readonly selection?: readonly Extension[];
 	/**
 	 * Whether to append missing base extensions to a stored explicit selection. Default true, because `delivery` must
-	 * never be absent from a real conversation; tests and evals turn it off when a narrowed selection is the point.
+	 * never be absent from a person-facing conversation; tests and evals turn it off when a narrowed selection is the
+	 * point, and a task-owned child never sees it at all — the repair runs on the root, once, before anything can run.
 	 */
 	readonly repairBase?: boolean;
 	/**
@@ -391,13 +397,18 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const { models, ref, faux } = access;
 		const roles = access.roles ?? derivedRoles(ref);
 
+		// Delegation, per boot like code mode: the lease files live under this process's data directory, and the child's
+		// model and level are the ones this boot resolved, so an extension built once at import time could carry neither.
+		const subagent = createSubagent({ leaseDir: leaseDirOf(dataDir), role: roles.subagent });
 		const extensionList: readonly Extension[] = [
 			...BASE_EXTENSIONS,
+			subagent,
 			...(options.extensions ?? []),
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
 		];
 		const unconditional = unconditionalExtensionNames([
+			subagent.name,
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
 			codemode.extension.name,
 		]);
