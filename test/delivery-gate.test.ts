@@ -428,7 +428,7 @@ test("a message sent from inside a script is refused, and the gate still asks fo
 /**
  * The other reader: a turn an event hook started.
  *
- * A fire carries an origin when the sender could name a conversation, and `reply` targets it: the person is in a chat,
+ * A fire carries an origin when the sender could name a conversation, and the reply records it: the person is in a chat,
  * and the model never names the chat's own tool. A fire with no origin — a schedule, a retry — records the reply and
  * says nobody was reached. Either way the gate counts the same call, because there is one operation and not two.
  */
@@ -450,7 +450,7 @@ test("a hooked turn answers with send, and the gate counts the call", async () =
 	);
 });
 
-test("a fire that named its address routes the reply back to it", async () => {
+test("a fire that named its address records the origin, and the reply is the row", async () => {
 	const directory = await temporary();
 	const script = recorder([deliver("Привет!"), said("Done.")]);
 	const telegram = {
@@ -474,9 +474,10 @@ test("a fire that named its address routes the reply back to it", async () => {
 	try {
 		assert.equal(settled.status, "done");
 		const reply = entries.find((entry) => entry.kind === "app.reply");
-		assert.deepEqual((reply?.data as { target?: unknown }).target, {
+		assert.deepEqual((reply?.data as { origin?: unknown }).origin, {
 			connector: "telegram",
 			ref: "team",
+			messageId: "m1",
 		});
 		const hook = entries.find((entry) => entry.kind === "app.hook");
 		assert.deepEqual((hook?.data as { origin?: unknown }).origin, {
@@ -701,9 +702,10 @@ test("a fire that named its conversation keeps its origin through the reflection
 		assert.ok(replies.length >= 1, "the turn spoke once");
 		// The newest input after the ask is the ask itself, the misread; the reply must still carry its origin.
 		for (const reply of replies) {
-			assert.deepEqual((reply.data as { target?: unknown }).target, {
+			assert.deepEqual((reply.data as { origin?: unknown }).origin, {
 				connector: "telegram",
 				ref: "team",
+				messageId: "m9",
 			});
 		}
 	} finally {
@@ -717,8 +719,8 @@ test("a fire that named its conversation keeps its origin through the reflection
  *
  * The newest input is what a turn's origin is read from, and both of these entries carry a `user`-role message, so a read
  * that finds the newest input by its text takes the summary for the person and the send commits unaddressed — the answer
- * is lost with nothing recording it as failed. The predicate refuses the kind instead, and the reply comes back
- * addressed to the chat that wrote, with the submission it answers.
+ * is lost with nothing recording it as failed. The predicate refuses the kind instead, and the reply comes back with the
+ * origin of the submission it answers.
  *
  * From Step 2 the same turn has a second, client-visible half: the state a client applies carries one reply row for it,
  * under one id. That is the assertion that outlives the delivery removal — the recorded origin says where the answer
@@ -756,14 +758,9 @@ for (const note of [
 			);
 			const reply = entries.find((entry) => entry.kind === "app.reply");
 			assert.deepEqual(
-				(reply?.data as { target?: unknown }).target,
-				{ connector: "telegram", ref: "team" },
-				"the answer is addressed to the chat that carried the words",
-			);
-			assert.deepEqual(
 				(reply?.data as { origin?: unknown }).origin,
 				{ connector: "telegram", ref: "team", messageId: "m7" },
-				"and the reply records whose submission it answers",
+				"the answer records the origin of the turn's input, not of the working note written after it",
 			);
 			// One message, one row: the id is the one the streaming row carried, so a client that watched the answer
 			// arrive does not get a second row when it commits.

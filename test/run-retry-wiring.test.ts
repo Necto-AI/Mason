@@ -289,7 +289,7 @@ describe("a failed run with no browser connected", () => {
 });
 
 describe("a retry of a turn somebody was waiting on", () => {
-	it("answers in the chat it resumes, so the person who wrote is the one who hears back", async () => {
+	it("records the origin it resumes, so the person who wrote is the one the reply answers", async () => {
 		await withSchedule(async () => {
 			const server = await serve(await temporaryHome(chatIntegrations), retryOnlyModel());
 			try {
@@ -307,9 +307,9 @@ describe("a retry of a turn somebody was waiting on", () => {
 				);
 				const reply = all.find((entry) => entry.kind === REPLY_ENTRY_KIND);
 				assert.deepEqual(
-					reply?.data.target,
-					CHAT,
-					"the answer is owed to the chat, not to a transcript nobody in it can read",
+					reply?.data.origin,
+					{ connector: CHAT.connector, ref: CHAT.ref },
+					"the answer records the origin of the turn it resumes, not a transcript nobody in the chat can read",
 				);
 			} finally {
 				await server.close();
@@ -319,7 +319,7 @@ describe("a retry of a turn somebody was waiting on", () => {
 });
 
 describe("a retry of a turn that compacted before it failed", () => {
-	it("answers in the chat the failed turn was answering, not in the transcript a summary came from", async () => {
+	it("records the origin the failed turn was answering, not the one a summary came from", async () => {
 		await withSchedule(async () => {
 			const staged = stagedModel();
 			const server = await serve(await temporaryHome(chatIntegrations), staged.access);
@@ -347,7 +347,11 @@ describe("a retry of a turn that compacted before it failed", () => {
 					"the retry resumes the failed turn, not the summary that landed after its words",
 				);
 				const reply = all.find((entry) => entry.kind === REPLY_ENTRY_KIND);
-				assert.deepEqual(reply?.data.target, CHAT, "the answer is still owed to the chat that is waiting");
+				assert.deepEqual(
+					reply?.data.origin,
+					{ connector: CHAT.connector, ref: CHAT.ref },
+					"the answer still records the chat that is waiting",
+				);
 			} finally {
 				await server.close();
 			}

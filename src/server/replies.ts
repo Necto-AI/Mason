@@ -2,19 +2,17 @@
  * Sends: the one operation through which a turn's words reach a reader, and the durable record it commits.
  *
  * A turn always has an **origin** — the connector that carried the person's words, or the transcript itself when
- * nobody carried them — and `send` addresses it. The model never names a vendor's tool, and an event's instruction never
- * names one either: the routing is mason's, decided from what actually started the turn rather than from prose in a
- * prompt. Nor does it name an address: there is no other destination to name (#200).
+ * nobody carried them — and the send records it. The model never names a vendor's tool, and an event's instruction
+ * never names one either: the routing is mason's, decided from what actually started the turn rather than from prose in a
+ * prompt. Nor does it name an address: the conversation is the one surface, and there is nowhere else to send anything
+ * (#200).
  *
- * Three shapes, and they differ in where the words land, not in how they are committed:
+ * Two shapes, and they differ in what was waiting, not in how they are committed:
  *
- * - a person wrote in a connector: the send is addressed to that connector and the opaque `ref` it minted, and the
- *   outbox delivers it;
- * - mason wrote the words (a routine, a retry): the transcript is the medium, so the send is committed and that is the
- *   delivery;
+ * - a person wrote in a connector: the send is a row of the conversation that connector's reader reads, and the origin
+ *   says which append it answers;
  * - nothing that carries words started the turn (a schedule, an event from a service with no reader): the send is still
- *   committed — the work is recorded — and the result says nobody was reached. Claiming a delivery nobody received is
- *   the one outcome the whole arrangement exists to avoid.
+ *   committed — the work is recorded — and the result says nobody was reached.
  *
  * ## Where the origin lives
  *
@@ -31,26 +29,16 @@ import type { Context } from "@earendil-works/chord";
 import type { ConversationId, Cursor, EntryRecord, Tx } from "@earendil-works/pi-durable";
 import type { Actor, ContentBlock, Origin } from "mason-protocol";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, isDeliveryReminder, isReflectionAsk } from "../shared/contract.ts";
-import type { Integration } from "./integrations.ts";
-
-/** Where a send goes: one connector, and the address it minted on the append the turn came from. */
-export interface SendAddress {
-	readonly connector: string;
-	/** The opaque address the connector minted on the append a turn came from. */
-	readonly ref?: string;
-}
 
 /**
  * One committed send, as the `app.reply` entry holds it.
  *
- * `address` absent means the transcript is the medium: a reader of the home sees it, and nothing is delivered anywhere.
- * `origin` is kept even when an address is derived from it, so a later reader can tell which submission a message
- * answers.
+ * `origin` is what the turn came from, kept so a later reader can tell which submission a message answers. There is no
+ * address: a row of the conversation is the whole of a delivery.
  */
 export interface ReplyRecord {
 	readonly deliveryId: string;
 	readonly blocks: readonly ContentBlock[];
-	readonly address?: SendAddress;
 	readonly origin?: Origin;
 }
 
@@ -173,15 +161,9 @@ export function replyRecordOf(entry: EntryRecord): ReplyRecord | undefined {
 	const data = entry.data as Record<string, unknown>;
 	if (typeof data.deliveryId !== "string" || data.deliveryId === "") return undefined;
 	const blocks = Array.isArray(data.blocks) ? data.blocks.filter(isContentBlock) : [];
-	const raw = data.target as Record<string, unknown> | undefined;
-	const address =
-		typeof raw === "object" && raw !== null && typeof raw.connector === "string"
-			? { connector: raw.connector, ...(typeof raw.ref === "string" ? { ref: raw.ref } : {}) }
-			: undefined;
 	return {
 		deliveryId: data.deliveryId,
 		blocks,
-		...(address === undefined ? {} : { address }),
 		...(originOf(data) === undefined ? {} : { origin: originOf(data) as Origin }),
 	};
 }
@@ -199,30 +181,6 @@ export function textOfBlocks(blocks: readonly ContentBlock[]): string {
 			block.type === "text" || block.type === "markdown" || block.type === "notice" ? [block.text] : [],
 		)
 		.join("");
-}
-
-/**
- * Whether an address is one this boot can reach: the connector is enabled, and it is still the connector that carried
- * the words.
- *
- * The check is the operator's configuration, read from the boot's snapshot — the same answer the session gives, so a
- * send can never address a connector the operator switched off mid-turn. The refusal is pinned by `test/delivery.test.ts`,
- * "a connector the operator switched off mid-turn is refused, and nothing is addressed to it".
- */
-export function reachableAddress(
-	integrations: Record<string, Integration>,
-	address: SendAddress,
-): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
-	const integration = integrations[address.connector];
-	if (integration === undefined || !integration.enabled || integration.connector === undefined) {
-		return { ok: false, reason: `"${address.connector}" is not an enabled connector` };
-	}
-	return { ok: true };
-}
-
-/** The address a turn's origin implies, when the origin is one a send can go back to. */
-export function addressOfOrigin(origin: Origin): SendAddress {
-	return { connector: origin.connector, ref: origin.ref };
 }
 
 /**

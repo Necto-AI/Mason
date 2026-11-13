@@ -1,10 +1,10 @@
 # The connector contract, v1
 
 A connector is a [Chord](https://github.com/earendil-works/pi) host. It opens one WebSocket to mason and everything
-after that is two contracts, defined in [`src/index.ts`](src/index.ts). Nothing in this document is a frame: the wire is
+after that is one contract, defined in [`src/index.ts`](src/index.ts). Nothing in this document is a frame: the wire is
 Chord's, and a peer that speaks Chord speaks this.
 
-## The two contracts
+## The contract
 
 `mason.peer`, served by mason at the host `mason`. A connector reaches it and:
 
@@ -12,16 +12,12 @@ Chord's, and a peer that speaks Chord speaks this.
 |---|---|
 | state `session` | the handshake: this connector's commands, granted kinds and budgets |
 | state `conversation` | the conversation a person reads — transcript rows, queue, run status — with its revision and diffs |
-| `append(append)` | hands mason one of three things: a person's words, an event, or a notice |
+| `append(append)` | hands mason one of two things: a person's words, or an event |
 | `control(op)` | spends one control out of the `session.commands` vocabulary |
 
-`mason.connector`, served by the connector at the host `connector:<name>`. Mason reaches it and calls exactly one method:
-
-| member | what it does |
-|---|---|
-| `deliver(delivery)` | sends one message to one address; the return value is the acknowledgement |
-
-There is no third contract and no method registry. A peer may call what the contract declares.
+The link is one-way. Mason has no method to call on the connector: an answer is a row of the `conversation` state, and
+a connector with something to say raises an event. There is no second contract and no method registry. A peer may call
+what the contract declares.
 
 ## The conversation
 
@@ -58,48 +54,28 @@ task id or a queue id — so it reacts to what happened without re-deriving the 
 
 1. **One socket, one connector.** The credential stamps it; nothing on the socket may name another.
 2. **Mason routes; the connector points.** No vendor tool, no other connector, no address of the model's own.
-3. **Inbound is an append at the edge:** `submission`, `event`, `notice`. Never an assistant message, a tool result, a
-   delivery, a reply or a compaction.
+3. **Inbound is an append at the edge:** `submission` or `event`. Never an assistant message, a tool result, a reply or
+   a compaction.
 4. **The type is the trust contract.** A `submission` is a person's words; an `event` is a claim, fenced, never an
-   instruction; a `notice` starts nothing.
-5. **Every append carries an id, deduped forever. Every delivery carries an id and is acknowledged.** `uncertain` is
-   never retried.
-6. **An address is opaque:** connector-minted, returned byte for byte, never parsed. A delivery with no address goes to
-   the connector's default.
+   instruction.
+5. **Every append carries an id, deduped forever.** A resend after a lost answer is the same act, not a second one.
+6. **The origin is opaque:** connector-minted, stored byte for byte, never parsed.
 7. **One person, one surface.** At most one enabled connector holds the `user` face; mason refuses the boot of a
    deployment that grants it to two, and the refusal names the rule.
-8. **An answer goes back where the words came from.** A delivery carries the `ref` the turn's append carried, and no
-   other address exists: no grant, no prompt and no model names one.
+8. **The answer is the transcript.** A turn's reply is a row of `conversation`, and no address exists to send it
+   anywhere else: no grant, no prompt and no model names one.
 9. **Within major 1, additions only.** Unknown fields are ignored on both sides: every object in the contract is `open`.
 10. **Nothing crosses the wire that the projection does not name.**
 
-## Addresses
+## The origin
 
-There is one kind:
+An append may carry an `origin`: a `ref` the connector minted, the medium's own `messageId` when it has one, and the
+`actor` when it attributes one. Mason stores it with the entry the append becomes, and with the reply that answers that
+turn, so a later reader can tell which append a row answers. It is never parsed and never returned as a destination:
+with one surface and no delivery, the transcript is the answer.
 
-- A **ref** is an opaque address the connector minted on an append and put in `origin.ref`. Mason stores it in the
-  transcript and returns it as `ref` on the delivery that answers that append. Mason never parses it.
-
-A delivery with no `ref` goes to whatever the connector treats as its default. There is no second address and no
-`target` field: the turn's origin is the only destination an answer has.
-
-An events-only connector can therefore raise an alert with an `origin` and be answered, which is the whole reason the
-two inbound methods became one append.
-
-## Acknowledgements
-
-`deliver` returns one of four statuses:
-
-| status | meaning | may mason resend? |
-|---|---|---|
-| `delivered` | the medium has it | no |
-| `duplicate` | it already had it under this id | no |
-| `uncertain` | it may have left, and nobody can tell | no — a person decides |
-| `rejected` | it definitively did not leave | a later turn may try again |
-
-Mason resends an unacknowledged delivery under the same `deliveryId` after a reconnect. A connector keeps a ledger of
-every id it answered, in its own store, because the restart that loses the answer is the restart that would lose a
-`Map`.
+An events-only connector may raise an alert with an origin and no words, which is the whole reason the two inbound
+methods became one append.
 
 ## Errors
 
@@ -133,8 +109,8 @@ The contract names carry no version suffix. Chord's own `version` field on each 
 a provider that breaks a consumer must declare an adapter. Within major 1 the envelope only grows: a field added is a
 field a peer ignores, and every object here has `additionalProperties: true` for exactly that reason. A field may also
 be retired inside major 1 for the same reason: an open object binds whether or not it carries one, so a deployed
-connector keeps working with `session.targets` and `delivery.target` gone and simply reads no targets. Major 1 stays the
-version (#200); a bump would refuse every connector already deployed to remove two fields nobody has to bind.
+connector keeps working with `session.targets` gone and simply reads no targets. Major 1 stays the version (#200); a
+bump would refuse every connector already deployed to remove a field nobody has to bind.
 
 A **member** may be added inside major 1 as well, and `conversation` is the first one: binding is directional, so a
 provider has to cover what its consumer names and is free to offer more. A connector deployed before the member existed

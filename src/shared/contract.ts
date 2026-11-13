@@ -11,21 +11,17 @@
  * The names the server and the client have to spell the same way: the one tool whose call is a send, and the entry
  * kinds the transcript is made of. Spelled once here, so a rename cannot land on one side of the wire only.
  *
- * `send` is mason's own operation, not a vendor's: it addresses the origin a turn came from — the connector that carried
- * the words — and the transcript itself when there is none. No prompt names a vendor tool, and the projection reads the
- * entry the send commits rather than the call that made it.
+ * `send` is mason's own operation, not a vendor's: it commits the turn's words to the transcript, which is the one
+ * surface a reader has, and records the origin of the turn's input beside them. No prompt names a vendor tool, and the
+ * projection reads the entry the send commits rather than the call that made it.
  */
 export const SEND_TOOL = "send";
 /** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
-/** A person's words that arrived through a connector, carrying the origin a reply goes back to. */
+/** A person's words that arrived through a connector, carrying the origin of the append they came from. */
 export const CONNECTOR_ENTRY_KIND = "app.connector";
-/** One committed send: the outbox record, and what the reader sees as a delivered message. */
+/** One committed send: what the reader sees as a delivered message. */
 export const REPLY_ENTRY_KIND = "app.reply";
-/** The medium talking about itself: written down for the reader, and it starts no turn. */
-export const NOTICE_ENTRY_KIND = "app.notice";
-/** What became of one reply: the acknowledgement, durable, so a restart neither resends nor forgets it. */
-export const DELIVERY_ENTRY_KIND = "app.delivery";
 
 /**
  * What the delivery gate says to the model when a turn ends with nothing sent.
@@ -33,7 +29,7 @@ export const DELIVERY_ENTRY_KIND = "app.delivery";
  * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry that
  * reads as one: the reader never sees the reminder, only the answer it produces.
  *
- * One reminder, because there is one operation: `send` reaches whoever the turn came from, and a turn nobody is
+ * One reminder, because there is one operation: `send` writes the transcript a reader reads, and a turn nobody is
  * waiting on says so in its result rather than being answered in another tool's name.
  */
 export const DELIVERY_REMINDER = `[delivery] That turn ended without a \`${SEND_TOOL}\` call, so nothing reached the reader: not your answer, not your notes, nothing at all. Send the answer now with \`${SEND_TOOL}\`, in the words the reader should see.`;

@@ -1,14 +1,16 @@
 /**
  * The mason connector protocol, v1, as Chord contracts.
  *
- * A connector is a Chord host. It opens one socket to mason, and everything it does happens through two contracts:
+ * A connector is a Chord host. It opens one socket to mason, and everything it does happens through one contract:
  *
  * - **`mason.peer`** is served by mason and reached by the connector. It is how a connector hands mason something — a
- *   person's words, an event, a notice — and how it asks for a control. Its `session` state is the handshake: the grant
- *   as the connector sees it, readable once the reference is ready. Its `conversation` state is the conversation a
- *   person reads — rows, queue, run status — with a monotonic revision and diff frames, for a client that renders it.
- * - **`mason.connector`** is served by the connector at `connector:<name>` and reached by mason. It is one method,
- *   `deliver`, and its answer is the acknowledgement.
+ *   person's words or an event — and how it asks for a control. Its `session` state is the handshake: the grant as the
+ *   connector sees it, readable once the reference is ready. Its `conversation` state is the conversation a person reads
+ *   — rows, queue, run status — with a monotonic revision and diff frames, for a client that renders it.
+ *
+ * The link is one-way: the connector calls and mason answers, and mason has no method to call on the connector. An
+ * answer reaches a reader as a row of the `conversation` state, which is why there is nothing to deliver and nothing to
+ * acknowledge.
  *
  * There are no frames of our own: no envelope, no sequence number, no method registry. What a peer may call is what the
  * contract declares, and what crosses the wire is what the contract has a schema for. Chord carries the rest — the link,
@@ -20,7 +22,6 @@ import {
 	type AnyContract,
 	ChordError,
 	type ChordErrorCode,
-	hostFamily,
 	hostNamed,
 	method,
 	type Readable,
@@ -53,8 +54,8 @@ export const PROTOCOL_MAJOR = 1;
 export const MASON_HOST = "mason";
 export const CONNECTOR_HOST_PREFIX = "connector:";
 
-/** The contract names, spelled once. */
-export const CONTRACT = { peer: "mason.peer", connector: "mason.connector" } as const;
+/** The contract name, spelled once. */
+export const CONTRACT = { peer: "mason.peer" } as const;
 
 /** The host name one connector lives at, and the one mason accepts its socket as. */
 export function connectorHost(name: string): string {
@@ -180,11 +181,10 @@ export const BlockSchema = union([
 export type ContentBlock = Static<typeof BlockSchema>;
 
 /**
- * One append: the three things a connector may hand mason, and nothing else.
+ * One append: the two things a connector may hand mason, and nothing else.
  *
  * A `submission` is a person's words and starts a turn. An `event` is a claim about the world, fenced as data and
- * routed to the routine its kind names. A `notice` is the medium talking about itself: it is written down and starts
- * nothing. The type is the trust boundary, which is why it is a tag on the envelope.
+ * routed to the routine its kind names. The type is the trust boundary, which is why it is a tag on the envelope.
  */
 export const AppendSchema = union([
 	obj(
@@ -209,7 +209,6 @@ export const AppendSchema = union([
 		},
 		{ open: true },
 	),
-	obj({ type: lit("notice"), appendId: str(), text: str(), origin: opt(OriginSchema) }, { open: true }),
 ]);
 export type AppendArgs = Static<typeof AppendSchema>;
 
@@ -219,27 +218,6 @@ export const AppendResultSchema = obj(
 	{ open: true },
 );
 export type AppendResult = Static<typeof AppendResultSchema>;
-
-/**
- * One delivery, in the one direction mason initiates it.
- *
- * `ref` is the opaque address the connector put on the append a turn came from: a delivery goes back where the words
- * came from, and there is nowhere else to send one. Its absence means the connector's own default. The id is the
- * delivery's identity for good: a connector that sees it twice has the message once.
- */
-export const DeliverSchema = obj({ deliveryId: str(), blocks: arr(BlockSchema), ref: opt(str()) }, { open: true });
-export type DeliverArgs = Static<typeof DeliverSchema>;
-
-/** What a connector answers a delivery with. `uncertain` exists because a lost send and a lost answer look identical. */
-export const AckSchema = obj(
-	{
-		status: union([lit("delivered"), lit("duplicate"), lit("uncertain"), lit("rejected")]),
-		detail: opt(str()),
-	},
-	{ open: true },
-);
-export type AckStatus = "delivered" | "duplicate" | "uncertain" | "rejected";
-export type DeliveryAck = Static<typeof AckSchema>;
 
 export const ControlSchema = obj({ op: str(), requestId: opt(str()), instructions: opt(str()) }, { open: true });
 export type ControlArgs = Static<typeof ControlSchema>;
@@ -352,15 +330,15 @@ export const ConversationStateSchema = obj(
 export type ConversationState = Static<typeof ConversationStateSchema>;
 
 /* ---------------------------------------------------------------------------------------------------------------- */
-/* The two contracts                                                                                                 */
+/* The contract                                                                                                      */
 /* ---------------------------------------------------------------------------------------------------------------- */
 
 /*
- * Both `input` schemas stay closed, and that is not an exception to rule 9: the input is the handshake, validated before
+ * The `input` schema stays closed, and that is not an exception to rule 9: the input is the handshake, validated before
  * a link exists, and two peers that disagree about it are refused rather than degraded. Rule 9 is about what crosses an
  * established link; a field added to the handshake is a major-2 change, and every object a caller sees after it is open.
  *
- * `test/rules.test.ts`, "both handshake inputs stay closed, and that is not an exception to rule 9", is the test that pins
+ * `test/rules.test.ts`, "the handshake input stays closed, and that is not an exception to rule 9", is the test that pins
  * it.
  */
 
@@ -388,18 +366,8 @@ export const MasonPeer: RemoteContract = remote(CONTRACT.peer, {
 	},
 });
 
-/** The connector's half, served at `connector:<name>`, one object per connector. */
-export const MasonConnector: RemoteContract = remote(CONTRACT.connector, {
-	version: 1,
-	input: obj({ connector: str() }),
-	host: hostFamily(CONNECTOR_HOST_PREFIX, "connector"),
-	variants: {
-		default: { methods: { deliver: method(DeliverSchema, AckSchema) } },
-	},
-});
-
-/** Both, for a host that has to prove it serves what the protocol says. */
-export const CONTRACTS: readonly AnyContract[] = [MasonPeer, MasonConnector];
+/** Every contract, for a host that has to prove it serves what the protocol says. There is one, and it is mason's. */
+export const CONTRACTS: readonly AnyContract[] = [MasonPeer];
 
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* What a caller holds                                                                                               */
@@ -419,12 +387,6 @@ export interface PeerRef {
 	readonly conversation: Readable<ConversationState>;
 	append(args: AppendArgs): Promise<AppendResult>;
 	control(args: ControlArgs): Promise<ControlResult>;
-}
-
-/** A reference to one connector's object, as mason sees it. */
-export interface ConnectorRef {
-	readonly variant: "default";
-	deliver(args: DeliverArgs): Promise<DeliveryAck>;
 }
 
 /** Where a turn came from, as the transcript holds it: the connector and the address it minted. */

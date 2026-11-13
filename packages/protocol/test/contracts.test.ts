@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { isChordError } from "@earendil-works/chord";
 import { compile } from "@earendil-works/pi-schema";
 import {
-	AckSchema,
 	AppendSchema,
 	CONTRACT,
 	CONTRACTS,
@@ -12,7 +11,6 @@ import {
 	ConversationStateSchema,
 	chordCodeFor,
 	connectorHost,
-	DeliverSchema,
 	ERROR_CODE,
 	errorCodeOf,
 	MasonPeer,
@@ -37,18 +35,14 @@ test("a refusal keeps its code across the wire, because Chord keeps only the rea
 	assert.equal(chordCodeFor(ERROR_CODE.actorUnknown), "forbidden");
 });
 
-test("the two contracts are the two names, placed where the protocol says", () => {
+test("there is one contract, placed where the protocol says", () => {
 	assert.deepEqual(
 		CONTRACTS.map((contract) => contract.name),
-		[CONTRACT.peer, CONTRACT.connector],
+		[CONTRACT.peer],
 	);
-	const placements = CONTRACTS.map((contract) => {
-		const def = contract.def as { host?: unknown };
-		return def.host;
-	});
+	const def = CONTRACTS[0]?.def as { host?: unknown };
 	assert.equal(CONTRACTS[0]?.name, "mason.peer");
-	assert.deepEqual(placements[0], { name: "mason" });
-	assert.deepEqual(placements[1], { prefix: "connector:", key: "connector" });
+	assert.deepEqual(def.host, { name: "mason" });
 	assert.equal(PROTOCOL_MAJOR, 1);
 });
 
@@ -77,16 +71,12 @@ test("the shape the type says and the shape the schema validates are one shape",
 		origin: { ref: "chat-1" },
 	};
 	assert.equal(compile(AppendSchema).check(submission), true);
+	assert.equal(compile(AppendSchema).check({ ...submission, type: "reply" }), false, "an append is one of two things");
 	assert.equal(
-		compile(AppendSchema).check({ ...submission, type: "reply" }),
+		compile(AppendSchema).check({ type: "notice", appendId: "n-1", text: "the channel was muted" }),
 		false,
-		"an append is one of three things",
+		"a notice is not an append any more: a connector with something to say raises an event",
 	);
-
-	const delivery = { deliveryId: "d-1", blocks: [{ type: "text", text: "hi" }], ref: "chat-1" };
-	assert.equal(compile(DeliverSchema).check(delivery), true);
-	assert.equal(compile(AckSchema).check({ status: "delivered" }), true);
-	assert.equal(compile(AckSchema).check({ status: "sent" }), false);
 	assert.equal(compile(ControlResultSchema).check({ handled: true, op: "stop" }), true);
 
 	// The conversation is the read model, and the type a client reads it with is the schema the wire validates.

@@ -9,18 +9,18 @@ import { createFakeMason, type FakeMason } from "../src/testkit/fake-mason.ts";
 import { chat } from "./fixtures/chat.ts";
 
 /**
- * The two claims the README makes about a restart: two connector instances, one store file, and in between them nothing
- * but what reached the disk.
+ * The claim the README makes about a restart: two connector instances, one store file, and in between them nothing but
+ * what reached the disk.
  *
  * The store is the only thing carried over. Everything a connector keeps in memory — its link, its in-flight map, the
- * set of ids it has seen — is gone, which is exactly why the journal and the ledger have to live in the store. The two
- * instances share this process because that is what a test can do; the state they share is only the file.
+ * conversation it applied — is gone, which is exactly why the journal has to live in the store. The two instances share
+ * this process because that is what a test can do; the state they share is only the file.
  */
 async function withFixture(
 	act: (context: {
 		readonly mason: FakeMason;
 		readonly path: string;
-		open: () => Promise<{ connector: Connector; sends: number[] }>;
+		open: () => Promise<{ connector: Connector; frames: number[] }>;
 	}) => Promise<void>,
 ): Promise<void> {
 	const dir = await mkdtemp(join(tmpdir(), "connector-restart-"));
@@ -32,12 +32,13 @@ async function withFixture(
 			commands: chat.faces.commands ?? [],
 		},
 	});
-	mason.start();
 	const path = join(dir, "connector.db");
 
 	const open = async () => {
 		const store = await openSqliteStore({ path });
-		const sends: number[] = [];
+		// The revisions this process applied: what a restart has to re-establish, and the one thing the SDK's own state
+		// member adds to the journal.
+		const frames: number[] = [];
 		const connector = createConnector({
 			name: chat.name,
 			version: "1.0.0",
@@ -49,14 +50,13 @@ async function withFixture(
 			readyTimeout: 1_000,
 			reconnect: { initialMs: 1, maxMs: 5 },
 			handlers: {
-				onDelivery(delivery) {
-					sends.push(delivery.deliveryId.length);
-					return { status: "delivered" };
+				onConversation(state) {
+					frames.push(state.revision);
 				},
 			},
 		});
 		await connector.start();
-		return { connector, sends };
+		return { connector, frames };
 	};
 
 	try {
@@ -85,33 +85,6 @@ test("a call journaled before a restart is replayed once by the next process", a
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			assert.equal(mason.submissions.length, 1, "the journaled call was replayed by the new process");
 			assert.equal(mason.submissions[0]?.appendId, "restart-1");
-		} finally {
-			await second.connector.stop();
-		}
-	});
-});
-
-test("a delivery settled before a restart is a duplicate after it, and nobody is sent it twice", async () => {
-	await withFixture(async ({ mason, open }) => {
-		const first = await open();
-		const ack = await mason.deliver({
-			deliveryId: "restart-delivery",
-			ref: "chat-1",
-			blocks: [{ type: "text", text: "hello" }],
-		});
-		assert.equal(ack?.status, "delivered");
-		assert.equal(first.sends.length, 1);
-		await first.connector.stop();
-
-		const second = await open();
-		try {
-			const again = await mason.deliver({
-				deliveryId: "restart-delivery",
-				ref: "chat-1",
-				blocks: [{ type: "text", text: "hello" }],
-			});
-			assert.equal(again?.status, "duplicate");
-			assert.equal(second.sends.length, 0, "the new process remembered the id it never saw");
 		} finally {
 			await second.connector.stop();
 		}

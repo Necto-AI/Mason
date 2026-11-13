@@ -11,25 +11,62 @@
  * name: `bind()` returns early when two fingerprints match, so a test that handed the served contract back to itself
  * would pass without reading a single member. The fingerprint assertion is what keeps this on the covered path.
  *
- * What is frozen is the member list and the fingerprint, because that is what this change alters: the fingerprint is the
- * one `packages/protocol/src/index.ts` had at `e59a4c3`, so a restatement that drifts — a schema edited underneath it, a
- * member renamed — fails here instead of quietly proving that *a* three-member contract binds. The schemas those members
- * are declared with are otherwise restated by reference: a change to one of them is a different claim, pinned by "the
- * shape the type says and the shape the schema validates are one shape" in `contracts.test.ts`.
+ * What is frozen is the member list and the fingerprint, because that is what this change alters: a restatement that
+ * drifts — a schema edited underneath it, a member renamed — fails here instead of quietly proving that *a* three-member
+ * contract binds. The schemas those members are declared with are restated by reference.
+ *
+ * One member was retired rather than added, and it is pinned separately below: #201 removes the `notice` append shape, and
+ * a union member is not a field — a deployed consumer that still names it is not covered by the served append any more,
+ * which is `coverage`'s answer and, through it, `bind`'s refusal. "The retired notice append is refused" is the test that
+ * says so; the price is recorded in `PROTOCOL.md`'s versioning section, and it is why the two connectors this step keeps
+ * are rebuilt in the same change.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bind, coverage, hostNamed, isChordError, method, type RemoteContract, remote } from "@earendil-works/chord";
+import { arr, lit, obj, opt, str, union, unknown } from "@earendil-works/pi-schema";
 import {
 	AppendResultSchema,
 	AppendSchema,
+	BlockSchema,
 	CONTRACT,
 	ControlResultSchema,
 	ControlSchema,
 	MasonPeer,
+	OriginSchema,
 	PROTOCOL_MAJOR,
 	SessionSchema,
 } from "../src/index.ts";
+
+/**
+ * The append v1 shipped: the three members a deployed connector holds, written out here rather than imported, because
+ * the served contract no longer carries `notice` (#201).
+ */
+const AppendBeforeNoticeCut = union([
+	obj(
+		{
+			type: lit("submission"),
+			appendId: str(),
+			content: arr(BlockSchema),
+			origin: opt(OriginSchema),
+			mode: opt(union([lit("followUp"), lit("steer"), lit("reject")])),
+			capabilities: opt(arr(str())),
+		},
+		{ open: true },
+	),
+	obj(
+		{
+			type: lit("event"),
+			appendId: str(),
+			kind: str(),
+			payload: opt(unknown()),
+			summary: opt(str()),
+			origin: opt(OriginSchema),
+		},
+		{ open: true },
+	),
+	obj({ type: lit("notice"), appendId: str(), text: str(), origin: opt(OriginSchema) }, { open: true }),
+]);
 
 /** The contract a connector deployed before `conversation` existed holds, member for member. */
 function peerBeforeConversation(): RemoteContract {
@@ -51,8 +88,9 @@ function peerBeforeConversation(): RemoteContract {
 
 test("a connector deployed before the conversation member existed still binds", () => {
 	const deployed = peerBeforeConversation();
-	// The one number this suite rests on: it is `MasonPeer.fingerprint` at `e59a4c3`, the contract v1 shipped.
-	assert.equal(deployed.fingerprint, "ac4fd4ec7911fb23");
+	// The fingerprint of the frozen consumer: pinned so a restatement that drifts fails here rather than quietly proving
+	// that *a* three-member contract binds.
+	assert.equal(deployed.fingerprint, "14219afca4437665");
 	assert.notEqual(
 		deployed.fingerprint,
 		MasonPeer.fingerprint,
@@ -61,6 +99,30 @@ test("a connector deployed before the conversation member existed still binds", 
 	assert.equal(coverage(MasonPeer.description, deployed.description), undefined);
 	// `bind` is what a link does when the consumer's reference arrives; a gap throws here rather than degrading later.
 	assert.doesNotThrow(() => bind(MasonPeer, undefined, deployed));
+});
+
+test("the retired notice append is refused to a deployed consumer, not silently accepted", () => {
+	const deployed = remote(CONTRACT.peer, {
+		version: PROTOCOL_MAJOR,
+		input: MasonPeer.input,
+		host: hostNamed("mason"),
+		variants: {
+			default: {
+				state: { session: SessionSchema },
+				methods: { append: method(AppendBeforeNoticeCut, AppendResultSchema) },
+			},
+		},
+	});
+	assert.equal(
+		coverage(MasonPeer.description, deployed.description),
+		"default.append arguments",
+		"a union member is not a field: the served append no longer covers the one that shipped",
+	);
+	assert.throws(
+		() => bind(MasonPeer, undefined, deployed),
+		/isChordError|Error/,
+		"a consumer holding the retired member does not bind, which is the visible price of the cut",
+	);
 });
 
 test("the member a deployed connector does not name is the only one it lacks", () => {

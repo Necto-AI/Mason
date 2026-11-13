@@ -46,10 +46,12 @@ for (const [kind, make] of implementations) {
 			await store.delete(NAMESPACE.outbox, "a");
 			assert.equal(await store.read(NAMESPACE.outbox, "a"), undefined);
 
-			await store.write(NAMESPACE.delivered, "x", { status: "delivered" });
-			await store.write(NAMESPACE.delivered, "y", { status: "delivered" });
-			await store.prune(NAMESPACE.delivered, 1);
-			assert.equal((await store.entries(NAMESPACE.delivered)).length, 1);
+			// `prune` is the store's own answer to a namespace that only grows, and a connector keeps its own under a name of
+			// its choosing: the SDK's two namespaces are its journal and its settled answers, and neither is pruned by the SDK.
+			await store.write("vendor.sent", "x", { status: "delivered" });
+			await store.write("vendor.sent", "y", { status: "delivered" });
+			await store.prune("vendor.sent", 1);
+			assert.equal((await store.entries("vendor.sent")).length, 1);
 		} finally {
 			await store.close();
 			await cleanup();
@@ -62,11 +64,11 @@ test("a store survives being reopened, which is the whole point of it", async ()
 	try {
 		const path = join(dir, "connector.db");
 		const first = await openSqliteStore({ path });
-		await first.write(NAMESPACE.delivered, "d-1", { status: "delivered" });
+		await first.write("vendor.sent", "d-1", { status: "delivered" });
 		await first.close();
 
 		const second = await openSqliteStore({ path });
-		assert.deepEqual(await second.read(NAMESPACE.delivered, "d-1"), { status: "delivered" });
+		assert.deepEqual(await second.read("vendor.sent", "d-1"), { status: "delivered" });
 		await second.close();
 	} finally {
 		await rm(dir, { recursive: true, force: true });

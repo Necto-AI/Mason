@@ -18,7 +18,7 @@ test("an events-only connector passes the published conformance suite", async ()
 		"the no-user refusal ran, because this fixture's grant names an owner",
 	);
 	assert.ok(
-		result.passed.some((name) => name.startsWith("delivery/")),
-		"the delivery cases ran: being handed a message back is not the same face as carrying a person's words",
+		result.passed.some((name) => name.startsWith("journal/")),
+		"the journal cases ran: a queued call is replayed whether or not the entry carries words",
 	);
 });

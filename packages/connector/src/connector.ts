@@ -1,38 +1,34 @@
 /**
- * The connector runtime: one Chord host, one durable journal, and the three acts a connector performs.
+ * The connector runtime: one Chord host, one durable journal, and the acts a connector performs.
  *
  * Everything here is the part a connector author would otherwise get wrong:
  *
  * - **Durable identity, not retries with fresh ids.** `append` and `control` write the call into the store before it
  *   reaches the link, so a link that dies mid-flight is a resend of the same id after reconnect rather than a second
  *   logical operation. Mason deduplicates on that id forever; a connector must not invent a new one for the same act.
- * - **The delivery ledger is the connector's own.** Mason resends an unacknowledged delivery under the same
- *   `deliveryId`, and the ledger is what turns that resend into `duplicate` instead of a person receiving the same
- *   message twice. It is persisted, because the restart that lost the acknowledgement is the same restart that would
- *   empty a `Map`.
- * - **A failed send is `uncertain`, not retried.** If the handler throws, nobody knows whether the vendor accepted the
- *   message. Guessing "no" duplicates it; guessing "yes" loses it. The SDK reports uncertainty and leaves the choice to
- *   a person.
  * - **Reconnect is the recovery mechanism.** The host keeps one link to mason; a new link re-holds every reference, and
  *   the journal is replayed over it.
+ * - **The conversation is where an answer is.** The SDK calls, and mason answers; the rows a person reads arrive as the
+ *   `conversation` state member, so no vendor handler sits between mason and a reader. Holding it is the SDK's job
+ *   because the rule for applying it is the protocol's: a snapshot replaces what is held, and a diff is kept only when
+ *   its revision is later than the one held, which is what makes a reconnect safe.
  */
-import { createHost, type Host, type Link } from "@earendil-works/chord";
+import { createHost, type Host, type Link, type StateEvent } from "@earendil-works/chord";
+import { apply } from "@earendil-works/chord/delta";
 import {
 	type ContentBlock,
 	type ControlOp,
 	type ControlResult,
+	type ConversationState,
 	connectorHost,
-	type DeliverArgs,
-	type DeliveryAck,
 	ERROR_CODE,
 	errorCodeOf,
-	MasonConnector,
 	MasonPeer,
 	type PeerRef,
 	type Session,
 } from "mason-protocol";
 import { type AttachmentClient, createAttachmentClient, type Fetcher } from "./attachments.ts";
-import { type ConnectorStore, LEDGER_KEEP, NAMESPACE } from "./store.ts";
+import { type ConnectorStore, NAMESPACE } from "./store.ts";
 
 export interface Logger {
 	debug?(message: string, fields?: Record<string, unknown>): void;
@@ -44,17 +40,9 @@ export interface Logger {
 /** Discards everything. The default, because a library that logs to the console by default is a library that does. */
 export const silentLogger: Logger = { info() {}, warn() {}, error() {} };
 
-/** What mason sends a connector: one delivery, and the address the turn came from. */
-export interface Delivery {
-	readonly deliveryId: string;
-	readonly blocks: readonly ContentBlock[];
-	/** The opaque address this connector minted on the append the turn came from. Absent means its own default. */
-	readonly ref?: string;
-}
-
 export interface ConnectorHandlers {
-	/** One message mason routed here. Return the ack; throw to report an uncertain vendor outcome. */
-	onDelivery(delivery: Delivery): Promise<DeliveryAck> | DeliveryAck;
+	/** The conversation as the wire has it: the snapshot first, then the value each diff produced. */
+	onConversation?(state: ConversationState): Promise<void> | void;
 	/** The session is live and the journal has been replayed. Called once per connection. */
 	onSession?(session: Session): Promise<void> | void;
 	/** The link is gone and a reconnect is scheduled. */
@@ -97,6 +85,8 @@ export type InboundOutcome =
 export interface ConnectorStatus {
 	readonly connected: boolean;
 	readonly session: Session | undefined;
+	/** The conversation as this connector last applied it: the state a medium renders. */
+	readonly conversation: ConversationState | undefined;
 	readonly connections: number;
 	readonly pending: number;
 	readonly lastError: string | undefined;
@@ -124,13 +114,6 @@ export interface EventInput {
 	readonly appendId?: string;
 }
 
-/** The medium talking about itself: written down, and it starts nothing. */
-export interface NoticeInput {
-	readonly text: string;
-	readonly origin?: { readonly ref: string; readonly messageId?: string };
-	readonly appendId?: string;
-}
-
 export interface ControlInput {
 	readonly op: ControlOp;
 	readonly instructions?: string;
@@ -143,7 +126,6 @@ export interface Connector {
 	status(): ConnectorStatus;
 	submit(input: SubmissionInput): Promise<InboundOutcome>;
 	event(input: EventInput): Promise<InboundOutcome>;
-	notice(input: NoticeInput): Promise<InboundOutcome>;
 	control(input: ControlInput): Promise<ControlResult>;
 	/** Replay the journal now, on a link that is already open. */
 	flush(): Promise<void>;
@@ -169,7 +151,7 @@ type Sent<T> =
 export function createConnector(config: ConnectorConfig): Connector {
 	const logger = config.logger ?? silentLogger;
 	const now = config.now ?? Date.now;
-	const handlers = config.handlers ?? { onDelivery: () => ({ status: "rejected", detail: "no delivery face" }) };
+	const handlers = config.handlers ?? {};
 	const principal = { connector: config.name };
 	const host: Host<{ connector: string }> = createHost({
 		name: connectorHost(config.name),
@@ -186,11 +168,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		maxBytes: () => cap,
 	});
 
-	host.serve(MasonConnector, () => ({
-		variant: "default",
-		deliver: (args: DeliverArgs) => settle(args),
-	}));
-
 	const reconnect = {
 		initialMs: config.reconnect?.initialMs ?? 500,
 		maxMs: config.reconnect?.maxMs ?? 30_000,
@@ -201,6 +178,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 	/** The link this connection runs on, so `drop` ends the link rather than the host it lives in. */
 	let currentLink: Link | undefined;
 	let session: Session | undefined;
+	let conversation: ConversationState | undefined;
 	let stopping = false;
 	let connections = 0;
 	let lastError: string | undefined;
@@ -212,7 +190,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 	let nextSeq: number | undefined;
 	let seeding: Promise<void> | undefined;
 	const inflight = new Map<string, Promise<Sent<unknown>>>();
-	const delivering = new Map<string, Promise<DeliveryAck>>();
 
 	const connector: Connector = {
 		start,
@@ -220,7 +197,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		status,
 		submit,
 		event,
-		notice,
 		control,
 		flush,
 		attachments,
@@ -232,6 +208,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 		return {
 			connected: peer !== undefined,
 			session,
+			conversation,
 			connections,
 			pending: inflight.size,
 			lastError,
@@ -305,6 +282,7 @@ export function createConnector(config: ConnectorConfig): Connector {
 			link.close(lastError);
 			throw error;
 		}
+		held.conversation.events((frame) => holdConversation(frame));
 		const state = held.session.value;
 		peer = held;
 		session = state;
@@ -318,6 +296,29 @@ export function createConnector(config: ConnectorConfig): Connector {
 			logger.error("onSession threw", { error: describe(error) });
 		}
 		return state;
+	}
+
+	/**
+	 * One frame of the conversation, applied by the rule the protocol states.
+	 *
+	 * A snapshot replaces what is held, whatever revision it carries; a diff is applied to a copy and kept only when its
+	 * revision is greater. Both halves are the protocol's, not a convenience: the counter restarts with mason, so a
+	 * snapshot at revision 1 after a reconnect is the frame that converges a client holding 42.
+	 */
+	function holdConversation(frame: StateEvent<ConversationState>): void {
+		const next =
+			frame.type === "ops"
+				? (apply(structuredClone(conversation), frame.ops) as ConversationState)
+				: (structuredClone(frame.value) as ConversationState);
+		if (frame.type === "ops" && conversation !== undefined && next.revision <= conversation.revision) return;
+		conversation = next;
+		try {
+			const held = handlers.onConversation?.(next);
+			if (held instanceof Promise)
+				held.catch((error: unknown) => logger.error("onConversation threw", { error: describe(error) }));
+		} catch (error) {
+			logger.error("onConversation threw", { error: describe(error) });
+		}
 	}
 
 	function onClosed(reason: string): void {
@@ -351,44 +352,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 		reconnectTimer = timer;
 	}
 
-	/**
-	 * Answer one delivery exactly once.
-	 *
-	 * Both guards are needed and they catch different things. The in-memory map catches two calls for one id that
-	 * overlap on a live link. The ledger catches the same delivery arriving again after a reconnect or a restart, which
-	 * is the case the whole at-least-once arrangement is built around.
-	 *
-	 * Every answer is remembered, including `uncertain` and `rejected`: a send that *may* have left must not be
-	 * attempted a second time when its answer was lost, because that is precisely the duplicate the ledger prevents.
-	 */
-	function settle(delivery: Delivery): Promise<DeliveryAck> {
-		const running = delivering.get(delivery.deliveryId);
-		if (running !== undefined) return running;
-		const settled = settleOnce(delivery).finally(() => delivering.delete(delivery.deliveryId));
-		delivering.set(delivery.deliveryId, settled);
-		return settled;
-	}
-
-	async function settleOnce(delivery: Delivery): Promise<DeliveryAck> {
-		const seen = await config.store.read<DeliveryAck>(NAMESPACE.delivered, delivery.deliveryId);
-		if (seen !== undefined) {
-			// A resent `delivered` is a duplicate; a resent `uncertain` is still uncertain, and saying so again is what
-			// keeps mason from recording a delivery it never got.
-			return seen.status === "delivered" || seen.status === "duplicate"
-				? { status: "duplicate", detail: `already settled as ${seen.status}` }
-				: seen;
-		}
-		let ack: DeliveryAck;
-		try {
-			ack = await handlers.onDelivery(delivery);
-		} catch (error) {
-			ack = { status: "uncertain", detail: `the send failed after it may have left: ${describe(error)}` };
-		}
-		await config.store.write(NAMESPACE.delivered, delivery.deliveryId, ack);
-		await config.store.prune(NAMESPACE.delivered, LEDGER_KEEP);
-		return ack;
-	}
-
 	function submit(input: SubmissionInput): Promise<InboundOutcome> {
 		const appendId = input.appendId ?? mintId("sub", now);
 		return inbound(appendId, {
@@ -409,16 +372,6 @@ export function createConnector(config: ConnectorConfig): Connector {
 			kind: input.kind,
 			...(input.payload === undefined ? {} : { payload: input.payload }),
 			...(input.summary === undefined ? {} : { summary: input.summary }),
-			...(input.origin === undefined ? {} : { origin: input.origin }),
-		});
-	}
-
-	function notice(input: NoticeInput): Promise<InboundOutcome> {
-		const appendId = input.appendId ?? mintId("note", now);
-		return inbound(appendId, {
-			type: "notice",
-			appendId,
-			text: input.text,
 			...(input.origin === undefined ? {} : { origin: input.origin }),
 		});
 	}
