@@ -24,7 +24,7 @@ disagreeing.
 
 | | |
 |---|---|
-| The contracts, the ten rules, the error codes | `packages/protocol` (`PROTOCOL.md`, `src/index.ts`) |
+| The contract, the ten rules, the error codes | `packages/protocol` (`PROTOCOL.md`, `src/index.ts`) |
 | SDK: socket, journal, the conversation, attachments | `packages/connector` |
 | Conformance suite and fake mason (a real Chord host) | `packages/connector/testkit` |
 | Three fixtures proving the suite (words, alarms, tools-only) | `packages/connector/test` |
@@ -36,7 +36,7 @@ disagreeing.
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | The console connector, in this repository | `scripts/chat.ts` — `mason chat`, on the same socket as every other connector |
-| Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` — text, files, an MCP server |
+| Telegram as an external process on the SDK | `github.com/DenisSud/mason-telegram` — events and tools |
 | What the agent is told about a connector | `docs/agent/`, mounted read-only at `/mason/docs` and indexed by the prompt, never pasted into it |
 
 A connector can connect, append words or an event, read the conversation and move files. One way in: this socket.
