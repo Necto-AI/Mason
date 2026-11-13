@@ -1,25 +1,23 @@
 /**
- * `mason doctor`: nine read-only checks over one bot's configuration, and an exit code a CI job can trust.
+ * `mason doctor`: seven read-only checks over one bot's configuration, and an exit code a CI job can trust.
  *
  * The rule the checks share is the one openclaw's outro taught (`docs/research/openclaw-cli.md` §1.1): a failure is one
  * sentence naming one repair command, never a stack trace and never a fix. Doctor changes nothing — not a file, not a
- * container, not a credential — because a command that repairs is a command whose report can no longer be trusted to say
- * what was wrong. The repair it names is the command a person would have typed.
+ * credential — because a command that repairs is a command whose report can no longer be trusted to say what was wrong.
+ * The repair it names is the command a person would have typed.
  *
- * The nine are ordered from the home outward, which is also the order a boot meets them: the two halves, the model, the
- * execution environment, the server, podman, the boot policy, each connector's container, the integration file, and the
- * exit-code shape itself. Checks 5 and 6 only run when a connector actually runs in a container: a bot whose only
- * connector is the console needs no podman, and failing it for a dependency it does not have is the kind of noise that
- * teaches people to ignore a doctor.
+ * The seven are ordered from the home outward, which is also the order a boot meets them: the two halves, the model, the
+ * execution environment, the server, the connectors that can reach it, the integration file, and the exit-code shape
+ * itself.
  *
- * Check 4 is honest about a stopped server. A fleet that is not running is a fleet somebody has not started, not a
+ * Check 4 is honest about a stopped server. A bot that is not running is one somebody has not started, not a
  * misconfiguration — `mason up` is the next step, not a repair — so "nothing is listening" passes and says so, while a
- * server that is listening and does not answer `/api/health` fails. That is what lets `mason onboard` end in a green
+ * port that answers and does not serve `/api/health` for this home fails. That is what lets `mason new` end in a green
  * doctor on a machine where nothing is up yet.
  */
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { connect } from "node:net";
 import { join, resolve } from "node:path";
 import { localDaemon } from "@earendil-works/pi-env";
 import {
@@ -31,13 +29,10 @@ import {
 	readPiSettingsModel,
 	resolveModelChoice,
 } from "./common.ts";
-import { composePath, readComposeCredential } from "./connector-compose.ts";
 import { listConnectorCredentials } from "./connectors.ts";
 import { parseRoutines, type RoutineConfig } from "./hooks.ts";
 import { HOUSE_ENTRIES, type HousePaths } from "./house.ts";
-import { type ConnectorInstalls, readInstalls } from "./install-state.ts";
 import { readIntegrationBoot, readIntegrations } from "./integrations.ts";
-import { bootPolicyFix, checkPodman, containerStates, listening, type PodmanOptions } from "./podman.ts";
 import { FAUX_MODEL } from "./runtime.ts";
 
 /** One line of the report: what was checked, what was found, and the one command that repairs a failure. */
@@ -59,9 +54,6 @@ export interface HealthAnswer {
 export interface DoctorOptions {
 	readonly house: HousePaths;
 	readonly env?: NodeJS.ProcessEnv;
-	/** Injected for tests; the real driver shells out to `podman` and `systemctl`. */
-	readonly runner?: PodmanOptions["runner"];
-	readonly probe?: PodmanOptions["probe"];
 	/** Injected for tests; the real probe is one `fetch` with a short timeout. */
 	readonly health?: (url: string) => Promise<HealthAnswer>;
 }
@@ -88,35 +80,35 @@ async function fetchHealth(url: string): Promise<HealthAnswer> {
 	}
 }
 
-function sha256(value: string): string {
-	return createHash("sha256").update(value, "utf8").digest("hex");
+/**
+ * Whether anything is bound to a port: the question "has this bot been started", asked before the health probe.
+ *
+ * A socket rather than a `fetch`, because "nothing is there" and "something is there and it is not mason" are different
+ * answers: the first is a next step and the second is the check failing.
+ */
+export function listening(host: string, port: number, timeoutMs = 1_500): Promise<boolean> {
+	return new Promise((resolve) => {
+		const socket = connect({ host, port });
+		const done = (answer: boolean): void => {
+			socket.destroy();
+			resolve(answer);
+		};
+		socket.setTimeout(timeoutMs, () => done(false));
+		socket.once("connect", () => done(true));
+		socket.once("error", () => done(false));
+	});
 }
 
-/** The nine checks, in the order a boot meets them. */
+/** The seven checks, in the order a boot meets them. */
 export async function runDoctor(options: DoctorOptions): Promise<readonly DoctorCheck[]> {
 	const house = options.house;
 	const env = options.env ?? process.env;
-	const podman: PodmanOptions = {
-		...(options.runner === undefined ? {} : { runner: options.runner }),
-		...(options.probe === undefined ? {} : { probe: options.probe }),
-	};
 	const checks: DoctorCheck[] = [];
 	checks.push(checkHome(house));
 	checks.push(await checkModel(house, env));
 	checks.push(await checkRuntime(house));
 	checks.push(await checkServer(house, env, options.health ?? fetchHealth));
-	let installs: ConnectorInstalls | undefined;
-	let installsError: string | undefined;
-	try {
-		installs = await readInstalls(house);
-	} catch (error) {
-		// A record mason cannot read is a configuration fault, not "no containers": check 7 has to say so.
-		installsError = error instanceof Error ? error.message : String(error);
-	}
-	const containers = Object.entries(installs?.connectors ?? {}).filter(([, record]) => record.project !== undefined);
-	checks.push(await checkPodmanTool(containers.length > 0, podman));
-	checks.push(await checkBootPolicy(containers.length > 0, podman));
-	checks.push(await checkConnectors(house, containers, podman, installsError));
+	checks.push(await checkConnectors(house));
 	checks.push(await checkIntegrations(house));
 	checks.push(checkExitShape(checks));
 	return checks;
@@ -150,8 +142,8 @@ function checkHome(house: HousePaths): DoctorCheck {
 			detail: `${house.home} is missing agent/ or service/`,
 			repair:
 				house.fleet === undefined
-					? "run `mason onboard` to create the home"
-					: `run \`mason onboard -b ${house.fleet.bot}\` to finish this bot's home`,
+					? "run `mason new <name>` to create the home"
+					: `run \`mason new ${house.fleet.bot}\` to finish this bot's home`,
 		};
 	return { name: "home", ok: true, detail: `${house.home} (agent/, service/)` };
 }
@@ -250,7 +242,7 @@ async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 			};
 }
 
-/** The server: nothing listening is "not started", and a listening server has to answer. */
+/** The server: nothing listening is "not started", and a port that answers has to be this bot's server. */
 async function checkServer(
 	house: HousePaths,
 	env: NodeJS.ProcessEnv,
@@ -264,13 +256,14 @@ async function checkServer(
 	if (!(await listening(dial, port)))
 		return { name: "server", ok: true, detail: `nothing is listening on ${dial}:${port} yet (mason up starts it)` };
 	const answer = await health(`http://${dial}:${port}/api/health`);
-	if (!answer.ok)
+	if (!answer.ok) {
 		return {
 			name: "server",
 			ok: false,
 			detail: `/api/health did not answer: ${answer.detail}`,
 			repair: `check what is bound to ${port}, then run \`mason up\``,
 		};
+	}
 	// A port is not an identity: a scratch bot's doctor used to report the live bot on 8787 as its own server.
 	if (answer.home !== undefined && resolve(answer.home) !== resolve(house.home))
 		return {
@@ -282,46 +275,11 @@ async function checkServer(
 	return { name: "server", ok: true, detail: `listening on ${dial}:${port}, /api/health answers for this home` };
 }
 
-/** podman and a compose provider, only for a bot that runs one. */
-async function checkPodmanTool(needed: boolean, options: PodmanOptions): Promise<DoctorCheck> {
-	if (!needed) return { name: "podman", ok: true, detail: "no connector runs in a container" };
-	const result = await checkPodman(options);
-	return result.ok
-		? { name: "podman", ok: true, detail: "podman and a compose provider" }
-		: {
-				name: "podman",
-				ok: false,
-				detail: result.fix,
-				repair: "install what the line names, then run `mason doctor` again",
-			};
-}
-
-/** `podman-restart.service` and linger, the half of `restart: always` a file cannot carry. */
-async function checkBootPolicy(needed: boolean, options: PodmanOptions): Promise<DoctorCheck> {
-	if (!needed) return { name: "boot", ok: true, detail: "no connector runs in a container" };
-	const fix = await bootPolicyFix(options);
-	return fix === undefined
-		? { name: "boot", ok: true, detail: "podman-restart.service is enabled and this user lingers" }
-		: { name: "boot", ok: false, detail: fix, repair: "run the commands the line names" };
-}
-
-/** Every container connector: the project rendered, the container up, the credential it was handed still live. */
-async function checkConnectors(
-	house: HousePaths,
-	containers: readonly (readonly [string, { readonly project?: string }])[],
-	options: PodmanOptions,
-	broken: string | undefined,
-): Promise<DoctorCheck> {
-	if (broken !== undefined)
-		return {
-			name: "connectors",
-			ok: false,
-			detail: broken,
-			repair: `fix ${house.connectors} by hand, or delete it and run \`mason setup\` for each connector`,
-		};
-	// A bot with no connector granted has no door: nothing can reach it, and the nine checks used to pass vacuously for it.
-	// That is the state a first run that died on the connector question leaves behind, and "doctor 0" is the proof the
-	// issue asks a first run to produce.
+/** Every granted connector is a door: switched on, and holding a credential this home minted. */
+async function checkConnectors(house: HousePaths): Promise<DoctorCheck> {
+	// A bot with no connector granted has no door: nothing can reach it, and the seven checks used to pass vacuously for
+	// it. That is the state a first run that died before its grant leaves behind, and "doctor 0" is the proof the issue
+	// asks a first run to produce.
 	const entries = await grantedConnectors(house);
 	const granted = entries.map((entry) => entry.name);
 	if (granted.length === 0)
@@ -329,15 +287,11 @@ async function checkConnectors(
 			name: "connectors",
 			ok: false,
 			detail: "no connector is granted: nothing can reach this bot",
-			repair: "run `mason setup --connector <name>` (console, telegram or custom)",
+			repair: "run `mason chat` to grant the built-in console connector, or write the entry by hand",
 		};
 	// A grant is not a door: `authenticateConnector` refuses a switched-off entry and a connector with no credential, so a
-	// check that counts the grant alone calls a bot reachable while every socket closes 1008. The switch comes first,
-	// containers included: a switched-off connector refuses every socket whatever its container does, and the loop below
-	// would report it "up".
+	// check that counts the grant alone calls a bot reachable while every socket closes 1008.
 	const off = entries.filter((entry) => !entry.enabled).map((entry) => entry.name);
-	// A credential is the other half, and a container's is judged below by the compose file it carries: a credential rotated
-	// out of the file is not the same as one never minted.
 	const read = await listConnectorCredentials(house.home).then(
 		(credentials) => ({ credentials }),
 		(error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
@@ -349,10 +303,7 @@ async function checkConnectors(
 			detail: `the credential store cannot be read: ${read.error}`,
 			repair: `fix ${house.config} by hand, then run \`mason doctor\` again`,
 		};
-	const inContainer = new Set(containers.map(([name]) => name));
-	const keyless = granted.filter(
-		(name) => !inContainer.has(name) && !read.credentials.some((record) => record.connector === name),
-	);
+	const keyless = granted.filter((name) => !read.credentials.some((record) => record.connector === name));
 	if (off.length > 0)
 		return {
 			name: "connectors",
@@ -365,46 +316,9 @@ async function checkConnectors(
 			name: "connectors",
 			ok: false,
 			detail: `granted but with no credential: ${keyless.join(", ")}`,
-			repair: `run \`mason setup --connector ${keyless[0]}\` to mint one`,
+			repair: `run \`mason connector add ${keyless[0]}\` to mint one`,
 		};
-	if (containers.length === 0)
-		return {
-			name: "connectors",
-			ok: true,
-			detail: `no connector runs in a container; granted: ${granted.join(", ")}`,
-		};
-	const live = await listConnectorCredentials(house.home).catch(() => []);
-	const lines: string[] = [];
-	let repair: string | undefined;
-	for (const [name, record] of containers) {
-		const project = record.project as string;
-		const path = composePath(house, name);
-		const setup = `mason setup --connector ${name}`;
-		if (!existsSync(path)) {
-			lines.push(`${name}: no compose file`);
-			repair ??= setup;
-			continue;
-		}
-		const states = await containerStates(project, options).catch(() => []);
-		const running = states.filter((state) => state.state === "running");
-		if (running.length === 0) {
-			lines.push(`${name}: ${states.length === 0 ? "no container" : states.map((state) => state.state).join(", ")}`);
-			repair ??= `podman compose -f ${path} -p ${project} up -d`;
-			continue;
-		}
-		const held = await readComposeCredential(path);
-		const matches =
-			held !== undefined && live.some((entry) => entry.connector === name && entry.sha256 === sha256(held));
-		if (!matches) {
-			lines.push(`${name}: up, but its credential is not one this home holds`);
-			repair ??= setup;
-			continue;
-		}
-		lines.push(`${name}: up`);
-	}
-	return repair === undefined
-		? { name: "connectors", ok: true, detail: lines.join("; ") }
-		: { name: "connectors", ok: false, detail: lines.join("; "), repair };
+	return { name: "connectors", ok: true, detail: `granted: ${granted.join(", ")}` };
 }
 
 /** The integration file parses, and it is the file the last boot read. */

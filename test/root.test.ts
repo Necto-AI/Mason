@@ -119,7 +119,7 @@ describe("which bot a command is about", () => {
 	test("a root with no bot says the command that creates one", async () => {
 		const root = await tempRoot();
 		assert.throws(() => resolveBot(readRoot(root), { env: {} }), /has no bot yet/);
-		assert.throws(() => resolveBot(readRoot(root), { env: {} }), /mason onboard/);
+		assert.throws(() => resolveBot(readRoot(root), { env: {} }), /has no bot yet: run `mason init`/);
 	});
 });
 

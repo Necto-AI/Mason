@@ -55,14 +55,12 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	const result = await mason([], await tempRoot());
 	assert.equal(result.code, 1, "no command is usage, and usage is a refusal");
 	for (const command of [
-		"mason onboard",
 		"mason init",
 		"mason new",
 		"mason bots",
 		"mason doctor",
 		"mason status",
 		"mason up",
-		"mason setup",
 		"mason chat",
 		"mason integration",
 		"mason connector",
@@ -72,7 +70,7 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	]) {
 		assert.match(result.stdout, new RegExp(command.replace(" ", "\\s+")));
 	}
-	for (const retired of ["token", "team", "person", "panel"]) {
+	for (const retired of ["token", "team", "person", "panel", "onboard", "setup"]) {
 		assert.doesNotMatch(result.stdout, new RegExp(`\\b${retired}\\b`), `${retired} went with the prune`);
 	}
 });
@@ -88,12 +86,12 @@ test("a root with no bot refuses, and names the command that creates one", async
 	const bots = await mason(["bots"], directory);
 	assert.equal(bots.code, 0);
 	assert.match(bots.stdout, /no bots under/);
-	assert.match(bots.stdout, /mason onboard/);
+	assert.match(bots.stdout, /mason new/);
 
 	const doctor = await mason(["doctor"], directory);
 	assert.equal(doctor.code, 1);
 	assert.match(doctor.stderr, /has no bot yet/);
-	assert.match(doctor.stderr, /mason onboard/);
+	assert.match(doctor.stderr, /mason new/);
 });
 
 test("a root whose halves sit at the root is refused on its names, creating nothing", async () => {

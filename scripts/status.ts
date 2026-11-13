@@ -10,7 +10,6 @@
 import { readPiSettingsModel, resolveModelChoice } from "../src/server/common.ts";
 import { housePaths } from "../src/server/house.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
-import { listening } from "../src/server/podman.ts";
 import { takeBot } from "../src/server/root.ts";
 import { FAUX_MODEL } from "../src/server/runtime.ts";
 
@@ -50,7 +49,12 @@ export async function runStatus(argv: readonly string[]): Promise<number> {
 		const connectors = names.filter((name) => integrations[name]?.connector !== undefined).length;
 		const port = Number(process.env.PORT ?? 8787);
 		const host = process.env.HOST ?? "127.0.0.1";
-		const up = await listening(host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host, port);
+		const up = await fetch(`http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${port}/api/health`, {
+			signal: AbortSignal.timeout(1_500),
+		}).then(
+			(answer) => answer.ok,
+			() => false,
+		);
 		console.log(
 			`bot ${name} (${house.home}): model ${model}; ${names.length} integration${names.length === 1 ? "" : "s"}, ` +
 				`${connectors} connector${connectors === 1 ? "" : "s"}; mason ${up ? `listening on ${port}` : "not running"}`,

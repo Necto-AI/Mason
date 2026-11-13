@@ -2,10 +2,9 @@
 /**
  * `mason`, the one command the installed package answers with — and the only place the Node floor is enforced.
  *
- * The floor is the renderer's: `@opentui/core` loads its native half through `node:ffi`, which does not exist below
- * Node 26.4, and the onboarding wizard imports it on its first screen. Without this file a run under an older Node dies
- * inside a dependency, at the first thing a stranger ever does, with a stack trace that names neither mason nor the
- * version and no hint that installing Node again is the repair.
+ * Mason runs TypeScript from source and keeps its state in `node:sqlite`, and neither is there on a version below Node
+ * 26.4. Without this file a run under an older Node dies inside a builtin, at the first thing a stranger ever does, with a
+ * stack trace that names neither mason nor the version and no hint that installing Node again is the repair.
  *
  * The check has to run before the runtime is loaded, and an ESM import is evaluated before the first line of the module
  * that names it. So this file imports exactly one thing of its own — `./node-floor.ts`, which imports nothing at all —

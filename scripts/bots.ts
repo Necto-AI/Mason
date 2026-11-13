@@ -24,7 +24,7 @@ export function runBots(argv: readonly string[]): number {
 		refuseHomeEnv();
 		const root = readRoot(rootPath());
 		if (root.bots.length === 0) {
-			console.log(`no bots under ${root.root}: \`mason onboard\` creates the first one`);
+			console.log(`no bots under ${root.root}: \`mason new <name>\` creates the first one`);
 			return 0;
 		}
 		let current: string | undefined;

@@ -1,13 +1,11 @@
 {
 	"ceilings": {
-		"bin": 118,
+		"bin": 104,
 		"evals": 565,
 		"packages/connector/src": 2533,
 		"packages/protocol/src": 260,
-		"scripts": 4308,
-		"src/server": 6860,
-		"src/setup": 397,
-		"src/shared": 54,
-		"src/tui": 1713
+		"scripts": 2328,
+		"src/server": 6217,
+		"src/shared": 54
 	}
 }

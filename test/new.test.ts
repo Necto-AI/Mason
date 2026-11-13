@@ -2,8 +2,8 @@
  * `scripts/new.ts` — one bot under a root, and the doctor line that says what it produced.
  *
  * The home it creates is today's home, unchanged: two halves, the soul from the product, the shipped skills seeded, and
- * `agent/.git` for the memory. What is new is only where it sits and what it refuses — a name that is taken, a root with
- * no common store, a name that is not a bot's.
+ * `agent/.git` for the memory. What is new is only where it sits, the console grant it writes, and what it refuses — a
+ * name that is taken, a root with no common store, a name that is not a bot's.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -43,9 +43,9 @@ async function initialisedRoot(): Promise<string> {
 }
 
 describe("a new bot", () => {
-	test("creates both halves, the soul, the shipped skills and its first connector, and ends green", async () => {
+	test("creates both halves, the soul, the shipped skills and the console grant, and ends green", async () => {
 		const root = await initialisedRoot();
-		const code = await runNew(["alice", "--connector", "console", "--yes", "--no-start"], { root });
+		const code = await runNew(["alice"], { root });
 		assert.equal(code, 0);
 		const home = join(root, "alice");
 		const paths = housePaths(home);
@@ -60,26 +60,27 @@ describe("a new bot", () => {
 		) as {
 			version?: string;
 		};
-		assert.equal(raw.version, "0.1", "the wizard's write stamped the file");
+		assert.equal(raw.version, "0.1", "the grant's write stamped the file");
 	});
 
-	test("--yes with no connector installs the console, the one that needs no token", async () => {
+	test("the console is the one connector it grants: it needs no token and no container", async () => {
 		const root = await initialisedRoot();
-		assert.equal(await runNew(["bob", "--yes", "--no-start"], { root }), 0);
+		assert.equal(await runNew(["bob"], { root }), 0);
 		const { integrations } = await readIntegrations(housePaths(join(root, "bob")));
 		assert.equal(integrations.console?.enabled, true);
+		assert.deepEqual(Object.keys(integrations), ["console"], "nothing else was installed");
 	});
 
 	test("a name that is taken is refused, and the bot that is there is not touched", async () => {
 		const root = await initialisedRoot();
-		assert.equal(await runNew(["alice", "--connector", "console", "--yes", "--no-start"], { root }), 0);
-		const code = await runNew(["alice", "--connector", "console", "--yes", "--no-start"], { root });
+		assert.equal(await runNew(["alice"], { root }), 0);
+		const code = await runNew(["alice"], { root });
 		assert.equal(code, 1);
 	});
 
 	test("a root with no common store refuses, and names the command that writes one", async () => {
 		const root = await tempRoot();
-		assert.equal(await runNew(["alice", "--connector", "console", "--yes"], { root }), 1);
+		assert.equal(await runNew(["alice"], { root }), 1);
 		assert.equal(existsSync(join(root, "alice")), false, "no home was created before the refusal");
 		assert.equal(existsSync(commonPaths(root).dir), false);
 	});
@@ -87,7 +88,7 @@ describe("a new bot", () => {
 	test("a name that is not a bot's is refused before anything is created", async () => {
 		const root = await initialisedRoot();
 		for (const name of ["Alice", "common", "a/b", "-x"]) {
-			assert.equal(await runNew([name, "--connector", "console", "--yes"], { root }), 1, name);
+			assert.equal(await runNew([name], { root }), 1, name);
 		}
 		assert.deepEqual(readRoot(root).bots, [], "no bot was created for any of them");
 	});

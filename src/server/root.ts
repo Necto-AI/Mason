@@ -153,7 +153,7 @@ export function refuseRootAsHome(home: string): void {
 /**
  * The root as it is: every bot directory, sorted by name, and where `common/` goes.
  *
- * A root that does not exist yet is an empty fleet, not a refusal: `mason onboard` is the command that creates it, and it
+ * A root that does not exist yet is an empty fleet, not a refusal: `mason init` is the command that creates it, and it
  * has to be able to look before it writes.
  */
 export function readRoot(root = rootPath()): MasonRoot {
@@ -257,8 +257,8 @@ export function resolveBot(
 	if (only !== undefined) return { root: root.root, name: only.name, home: only.home };
 	if (root.bots.length === 0)
 		throw new Error(
-			`${root.root} has no bot yet: run \`mason onboard\` to initialise the root and create the first one, or ` +
-				"`mason new <name>` once it is initialised.",
+			`${root.root} has no bot yet: run \`mason init\` to initialise the root, then \`mason new <name>\` to create ` +
+				"the first one.",
 		);
 	throw new Error(
 		`${root.root} holds ${root.bots.length} bots: ${botNames(root)}. Pick one with \`-b <name>\`, or set MASON_BOT.`,

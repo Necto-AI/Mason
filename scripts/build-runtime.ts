@@ -8,7 +8,7 @@
  *
  * A few things travel beside the compiled code, copied by this script rather than by tsc: the shipped skills, into
  * `dist/skills`, because `SHIPPED_SKILLS_DIR` reads them three directories up from the compiled module; the eval
- * scenarios and the connector catalog, which `mason eval` and `mason setup` read as data; the deployment reference,
+ * scenarios, which `mason eval` reads as data; the deployment reference,
  * into `dist/docs/agent`, because `SHIPPED_DOCS_DIR` resolves that path from the compiled module and the prompt's
  * `docs` section is empty without it; and the workspace packages the server imports bare, vendored into
  * `dist/node_modules` under the name the import asks for, so one tarball installs and boots with nothing but npm
@@ -134,11 +134,6 @@ async function main(): Promise<void> {
 	await cp(join(root, "skills"), join(tools, "skills"), { recursive: true });
 	await rm(join(tools, "evals", "scenarios"), { recursive: true, force: true });
 	await cp(join(root, "evals", "scenarios"), join(tools, "evals", "scenarios"), { recursive: true });
-	// And the connector catalog `mason setup` offers, which is data for the same reason: `CATALOG_PATH` resolves two
-	// directories up from the compiled module, which is `dist/` here and the checkout root in a dev tree. It ships under
-	// `dist/` rather than as a second top-level `files` entry, so the tarball holds one copy of it.
-	await rm(join(tools, "catalog"), { recursive: true, force: true });
-	await cp(join(root, "catalog"), join(tools, "catalog"), { recursive: true });
 	// The deployment reference the prompt indexes: `SHIPPED_DOCS_DIR` resolves `../../docs/agent/` from the compiled
 	// module, which is `dist/docs/agent` in a tarball and the checkout's own `docs/agent` in a dev tree. Without the copy
 	// the tarball's prompt loses the section silently — `readDocsIndex` reads a missing directory as no pages — and the
