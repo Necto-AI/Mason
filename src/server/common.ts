@@ -425,7 +425,7 @@ function readBotOverride(house: HousePaths): { provider: string; modelId: string
 }
 
 /**
- * Which model a bot runs: its own override, then the common default, then `PI_PROVIDER`/`PI_MODEL`.
+ * Which model a bot runs: its own override, then the role map, then the common default, then `PI_PROVIDER`/`PI_MODEL`.
  *
  * The order is the root's, and the environment is below the files on purpose: a root's default is a decision somebody
  * made for every bot under it, and an exported variable from one experiment must not quietly move it. A home addressed
