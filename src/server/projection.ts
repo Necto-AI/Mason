@@ -128,8 +128,9 @@ const DELIVERY_NOTICE: Readonly<Record<string, string>> = {
  *
  * Entries are append-only, so the rows a prefix of them produced never change — with one exception a later entry can
  * move: a delivery acknowledgement that says the message may not have arrived adds a notice behind the row it settles,
- * which is what `notices` counts. Everything else an entry contributes depends on the entries before it, which is why a
- * fold can be resumed at the entry it stopped at.
+ * and a second acknowledgement for the same delivery takes it away again. Both are visible in `acks`, the delivery id
+ * and status folded so far, because a count is a proxy for that set and a swap can keep the count. Everything else an
+ * entry contributes depends on the entries before it, which is why a fold can be resumed at the entry it stopped at.
  */
 export interface TranscriptFold {
 	/** The rows, one object per row: a later revision reuses these objects, which is what makes its diff a tail diff. */
@@ -139,8 +140,8 @@ export interface TranscriptFold {
 	/** The newest entry folded, and how many there were: a view that rewrote them is not a view that appended. */
 	readonly last: string;
 	readonly count: number;
-	/** How many acknowledgements are a notice of their own: a new one changes a row already folded. */
-	readonly notices: number;
+	/** The acknowledgements folded so far, as delivery id and status: a new one can change a row already folded. */
+	readonly acks: string;
 }
 
 /**
@@ -159,7 +160,6 @@ export function foldTranscript(
 	const outcomes = new Map<string, boolean>();
 	const replies = new Set<string>();
 	const deliveries = new Map<string, DeliveryRecord>();
-	let notices = 0;
 	for (const entry of entries) {
 		if (entry.kind === "pi.tool-result") {
 			const message = messageOf(entry) as { toolCallId?: unknown; isError?: unknown } | undefined;
@@ -174,15 +174,15 @@ export function foldTranscript(
 		const delivery = deliveryRecordOf(entry);
 		if (delivery === undefined) continue;
 		deliveries.set(delivery.deliveryId, delivery);
-		if (DELIVERY_NOTICE[delivery.status] !== undefined) notices += 1;
 	}
+	const acks = [...deliveries.values()].map((record) => `${record.deliveryId}:${record.status}`).join(",");
 	const id = (index: number): string => (entries[index] === undefined ? "" : String(entries[index]?.id));
 	// A turn nobody has read the start of has spoken until an entry says otherwise: the default the whole view gets.
 	const resumed =
 		before !== undefined &&
 		before.count <= entries.length &&
 		before.last === id(before.count - 1) &&
-		before.notices === notices
+		before.acks === acks
 			? before
 			: undefined;
 	const items: TranscriptItem[] = resumed === undefined ? [] : [...resumed.items];
@@ -190,7 +190,7 @@ export function foldTranscript(
 	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
 		spoke = foldEntry(entries[index] as EntryRecord, deliveries, items, spoke);
 	}
-	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length, notices };
+	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length, acks };
 	return { fold, tail: streamingItems(view, outcomes, replies) };
 }
 
