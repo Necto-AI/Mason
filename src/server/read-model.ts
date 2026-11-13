@@ -104,13 +104,18 @@ function sameRows(left: readonly object[], right: readonly object[]): boolean {
  * What changed between two values, named by the revision that reports it.
  *
  * Derived from the two projections rather than from the entries, so a transition cannot claim something the transcript
- * does not show. The order is the order a client wants to react in: a run starts, its message commits, the queue moves,
- * and a run that ended ends last — never both stopped and errored, because an ended run either failed or did not, and
- * `pi.live.runFailure` is what says which.
+ * does not show. The order is the order a client wants to react in: a run starts — after the task it replaces, if any,
+ * has stopped — its message commits, the queue moves, and a run that ended ends last: never both stopped and errored,
+ * because an ended run either failed or did not, and `pi.live.runFailure` is what says which.
  */
 function transitionsOf(before: ConversationState, after: Change, revision: number): ConversationTransition[] {
 	const news: ConversationTransition[] = [];
-	if (!before.busy && after.busy && after.activeRunTaskId !== undefined) {
+	// A run is the task the state names, and a turn can change it: pi-durable's `handOver` rewrites
+	// `pi.live.run.taskId` mid-run, so the task a client was told started ends and the one replacing it starts.
+	if (after.busy && after.activeRunTaskId !== undefined && after.activeRunTaskId !== before.activeRunTaskId) {
+		if (before.busy && before.activeRunTaskId !== undefined) {
+			news.push({ kind: "run.stopped", revision, runTaskId: before.activeRunTaskId });
+		}
 		news.push({ kind: "run.started", revision, runTaskId: after.activeRunTaskId });
 	}
 	// What the reader already had, as a message: the row streaming under the same id is the one that has yet to commit,

@@ -178,10 +178,26 @@ describe("the conversation a connector holds", () => {
 					rows.map((row) => row.id),
 					"each commit is reported once, naming the row it became",
 				);
-				const at = (kind: string) => news.filter((transition) => transition.kind === kind).length;
-				assert.equal(at("run.started"), 2, "each turn is a run the client is told started");
-				assert.equal(at("run.stopped"), 2, "and each is told ending");
-				assert.equal(at("run.errored"), 0, "a turn that answered did not error");
+				// A run is a task id, and pi-durable hands a turn over mid-run: the task a turn starts under is not always
+				// the one it stops under, so a client is told the replaced run ended before the one replacing it starts.
+				// Counting kinds would hide a stop for a run nobody saw start, so the ids are what this walks.
+				const runs = news.filter((one) => one.kind === "run.started" || one.kind === "run.stopped");
+				const open: string[] = [];
+				for (const run of runs) {
+					const id = run.runTaskId as string;
+					if (run.kind === "run.started") open.push(id);
+					else assert.equal(open.pop(), id, "a run that stops is the run the client was told started");
+				}
+				assert.deepEqual(open, [], "every run the client was told started was also told stopped");
+				assert.ok(
+					runs.filter((one) => one.kind === "run.started").length > 2,
+					"a handed-over turn tells the client about the task it replaced, so two turns are more than two runs",
+				);
+				assert.equal(
+					news.filter((one) => one.kind === "run.errored").length,
+					0,
+					"a turn that answered did not error",
+				);
 				for (const transition of news) {
 					const state = client.states.find((entry) => entry.state.revision === transition.revision)?.state;
 					assert.ok(
