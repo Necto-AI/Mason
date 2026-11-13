@@ -27,7 +27,7 @@
  *   writer's lease.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { link, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -86,19 +86,52 @@ function alive(pid: number): boolean {
 	}
 }
 
-/** The holder a lease file names, or `undefined` when it cannot be read as one (which is never treated as free). */
-async function holderOf(path: string): Promise<LeaseHolder | undefined> {
+/** What a lease path says: a holder, debris with nothing in it, or something this process cannot read. */
+type LeaseRead =
+	| { readonly kind: "holder"; readonly holder: LeaseHolder }
+	| { readonly kind: "empty" }
+	| { readonly kind: "unreadable" };
+
+async function readLease(path: string): Promise<LeaseRead> {
+	let text: string;
+	try {
+		text = await readFile(path, "utf8");
+	} catch (error) {
+		// A file that is gone by the time we look is not a holder; anything else — a permission, a descriptor limit, an I/O
+		// error — is a file we have no right to judge, and calling that free is how two writers end up on one checkout.
+		return (error as { code?: unknown }).code === "ENOENT" ? { kind: "empty" } : { kind: "unreadable" };
+	}
+	// The body is staged complete and then linked, so an empty file is debris from a shape that no longer exists — but it is
+	// still somebody's, and only its age says otherwise (`clearpable`).
+	if (text.trim() === "") return { kind: "empty" };
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(await readFile(path, "utf8"));
+		parsed = JSON.parse(text);
 	} catch {
-		return undefined;
+		return { kind: "unreadable" };
 	}
-	if (typeof parsed !== "object" || parsed === null) return undefined;
+	if (typeof parsed !== "object" || parsed === null) return { kind: "unreadable" };
 	const holder = parsed as Partial<LeaseHolder>;
 	if (typeof holder.pid !== "number" || typeof holder.host !== "string" || typeof holder.token !== "string")
-		return undefined;
-	return holder as LeaseHolder;
+		return { kind: "unreadable" };
+	return { kind: "holder", holder: holder as LeaseHolder };
+}
+
+/** How long an empty lease file has to sit there before it is debris: a live holder's file is never empty, even briefly. */
+const DEBRIS_AFTER_MS = 5_000;
+
+/**
+ * Whether an empty lease file is debris rather than somebody's. Only an empty file is ever considered, and only once it has
+ * been empty for longer than any write could take — nothing can delete a lease a live writer has just taken, because a
+ * live writer's lease is never empty.
+ */
+async function debris(path: string): Promise<boolean> {
+	const info = await stat(path).catch(() => undefined);
+	if (info === undefined || info.size > 0 || Date.now() - info.mtimeMs <= DEBRIS_AFTER_MS) return false;
+	// Read it once more before saying so: a writer that has just cleared the same debris and taken the lease leaves a file
+	// with a body, and that one is not ours to remove. The window between this read and the caller's unlink is the only
+	// one left, and the alternative to it is refusing a checkout that a crash left behind, forever.
+	return (await readFile(path, "utf8").catch(() => undefined))?.trim() === "";
 }
 
 /**
@@ -114,7 +147,7 @@ function abandoned(holder: LeaseHolder): boolean {
  *
  * The write is one `link`, which is the whole mutual exclusion: two callers racing get one file and one `EEXIST`, and the
  * loser never touches what the winner wrote. The file is staged complete beside it first, so a lease on disk always has a
- * holder in it or is cleared as debris. A holder that is provably gone is cleared and retried
+ * holder in it; only a file that is empty, and has been empty for longer than a write can take, is cleared as debris. A holder that is provably gone is cleared and retried
  * once — the crash of a previous process is the only way a lease outlives its run, and the retry is bounded so a
  * perpetual race cannot spin.
  */
@@ -157,26 +190,31 @@ export async function acquireWriteLease(input: {
 			};
 		} catch (error) {
 			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-			const holder = await holderOf(path);
-			// Unreadable is not held: a file with no holder in it is one whose writer never finished announcing itself. A
-			// readable one is cleared only when its holder is provably gone, and either way the retry is bounded.
-			if (attempt === 0 && (holder === undefined || abandoned(holder))) {
-				if (holder === undefined) await unlink(path).catch(() => undefined);
-				else await releaseIfOurs(path, holder.token);
+			const read = await readLease(path);
+			// Three cases, three answers. A holder that is provably gone is cleared. An empty file that has been empty long
+			// enough to be debris is cleared. Anything this process cannot read is refused: a permission or a descriptor
+			// limit says nothing about the holder, and deleting on it lets a second writer in.
+			if (attempt === 0 && read.kind === "holder" && abandoned(read.holder)) {
+				await releaseIfOurs(path, read.holder.token);
 				continue;
 			}
-			return { held: false, holder };
+			if (attempt === 0 && read.kind === "empty" && (await debris(path))) {
+				await unlink(path).catch(() => undefined);
+				continue;
+			}
+			return { held: false, holder: read.kind === "holder" ? read.holder : undefined };
 		} finally {
 			await unlink(staged).catch(() => undefined);
 		}
 	}
-	return { held: false, holder: await holderOf(path) };
+	const read = await readLease(path);
+	return { held: false, holder: read.kind === "holder" ? read.holder : undefined };
 }
 
 /** Unlink a lease file when it still carries `token`: the only way a release can be sure it is its own. */
 async function releaseIfOurs(path: string, token: string): Promise<void> {
-	const holder = await holderOf(path);
-	if (holder === undefined || holder.token !== token) return;
+	const read = await readLease(path);
+	if (read.kind !== "holder" || read.holder.token !== token) return;
 	await unlink(path).catch(() => undefined);
 }
 

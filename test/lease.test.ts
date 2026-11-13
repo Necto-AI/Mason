@@ -7,7 +7,8 @@
  * that has been thinking for ten minutes is a child that is still writing.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -111,13 +112,49 @@ test("a release only removes the lease it took", async () => {
 	);
 });
 
-test("a lease file with no holder in it is debris, cleared rather than refused forever", async () => {
+test("an empty lease file is debris only once it has been empty long enough", async () => {
 	// The crash this exists for: a writer died after the file appeared and before its body landed. Nothing can be holding
-	// it, so the next writer takes it instead of being refused by a file that names nobody.
+	// it — but a file that is empty *now* may be one a writer is about to fill, so the age is what makes it debris.
 	const { dir, checkout } = await workspace("mason-lease-debris-");
 	await mkdir(dir, { recursive: true });
-	await writeFile(await leasePath(dir, checkout), "");
+	const path = await leasePath(dir, checkout);
+	await writeFile(path, "");
+	await utimes(path, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
 	const taken = await acquireWriteLease({ checkout, dir, writer: "after the debris" });
 	assert.equal(taken.held, true);
 	if (taken.held) await taken.lease.release();
+});
+
+test("an empty lease file somebody just made is still somebody's", async () => {
+	const { dir, checkout } = await workspace("mason-lease-fresh-empty-");
+	await mkdir(dir, { recursive: true });
+	const path = await leasePath(dir, checkout);
+	await writeFile(path, "");
+	const refused = await acquireWriteLease({ checkout, dir, writer: "too early" });
+	assert.equal(refused.held, false);
+	assert.ok(existsSync(path), "the file is left where it was");
+});
+
+test("a lease this process cannot read is refused, not deleted", async () => {
+	// A permission bit or a descriptor limit says nothing about whether a writer holds the checkout. Treating an unreadable
+	// file as free is how a second writer is admitted while the first is still running.
+	const { dir, checkout } = await workspace("mason-lease-unreadable-");
+	await mkdir(dir, { recursive: true });
+	const path = await leasePath(dir, checkout);
+	await writeFile(
+		path,
+		JSON.stringify({
+			pid: 1,
+			host: hostname(),
+			token: "x",
+			checkout,
+			startedAt: new Date().toISOString(),
+			writer: "root",
+		}),
+	);
+	await chmod(path, 0o000);
+	const refused = await acquireWriteLease({ checkout, dir, writer: "cannot look" });
+	assert.equal(refused.held, false);
+	await chmod(path, 0o600);
+	assert.ok(existsSync(path), "the lease somebody may hold is still there");
 });
