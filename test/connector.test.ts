@@ -336,6 +336,12 @@ describe("control", () => {
 				const status = await connected.connector.control({ op: "status" });
 				assert.equal(status.handled, true);
 				assert.ok(status.status !== undefined, "a status control answers with the run's state");
+				// The pair the boot resolved, on the status a client already asks for: the faux install runs one model at
+				// `off`, which is what a boot with no role map derives.
+				assert.deepEqual(status.status.roles, {
+					main: { provider: "faux", modelId: "faux-1", thinking: "off" },
+					subagent: { provider: "faux", modelId: "faux-1", thinking: "off" },
+				});
 			} finally {
 				await connected.close();
 			}

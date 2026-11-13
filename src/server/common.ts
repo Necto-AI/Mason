@@ -25,6 +25,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SshTarget } from "@earendil-works/pi-env";
 import { withStoreLock, writeTextAtomic } from "./atomic.ts";
@@ -313,6 +315,85 @@ export async function writeCommonStore(
 			writes.push({ path: paths.runtime, text: jsonText({ version: COMMON_VERSION, kind: "local" }) });
 		await commitStaged(writes);
 	});
+}
+
+/**
+ * The two roles v0 runs, and the only two: the conversation a person writes to (`main`), and the child conversation one
+ * tool call of it runs (`subagent`). A role is a model and a thinking level, not a prompt: what differs between the two
+ * is how hard the model thinks before it answers, which is the one thing a delegation buys that a second turn does not.
+ */
+export type RoleName = "main" | "subagent";
+
+/** Every role, in the order a status line names them. */
+export const ROLE_NAMES = ["main", "subagent"] as const;
+
+/** One role: the model a conversation runs on, and the thinking level the request asks it for. */
+export interface AgentRole {
+	readonly provider: string;
+	readonly modelId: string;
+	readonly thinking: ModelThinkingLevel;
+}
+
+/** The two-entry map `common/settings.json` carries under `roles`. */
+export type RoleMap = Readonly<Record<RoleName, AgentRole>>;
+
+/**
+ * `roles` from `common/settings.json`, or `undefined` when the store says nothing about roles.
+ *
+ * Absent is the ordinary install: both roles then run the model the boot already resolved, at `off`, which sends no
+ * reasoning parameter — the same request every turn made before roles existed. A store that does name roles is refused
+ * rather than repaired when it is malformed, because a role is a decision somebody made about which model answers as
+ * whom, and a typo in it would otherwise be answered by a different model with nothing said.
+ *
+ * The level is checked for *shape* here. Whether the model supports it is the catalog's answer and is checked at the
+ * boot (`runtime.ts`), which is the only place a catalog exists.
+ */
+export function roleMapOf(raw: unknown, where: string): RoleMap | undefined {
+	if (raw === undefined) return undefined;
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+		throw new Error(
+			`${where}: "roles" is not an object mapping "main" and "subagent" to a provider, a model and a thinking level`,
+		);
+	const roles: Partial<Record<RoleName, AgentRole>> = {};
+	for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+		if (!(ROLE_NAMES as readonly string[]).includes(name))
+			throw new Error(
+				`${where}: "roles" names ${JSON.stringify(name)}; the two roles are ${ROLE_NAMES.join(" and ")}`,
+			);
+		if (typeof value !== "object" || value === null || Array.isArray(value))
+			throw new Error(`${where}: role "${name}" is not an object with "provider", "modelId" and "thinking"`);
+		const { provider, modelId, thinking } = value as Record<string, unknown>;
+		// "thinking" is spelled exactly as the catalog spells a level, so a level a provider knows is a typo here.
+		if (typeof thinking !== "string" || !(MODEL_THINKING_LEVELS as readonly string[]).includes(thinking))
+			throw new Error(
+				`${where}: role "${name}" has thinking ${JSON.stringify(thinking)}; the levels are ${MODEL_THINKING_LEVELS.join(", ")}`,
+			);
+		if (typeof provider !== "string" || provider.trim() === "")
+			throw new Error(`${where}: role "${name}" has no "provider": the catalog id the model is served by`);
+		if (typeof modelId !== "string" || modelId.trim() === "")
+			throw new Error(`${where}: role "${name}" has no "modelId": the model that answers for it`);
+		roles[name as RoleName] = { provider, modelId, thinking: thinking as ModelThinkingLevel };
+	}
+	const missing = ROLE_NAMES.filter((name) => roles[name] === undefined);
+	if (missing.length > 0) throw new Error(`${where}: "roles" has no ${missing.join(" or ")} entry; both are required`);
+	return roles as RoleMap;
+}
+
+/** The role map this bot inherits: the root's `common/settings.json`, or `undefined` when nothing names one. */
+export async function readRoleMap(root: string): Promise<RoleMap | undefined> {
+	const { value } = await readCommonSettings(root);
+	return roleMapOf(value.roles, commonPaths(root).settings);
+}
+
+/**
+ * Both roles on one model at `off`: what an install with no role map runs, and what the faux provider always does.
+ *
+ * `off` is not a shrug. It is the level every turn ran at before this map existed: pi sends no reasoning parameter for
+ * it, so an install that never asked for thinking keeps the request it had, and the map is what changes that.
+ */
+export function derivedRoles(ref: { readonly provider: string; readonly modelId: string }): RoleMap {
+	const role: AgentRole = { provider: ref.provider, modelId: ref.modelId, thinking: "off" };
+	return { main: role, subagent: role };
 }
 
 /** Where a bot's own model override lives: the service half, beside the grant it was chosen with. */

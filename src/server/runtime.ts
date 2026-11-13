@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, Provider } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
@@ -26,7 +26,19 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { readCommonRuntime, readPiSettingsModel, resolveModelChoice, sshTargetFromRuntime } from "./common.ts";
+import {
+	type AgentRole,
+	commonPaths,
+	derivedRoles,
+	ROLE_NAMES,
+	type RoleMap,
+	readCommonAuth,
+	readCommonRuntime,
+	readPiSettingsModel,
+	readRoleMap,
+	resolveModelChoice,
+	sshTargetFromRuntime,
+} from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { EventLog } from "./events-log.ts";
 import { createCodemode } from "./extensions/codemode.ts";
@@ -109,6 +121,8 @@ export interface AgentRuntime {
 	readonly mcp: McpCatalog;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
+	/** The two roles this boot runs: what the status line names and what a child conversation is configured with. */
+	readonly roles: RoleMap;
 	/**
 	 * The model this conversation was on before the boot moved it, when the configured one differs from the stored one.
 	 * The boot line says so once; nothing else needs it, and it is `undefined` on every ordinary boot.
@@ -143,6 +157,11 @@ export interface OpenAgentRuntimeOptions {
 	readonly storageOverride?: Storage;
 	/** Model choices; overridden by `PI_PROVIDER` / `PI_MODEL` / `PI_FAUX_MODEL`. */
 	readonly model?: AgentModelRef;
+	/**
+	 * The two roles for this boot, when something other than the store decides them: a test's scripted provider, or an
+	 * eval comparing two levels. Absent, they are the store's, or one model at `off`.
+	 */
+	readonly roles?: RoleMap;
 	/** `true` (or `PI_FAUX_MODEL=1`) plays the model offline: deterministic tests and UI checks. */
 	readonly faux?: boolean;
 	readonly env?: RuntimeEnvManager;
@@ -200,6 +219,30 @@ export interface ResolvedModel {
 	readonly models: Models;
 	readonly ref: AgentModelRef;
 	readonly faux: boolean;
+	/** The two roles this boot runs; absent means both run `ref` at `off` (`derivedRoles`). */
+	readonly roles?: RoleMap;
+}
+
+/**
+ * Refuse a role whose thinking level the catalog does not offer for its model.
+ *
+ * The sentence names the model *and* the levels it does offer, because the fix is choosing one of them and the catalog is
+ * the only thing that knows which: an operator who wrote `"…: "roles": {"subagent": {"…": "max"}}` for a model that
+ * maps only `high` is told exactly that. A model this build's catalog does not carry is skipped rather than refused: the
+ * provider resolves it at the request, and a refusal would name an empty list.
+ */
+export function validateRoles(models: Models, roles: RoleMap, where: string): void {
+	for (const name of ROLE_NAMES) {
+		const role = roles[name];
+		const model = models.getModel(role.provider, role.modelId);
+		if (model === undefined) continue;
+		const supported = getSupportedThinkingLevels(model);
+		if (supported.includes(role.thinking)) continue;
+		throw new Error(
+			`${where}: role "${name}" runs ${role.provider}/${role.modelId} at thinking "${role.thinking}", which that model ` +
+				`does not support: it offers ${supported.join(", ")}`,
+		);
+	}
 }
 
 /**
@@ -222,12 +265,23 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 		// This queue used to be empty here, so a server booted under `PI_FAUX_MODEL=1` answered nothing: every turn died on
 		// "No more faux responses queued", which reads as a dead bot rather than as a script that was never loaded.
 		faux.setResponses(fauxSessionScript(env));
-		return { models, ref: options.model ?? FAUX_MODEL, faux: true };
+		const ref = options.model ?? FAUX_MODEL;
+		return { models, ref, faux: true, roles: options.roles ?? derivedRoles(ref) };
 	}
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false });
 	const choice = await resolveModelChoice(house, env);
+	// The role map is the root's, like the default model: one decision for every bot under it, and a bot addressed
+	// directly has no store to keep one in.
+	const stored = house.root === undefined ? undefined : await readRoleMap(house.root.root);
 	const chosen = choice === undefined ? undefined : { provider: choice.provider, modelId: choice.modelId };
-	const ref = options.model ?? chosen ?? (house.root === undefined ? readPiSettingsModel() : undefined);
+	// A stored role map *is* the statement of which model answers, so it outranks the single-model choice: a store that
+	// names `main` and `subagent` and a `defaultModel` beside them would otherwise run one and report the other. A caller
+	// handing in a model is the last word, and an install with no role map chooses exactly as it always did.
+	const ref =
+		options.model ??
+		(stored === undefined ? undefined : { provider: stored.main.provider, modelId: stored.main.modelId }) ??
+		chosen ??
+		(house.root === undefined ? readPiSettingsModel() : undefined);
 	if (ref === undefined) {
 		throw new Error(
 			house.root === undefined
@@ -236,9 +290,31 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 						`defaultProvider/defaultModel in ${join(house.serviceDir, "settings.json")}`,
 		);
 	}
+	const roles = options.roles ?? stored ?? derivedRoles(ref);
+	// A map somebody wrote is checked; the one this boot derived is not, because its level is pi's own default (`off`,
+	// which sends no reasoning parameter) rather than a request, and refusing an install over a level it never chose would
+	// make the refusal about the wrong person. Both roles' models are checked, and the sentence names the file.
+	if (options.roles !== undefined || stored !== undefined)
+		validateRoles(
+			runtime,
+			roles,
+			options.roles === undefined
+				? commonPaths(house.root?.root ?? house.home).settings
+				: "the roles this boot was given",
+		);
 	if (choice?.key !== undefined && choice.provider === ref.provider)
 		await runtime.setRuntimeApiKey(ref.provider, choice.key);
-	return { models: runtime, ref, faux: false };
+	// A role naming a second provider needs that provider's key too, and the only store mason keeps one in is the root's.
+	// A miss is not refused here: ModelRuntime reads its own credential store, which is where an operator may have it.
+	for (const provider of new Set(ROLE_NAMES.map((name) => roles[name].provider))) {
+		if (provider === ref.provider) continue;
+		const key =
+			house.root === undefined
+				? undefined
+				: (await readCommonAuth(house.root.root).catch(() => undefined))?.providers[provider]?.key;
+		if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+	}
+	return { models: runtime, ref, faux: false, roles };
 }
 
 /** Opens storage, the harness, and the root conversation; resumes any run a previous process left unfinished. */
@@ -311,7 +387,9 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			options.storageOverride ??
 			(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
 
-		const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options, house));
+		const access = options.modelAccess ?? (await resolveModelAccess(options, house));
+		const { models, ref, faux } = access;
+		const roles = access.roles ?? derivedRoles(ref);
 
 		const extensionList: readonly Extension[] = [
 			...BASE_EXTENSIONS,
@@ -388,7 +466,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// only when it creates the conversation, so a bot whose transcript predates a `defaultModel` change kept the old
 		// model for the life of the home while `mason status` and `doctor` reported the new one. Config takes effect at
 		// boot, which is when an operator expects a settings edit to land.
-		const previousModel = await applyModelChoice(root, ref, context);
+		const previousModel = await applyMainRole(root, roles.main, context);
 		// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
 		// or before an integration offered tools — would leave the conversation without it, while a catalog said it had
 		// connected. A failed repair is a failed guarantee, so the server does not start with it.
@@ -408,6 +486,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			mcp,
 			workspaceDir,
 			model: ref,
+			roles,
 			...(previousModel === undefined ? {} : { previousModel }),
 			modelIsFaux: faux,
 			conversation: () => Promise.resolve(root),
@@ -494,20 +573,28 @@ async function readConversation(conversation: Conversation, context: Context): P
  * nothing is pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
  */
 /**
- * Moves a stored conversation onto the model this boot was configured with, and answers the one it was on.
+ * Moves a stored conversation onto the role this boot resolved, and answers the model it was on.
  *
- * A run the last process left unfinished keeps its checkpoint's model for the turn it resumes: it started on that one,
- * and half an answer in a different model's voice is worse than one turn on the old model.
+ * The record is the conversation's own `pi.agent`, and it is what a run reads at each request: the model and the
+ * thinking level together, so a bot whose record says one model and whose boot says another cannot run half of each. A
+ * run the last process left unfinished keeps its checkpoint's model for the turn it resumes: it started on that one, and
+ * half an answer in a different model's voice is worse than one turn on the old model.
  */
-async function applyModelChoice(
+async function applyMainRole(
 	root: Conversation,
-	ref: AgentModelRef,
+	role: AgentRole,
 	context: Context,
 ): Promise<AgentModelRef | undefined> {
 	return root.commit(async (tx) => {
-		const stored = (await tx.doc(AgentDoc, root.id)).model;
-		if (stored?.provider === ref.provider && stored.modelId === ref.modelId) return undefined;
-		configure(tx, root.id, { model: ref });
+		const agent = await tx.doc(AgentDoc, root.id);
+		const stored = agent.model;
+		const moved = stored?.provider !== role.provider || stored.modelId !== role.modelId;
+		const releveled = (agent.thinkingLevel ?? "off") !== role.thinking;
+		if (!moved && !releveled) return undefined;
+		configure(tx, root.id, {
+			model: { provider: role.provider, modelId: role.modelId },
+			thinkingLevel: role.thinking,
+		});
 		return stored === undefined ? undefined : { provider: stored.provider, modelId: stored.modelId };
 	}, context);
 }
