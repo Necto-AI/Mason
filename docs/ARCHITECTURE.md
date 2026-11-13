@@ -65,8 +65,8 @@ A change that breaks one is not a trade-off to weigh, it is the wrong change.
    paths (`src/server/connectors.ts`), read on every connection so a revoke lands immediately; `/api/health` outside it, by
    decision. Pinned by `test/connector.test.ts` and `npm run gen:surface:check`.
 2. **Nothing reaches a reader before the projection.** `src/server/projection.ts` derives `transcript`, `queued` and
-   `agentStatus` from the committed view, and reasoning, tool calls, arguments and output are in none of them. Nothing
-   consumes it yet: a reply reaches its connector through the outbox. Pinned by `test/projection.test.ts`.
+   `agentStatus` from the committed view; reasoning, tool calls, arguments and output are in none of them. `conversation`
+   is that projection, revision and diffs included; a reply is a row. Pinned by `test/projection.test.ts`.
 3. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
    that arrived mid-conversation would re-price every later turn, which is why an integration's tools are a catalog
    (`docs/SPEC.md` §4.1e). Pinned by `test/prompt.test.ts` (a section renders byte-identically twice) and
