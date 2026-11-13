@@ -134,11 +134,12 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix build .#mason --print-build-logs
       # No arguments is usage, and usage is exit 1: the packaged command dispatches, and a wrapper that cannot find
-      # `dist/` would fail some other way and say so in its own words.
+      # `dist/` would fail some other way and say so in its own words. `init` is the first run and `chat` the developer
+      # adapter, so a tarball missing either is a release missing a command.
       - name: the packaged command is the one npm installs
         run: |
           out=$(./result/bin/mason 2>&1 || true)
-          echo "$out" | grep -q "mason onboard"
+          echo "$out" | grep -q "mason init"
           echo "$out" | grep -q "mason chat"
 
   # The deploy image, built from the commit. Two failures this catches that no source check can: a `COPY . /app` that
