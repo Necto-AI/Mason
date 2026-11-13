@@ -2,16 +2,14 @@
  * `send`: the one channel through which a turn's words reach a reader.
  *
  * Routing is mason's, not the model's. A turn knows its origin from the transcript — the `app.connector` or `app.hook`
- * entry that started it — and the tool addresses the send there. There is no vendor tool to name and no prompt that
- * names one: a chat, the transcript and a schedule are the same call, and only the destination differs.
+ * entry that started it — and records it beside the words. There is no vendor tool to name, no prompt that names one and
+ * no address to choose: the conversation is the reader, and the entry the call commits *is* the delivery.
  *
- * Three outcomes, and the result says which:
+ * Two outcomes, and the result says which:
  *
- * - **delivered** — the transcript is the reader; the entry the call commits *is* the delivery.
- * - **queued** — a connector is the reader; the entry is the durable outbox, and the link delivers it, resends it after a
- *   reconnect, and records the acknowledgement. Saying "delivered" here would be a promise this process cannot keep.
- * - **nobody reached** — an event with no origin. The work is recorded and the model is told that no person has it, which
- *   is the truth; a message nobody received is the worst outcome the arrangement exists to avoid.
+ * - **delivered** — the entry the call commits is a row of the conversation, which is what a reader reads.
+ * - **nobody reached** — an event with no origin. The work is recorded and the model is told that nothing was waiting on
+ *   it, which is the truth rather than a claim about a destination.
  *
  * `replay` is explicit, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would commit
  * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
@@ -36,15 +34,7 @@ import {
 	REPLY_ENTRY_KIND,
 	SEND_TOOL,
 } from "../../shared/contract.ts";
-import { currentIntegrations } from "../integrations.ts";
-import {
-	addressOfOrigin,
-	type ReplyRecord,
-	reachableAddress,
-	readTurnOrigin,
-	type SendAddress,
-	type TurnOrigin,
-} from "../replies.ts";
+import { type ReplyRecord, readTurnOrigin, type TurnOrigin } from "../replies.ts";
 import { nestedRefusal } from "./nested.ts";
 
 /**
@@ -70,14 +60,15 @@ const SendParams = Type.Object(
 const SEND_NESTED_REFUSAL =
 	"send cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call send from the turn.";
 
+/** What the model is told about a send a reader will see: the commit is the delivery, so there is nothing to wait for. */
+const DELIVERED_TO_READER = "delivered to the transcript";
+
 /** What the model is told when nothing that carries words started this turn. */
 const NOBODY_REACHED =
 	"recorded, but nobody was reached: this turn came from an event that named no conversation, so the message is in the transcript and no person was sent it. There is nowhere else to send it: no address exists to name, so do not call send again for it.";
 
-/** Where a send goes, and whether the recording of it is also a delivery. */
-interface ChosenAddress {
-	readonly address?: SendAddress;
-	/** An event with no origin: the words are recorded, and no medium carries them. */
+/** Whether anything was waiting on the turn: an event with no origin is recorded and reaches no one in particular. */
+interface ChosenOrigin {
 	readonly nobodyReached?: true;
 }
 
@@ -103,17 +94,15 @@ export const sendTool = defineTool({
 		const nested = nestedRefusal(api, SEND_NESTED_REFUSAL);
 		if (nested !== undefined) return nested;
 		const origin = await readTurnOrigin(api, context);
-		const chosen = chooseAddress(origin);
-		if ("reason" in chosen) return { output: [{ type: "text", text: chosen.reason }] };
+		const chosen = chooseOrigin(origin);
 		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text }];
 		const record: ReplyRecord = {
 			deliveryId: `reply:${api.callId}`,
 			blocks,
-			...(chosen.address === undefined ? {} : { address: chosen.address }),
 			...(origin.kind !== "local" && origin.origin !== undefined ? { origin: origin.origin } : {}),
 		};
-		// The commit is the delivery, and the commit is what makes it durable: a local send is read out of this entry,
-		// and a connector send is delivered from it by the outbox, which records the acknowledgement as its own entry.
+		// The commit is the delivery, and the commit is what makes it durable: the row a reader sees is read out of this
+		// entry, and the origin beside it says which append the row answers.
 		await api.commit(
 			(tx) =>
 				tx.appendEntry(api.conversationId, {
@@ -122,16 +111,6 @@ export const sendTool = defineTool({
 					data: {
 						deliveryId: record.deliveryId,
 						blocks,
-						...(record.address === undefined
-							? {}
-							: {
-									// The entry's key keeps the name `target` for replies already committed: renaming a durable key is
-									// a data migration, and this is not the wire field #200 retired. ADR 0015 says so.
-									target: {
-										connector: record.address.connector,
-										...(record.address.ref === undefined ? {} : { ref: record.address.ref }),
-									},
-								}),
 						...(record.origin === undefined
 							? {}
 							: {
@@ -146,35 +125,21 @@ export const sendTool = defineTool({
 				}),
 			context,
 		);
-		const outcome = chosen.nobodyReached === true ? NOBODY_REACHED : outcomeText(record);
+		const outcome = chosen.nobodyReached === true ? NOBODY_REACHED : DELIVERED_TO_READER;
 		return { output: [{ type: "text", text: outcome }], details: { length: text.length } };
 	},
 });
 
-/** What the model is told the call did, in one sentence it can act on. */
-function outcomeText(record: ReplyRecord): string {
-	// The connector alone: it is where the words arrived, and the `ref` is the address it minted, opaque to the model.
-	return record.address === undefined
-		? "delivered to the transcript"
-		: `queued for delivery to ${record.address.connector}`;
-}
-
 /**
- * Where the send goes, or why it cannot go anywhere.
+ * Whether anything was waiting on the send.
  *
- * The origin decides, and it is the only address a send has: a turn a connector carried goes back to that connector, and
- * a turn nothing carried is recorded in the transcript. A connector the operator switched off mid-turn is refused rather
- * than silently landing somewhere nobody reads.
+ * A turn a person started, or a fire that named one, is recorded beside its origin and the reader reads it. An event
+ * that named no origin had nobody waiting: the words are still committed, and the result says so rather than claiming a
+ * reader who was never there.
  */
-function chooseAddress(origin: TurnOrigin): ChosenAddress | { readonly reason: string } {
-	const carried = origin.kind === "local" ? undefined : origin.origin;
-	if (carried !== undefined) {
-		const address = addressOfOrigin(carried);
-		const reachable = reachableAddress(currentIntegrations(), address);
-		return reachable.ok ? { address } : { reason: `cannot deliver: ${reachable.reason}` };
-	}
+function chooseOrigin(origin: TurnOrigin): ChosenOrigin {
 	if (origin.kind === "local") return {};
-	return { nobodyReached: true };
+	return origin.origin === undefined ? { nobodyReached: true } : {};
 }
 
 const DELIVERED = "delivery.delivered";

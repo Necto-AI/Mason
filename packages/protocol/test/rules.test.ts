@@ -50,8 +50,8 @@ test("every exported object schema is open, because major 1 is additions only", 
  * a field added to it is a major-2 change rather than a degradation. `src/index.ts` promises this, and this is the test
  * that promise names.
  */
-test("both handshake inputs stay closed, and that is not an exception to rule 9", () => {
-	assert.equal(protocol.CONTRACTS.length, 2, "the walk below reads the contracts, so it has to see both");
+test("the handshake input stays closed, and that is not an exception to rule 9", () => {
+	assert.equal(protocol.CONTRACTS.length, 1, "the walk below reads the contracts, so it has to see it");
 	for (const contract of protocol.CONTRACTS) {
 		const input = contract.input as unknown as Readonly<Record<string, unknown>>;
 		assert.equal(

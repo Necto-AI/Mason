@@ -25,7 +25,6 @@ import {
 	getCurrentTools,
 } from "@earendil-works/pi-ai/utils/transcript";
 import { housePaths } from "../src/server/house.ts";
-import { takeBot } from "../src/server/root.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 
 const FAUX_MODEL = { provider: "faux", modelId: "faux-1" } as const;
@@ -99,14 +98,14 @@ async function rendered(runtime: AgentRuntime): Promise<Rendered> {
  *
  * The home is `--home`, else `MASON_HOME`, else the bot the root targets — the same resolution every other command uses.
  * It used to be `~/.mason` when neither was set, which is a *root* in the fleet layout: `mason prompt` under `MASON_ROOT`
- * ignored the root, and `ensureHouse` wrote `agent/` and `service/` at the live root, the one shape the fleet refuses.
+ * ignored the root, and `ensureHouse` wrote `agent/` and `service/` at the live root, the one shape the root refuses.
  */
 export async function runPrompt(argv: readonly string[]): Promise<number> {
 	let runtime: AgentRuntime | undefined;
 	// The state a boot writes — `routines-state.json` — goes to a temporary directory, so the operator's `service/data` is untouched.
 	let dataDir: string | undefined;
 	try {
-		const args = parseArgs(takeBot(argv));
+		const args = parseArgs(argv);
 		const home = housePaths(args.home).home;
 		dataDir = await mkdtemp(join(tmpdir(), "mason-prompt-"));
 		runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {

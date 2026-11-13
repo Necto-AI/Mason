@@ -12,9 +12,7 @@ import type { ConversationView } from "@earendil-works/pi-durable";
 import { projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
-	DELIVERY_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
-	NOTICE_ENTRY_KIND,
 	REFLECTION_ASK,
 	REPLY_ENTRY_KIND,
 	SEND_TOOL,
@@ -51,13 +49,6 @@ function replyEntry(id: number, deliveryId: string, text: string, extra: Record<
 	return entry(id, REPLY_ENTRY_KIND, [], { data: { deliveryId, blocks: [{ type: "text", text }], ...extra } });
 }
 
-/** One acknowledgement, as the outbox records it. */
-function ackEntry(id: number, deliveryId: string, status: string, detail?: string): Entry {
-	return entry(id, DELIVERY_ENTRY_KIND, [], {
-		data: { deliveryId, status, ...(detail === undefined ? {} : { detail }) },
-	});
-}
-
 describe("the transcript the client is sent", () => {
 	it("carries the reader's words and the message the agent sent, and nothing else", () => {
 		const transcript = projectTranscript(
@@ -76,7 +67,6 @@ describe("the transcript the client is sent", () => {
 				]),
 				result(6, "sent", "delivered", false),
 				replyEntry(7, "reply:sent", "The deploy is healthy."),
-				ackEntry(8, "reply:sent", "delivered"),
 			]),
 		);
 		assert.deepEqual(transcript, [
@@ -89,27 +79,6 @@ describe("the transcript the client is sent", () => {
 		assert.ok(!wire.includes("thinking"), "no reasoning crosses the wire");
 		assert.ok(!wire.includes("toolCall"), "no tool call crosses the wire");
 		assert.ok(!wire.includes("Working notes"), "no assistant prose crosses the wire");
-	});
-
-	it("keeps a message whose delivery is uncertain, and says it may not have arrived", () => {
-		const transcript = projectTranscript(
-			viewOf([
-				entry(1, "pi.user", [{ role: "user", content: "Move standup." }]),
-				replyEntry(2, "reply:m1", "Standup moved."),
-				ackEntry(3, "reply:m1", "uncertain", "the vendor timed out after the send"),
-			]),
-		);
-		assert.deepEqual(transcript, [
-			{ kind: "user", id: "1", text: "Move standup." },
-			{ kind: "delivered", id: "reply:m1", text: "Standup moved." },
-			{
-				kind: "notice",
-				id: "delivery:reply:m1",
-				text: "This message may not have reached the chat: the connector could not tell whether it was sent.",
-			},
-		]);
-		// The connector's own sentence is data from outside: the reader gets the coarse line, not the vendor's words.
-		assert.ok(!JSON.stringify(transcript).includes("vendor timed out"));
 	});
 
 	it("drops a message with nothing in it rather than rendering an empty bubble", () => {
@@ -261,17 +230,6 @@ describe("the transcript the client is sent", () => {
 			{ kind: "event", id: "1", name: "chat.message" },
 			{ kind: "notice", id: "silent:2", text: "The agent finished without sending you a message." },
 		]);
-	});
-
-	it("shows a notice the medium wrote about itself", () => {
-		const transcript = projectTranscript(
-			viewOf([
-				entry(1, NOTICE_ENTRY_KIND, [], {
-					data: { appendId: "note-1", connector: "telegram", text: "the channel was muted for an hour" },
-				}),
-			]),
-		);
-		assert.deepEqual(transcript, [{ kind: "notice", id: "medium:1", text: "the channel was muted for an hour" }]);
 	});
 
 	it("says the agent finished without a message, rather than leaving the turn blank", () => {

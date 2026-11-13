@@ -8,8 +8,8 @@
   outputs =
     { self, nixpkgs }:
     let
-      # Linux x64 is the only platform the release checks run on (docs/release-notes/0.1.0.md). The two native halves
-      # mason needs — the renderer's `.so` through node:ffi, and the pi-env daemon — come inside their npm packages, so
+      # Linux x64 is the only platform the release checks run on (docs/release-notes/0.1.0.md). The native halves mason
+      # needs — the pi-env daemon and the X11 helper `pi-coding-agent` still pulls in — come inside their npm packages, so
       # a build here needs no network beyond the npm dependency cache.
       systems = [ "x86_64-linux" ];
       forAll = nixpkgs.lib.genAttrs systems;
@@ -31,17 +31,17 @@
             # The floor (engines.node >=26.4.0), not nixpkgs' default. The build itself runs `npm run build`, and the
             # wrapper this produces must be the same Node a stranger gets from npm.
             nodejs = pkgs.nodejs_26;
-            npmDepsHash = "sha256-VS6xEGCCvcpWT0NcMkJ/vcgchx49wrGQkxZ3cp0fXKI=";
+            npmDepsHash = "sha256-jTRCOunpmRb7BJgsGfFbmgUr96gQDLwNWfZg1eA+fjk=";
 
             # The shipped layout is `dist/`, and `npm run build` is what writes it: tsc over `bin/`, `scripts/`,
             # `src/` and `evals/`, then the assets and the vendored workspace packages that the compiled imports name.
             npmBuildScript = "build";
 
-            # `node:ffi` dlopens the renderer's platform library and `pi-env` ships prebuilt daemons; both are
-            # dynamically linked and both must resolve on NixOS, where there is no /lib64/ld-linux.
+            # `pi-env` ships prebuilt daemons: they are dynamically linked and must resolve on NixOS, where there is no
+            # /lib64/ld-linux.
             nativeBuildInputs = [ pkgs.autoPatchelfHook ];
-            # `pi-tui`'s X11 helper is the second native module in the tree: it links libxcb, which a Nix system does
-            # not have on a default search path.
+            # `pi-tui`'s X11 helper is the other native module in the tree — still installed as a dependency of
+            # `pi-coding-agent` — and it links libxcb, which a Nix system does not have on a default search path.
             buildInputs = [
               pkgs.stdenv.cc.cc.lib
               pkgs.libxcb

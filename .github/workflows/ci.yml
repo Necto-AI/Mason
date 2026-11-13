@@ -4,7 +4,7 @@ name: ci
 # type error in a test and nothing noticed: the suite runs with `--experimental-strip-types`, which erases types without
 # reading them, and `tsc` was not a dependency of the project at all.
 #
-# Six jobs rather than one, because the suite is the long pole and the rest of the checks do not read its output. The
+# Five jobs rather than one, because the suite is the long pole and the rest of the checks do not read its output. The
 # numbers are this runner's, measured on one commit. Node's default with two cores is one test file at a time
 # (`availableParallelism() - 1`) and the suite took 135 seconds that way. Two at a time took 66 to 118 depending on the
 # run, three took 76 to 89 and four took 115 to 140: past two, the contention costs more than the overlap wins. Two
@@ -97,19 +97,20 @@ jobs:
       - run: npm run build
       - run: test -f dist/docs/agent/README.md
       - run: npm run test:packages
-      # The tarball as a stranger installs it: packed, unpacked outside the tree, and driven there — onboard, doctor, and
-      # the prompt's `docs` section, which a missing copy used to empty without failing anything.
+      # The tarball as a stranger installs it: packed, unpacked outside the tree, and driven there — `init` from its flags,
+      # `new`, a doctor, and the prompt's `docs` section, which a missing copy used to empty without failing anything.
       - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
       # an SDK, and this is the only check that says so.
       - run: npm run prove:connector
 
-  # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, onboard, a second onboard,
-  # a second bot, the fleet refusal, `mason up` in its own process, and one turn over the console socket on `bob`'s home
-  # in that root, against a server this script opens because no environment variable scripts the faux provider.
-  # `test/onboard.test.ts` spawns the CLI too, but only for the short-lived commands, and `test/chat.test.ts` opens its
-  # server in-process: no test starts `mason up` as a process and checks the bot it serves, and the assertion that the
-  # run left no home halves at the root it made and wrote no `~/.mason` under its scratch HOME lives only in this script.
+  # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, flags-only `init` (then
+  # again, for the asking-nothing half), `new`, one bot, `mason up` in its own process, and one turn a Chord client
+  # answers over the console socket on that bot's home, against a server this script opens because no environment
+  # variable scripts the faux provider. `test/mason-bin.test.ts` spawns the CLI too, but only for the short-lived
+  # commands, and `test/chat.test.ts` opens its server in-process: no test starts `mason up` as a process and checks the
+  # bot it serves, and the assertion that the run left no home halves at the root it made and wrote no `~/.mason` under
+  # its scratch HOME lives only in this script.
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -134,31 +135,10 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix build .#mason --print-build-logs
       # No arguments is usage, and usage is exit 1: the packaged command dispatches, and a wrapper that cannot find
-      # `dist/` would fail some other way and say so in its own words.
+      # `dist/` would fail some other way and say so in its own words. `init` is the first run and `chat` the developer
+      # adapter, so a tarball missing either is a release missing a command.
       - name: the packaged command is the one npm installs
         run: |
           out=$(./result/bin/mason 2>&1 || true)
-          echo "$out" | grep -q "mason onboard"
+          echo "$out" | grep -q "mason init"
           echo "$out" | grep -q "mason chat"
-
-  # The deploy image, built from the commit. Two failures this catches that no source check can: a `COPY . /app` that
-  # carries the operator's `deploy/.env` into a layer, and a `packages/*/dist` the image never builds, so a clean clone
-  # boots with `ERR_MODULE_NOT_FOUND` under `restart: always`.
-  image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      # The documented first run writes the bot token into `deploy/.env` before the first `up`. The sentinel only means
-      # anything if the file is there when the context is read, which is what the first check asserts.
-      - run: printf 'TELEGRAM_BOT_TOKEN=ci-sentinel\n' > deploy/.env
-      - run: docker build --file deploy/mason.Dockerfile --tag mason:ci .
-
-      - name: the operator's credentials are not in the image
-        run: docker run --rm --entrypoint sh mason:ci -c 'test ! -e /app/deploy/.env'
-
-      - name: the workspace package the server imports resolves
-        run: >
-          docker run --rm --entrypoint sh mason:ci -c
-          'cd /app && node -e "import(\"mason-protocol\").then(() => {}, (error) => { console.error(error); process.exit(1) })"'

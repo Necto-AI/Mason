@@ -1,5 +1,5 @@
 /**
- * `src/server/doctor.ts` — the nine checks, each with a good fixture and the failure it exists to name.
+ * `src/server/doctor.ts` — the seven checks, each with a good fixture and the failure it exists to name.
  *
  * Doctor is read-only, so the fixtures are files: a bot whose common store and console grant are written, then one thing
  * broken in it. What is pinned is the shape of the report — a failing check says one repair command — plus the two
@@ -7,6 +7,8 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -16,18 +18,15 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { consoleGrant } from "../scripts/chat.ts";
 import { writeTextAtomic } from "../src/server/atomic.ts";
 import { commonPaths, hashFile, writeCommonStore } from "../src/server/common.ts";
-import { writeCompose } from "../src/server/connector-compose.ts";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { doctorExitCode, formatCheck, runDoctor } from "../src/server/doctor.ts";
 import { botPaths, ensureHouse, type HousePaths } from "../src/server/house.ts";
-import { writeInstall } from "../src/server/install-state.ts";
 import {
 	bootRecordPath,
 	readIntegrationBoot,
 	recordIntegrationBoot,
 	writeIntegration,
 } from "../src/server/integrations.ts";
-import type { CommandRunner, Prober } from "../src/server/podman.ts";
 import { openAgentRuntime } from "../src/server/runtime.ts";
 
 const directories = new Set<string>();
@@ -41,7 +40,7 @@ async function tempRoot(): Promise<string> {
 	return directory;
 }
 
-/** A bot with a common store, a console grant and a soul: every check that does not need a container can pass. */
+/** A bot with a common store, a console grant and a soul: every check can pass. */
 async function goodBot(): Promise<{ root: string; house: HousePaths }> {
 	const root = await tempRoot();
 	await writeCommonStore(root, { defaultProvider: "faux", defaultModel: "faux-1" });
@@ -49,73 +48,15 @@ async function goodBot(): Promise<{ root: string; house: HousePaths }> {
 	const house = botPaths({ root, name: "alice", home });
 	await ensureHouse(house, "a soul for the doctor");
 	await writeIntegration(house, "console", { enabled: true, description: "the terminal", connector: consoleGrant() });
-	// A grant with no credential is a door that closes 1008, which the connectors check now fails: the good fixture is a
-	// bot a connector can actually open.
+	// A grant with no credential is a door that closes 1008, which the connectors check fails: the good fixture is a bot a
+	// connector can actually open.
 	await mintConnectorCredential(house.home, "console");
 	return { root, house };
 }
 
-/** A bot whose one connector runs in a container, with whatever state the test wants it to be in. */
-async function containerBot(state: string | undefined, credential: boolean): Promise<HousePaths> {
-	const root = await tempRoot();
-	await writeCommonStore(root, { defaultProvider: "faux", defaultModel: "faux-1" });
-	const home = join(root, "alice");
-	const house = botPaths({ root, name: "alice", home });
-	await ensureHouse(house, "a soul for the doctor");
-	await writeIntegration(house, "telegram", { enabled: true, description: "telegram", connector: consoleGrant() });
-	await writeCompose(house, {
-		connector: "telegram",
-		image: "ghcr.io/example/mason-telegram:1.0.0",
-		home,
-		env: {
-			MASON_CONNECTOR_URL: "ws://host.containers.internal:8787/api/connector",
-			MASON_CONNECTOR_CREDENTIAL: "masonc_x",
-		},
-	});
-	await writeInstall(house, "telegram", {
-		source: "catalog:telegram@1.0.0",
-		image: "ghcr.io/example/mason-telegram:1.0.0",
-		version: "1.0.0",
-		project: "abc12345-telegram",
-		createdAt: new Date().toISOString(),
-		started: state === "running",
-	});
-	if (credential) {
-		// A credential whose hash is the one the compose file carries: the state a healthy install is in.
-		const { mintConnectorCredential } = await import("../src/server/connectors.ts");
-		const minted = await mintConnectorCredential(house.home, "telegram", { replace: true });
-		await writeCompose(house, {
-			connector: "telegram",
-			image: "ghcr.io/example/mason-telegram:1.0.0",
-			home,
-			env: {
-				MASON_CONNECTOR_URL: "ws://host.containers.internal:8787/api/connector",
-				MASON_CONNECTOR_CREDENTIAL: minted.credential,
-			},
-		});
-	}
-	return house;
-}
-
-/** A runner that answers the version probes and reports one container in `state`. */
-function runner(state: string | undefined): CommandRunner {
-	return async (_command, argv) => {
-		if (argv[0] === "ps") return { stdout: state === undefined ? "" : `mason-telegram\t${state}\n`, stderr: "" };
-		return { stdout: "", stderr: "" };
-	};
-}
-
-/** A prober with no user manager: no answer is not a complaint, so the boot-policy check passes. */
-const noManager: Prober = async () => ({ code: 1, stdout: "", stderr: "no user manager" });
-
-/** The doctor over one home, with the server check pinned to a port nothing listens on. */
-async function doctor(house: HousePaths, options: { runner?: CommandRunner; credential?: boolean } = {}) {
-	return runDoctor({
-		house,
-		env: { PORT: "1" },
-		...(options.runner === undefined ? {} : { runner: options.runner }),
-		probe: noManager,
-	});
+/** The doctor over one home, on a port nothing listens on: "not started" is a pass, and it has to say so. */
+async function doctor(house: HousePaths) {
+	return runDoctor({ house, env: { PORT: "1" } });
 }
 
 function check(checks: Awaited<ReturnType<typeof doctor>>, name: string) {
@@ -125,10 +66,10 @@ function check(checks: Awaited<ReturnType<typeof doctor>>, name: string) {
 }
 
 describe("the good fixture", () => {
-	test("all nine pass, and the exit code is 0", async () => {
+	test("all seven pass, and the exit code is 0", async () => {
 		const { house } = await goodBot();
 		const checks = await doctor(house);
-		assert.equal(checks.length, 9);
+		assert.equal(checks.length, 7);
 		assert.deepEqual(
 			checks.filter((entry) => !entry.ok),
 			[],
@@ -182,6 +123,25 @@ describe("each failure names one repair", () => {
 		assert.match(runtime.detail, /ssh box, configured \(doctor does not open a session\)/);
 	});
 
+	test("a port nothing listens on passes as not started, and a port that answers for another home fails", async () => {
+		const { house } = await goodBot();
+		assert.match(check(await doctor(house), "server").detail, /nothing is listening on 127\.0\.0\.1:1 yet/);
+		// A server that answers, and is not this bot's: the one case the port probe cannot tell from "mason is up".
+		const stranger = createServer((_request, response) => {
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(JSON.stringify({ status: "ok", home: "/somewhere/else" }));
+		});
+		await new Promise<void>((done) => stranger.listen(0, "127.0.0.1", done));
+		try {
+			const port = (stranger.address() as AddressInfo).port;
+			const server = check(await runDoctor({ house, env: { PORT: String(port) } }), "server");
+			assert.equal(server.ok, false, "a port is not an identity");
+			assert.match(server.detail, /it serves \/somewhere\/else, not/);
+		} finally {
+			await new Promise<void>((done) => stranger.close(() => done()));
+		}
+	});
+
 	test("an integration file changed since the boot says restart to apply", async () => {
 		const { house } = await goodBot();
 		await writeTextAtomic(
@@ -196,22 +156,6 @@ describe("each failure names one repair", () => {
 		assert.equal(integrations.ok, false);
 		assert.match(integrations.detail, /changed since the boot/);
 		assert.match(integrations.repair ?? "", /restart to apply/);
-	});
-
-	test("a container that is not running names the command that starts it", async () => {
-		const house = await containerBot("exited", true);
-		const checks = await doctor(house, { runner: runner("exited") });
-		const connectors = check(checks, "connectors");
-		assert.equal(connectors.ok, false);
-		assert.match(connectors.detail, /telegram: exited/);
-		assert.match(connectors.repair ?? "", /podman compose -f .* up -d/);
-	});
-
-	test("a running container whose credential matches passes", async () => {
-		const house = await containerBot("running", true);
-		const connectors = check(await doctor(house, { runner: runner("running") }), "connectors");
-		assert.equal(connectors.ok, true, connectors.detail);
-		assert.match(connectors.detail, /telegram: up/);
 	});
 
 	test("a grant that is switched off fails the connectors check", async () => {
@@ -241,15 +185,19 @@ describe("each failure names one repair", () => {
 		const connectors = check(await doctor(house), "connectors");
 		assert.equal(connectors.ok, false, "a grant nothing can authenticate against is not a door");
 		assert.match(connectors.detail, /no credential: console/);
-		assert.match(connectors.repair ?? "", /mason setup --connector console/);
+		assert.match(connectors.repair ?? "", /mason connector add console/);
 	});
 
-	test("a compose credential this home does not hold names mason setup", async () => {
-		const house = await containerBot("running", false);
-		const connectors = check(await doctor(house, { runner: runner("running") }), "connectors");
+	test("a bot with no connector at all fails: nothing can reach it", async () => {
+		const root = await tempRoot();
+		await writeCommonStore(root, { defaultProvider: "faux", defaultModel: "faux-1" });
+		const home = join(root, "alice");
+		const house = botPaths({ root, name: "alice", home });
+		await ensureHouse(house, "a soul for the doctor");
+		const connectors = check(await doctor(house), "connectors");
 		assert.equal(connectors.ok, false);
-		assert.match(connectors.detail, /credential is not one this home holds/);
-		assert.match(connectors.repair ?? "", /mason setup --connector telegram/);
+		assert.match(connectors.detail, /no connector is granted/);
+		assert.match(connectors.repair ?? "", /mason chat/);
 	});
 
 	test("a home whose halves sit at the root names the move", async () => {
@@ -262,18 +210,6 @@ describe("each failure names one repair", () => {
 		const home_ = check(await doctor(house), "home");
 		assert.equal(home_.ok, false);
 		assert.match(home_.detail, /soul\.md/);
-	});
-
-	test("a bot with a container checks podman and the boot policy, and a bot without one does not", async () => {
-		const console = await goodBot();
-		assert.match(check(await doctor(console.house), "podman").detail, /no connector runs in a container/);
-		const container = await containerBot("running", true);
-		const failing: CommandRunner = async () => {
-			throw new Error("podman: command not found");
-		};
-		const checks = await doctor(container, { runner: failing });
-		assert.equal(check(checks, "podman").ok, false);
-		assert.match(check(checks, "podman").detail, /podman is not installed/);
 	});
 });
 
@@ -362,7 +298,7 @@ describe("the report", () => {
 		const house = botPaths({ root, name: "alice", home });
 		await ensureHouse(house, "a soul for the doctor");
 		const lines = (await doctor(house)).map(formatCheck);
-		assert.equal(lines.length, 9);
+		assert.equal(lines.length, 7);
 		assert.match(lines.find((line) => line.startsWith("[fail] model:")) ?? "", /\(repair: .*mason init.*\)/);
 		assert.equal(doctorExitCode(await doctor(house)), 1);
 		assert.match(lines.find((line) => line.startsWith("[ok] exit:")) ?? "", /this report exits 1/);

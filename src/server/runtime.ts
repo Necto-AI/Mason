@@ -227,12 +227,12 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false });
 	const choice = await resolveModelChoice(house, env);
 	const chosen = choice === undefined ? undefined : { provider: choice.provider, modelId: choice.modelId };
-	const ref = options.model ?? chosen ?? (house.fleet === undefined ? readPiSettingsModel() : undefined);
+	const ref = options.model ?? chosen ?? (house.root === undefined ? readPiSettingsModel() : undefined);
 	if (ref === undefined) {
 		throw new Error(
-			house.fleet === undefined
+			house.root === undefined
 				? "No model configured: set defaultProvider/defaultModel in ~/.pi/agent/settings.json, or PI_PROVIDER/PI_MODEL"
-				: `No model configured for bot "${house.fleet.bot}": run \`mason init\` for ${house.fleet.root}, or set ` +
+				: `No model configured for bot "${house.root.bot}": run \`mason init\` for ${house.root.root}, or set ` +
 						`defaultProvider/defaultModel in ${join(house.serviceDir, "settings.json")}`,
 		);
 	}
@@ -369,7 +369,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// The machine tools run on: the environment's own target wins, and a root's `common/runtime.json` is the default a
 		// bot inherits when the environment names none. A malformed runtime file refuses the boot here rather than running
 		// tools on the wrong machine.
-		const runtimeDefault = house.fleet === undefined ? undefined : await readCommonRuntime(house.fleet.root);
+		const runtimeDefault = house.root === undefined ? undefined : await readCommonRuntime(house.root.root);
 		const ssh =
 			sshTargetFromEnv() ?? (runtimeDefault === undefined ? undefined : sshTargetFromRuntime(runtimeDefault, house));
 		const envManager: RuntimeEnvManager =

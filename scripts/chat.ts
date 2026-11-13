@@ -2,10 +2,10 @@
  * `mason chat` — the console connector, and the reason a person with no Telegram can still talk to their bot.
  *
  * The console is a connector like any other: it opens the one socket at `/api/connector`, presents a credential, and
- * receives the agent's replies as deliveries with the same streaming, the same acknowledgements and the same controls as
- * Telegram. It is built in rather than published because there is nothing to install — `mason chat` is the process — and
- * because a wizard-only feature would prove nothing about the wire, which is the part of a first run that has to be
- * true. The prototype that pinned this shape is `.scratch/010/chat-prototype.mjs`; it needed no protocol change.
+ * reads the agent's replies as rows of the conversation, with the same streaming and the same controls as any other
+ * connector. It is built in rather than published because there is nothing to install — `mason chat` is the process —
+ * and because it proves the wire a first run has to prove. The developer adapter is where this ends in v0 (#201,
+ * Gate 2 reviewed the decision): the sliding rule is one person, one surface, and this one is a terminal.
  *
  * It mints its own credential, and rotates it on every run. That is not carelessness: mason keeps only a hash, so a
  * credential that already exists cannot be printed again, and a terminal that could not open its own socket would need
@@ -13,18 +13,18 @@
  * credential at a time, and the one a previous run held stops working — which is the right answer for a door that is
  * this terminal.
  *
- * The entry itself is written here if it is missing, so `mason chat` works on a home where setup only installed
- * Telegram. That write goes through the same `writeIntegration` the boot reads, so a grant that could not be served
- * fails here rather than at the next start. The write also names the home it just made when it leaves two enabled
- * connectors holding a person's words, which the boot refuses: writing it silently would leave `mason up` as the first to
- * say the rule. The refusal itself stays the boot's, as it does for every writer.
+ * The entry itself is written here if it is missing, so `mason chat` works on a home that was made by hand. That write
+ * goes through the same `writeIntegration` the boot reads, so a grant that could not be served fails here rather than at
+ * the next start. The write also names the home it just made when it leaves two enabled connectors holding a person's
+ * words, which the boot refuses: writing it silently would leave `mason up` as the first to say the rule. The refusal
+ * itself stays the boot's, as it does for every writer.
  */
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { type ConnectorStore, createConnector, nodeWebSocketLink, type StoreEntry } from "mason-connector";
-import { CONTROL_OPS, type ContentBlock, type ControlOp } from "mason-protocol";
+import { CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { writeFileAtomic } from "../src/server/atomic.ts";
 import type { ConnectorGrant } from "../src/server/connectors.ts";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
@@ -123,13 +123,13 @@ export function parseChatArgs(argv: readonly string[]): ChatArgs {
 }
 
 /**
- * The console's ledger, on disk.
+ * The console's journal, on disk.
  *
  * The SDK's own documentation is blunt about this: a store that cannot survive a restart is not a store, which is why the
  * in-memory one is named for what it is. A terminal is exactly the process that goes away without warning — ctrl-c, a
- * closed window, a `--once` run — and mason answers a delivery it was never acknowledged for all over again. That shows up
- * as the previous answer printed under the next question, so the ledger is a file: `service/console-ledger.json`, two
- * namespaces, whole-file writes through the same atomic writer the rest of the service half uses.
+ * closed window, a `--once` run — and a call placed before the link dropped is replayed from the journal rather than
+ * placed a second time. So the journal is a file: `service/console-ledger.json`, whole-file writes through the same
+ * atomic writer the rest of the service half uses.
  */
 function fileStore(path: string): ConnectorStore {
 	type Bucket = Record<string, StoreEntry<unknown>>;
@@ -150,7 +150,7 @@ function fileStore(path: string): ConnectorStore {
 		return data[namespace];
 	};
 	// Whole-file writes, one at a time: two of them interleaved would leave the file holding the newer one's bytes under
-	// the older one's length. The SDK writes an acknowledgement and an outbox entry in the same turn, so this is not a
+	// the older one's length. The SDK writes a journal entry and a settled key in the same turn, so this is not a
 	// hypothetical.
 	let writing = Promise.resolve();
 	const save = (): Promise<void> => {
@@ -190,22 +190,14 @@ function socketUrl(url: string | undefined): string {
 	return url ?? `ws://127.0.0.1:${process.env.PORT ?? 8787}/api/connector`;
 }
 
-/** The words of one delivery, out of the blocks that carry them. Notices and files are not what a terminal shows. */
-function textOf(blocks: readonly ContentBlock[]): string {
-	return blocks
-		.filter((block): block is { type: "text"; text: string } => block.type === "text")
-		.map((block) => block.text)
-		.join("");
-}
-
 const dim = (text: string): string => `\x1b[2m${text}\x1b[22m`;
 
 /**
  * The command. Returns an exit code rather than calling `process.exit`, so a test can drive `--once` in-process and
  * `--chat` from setup can call it without a second process.
  *
- * The ledger is a file under the service half (`fileStore`): the SDK's journal exists precisely so a delivery survives a
- * *process* restart, and a terminal is the process that ends without warning.
+ * The journal is a file under the service half (`fileStore`): it exists precisely so a call survives a *process*
+ * restart, and a terminal is the process that ends without warning.
  */
 export async function runChat(argv: readonly string[]): Promise<number> {
 	let args: ChatArgs;
@@ -247,6 +239,12 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 	/** Set while a `--once` run waits: a socket that closes before it was ever open is mason not running, not a resend. */
 	let closed: ((reason: string) => void) | undefined;
 	let connected = false;
+	/**
+	 * The rows this run has already accounted for. The first frame is the conversation as it stands — what happened
+	 * before this terminal opened — so its rows are marked and nothing is printed for them.
+	 */
+	const seen = new Set<string>();
+	let first = true;
 	const connector = createConnector({
 		name: CONSOLE,
 		version: "0.2.0",
@@ -269,16 +267,22 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 					closed = undefined;
 				}
 			},
-			onDelivery(delivery) {
-				const text = textOf(delivery.blocks);
-				if (args.once !== undefined) {
-					console.log(text);
-					delivered?.(text);
-					delivered = undefined;
-				} else {
-					console.log(`\nmason: ${text}\n`);
+			onConversation(state) {
+				for (const row of state.transcript) {
+					// A row still being written is not the answer yet: the committed row is the message, under the same id.
+					if (row.kind !== "delivered" || row.streaming === true) continue;
+					if (seen.has(row.id)) continue;
+					seen.add(row.id);
+					if (first) continue;
+					if (args.once !== undefined) {
+						console.log(row.text);
+						delivered?.(row.text);
+						delivered = undefined;
+					} else {
+						console.log(`\nmason: ${row.text}\n`);
+					}
 				}
-				return { status: "delivered" };
+				first = false;
 			},
 		},
 	});
@@ -336,10 +340,6 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 			}),
 		]);
 		clearTimeout(deadline);
-		// The acknowledgement of that delivery is a frame in flight, and mason resends a reply it was never answered for.
-		// Frames are ordered on one socket, so an answered `status` is the fence: whatever was sent before it was read.
-		// Without this the reply of a `--once` run stays owed, and the next run prints it again.
-		await connector.control({ op: "status" }).catch(() => {});
 		await connector.stop().catch(() => {});
 		return text === "" ? 1 : 0;
 	}
@@ -402,8 +402,6 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 		}
 	} finally {
 		lines.close();
-		// The same fence as `--once`: a person who types /exit right after an answer is owed nothing either.
-		await connector.control({ op: "status" }).catch(() => {});
 		await connector.stop().catch(() => {});
 	}
 	return 0;

@@ -5,7 +5,7 @@ a hosted service.
 
 ## The demo
 
-<img src="docs/media/mason-demo.gif" alt="mason onboard, then a conversation in mason chat" width="880">
+<img src="docs/media/mason-demo.gif" alt="the first run, then a conversation in the terminal" width="880">
 
 The recording runs on a deterministic local model (`PI_FAUX_MODEL=1`), not a hosted one: the bot answers the same words
 every time, and no provider, key or network is involved. It is a throwaway home under `/tmp`, which is why the connector
@@ -15,13 +15,13 @@ credential it prints is one that was discarded.
 
 Node.js 26.4.0 or newer, and npm 11.
 
-The floor is the onboarding TUI's: its renderer loads its native half through `node:ffi`, which does not exist below
-26.4. One floor covers everything — the runtime, the CLI, onboarding and the TUI — so there is no second version to
-check.
+The floor is one version for everything — the runtime, the CLI and the connector SDK: mason runs its TypeScript from
+source and keeps its state in `node:sqlite`, so there is no second version to check.
 
 ```sh
 npm install -g mason-agent
-mason onboard
+mason init --provider <id> --model <id> --key <key>
+mason new bot
 ```
 
 Or with Nix, from a checkout:
@@ -32,19 +32,18 @@ nix run github:DenisSud/mason            # or: nix profile install github:DenisS
 
 ## First run
 
-`mason onboard` is the first run in one command. It asks for a provider, a model and a key, and checks the key with one
-real completion before it writes anything. It names the first bot and installs the console connector, the one way to
-talk to it in this release. It writes the root (`~/.mason`, or `$MASON_ROOT`) and the bot's home under it: the soul,
-the profile, the skills, the connector's grant and the credential it opens its socket with. Run it again and it asks
-nothing; it reports what is there.
+The first run is flags, in two commands, and nothing prompts: `mason init` stores a provider, a model and a key —
+checked with one real completion before anything is written — and `mason new <name>` makes the bot's home under the root
+(`~/.mason`, or `$MASON_ROOT`): the soul, the profile, the skills, and the built-in console connector's grant and
+credential. Run `init` again and it asks nothing; it reports what is there.
 
 ```sh
 mason up     # serve the bot, so its connector socket answers
 mason chat   # a conversation in this terminal, through the console connector
 ```
 
-`mason onboard` ends with `mason doctor`, the read-only checks over what it just wrote. `mason chat --once "hello"`
-sends one message, prints the answer and exits, for a script or a pipe.
+`mason new` ends with `mason doctor`, the read-only checks over what it just wrote. `mason chat --once "hello"` sends
+one message, prints the answer and exits, for a script or a pipe.
 
 ## What it is, and how it runs
 
@@ -55,9 +54,9 @@ A bot's home holds everything it is — soul, profile, skills, routines, credent
 tools run in — and nothing about it lives outside that home. Sessions are durable, so a restart is a pause and not a
 reset; a routine's timer or an event a connector fires can wake the bot with nobody typing.
 
-Connectors are the only door a person speaks through: words arrive on a connector's socket, and the reply goes back the
-same way. There is no web UI, no owner token and no panel. `/api/health` is the one path that answers without a
-credential, and it answers one word.
+Connectors are the only door a person speaks through: words arrive on a connector's socket, and the answer is a row of
+the conversation that socket reads. There is no web UI, no owner token and no panel. `/api/health` is the one path that
+answers without a credential, and it answers one word.
 
 ## Connectors and integrations
 
@@ -76,7 +75,8 @@ whether it is up, and `mason doctor` checks it.
 - **0.1.0.** Expect breaking changes between releases; nothing here promises a stable API.
 - **Console only.** There is no web UI, and no second way to reach a bot.
 - **One owner per bot, one process per bot.** There is no multi-user access.
-- **Container connectors need podman**, and none ship in this release: the Telegram image is unpublished (#151).
+- **The console is a developer adapter.** It holds the one user grant, so it and a real chat connector cannot both be
+  enabled; the terminal interface is gone (#201).
 - **Single host.** The runtime, the home and the machine its tools run on are one machine.
 - **Configuration is JSON files** under the home. They can be hand-edited, but you should not need to.
 

@@ -112,7 +112,7 @@ async function toggle(enabled: boolean): Promise<void> {
 	}
 	console.log(`${enabled ? "enabled" : "disabled"} ${name}`);
 	// Switching one on can leave two enabled connectors holding a person's words, which the boot refuses: this names the
-	// home the write made, for the same reason `mason setup` and `mason chat` do (`assertOneUserGrant` is the boot's).
+	// home the write made, for the same reason `mason chat` does (`assertOneUserGrant` is the boot's).
 	const note = enabled ? secondUserGrantNote((await readIntegrations(house)).integrations) : undefined;
 	if (note !== undefined) console.log(note);
 	console.log("The list is read once at boot: start the server again for this to take effect.");

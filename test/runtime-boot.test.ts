@@ -6,7 +6,7 @@
  * nothing in the file said which one was the person's chat. One bot works for one person, so the boot refuses the home
  * rather than discovering it from a message that went somewhere nobody read.
  *
- * The refusal is the boot's and not the reader's: `mason setup` still writes what the operator asked for, and `status`
+ * The refusal is the boot's and not the writer's: `mason chat` still writes what the operator asked for, and `status`
  * and `doctor` still report the file as it is — which is what lets an operator fix the home the refusal names.
  */
 import assert from "node:assert/strict";

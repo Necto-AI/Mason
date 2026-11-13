@@ -1,78 +1,54 @@
 /**
- * `mason new <name>` — one bot under the root: a home, the soul and skills every home starts with, a first connector,
- * and a doctor line that says what the four produced.
+ * `mason new <name>` — one bot under the root: a home, the soul and skills every home starts with, the built-in console
+ * connector, and a doctor line that says what those produced.
  *
- * The home is today's home, unchanged (`house.ts`), so nothing downstream of this command has to know a fleet exists: the
+ * The home is today's home, unchanged (`house.ts`), so nothing downstream of this command has to know a root exists: the
  * bot's `agent/` and `service/` are what `MASON_HOME` would have pointed at. What is new is only where it sits — one
  * directory under the root — and that the root has to be initialised first: a bot with no common store has no provider,
  * and a bot that boots into "no model configured" is a first run that failed after the files were written.
  *
- * The first connector is `setup`'s flow, called with this bot's home rather than the ambient one. With `--yes` and no
- * `--connector` or `--url`, it installs the console: the one connector that needs no token, no image and no container, so
- * a scripted first run ends in a bot somebody can talk to instead of a refusal asking for a flag.
+ * The one connector it grants is the console, written by the same `ensureConsole` `mason chat` uses: it needs no token,
+ * no image and no container, so a scripted first run ends in a bot somebody can talk to instead of a refusal asking for a
+ * flag. Every other connector is a grant an operator writes by hand, which is what the cut in #201 left.
  */
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { commonReady } from "../src/server/common.ts";
+import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { doctorExitCode, formatCheck, runDoctor } from "../src/server/doctor.ts";
 import { botPaths, ensureHouse, ensureRepository } from "../src/server/house.ts";
 import { DEFAULT_SOUL } from "../src/server/prompt.ts";
 import { BOT_NAME, botHome, COMMON, readRoot, refuseHomeEnv, rootPath } from "../src/server/root.ts";
-import { runSetup } from "./setup.ts";
+import { CONSOLE, ensureConsole } from "./chat.ts";
 
 export interface NewArgs {
 	readonly name?: string;
-	/** Everything setup understands, passed through untouched: the first connector is setup's flow. */
-	readonly setup: readonly string[];
 	readonly help: boolean;
 }
 
 export function usage(): string {
-	return `usage: mason new <name> [setup flags]
+	return `usage: mason new <name>
 
-  Create one bot under the root: its home (agent/ and service/), the soul and skills every home starts with, a first
-  connector, and a doctor line for the result. The root must be initialised (\`mason init\`).
+  Create one bot under the root: its home (agent/ and service/), the soul and skills every home starts with, the built-in
+  console connector, and a doctor line for the result. The root must be initialised (\`mason init\`).
 
   <name>                 lowercase letters, digits and dashes; it is the directory under the root
-  --connector <name>     the first connector, one from the catalog or \`console\` (the default with --yes)
-  --url <ws-url>         a connector already running somewhere else; implies --connector custom
-  --env NAME=value       one answer a connector needs; repeatable
-  --owner <id>           who owns this chat
-  --events <kind=hook>   a url: connector's event kinds
-  --no-start             write the connector's files and leave its container down
-  --yes                  take the flags it has and ask nothing
   --help                 this
 
-  next: mason up -b <name>, or mason chat -b <name>.`;
+  next: mason up, or mason chat, which talks to the bot from this terminal.`;
 }
 
-/** The name and setup's own argv, split at the first token that is not the name. */
 export function parseArgs(argv: readonly string[]): NewArgs {
-	const name = argv[0] !== undefined && !argv[0].startsWith("-") ? argv[0] : undefined;
-	const setup = name === undefined ? [...argv] : argv.slice(1);
-	return { ...(name === undefined ? {} : { name }), setup, help: setup.includes("--help") || setup.includes("-h") };
-}
-
-/** Whether setup's argv already names the connector it will install. */
-export function namesConnector(setup: readonly string[]): boolean {
-	return setup.some(
-		(arg) => arg === "--url" || arg.startsWith("--url=") || arg === "--connector" || arg.startsWith("--connector="),
-	);
+	const first = argv[0];
+	const name = first !== undefined && !first.startsWith("-") ? first : undefined;
+	const rest = name === undefined ? [...argv] : argv.slice(1);
+	return { ...(name === undefined ? {} : { name }), help: rest.includes("--help") || rest.includes("-h") };
 }
 
 /** The command. Returns an exit code rather than calling `process.exit`, so a test can run the flow in-process. */
 export async function runNew(
 	argv: readonly string[],
-	options: {
-		readonly root?: string;
-		readonly doctor?: boolean;
-		/**
-		 * Whether this command installs the first connector. `mason new` does; the onboarding wizard does not, because it
-		 * has already collected that connector's answers and installs it as a step of its own, and two installs of the same
-		 * connector in one run would be one too many.
-		 */
-		readonly setup?: boolean;
-	} = {},
+	options: { readonly root?: string; readonly doctor?: boolean } = {},
 ): Promise<number> {
 	const args = parseArgs(argv);
 	if (args.help) {
@@ -87,33 +63,35 @@ export async function runNew(
 		if (!BOT_NAME.test(name) || name === COMMON)
 			throw new Error(`"${name}" is not a bot name: lowercase letters, digits and dashes, and not "${COMMON}"`);
 		const home = botHome(root.root, name);
-		if (existsSync(home))
-			throw new Error(`bot "${name}" already exists at ${home}: \`mason bots\` lists what there is`);
+		if (existsSync(home)) throw new Error(`bot "${name}" already exists at ${home}: this root holds one bot`);
+		// One environment is one bot (#201): a second directory would be a root no command can name a home in, so the
+		// refusal is about the shape rather than about a name being taken.
+		const existing = root.bots[0];
+		if (existing !== undefined)
+			throw new Error(
+				`${root.root} already holds the bot "${existing.name}": one environment is one bot, and \`mason new\` ` +
+					"makes the first one. Move it out of the root to make another.",
+			);
 		if (!(await commonReady(root.root)))
 			throw new Error(
-				`${root.root} has no common store: run \`mason init\` first (it stores the provider every bot shares), or ` +
-					"`mason onboard`, which initialises the root and creates the first bot",
+				`${root.root} has no common store: run \`mason init\` first (it stores the provider every bot shares)`,
 			);
 		const target = { root: root.root, name, home };
 		const paths = botPaths(target);
 		await mkdir(home, { recursive: true, mode: 0o700 });
 		await ensureHouse(paths, DEFAULT_SOUL);
 		await ensureRepository(paths.agentDir);
-		console.log(`[new] created bot "${name}" at ${home}`);
-		if (options.setup !== false) {
-			const setup =
-				args.setup.includes("--yes") && !namesConnector(args.setup)
-					? [...args.setup, "--connector", "console"]
-					: args.setup;
-			const code = await runSetup(setup, { house: paths });
-			if (code !== 0) return code;
-		}
+		// Granted and minted together: a grant with no credential is a door that closes every socket, and `mason doctor` is
+		// what says so. `mason chat` rotates this credential on every run, so this is the first one, not a fixed one.
+		await ensureConsole(paths);
+		await mintConnectorCredential(paths.home, CONSOLE, { replace: true });
+		console.log(`[new] created bot "${name}" at ${home}, and granted "${CONSOLE}"`);
 		if (options.doctor === false) return 0;
 		const checks = await runDoctor({ house: paths });
 		for (const check of checks) console.log(`[new] ${formatCheck(check)}`);
 		const failed = checks.filter((check) => !check.ok).length;
 		console.log(`[new] ${checks.length} checks: ${checks.length - failed} ok, ${failed} failed`);
-		console.log(`[new] next: mason up -b ${name} (or \`mason chat -b ${name}\`)`);
+		console.log("[new] next: mason up, or `mason chat` to talk to it from this terminal");
 		return doctorExitCode(checks);
 	} catch (error) {
 		console.error(`[new] ${error instanceof Error ? error.message : String(error)}`);

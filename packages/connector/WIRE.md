@@ -1,6 +1,6 @@
 # The Chord frames a connector SDK must implement
 
-The protocol is two Chord contracts. Chord's own link protocol is what carries them, and this file is the subset an SDK
+The protocol is one Chord contract. Chord's own link protocol is what carries it, and this file is the subset an SDK
 in another language has to speak. It is not a second specification: what is written here is what `@earendil-works/chord`
 does at `dist/wire.js` and `dist/connection.js`, restricted to the parts a connector meets. If the two ever disagree,
 Chord wins and this file is the bug.
@@ -50,8 +50,8 @@ The `token` is the contract's description, which is what the provider validates 
 An error carries `code` (Chord's own, out of a closed set) and `reason` (mason's fine-grained one). Only those two and
 `message` survive a link: `retryable` and `details` do not cross, which is why nothing in this protocol relies on them.
 
-A connector serves one object of its own, at `connector:<name>`: `deliver`. Mason holds it, calls it, and reads the ack
-from the result.
+A connector serves no object of its own: `mason.peer` is the only contract on the link, and mason calls nothing on the
+connector. What a connector has to say it says by calling `append`.
 
 ## Flow control
 

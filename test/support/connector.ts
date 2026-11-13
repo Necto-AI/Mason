@@ -22,14 +22,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { type Connector, type ConnectorHandlers, createConnector, nodeWebSocketLink } from "mason-connector";
 import { MemoryStore } from "mason-connector/store/memory";
-import {
-	type ConversationState,
-	connectorHost,
-	errorCodeOf,
-	MasonConnector,
-	MasonPeer,
-	type PeerRef,
-} from "mason-protocol";
+import { type ConversationState, connectorHost, errorCodeOf, MasonPeer, type PeerRef } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../../src/server/connectors.ts";
 import { type HousePaths, housePaths } from "../../src/server/house.ts";
@@ -233,22 +226,23 @@ export async function serveConnector(
 
 export interface ConnectedConnector {
 	readonly connector: Connector;
-	readonly deliveries: Array<{ deliveryId: string; text: string }>;
+	/** The conversation as this connection applied it: what a medium renders, frame by frame. */
+	readonly states: ConversationState[];
 	readonly sessions: number;
 	close(): Promise<void>;
 }
 
-/** One SDK connector on a real socket. `handlers.onDelivery` records and acknowledges by default. */
+/** One SDK connector on a real socket, recording every conversation frame it applies. */
 export async function connectConnector(
 	served: ServedConnector,
 	options: {
 		readonly name?: string;
 		readonly credential?: string;
 		readonly handlers?: ConnectorHandlers;
-		readonly deliveries?: Array<{ deliveryId: string; text: string }>;
+		readonly states?: ConversationState[];
 	} = {},
 ): Promise<ConnectedConnector> {
-	const deliveries: Array<{ deliveryId: string; text: string }> = options.deliveries ?? [];
+	const states: ConversationState[] = options.states ?? [];
 	const connector = createConnector({
 		name: options.name ?? "telegram",
 		version: "0.0.0-test",
@@ -257,12 +251,8 @@ export async function connectConnector(
 		store: new MemoryStore(),
 		link: nodeWebSocketLink(WebSocket as never),
 		handlers: {
-			onDelivery: (params) => {
-				const text = params.blocks
-					.map((block) => (block.type === "text" || block.type === "markdown" ? block.text : ""))
-					.join("");
-				deliveries.push({ deliveryId: params.deliveryId, text });
-				return { status: "delivered" };
+			onConversation: (state) => {
+				states.push(state);
 			},
 			...options.handlers,
 		},
@@ -270,7 +260,7 @@ export async function connectConnector(
 	await connector.start();
 	return {
 		connector,
-		deliveries,
+		states,
 		sessions: connector.status().connections,
 		close: () => connector.stop(),
 	};
@@ -311,9 +301,8 @@ export async function entriesOf(server: RunningServer): Promise<readonly Record<
 /**
  * One raw Chord client holding `mason.peer`: the socket the SDK connector itself opens, with the state member read.
  *
- * The SDK is the right client for the protocol's methods and the wrong one for this: it reads `session` once and gives
- * away nothing else, so a test that wanted the conversation's frames would be testing the SDK's copy of them. This
- * holds the peer's reference directly, so what a case sees is what Chord put on the wire.
+ * The SDK is the right client for a medium that renders its own conversation, and the wrong one for a case about the
+ * frames themselves: what this holds is the peer's reference directly, so what a case sees is what Chord put on the wire.
  */
 export interface HeldPeer {
 	readonly ref: PeerRef;
@@ -332,8 +321,6 @@ export async function holdPeer(
 		self: principal,
 		onError: () => {},
 	});
-	// The door calls `deliver` on the outbox's own schedule; a client that answers it keeps the log free of "unanswered".
-	host.serve(MasonConnector, () => ({ variant: "default", deliver: async () => ({ status: "delivered" as const }) }));
 	const link = nodeWebSocketLink(WebSocket as never)(served.url, {
 		credential: options.credential ?? served.credential,
 	});

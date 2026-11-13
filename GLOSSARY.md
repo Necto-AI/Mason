@@ -28,9 +28,9 @@ split is the boundary between the server and the machine its tools run on.
 _Avoid_: house, state dir, `.mason`
 
 **root**:
-The directory the bots live under, `~/.mason` or `MASON_ROOT`: `common/` and one directory per bot, each one home. A
-command targets one with `-b`, else `MASON_BOT`, else the only bot.
-_Avoid_: fleet (that is the bots, not the directory), state dir
+The directory the bot lives under, `~/.mason` or `MASON_ROOT`: `common/` and the bot's directory, which is one home. One
+environment is one bot, so a command resolves it without a target.
+_Avoid_: fleet, state dir
 
 **common store**:
 The three files every bot under a root shares: the default provider and model, one key per provider, and where tools run.
@@ -117,34 +117,23 @@ _Avoid_: hook (alone), trigger, event
 **fire**:
 One wake of the bot by a routine or an event. A redelivery under the same identity is still one fire. Unlike a tool
 result, a fire is unsolicited input that can start a turn.
-_Avoid_: event (when a routine fired), invocation, delivery, submission
+_Avoid_: event (when a routine fired), invocation, submission
 
 **delegation**:
 One tool call that owns a conversation with a narrow job and returns a report. A conversation, not a peer: no home, no
 way to speak to anyone, never a deployment.
 _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
-**delivery**:
-One outbound act: mason calls `deliver` on the connector that owes an answer, with the address the turn's words came
-from and the blocks to send. The words were already committed, so a delivery follows the transcript rather than
-duplicating it.
-_Avoid_: message, notification
-
 **send**:
-The one mason-owned tool a turn uses to reach its reader: it answers where the turn's words came from and commits an
-`app.reply` entry. There is no address for a model to name, so a turn nobody wrote to records the send and says nobody
-was reached.
+The one mason-owned tool a turn uses to reach its reader: it commits an `app.reply` entry carrying the turn's origin, and
+that row of the conversation is the message. There is no address for a model to name, so a turn nobody wrote to records
+the send and says nobody was reached.
 _Avoid_: reply (the former name), send_to_user, message
 
-**delivery id**:
-The durable identity of one send: `reply:<callId>` of the call that asked for it. A resend after a lost acknowledgement
-carries it, which lets a connector answer `duplicate` instead of sending twice.
-_Avoid_: message id, request id
-
-**outbox**:
-The committed sends a connector has not acknowledged yet, read from the transcript, not a second store. A send is owed
-until an `app.delivery` entry says what became of it; an `uncertain` one is never retried.
-_Avoid_: queue, retry buffer
+**reply id**:
+The durable identity of one send: `reply:<callId>` of the call that asked for it, and the id of the row a reader's client
+renders. One message, one id, one row.
+_Avoid_: message id, request id, delivery id
 
 ## Integrations and connectors
 
@@ -160,12 +149,13 @@ _Avoid_: tool surface, tools face
 
 **connector**:
 An external process mason admitted on `/api/connector`, with the credential minted for its integration: it appends a
-person's words or an event, and mason calls `deliver` on it. Tools are the entry's MCP server, never the socket.
+person's words or an event, and the answer is a row of the conversation it reads. Tools are the entry's MCP server,
+never the socket.
 _Avoid_: integration (that is the entry), plugin, client, app
 
 **append**:
-The one inbound call: a submission, an event or a notice, each with an id mason dedupes forever and an origin it never
-parses. One call for three shapes is what lets an events-only connector be answered.
+The one inbound call: a submission or an event, each with an id mason dedupes forever and an origin it never parses.
+One call for two shapes lets an events-only connector be answered.
 _Avoid_: submit, fire, envelope
 
 **payload**:
@@ -210,7 +200,7 @@ answer goes. Data on the entry, never prose in a prompt. A retry inherits the or
 _Avoid_: source, channel, session, conversation (there is one, and it is the transcript)
 
 **ref**:
-The address a connector mints into `origin.ref`, returned byte for byte on the delivery that answers that append. Mason
+The address a connector mints into `origin.ref`, kept byte for byte with the reply answering that append. Mason
 never parses it, so a medium with no chat ids is a connector like any other.
 _Avoid_: address, room id, conversation id
 

@@ -115,7 +115,7 @@ describe("the integration list on disk", () => {
 		const paths = await temporaryHome();
 		await writeIntegration(paths, "github", github);
 		const first = JSON.parse(await readFile(paths.integrations, "utf8")) as { version?: string };
-		assert.equal(first.version, "0.1", "every wizard write stamps the file");
+		assert.equal(first.version, "0.1", "every write stamps the file");
 
 		await writeIntegration(paths, "github", { ...github, description: "moved" });
 		const backups = (await readdir(paths.serviceDir)).filter(
@@ -507,8 +507,8 @@ describe("the integration command", () => {
 
 		const enabled = await integration(paths.home, "enable", "telegram");
 		assert.match(enabled.stdout, /enabled telegram/);
-		// The write lands — the enforcement is the boot's — and the command says what its own write made, as `mason setup`
-		// and `mason chat` do, with the same sentence.
+		// The write lands — the enforcement is the boot's — and the command says what its own write made, as `mason chat`
+		// does, with the same sentence.
 		assert.match(
 			enabled.stdout,
 			/this home grants a person's words to "console" and "telegram": one bot works for one person, so mason refuses this home at boot until one of them is switched off, by hand/,

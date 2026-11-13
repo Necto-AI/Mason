@@ -14,11 +14,9 @@ import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/p
 import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
-	DELIVERY_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
 	isDeliveryReminder,
 	isReflectionAsk,
-	NOTICE_ENTRY_KIND,
 	REPLY_ENTRY_KIND,
 	SEND_TOOL,
 	splitAuthor,
@@ -68,29 +66,6 @@ function callsOf(message: unknown): CallBlock[] {
 	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
 }
 
-/** What became of one delivery, as the entry records it. */
-interface DeliveryRecord {
-	readonly deliveryId: string;
-	readonly status: "delivered" | "duplicate" | "uncertain" | "rejected";
-	readonly detail?: string;
-}
-
-function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
-	if (entry.kind !== DELIVERY_ENTRY_KIND) return undefined;
-	if (typeof entry.data !== "object" || entry.data === null) return undefined;
-	const data = entry.data as Record<string, unknown>;
-	if (typeof data.deliveryId !== "string") return undefined;
-	const status = data.status;
-	if (status !== "delivered" && status !== "duplicate" && status !== "uncertain" && status !== "rejected") {
-		return undefined;
-	}
-	return {
-		deliveryId: data.deliveryId,
-		status,
-		...(typeof data.detail === "string" ? { detail: data.detail } : {}),
-	};
-}
-
 /**
  * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
@@ -101,11 +76,11 @@ function deliveryRecordOf(entry: EntryRecord): DeliveryRecord | undefined {
  *
  * The round in flight contributes the same shape, streaming: a reply appears as the model writes it, exactly as it will
  * stand once committed. A streaming reply whose entry has already landed is skipped — the entry is the truth, and two
- * copies of one message is the duplicate the outbox exists to prevent.
+ * copies of one message is a duplicate a client would render twice.
  *
- * Two kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
- * log, not the reader) and `pi.compaction`. Neither carries a word for the reader, and the tests pin that they do not
- * cross the wire.
+ * Three kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
+ * log, not the reader), `pi.compaction`, and `app.delivery` in a home written before the outbox went. None carries a word
+ * for the reader, and the tests pin that they do not cross the wire.
  */
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
 	const { fold, tail } = foldTranscript(view);
@@ -117,20 +92,11 @@ const FAILED_NOTICE_PREFIX = "failed:";
 const RUN_FAILED_NOTICE = "Something went wrong, and the turn did not finish.";
 const SILENT_NOTICE = "The agent finished without sending you a message.";
 
-/** The two notices an acknowledgement can be, by status: a message the reader has, and cannot be told it arrived. */
-const DELIVERY_NOTICE: Readonly<Record<string, string>> = {
-	uncertain: "This message may not have reached the chat: the connector could not tell whether it was sent.",
-	rejected: "This message did not reach the chat: the connector refused it.",
-};
-
 /**
  * The committed rows of a transcript, folded once so a later revision can reuse them.
  *
- * Entries are append-only, so the rows a prefix of them produced never change — with one exception a later entry can
- * move: a delivery acknowledgement that says the message may not have arrived adds a notice behind the row it settles,
- * and a second acknowledgement for the same delivery takes it away again. Both are visible in `acks`, the delivery id
- * and status folded so far, because a count is a proxy for that set and a swap can keep the count. Everything else an
- * entry contributes depends on the entries before it, which is why a fold can be resumed at the entry it stopped at.
+ * Entries are append-only, so the rows a prefix of them produced never change: everything an entry contributes depends
+ * on the entries before it, which is why a fold can be resumed at the entry it stopped at.
  */
 export interface TranscriptFold {
 	/** The rows, one object per row: a later revision reuses these objects, which is what makes its diff a tail diff. */
@@ -140,8 +106,6 @@ export interface TranscriptFold {
 	/** The newest entry folded, and how many there were: a view that rewrote them is not a view that appended. */
 	readonly last: string;
 	readonly count: number;
-	/** The acknowledgements folded so far, as delivery id and status: a new one can change a row already folded. */
-	readonly acks: string;
 }
 
 /**
@@ -149,8 +113,8 @@ export interface TranscriptFold {
  *
  * `before` is the previous revision's fold, and folding onto it is what keeps a token from rebuilding the transcript:
  * when the view only appended, the rows up to the last entry are reused object for object and only what follows is
- * derived. A view that rewrote an entry, or a delivery notice that landed behind one, starts the fold again — the rows
- * are then equal but not shared, and the diff that follows is still a tail diff, because equality is what a diff reads.
+ * derived. A view that rewrote an entry starts the fold again — the rows are then equal but not shared, and the diff that
+ * follows is still a tail diff, because equality is what a diff reads.
  */
 export function foldTranscript(
 	view: ConversationView | undefined,
@@ -159,38 +123,28 @@ export function foldTranscript(
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
 	const outcomes = new Map<string, boolean>();
 	const replies = new Set<string>();
-	const deliveries = new Map<string, DeliveryRecord>();
 	for (const entry of entries) {
 		if (entry.kind === "pi.tool-result") {
 			const message = messageOf(entry) as { toolCallId?: unknown; isError?: unknown } | undefined;
 			if (typeof message?.toolCallId === "string") outcomes.set(message.toolCallId, message.isError === true);
 			continue;
 		}
-		if (entry.kind === REPLY_ENTRY_KIND) {
-			const record = replyRecordOf(entry);
-			if (record !== undefined) replies.add(record.deliveryId);
-			continue;
-		}
-		const delivery = deliveryRecordOf(entry);
-		if (delivery === undefined) continue;
-		deliveries.set(delivery.deliveryId, delivery);
+		if (entry.kind !== REPLY_ENTRY_KIND) continue;
+		const record = replyRecordOf(entry);
+		if (record !== undefined) replies.add(record.deliveryId);
 	}
-	const acks = [...deliveries.values()].map((record) => `${record.deliveryId}:${record.status}`).join(",");
 	const id = (index: number): string => (entries[index] === undefined ? "" : String(entries[index]?.id));
 	// A turn nobody has read the start of has spoken until an entry says otherwise: the default the whole view gets.
 	const resumed =
-		before !== undefined &&
-		before.count <= entries.length &&
-		before.last === id(before.count - 1) &&
-		before.acks === acks
+		before !== undefined && before.count <= entries.length && before.last === id(before.count - 1)
 			? before
 			: undefined;
 	const items: TranscriptItem[] = resumed === undefined ? [] : [...resumed.items];
 	let spoke = resumed === undefined ? true : resumed.spoke;
 	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
-		spoke = foldEntry(entries[index] as EntryRecord, deliveries, items, spoke);
+		spoke = foldEntry(entries[index] as EntryRecord, items, spoke);
 	}
-	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length, acks };
+	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length };
 	return { fold, tail: streamingItems(view, outcomes, replies) };
 }
 
@@ -201,12 +155,7 @@ export function foldTranscript(
  * become*. An entry kind this does not name contributes nothing, which is the property the tests in
  * `test/projection.test.ts` exist to keep.
  */
-function foldEntry(
-	entry: EntryRecord,
-	deliveries: Map<string, DeliveryRecord>,
-	items: TranscriptItem[],
-	spoke: boolean,
-): boolean {
+function foldEntry(entry: EntryRecord, items: TranscriptItem[], spoke: boolean): boolean {
 	if (entry.kind === HOOK_ENTRY_KIND) {
 		// A fire is a turn that owed the person words, whether it names a kind or is a routine's timer: an event is the
 		// reader's business and says so as a row of its own, and a routine's message is the row — but a fire that sent
@@ -214,13 +163,6 @@ function foldEntry(
 		const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
 		if (typeof kind === "string" && kind !== "") items.push({ kind: "event", id: String(entry.id), name: kind });
 		return false;
-	}
-	if (entry.kind === NOTICE_ENTRY_KIND) {
-		// The medium talking about itself: a channel that was muted, a delivery that the network refused. It is not a
-		// turn and it never woke one, so it is a row and not a message from anybody.
-		const text = (entry.data as { text?: unknown } | undefined)?.text;
-		if (typeof text === "string" && !isBlank(text)) items.push({ kind: "notice", id: `medium:${entry.id}`, text });
-		return spoke;
 	}
 	if (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) {
 		const spoken = textOfMessage(messageOf(entry)).trim();
@@ -240,16 +182,6 @@ function foldEntry(
 		const text = textOfBlocks(record.blocks);
 		if (isBlank(text)) return spoke;
 		items.push({ kind: "delivered", id: record.deliveryId, text });
-		const delivery = deliveries.get(record.deliveryId);
-		// A delivery that may not have arrived is the reader's business: the message is on screen, and whether a
-		// person received it is not something the transcript may leave implied.
-		if (delivery !== undefined && DELIVERY_NOTICE[delivery.status] !== undefined) {
-			items.push({
-				kind: "notice",
-				id: `delivery:${record.deliveryId}`,
-				text: DELIVERY_NOTICE[delivery.status] as string,
-			});
-		}
 		return true;
 	}
 	if (entry.kind === "pi.assistant") {

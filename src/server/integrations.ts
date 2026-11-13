@@ -117,10 +117,10 @@ async function load(
  * addressed to the other's, and nothing in the file said which was the person's chat. So the boot refuses the home,
  * with the rule in the sentence, rather than discovering it from a message that went somewhere nobody read.
  *
- * Called by the boot and by nothing else (`runtime.ts`), which is why the file's other readers still work: `mason setup`
- * keeps writing what the operator asked for — and names the state its own write made — and `status` and `doctor` keep
- * reporting the file as it is. A disabled entry is not counted — switching one off is how an operator keeps a second
- * grant on disk without it ever speaking.
+ * Called by the boot and by nothing else (`runtime.ts`), which is why the file's other readers still work: `mason new`
+ * grants the console and `mason chat` writes that grant again — naming the state its own write made — while `status` and
+ * `doctor` keep reporting the file as it is. A disabled entry is not counted — switching one off is how an operator keeps
+ * a second grant on disk without it ever speaking.
  *
  * `test/runtime-boot.test.ts`, "two enabled connectors that carry a person's words refuse the boot", pins it.
  */
@@ -138,11 +138,11 @@ export function assertOneUserGrant(where: string, integrations: Record<string, I
  * The enabled entries that hold a person's words, by name: the rule's one reading.
  *
  * The boot refuses a home where there is more than one (`assertOneUserGrant` above), and every command that can make the
- * second — `mason setup`, `mason chat`, `npm run integration -- enable` — says so in its own output, from the one sentence
- * below. Two spellings of "who may speak" would drift apart, and the sentence a person reads on the way in would then
- * disagree with the one that stops the boot.
+ * second — `mason chat`, `npm run integration -- enable` — says so in its own output, from the one sentence below. Two
+ * spellings of "who may speak" would drift apart, and the sentence a person reads on the way in would then disagree with
+ * the one that stops the boot.
  *
- * `test/runtime-boot.test.ts`, `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin it.
+ * `test/chat.test.ts` and `test/integrations.test.ts` pin it.
  */
 export function userGrantNames(integrations: Record<string, Integration>): string[] {
 	return Object.entries(integrations)
@@ -154,11 +154,11 @@ export function userGrantNames(integrations: Record<string, Integration>): strin
  * What a writer says when its own write left more than one enabled connector holding a person's words: one sentence
  * naming the home the boot will refuse, or `undefined` when the write left one surface or none.
  *
- * The refusal stays the boot's (`assertOneUserGrant`), so this is the word on the way in: `mason setup`, `mason chat` and
+ * The refusal stays the boot's (`assertOneUserGrant`), so this is the word on the way in: `mason chat` and
  * `npm run integration -- enable` each call it after their own write, and one sentence means the note a person reads and
  * the refusal that stops the boot cannot disagree.
  *
- * `test/setup-apply.test.ts`, `test/chat.test.ts` and `test/integrations.test.ts` pin the three writers.
+ * `test/chat.test.ts` and `test/integrations.test.ts` pin the two writers.
  */
 export function secondUserGrantNote(integrations: Record<string, Integration>): string | undefined {
 	const speaking = userGrantNames(integrations);
@@ -205,8 +205,8 @@ function parseFile(path: string, text: string): { file: Record<string, unknown>;
 	if (version !== undefined && version !== INTEGRATIONS_VERSION) {
 		throw new Error(
 			`${path}: "version" is ${JSON.stringify(version)}, and this mason reads "${INTEGRATIONS_VERSION}". A list ` +
-				"shaped by another release is a grant this one would guess at; write the file with the `mason setup` this " +
-				"release ships, or move the newer file aside and start it again.",
+				"shaped by another release is a grant this one would guess at; write the file by hand, or move the newer file " +
+				"aside and start it again.",
 		);
 	}
 	const declared = file.integrations;
@@ -388,8 +388,8 @@ function isHttpUrl(url: string): boolean {
  * Write one entry, keeping every other entry and every other key — including the ones inside the entry being replaced
  * that mason does not understand. Returns the entry as it was stored, which is what the command prints.
  *
- * The write stamps the version, keeps a timestamped copy of the file it replaces, and lands through a rename: this is the
- * wizard's write, and a wizard that fails has to leave the file it found.
+ * The write stamps the version, keeps a timestamped copy of the file it replaces, and lands through a rename: a write
+ * that fails has to leave the file it found.
  */
 export async function writeIntegration(
 	paths: HousePaths,
@@ -468,7 +468,7 @@ export function currentIntegrations(): Record<string, Integration> {
  * The file is read once at boot and a change is a restart (`docs/SPEC.md` §4.1d). That invariant is only useful if
  * something can notice the change, so the boot records the hash it read in the server's half — never in `agent/` — and
  * `mason doctor` compares it. A missing record is not staleness: it is a home that has not booted yet, which is exactly
- * the state `mason onboard` leaves one in.
+ * the state `mason new` leaves one in.
  */
 export interface IntegrationBoot {
 	readonly version: string;

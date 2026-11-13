@@ -11,7 +11,7 @@ import { after, describe, it } from "node:test";
 import { diffRevisions, type Op } from "@earendil-works/chord/delta";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { createReadModel } from "../src/server/read-model.ts";
-import { DELIVERY_ENTRY_KIND, REPLY_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
+import { REPLY_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
 
 type Entry = Record<string, unknown>;
 
@@ -29,9 +29,14 @@ function replyEntry(id: number, deliveryId: string, text: string): Entry {
 	return entry(id, REPLY_ENTRY_KIND, [], { data: { deliveryId, blocks: [{ type: "text", text }] } });
 }
 
-/** One acknowledgement of a delivery, as the outbox records it. */
-function deliveryEntry(id: number, deliveryId: string, status: string): Entry {
-	return entry(id, DELIVERY_ENTRY_KIND, [], { data: { deliveryId, status } });
+/** One write nothing reads, as the outbox recorded them before the cut: a row the fold has to leave out. */
+function retiredDeliveryEntry(id: number, deliveryId: string, status: string): Entry {
+	return entry(id, "app.delivery", [], { data: { deliveryId, status } });
+}
+
+/** One medium notice, as the retired append shape wrote them: a row nothing reads any more. */
+function retiredNoticeEntry(id: number, text: string): Entry {
+	return entry(id, "app.notice", [], { data: { text } });
 }
 
 /** One person's words. */
@@ -158,26 +163,44 @@ describe("what a token costs on the wire", () => {
 		);
 	});
 
-	it("takes back a notice when a second acknowledgement for the same delivery replaces the first", () => {
-		// Two acks for one delivery is a swap, not an append: the fold's invalidation compares which acknowledgements it
-		// consumed, not how many, because a pair of them can change the rows a prefix produced without changing the count.
+	it("ignores an acknowledgement entry a home written before the outbox went still holds", () => {
+		// The entry kind is retired, and the transcript is append-only: a home that ran the outbox keeps its
+		// `app.delivery` rows forever. They are not the reader's, and a fold that read them would render a status a person
+		// has no use for.
 		const model = createReadModel();
 		const entries = [
 			userEntry(1, "Ship it."),
 			replyEntry(2, "reply:m1", "Shipped."),
-			deliveryEntry(3, "reply:m1", "rejected"),
+			retiredDeliveryEntry(3, "reply:m1", "rejected"),
 		];
-		const refused = model.next(viewOf(entries));
+		const state = model.next(viewOf(entries));
 		assert.deepEqual(
-			refused.transcript.map((row) => row.id),
-			["1", "reply:m1", "delivery:reply:m1"],
-			"a refusal the reader has to be told about is a row behind the message",
-		);
-		const settled = model.next(viewOf([...entries, deliveryEntry(4, "reply:m1", "duplicate")]));
-		assert.deepEqual(
-			settled.transcript.map((row) => row.id),
+			state.transcript.map((row) => row.id),
 			["1", "reply:m1"],
-			"the ack that replaces it is not a refusal, so the row the first one added goes",
+			"the message, and nothing about how it travelled",
+		);
+	});
+
+	it("ignores a notice entry a home written before the append shape went still holds", () => {
+		// The append shape is retired and the transcript is append-only, so a home that ran an older mason keeps its
+		// `app.notice` entries forever: a medium talking about itself, written by a call the contract no longer has. The
+		// Done-when is this row's absence: no notice row after the append shape is removed.
+		const model = createReadModel();
+		const entries = [
+			userEntry(1, "Ship it."),
+			retiredNoticeEntry(2, "the channel was muted"),
+			replyEntry(3, "reply:m1", "Shipped."),
+		];
+		const state = model.next(viewOf(entries));
+		assert.deepEqual(
+			state.transcript.map((row) => row.kind),
+			["user", "delivered"],
+			"no row for the medium's notice",
+		);
+		assert.deepEqual(
+			state.transcript.map((row) => row.id),
+			["1", "reply:m1"],
+			"the message and the reply, and nothing the medium said about itself",
 		);
 	});
 

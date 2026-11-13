@@ -3,9 +3,9 @@
  *
  * Every command here is executed exactly as an operator types it, from the source the npm scripts run, and every root is
  * a temporary directory passed in `MASON_ROOT`: the real one is never read, let alone written. What is pinned is what
- * survives a review of the subcommand set — usage names the closed set and none of the retired nouns, `-b` becomes
- * `MASON_BOT` for every verb, a root with no bot refuses with the command that creates one, and a root whose halves sit
- * at the root is refused with its names and nothing created.
+ * survives a review of the subcommand set — usage names the closed set and none of the retired nouns, a root with no bot
+ * refuses with the command that creates one, and a root whose halves sit at the root is refused with its names and
+ * nothing created.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -55,14 +55,11 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	const result = await mason([], await tempRoot());
 	assert.equal(result.code, 1, "no command is usage, and usage is a refusal");
 	for (const command of [
-		"mason onboard",
 		"mason init",
 		"mason new",
-		"mason bots",
 		"mason doctor",
 		"mason status",
 		"mason up",
-		"mason setup",
 		"mason chat",
 		"mason integration",
 		"mason connector",
@@ -72,7 +69,7 @@ test("usage() names the closed subcommand set, and none of the retired nouns", a
 	]) {
 		assert.match(result.stdout, new RegExp(command.replace(" ", "\\s+")));
 	}
-	for (const retired of ["token", "team", "person", "panel"]) {
+	for (const retired of ["token", "team", "person", "panel", "onboard", "setup", "bots"]) {
 		assert.doesNotMatch(result.stdout, new RegExp(`\\b${retired}\\b`), `${retired} went with the prune`);
 	}
 });
@@ -85,21 +82,16 @@ test("a command the set does not know is a refusal, not a default", async () => 
 
 test("a root with no bot refuses, and names the command that creates one", async () => {
 	const directory = await tempRoot();
-	const bots = await mason(["bots"], directory);
-	assert.equal(bots.code, 0);
-	assert.match(bots.stdout, /no bots under/);
-	assert.match(bots.stdout, /mason onboard/);
-
 	const doctor = await mason(["doctor"], directory);
 	assert.equal(doctor.code, 1);
 	assert.match(doctor.stderr, /has no bot yet/);
-	assert.match(doctor.stderr, /mason onboard/);
+	assert.match(doctor.stderr, /mason new/);
 });
 
 test("a root whose halves sit at the root is refused on its names, creating nothing", async () => {
 	const directory = await tempRoot();
 	await writeFile(join(directory, "profile.md"), "# Denis\n", "utf8");
-	const result = await mason(["bots"], directory);
+	const result = await mason(["new", "bot"], directory);
 	assert.equal(result.code, 1);
 	assert.match(result.stderr, /holds a single home's halves at the root/);
 	assert.match(result.stderr, /profile\.md/);
@@ -107,11 +99,11 @@ test("a root whose halves sit at the root is refused on its names, creating noth
 	assert.equal(existsSync(join(directory, "common")), false, "nothing was created");
 });
 
-test("a fleet command refuses MASON_HOME, which names one home and not a root", async () => {
+test("a root command refuses MASON_HOME, which names one home and not a root", async () => {
 	const directory = await tempRoot();
 	const home = join(directory, "home");
 	await mkdir(home, { recursive: true });
-	const result = await mason(["bots"], directory, { MASON_HOME: home });
+	const result = await mason(["new", "bot"], directory, { MASON_HOME: home });
 	assert.equal(result.code, 1);
 	assert.match(result.stderr, /MASON_HOME names one home/);
 	assert.match(result.stderr, /MASON_ROOT/);

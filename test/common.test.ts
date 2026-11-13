@@ -6,7 +6,7 @@
  * once, because a whole-file rewrite that lost a key somebody just stored is the one write that cannot be retried; and
  * every file refuses a version this build does not read, because a store shaped by a later release is a guess.
  *
- * Every write also leaves the file it replaced beside it, with a timestamp: a wizard that fails has to leave the
+ * Every write also leaves the file it replaced beside it, with a timestamp: a write that fails has to leave the
  * configuration it found. Nothing here reads pi's stores.
  */
 import assert from "node:assert/strict";

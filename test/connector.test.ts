@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import WebSocket from "ws";
-import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, NOTICE_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
 import {
 	connectConnector,
 	connectorHome,
@@ -20,13 +20,19 @@ import {
 	until,
 } from "./support/connector.ts";
 
+/** The text of the one committed reply, as the reader's row holds it. */
+function replyText(entry: Record<string, unknown>): string {
+	const blocks = (entry.data as { blocks?: ReadonlyArray<{ text?: string }> } | undefined)?.blocks ?? [];
+	return blocks.map((block) => block.text ?? "").join("");
+}
+
 /** Every entry of one kind, oldest first, as plain JSON. */
 async function entries(served: Awaited<ReturnType<typeof serveConnector>>, kind: string) {
 	return (await entriesOf(served.server)).filter((entry) => entry.kind === kind);
 }
 
 describe("a connector's words", () => {
-	it("become an ordinary attributed submission, and the send goes back to the origin's address", async () => {
+	it("become an ordinary attributed submission, and the send records the turn's origin", async () => {
 		const served = await serveConnector({
 			home: await connectorHome(),
 			steps: replyTurns(["the calendar is clear"]),
@@ -39,8 +45,12 @@ describe("a connector's words", () => {
 					content: [{ type: "text", text: "what is on my calendar" }],
 				});
 				assert.equal(outcome.status, "accepted");
-				await until(() => connected.deliveries.length === 1, "the send to arrive");
-				assert.equal(connected.deliveries[0]?.text, "the calendar is clear");
+				await until(async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1, "the send to arrive");
+				assert.equal(
+					replyText((await entries(served, REPLY_ENTRY_KIND))[0] as Record<string, unknown>),
+					"the calendar is clear",
+					"the answer is the reply row",
+				);
 
 				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
 				assert.equal(submitted.length, 1);
@@ -240,7 +250,7 @@ describe("an event", () => {
 					payload: "are you there",
 					origin: { ref: "team", messageId: "m7" },
 				});
-				await until(() => connected.deliveries.length === 1, "the answer to the event");
+				await until(async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1, "the answer to the event");
 				const hooks = await entries(served, HOOK_ENTRY_KIND);
 				assert.deepEqual((hooks[0]?.data as { origin?: unknown }).origin, {
 					connector: "telegram",
@@ -266,31 +276,8 @@ describe("an event", () => {
 					"a recorded send that reaches nobody",
 				);
 				const sent = (await entries(served, REPLY_ENTRY_KIND))[0];
-				assert.equal(sent?.data === undefined ? undefined : (sent.data as { target?: unknown }).target, undefined);
-				assert.equal(connected.deliveries.length, 0, "nothing was sent to a person");
+				assert.equal(Object.hasOwn((sent?.data ?? {}) as object, "target"), false, "no destination is recorded");
 				assert.match(JSON.stringify(await entriesOf(served.server)), /nobody was reached/);
-			} finally {
-				await connected.close();
-			}
-		} finally {
-			await served.close();
-		}
-	});
-});
-
-describe("a notice", () => {
-	it("is written down for the reader and starts no turn", async () => {
-		const served = await serveConnector();
-		try {
-			const connected = await connectConnector(served);
-			try {
-				const outcome = await connected.connector.notice({ text: "the channel was muted for an hour" });
-				assert.equal(outcome.status, "accepted");
-				const written = await entries(served, NOTICE_ENTRY_KIND);
-				assert.equal(written.length, 1);
-				assert.equal((written[0]?.data as { text?: string }).text, "the channel was muted for an hour");
-				assert.equal((await entries(served, HOOK_ENTRY_KIND)).length, 0, "a notice wakes nothing");
-				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "a notice is not a person's words");
 			} finally {
 				await connected.close();
 			}

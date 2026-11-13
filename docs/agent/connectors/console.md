@@ -1,18 +1,18 @@
 # console
 
-The terminal: `mason chat` in the shell this bot runs in. There is nothing to install and no service behind it — the
-command is the connector, and it opens the same socket every other connector opens.
+The terminal: `mason chat` in the shell this bot runs in. There is nothing to install — the command is the connector, on
+the socket every connector opens. It is the developer adapter v0 keeps, and it holds the one `user` grant, so a real chat
+connector cannot be enabled beside it.
 
 ## Addressing
 
-A message typed at the prompt comes back to that prompt: the console acts as the owner and mints the address, so
-`send` reaches the person at the keyboard without naming anything.
+A message typed at the prompt is answered in the conversation that prompt reads: the console acts as the owner and renders
+the committed rows.
 
 ## What it carries
 
-Plain text. A terminal prints what it is given, so a table survives and an image does not.
+Plain text: a terminal prints what it is given, so a table survives and an image does not.
 
 ## Controls
 
-`/stop`, `/compact`, `/clear`, `/status` at the prompt, plus `/help` and `/exit`, which the command answers itself
-because they are about the shell rather than the bot.
+`/stop`, `/compact`, `/clear`, `/status` at the prompt, plus `/help` and `/exit`, which the shell answers itself.

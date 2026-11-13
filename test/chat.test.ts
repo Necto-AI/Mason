@@ -71,11 +71,11 @@ describe("mason chat", () => {
 		}
 	});
 
-	test("a second run is not handed the first run's reply, and the ledger that decides is a file", async () => {
+	test("a second run is not handed the first run's reply, and what it starts from is the conversation", async () => {
 		const { home, serve } = await household("mason-chat-ledger-");
-		// Two turns, one per run. Mason resends a delivery it was never acknowledged for, and the run that would be told so
-		// is the next process: the ledger is a file under the service half for exactly that reason, and the last assertion
-		// here is the one a process-local store could not satisfy.
+		// Two turns, one per run, and the second process must not print the first run's answer again: the rows come from the
+		// conversation, and what this checks is that a fresh run starts from the state it is handed rather than from a row
+		// it had already counted.
 		const served = await serve([...replyTurn("first answer"), ...replyTurn("second answer")]);
 		try {
 			const runOnce = async (): Promise<string> => {
@@ -90,7 +90,7 @@ describe("mason chat", () => {
 			const second = await runOnce();
 			assert.match(second, /second answer/);
 			assert.doesNotMatch(second, /first answer/, "the previous run's answer is not owed to this one");
-			// And the ledger is in the service half, where the rest of the connector's state lives.
+			// And the journal is in the service half, where the rest of the connector's state lives.
 			assert.equal(existsSync(join(home, "service", "console-ledger.json")), true);
 		} finally {
 			await served.close();

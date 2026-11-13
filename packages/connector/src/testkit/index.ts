@@ -14,7 +14,6 @@ export {
 } from "./conformance.ts";
 export {
 	createFakeMason,
-	type DeliveryRecord,
 	type FakeMason,
 	type FakeMasonGrants,
 	type FakeMasonOptions,

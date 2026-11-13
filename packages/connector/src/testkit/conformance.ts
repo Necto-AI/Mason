@@ -12,22 +12,15 @@
  */
 import type { ControlOp, Session } from "mason-protocol";
 import { AttachmentError } from "../attachments.ts";
-import {
-	type Connector,
-	type ConnectorConfig,
-	type ConnectorHandlers,
-	createConnector,
-	type Delivery,
-	type InboundOutcome,
-} from "../connector.ts";
+import { type Connector, type ConnectorConfig, type ConnectorHandlers, createConnector } from "../connector.ts";
 import type { ConnectorStore } from "../store.ts";
 import { MemoryStore } from "../store-memory.ts";
 import { createFakeMason, type FakeMason, type FakeMasonGrants } from "./fake-mason.ts";
 
 export interface ConformanceFaces {
 	/**
-	 * The actor this medium speaks as. `""` is the entry whose grant names no `user` at all: it may raise events, write
-	 * notices and answer controls, and it may not carry a person's words.
+	 * The actor this medium speaks as. `""` is the entry whose grant names no `user` at all: it may raise events and
+	 * answer controls, and it may not carry a person's words.
 	 */
 	readonly owner?: string;
 	/** The `kind` strings this connector raises. */
@@ -46,7 +39,6 @@ export interface ConformanceFixture {
 
 /** Everything the suite saw, recorded around the fixture's own handlers. */
 export interface Observed {
-	readonly deliveries: Delivery[];
 	readonly sessions: Session[];
 	readonly closed: string[];
 }
@@ -56,7 +48,7 @@ export interface ConformanceContext {
 	readonly mason: FakeMason;
 	readonly connector: Connector;
 	readonly observed: Observed;
-	/** A case may replace a handler: only this way can "the send failed after it may have left" be staged. */
+	/** A case may replace a handler, so a case about a session hook can stage the hook without touching the fixture. */
 	handler: Partial<ConnectorHandlers>;
 }
 
@@ -150,17 +142,11 @@ export async function open(
 	grant: Partial<FakeMasonGrants> = {},
 ): Promise<ConformanceContext> {
 	const mason = createFakeMason({ connector: fixture.name, granted: { ...grantsOf(fixture), ...grant } });
-	mason.start();
 
-	const observed: Observed = { deliveries: [], sessions: [], closed: [] };
+	const observed: Observed = { sessions: [], closed: [] };
 	const handler: Partial<ConnectorHandlers> = { ...(fixture.handlers ?? {}) };
 
 	const handlers: ConnectorHandlers = {
-		async onDelivery(delivery) {
-			observed.deliveries.push(delivery);
-			if (handler.onDelivery === undefined) return { status: "delivered" };
-			return handler.onDelivery(delivery);
-		},
 		onSession(session) {
 			observed.sessions.push(session);
 			return handler.onSession?.(session);
@@ -298,10 +284,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 					"the refusal code",
 				);
 				equal(mason.submissions.length, 0, "a refused submission places nothing");
-				// The face it does hold is untouched: a notice is still a row the connector may write.
-				const written = await connector.notice({ text: "the alarm was silenced", appendId: "no-face-2" });
-				equal(written.status, "accepted", "a notice from an entry with no user");
-				equal(mason.notices.length, 1, "notices mason recorded");
 			},
 		},
 		{
@@ -335,85 +317,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
-			name: "event/a notice is written down and starts nothing",
-			async run({ connector, mason }) {
-				const outcome = await connector.notice({ text: "the channel was muted for an hour" });
-				equal(outcome.status, "accepted", "notice outcome");
-				equal(mason.notices.length, 1, "notices mason recorded");
-				equal(mason.submissions.length, 0, "submissions a notice created");
-				equal(mason.events.length, 0, "events a notice created");
-			},
-		},
-		{
-			name: "delivery/a delivery carries the address the turn came from",
-			async run({ mason, observed }) {
-				const ack = await mason.deliver({
-					deliveryId: "d-1",
-					ref: "chat-1",
-					blocks: [{ type: "text", text: "hello" }],
-				});
-				equal(ack?.status, "delivered", "delivery ack");
-				equal(observed.deliveries.length, 1, "deliveries the handler saw");
-				equal(observed.deliveries[0]?.ref, "chat-1", "the address the handler saw: where the words came from");
-			},
-		},
-		{
-			name: "delivery/a delivery with no address goes to the connector's default",
-			async run({ mason, observed }) {
-				const ack = await mason.deliver({ deliveryId: "d-default", blocks: [{ type: "text", text: "hello" }] });
-				equal(ack?.status, "delivered", "delivery ack");
-				equal(
-					observed.deliveries.at(-1)?.ref,
-					undefined,
-					"the address an unaddressed delivery reaches the handler with",
-				);
-			},
-		},
-		{
-			name: "delivery/a resend under the same id is a duplicate and never a second send",
-			async run({ mason, observed }) {
-				await mason.deliver({ deliveryId: "d-2", blocks: [{ type: "text", text: "once" }] });
-				const again = await mason.deliver({ deliveryId: "d-2", blocks: [{ type: "text", text: "once" }] });
-				equal(again?.status, "duplicate", "a resent delivery");
-				equal(observed.deliveries.length, 1, "the handler ran once");
-			},
-		},
-		{
-			name: "delivery/a lost acknowledgement is resent after a reconnect and collapses",
-			async run({ mason, observed }) {
-				mason.loseNextAck();
-				const first = await mason.deliver({ deliveryId: "d-3", blocks: [{ type: "text", text: "unknown" }] });
-				equal(first, undefined, "the first acknowledgement");
-				// The send happened and the answer did not: that is the only state in which a resend says anything.
-				await waitFor(() => observed.deliveries.length === 1, "the send reached the medium");
-				mason.kill("the acknowledgement was lost");
-				await waitFor(() => mason.connected, "the connector reconnected");
-				await waitFor(() => mason.deliveries[0]?.ack !== undefined, "the delivery was settled after reconnect");
-				equal(mason.deliveries[0]?.ack?.status, "duplicate", "the resent delivery");
-				equal(observed.deliveries.length, 1, "the handler ran once");
-			},
-		},
-		{
-			name: "delivery/a send that may have happened is uncertain and never retried",
-			async run(context) {
-				const { mason } = context;
-				let attempts = 0;
-				context.handler.onDelivery = () => {
-					attempts += 1;
-					throw new Error("the vendor stopped answering");
-				};
-				mason.loseNextAck();
-				const first = await mason.deliver({ deliveryId: "d-4", blocks: [{ type: "text", text: "maybe" }] });
-				equal(first, undefined, "the first acknowledgement");
-				await waitFor(() => attempts === 1, "the send reached the medium");
-				mason.kill("the acknowledgement was lost");
-				await waitFor(() => mason.connected, "the connector reconnected");
-				await waitFor(() => mason.deliveries[0]?.ack !== undefined, "the delivery was settled after reconnect");
-				equal(mason.deliveries[0]?.ack?.status, "uncertain", "the resent delivery");
-				equal(attempts, 1, "attempts a person's message was sent with");
-			},
-		},
-		{
 			name: "control/a granted control is answered",
 			needs: ["commands"],
 			async run({ connector, mason, fixture }) {
@@ -443,29 +346,6 @@ export function conformanceCases(): readonly ConformanceCase[] {
 				equal(outcome.status, "pending", "a call refused for budget");
 				await waitFor(() => mason.submissions.length === 1, "the retry landed", 3_000);
 				equal(mason.submissions[0]?.appendId, "budget-1", "the id the retry carried");
-			},
-		},
-		{
-			name: "budget/a notice spends the submission budget",
-			async run({ connector, mason }) {
-				const limit = connector.status().session?.limits.submissionsPerMinute ?? 0;
-				if (limit < 2) fail("budget", "a submissions budget with no room to spend it");
-				// A notice is words in the transcript, so the door charges it to the same minute as a submission. Mixing the
-				// two is what proves the one budget covers both: the last call finds the minute spent either way.
-				let last: InboundOutcome | undefined;
-				for (let index = 0; index <= limit; index += 1) {
-					last =
-						index % 2 === 0
-							? await connector.submit({
-									content: [{ type: "text", text: `m${index}` }],
-									appendId: `budget-mixed-${index}`,
-								})
-							: await connector.notice({ text: `notice ${index}`, appendId: `budget-mixed-${index}` });
-				}
-				equal(last?.status, "pending", "the call that found the minute spent");
-				equal(mason.submissions.length + mason.notices.length, limit, "calls the fake mason accepted");
-				// A budget is a verdict, not a broken link: the connector keeps the socket it was refused on.
-				equal(mason.connected, true, "the link the refusal came over");
 			},
 		},
 		{

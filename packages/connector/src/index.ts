@@ -3,8 +3,8 @@
  *
  * A connector is a Chord host that opens one socket to mason. This package owns the parts that are the same for every
  * connector and wrong in the same way when each one writes them itself: the host, the link, the durable journal, the
- * dedup ledger, attachments, and the approval marker. It does not own vendor behaviour, and it makes no policy decision:
- * what a connector may do is mason's operator's answer, not the SDK's.
+ * attachments and the approval marker. It does not own vendor behaviour, and it makes no policy decision: what a
+ * connector may do is mason's operator's answer, not the SDK's.
  */
 
 export type {
@@ -12,7 +12,6 @@ export type {
 	ContentBlock,
 	ControlOp,
 	ControlResult,
-	DeliveryAck,
 	ErrorCode,
 	Origin,
 	Session,
@@ -28,7 +27,6 @@ export {
 	ERROR_CODE,
 	errorCodeOf,
 	MASON_HOST,
-	MasonConnector,
 	MasonPeer,
 	masonError,
 	PROTOCOL_MAJOR,
@@ -48,12 +46,10 @@ export {
 	type ConnectorStatus,
 	type ControlInput,
 	createConnector,
-	type Delivery,
 	type EventInput,
 	type InboundOutcome,
 	type LinkFactory,
 	type Logger,
-	type NoticeInput,
 	type SubmissionInput,
 	silentLogger,
 } from "./connector.ts";
@@ -66,4 +62,4 @@ export {
 	readApprovalMarker,
 	type ToolDeclaration,
 } from "./mcp.ts";
-export { type ConnectorStore, LEDGER_KEEP, NAMESPACE, type StoreEntry } from "./store.ts";
+export { type ConnectorStore, NAMESPACE, type StoreEntry } from "./store.ts";

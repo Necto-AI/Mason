@@ -1,13 +1,17 @@
 # `mason-connector`
 
 The TypeScript SDK for one external mason connector. It owns the parts that are the same for every connector and wrong
-in the same way when each one writes them itself: the Chord host, the link, the durable journal, the delivery ledger,
-attachments, and the approval marker. It does not own vendor behaviour.
+in the same way when each one writes them itself: the Chord host, the link, the durable journal, the conversation it
+holds, attachments, and the approval marker. It does not own vendor behaviour.
 
 ```ts
-import { createConnector, nodeWebSocketLink } from "mason-connector";
+import { createConnector, nodeWebSocketLink, type WebSocketConstructor } from "mason-connector";
 import { openSqliteStore } from "mason-connector/store/sqlite";
 import WebSocket from "ws";
+
+// `ws` declares an overload `WebSocketConstructor` does not describe (an address of `null`), so the class arrives
+// typed as the constructor the SDK takes. Otherwise the class is the whole transport: it is what sets the header.
+const socket = WebSocket as WebSocketConstructor;
 
 const connector = createConnector({
 	name: "telegram",
@@ -16,13 +20,12 @@ const connector = createConnector({
 	credential: process.env.MASON_CONNECTOR_CREDENTIAL ?? "",
 	// The credential travels as `Authorization: Bearer` on the upgrade request. A browser's `WebSocket` cannot set a
 	// header and Node's built-in one cannot either, so a Node connector passes `ws`.
-	link: nodeWebSocketLink(WebSocket),
+	link: nodeWebSocketLink(socket),
 	store: await openSqliteStore({ path: "/var/lib/mason-telegram/state.db" }),
 	handlers: {
-		async onDelivery(delivery) {
-			// Send it, then say what happened. Throwing means "this may or may not have left", which mason records as
-			// uncertain and never retries — because retrying could send it twice.
-			return { status: "delivered", detail: "sent" };
+		async onConversation(state) {
+			// What a reader sees, as mason publishes it: the snapshot when the link opens, then each diff's value.
+			for (const row of state.transcript) console.log(row.id, row.kind);
 		},
 		async onSession(session) {
 			// The handshake: the controls this socket may spend, the kinds it may raise, and its budgets.
@@ -33,32 +36,39 @@ const connector = createConnector({
 
 await connector.start();
 
-const outcome = await connector.submit({
-	appendId: `tg-${update.update_id}`,
-	origin: { ref: "8811", messageId: "42" },
-	content: [{ type: "text", text: "what is on my calendar" }],
-});
+/** Your vendor's webhook: one message, and the append that carries it to mason. */
+async function onMessage(message: { id: number; chat: number; text: string }): Promise<void> {
+	const outcome = await connector.event({
+		appendId: `tg-${message.id}`,
+		kind: "chat.message",
+		payload: { chat: message.chat, text: message.text },
+	});
+	if (outcome.status === "refused") console.log(outcome.code, outcome.reason);
+}
 ```
 
 ## What the SDK guarantees, and what it does not
 
-- **A call is journaled before it goes on the link.** `submit`, `event`, `notice` and `control` write themselves into the
-  store first, so a link that dies mid-flight is a resend of the same id rather than a second logical operation.
+- **A call is journaled before it goes on the link.** `submit`, `event` and `control` write themselves into the store
+  first, so a link that dies mid-flight is a resend of the same id rather than a second logical operation.
   `status: "pending"` means exactly that: the act is durable and unfinished, and `flush()` or a reconnect sends it again.
-- **A delivery is answered once.** The ledger is persisted, so a resend under the same `deliveryId` is answered from it
-  even across a restart: a `delivered` one is `duplicate`, and one whose outcome could not be known is `uncertain`
-  again. That is the whole of at-least-once delivery: mason keeps resending, and the connector refuses to send twice.
-- **A handler that throws is `uncertain`, not retried.** If the send may have left, nobody knows. Guessing loses or
-  duplicates a message, so the SDK reports the uncertainty and a person decides.
+- **The conversation is the answer, and holding it is the SDK's job.** `conversation` is a state member: a snapshot when
+  the link opens and after a reconnect, then diffs. The SDK applies them by the protocol's rule — a snapshot replaces
+  what is held, a diff is kept only when its revision is later — which is what makes a reconnect safe. Nothing is
+  delivered to a connector and nothing is acknowledged: the rows are the message, and a client that renders them reads
+  the same frames.
+- **A handler that throws costs the frame, not the link.** The throw is logged and the state it was handed is already
+  held, so the next frame is applied to what the SDK has.
 - **A refusal is a Chord error.** Its `reason` is one of mason's codes (`mason.kind_not_permitted`,
-  `mason.rate_limited`, …); `errorCodeOf(error)` reads it back.
+  `mason.rate_limited`, …); `errorCodeOf(error)` reads it back. A refusal is a verdict and the journaled call is
+  dropped; a spent budget or a link that is going down is not, and the call stays journaled for the retry.
 
 ## Stores
 
 | Import | Store | Use |
 |---|---|---|
 | `mason-connector/store/sqlite` | `openSqliteStore({ path })` | the reference production store: one SQLite file |
-| `mason-connector/store/memory` | `new MemoryStore()` | **test-only** — forgets the journal and the ledger on restart |
+| `mason-connector/store/memory` | `new MemoryStore()` | **test-only** — the journal is gone when the process ends |
 
 `node:sqlite` needs `--experimental-sqlite` on Node 22 and nothing on Node 24. A connector with its own persistence
 implements `ConnectorStore` — five methods — and passes it in.
@@ -87,24 +97,23 @@ authority: the marker is the connector author's statement, and trusting it is an
 import { runConformance } from "mason-connector/testkit";
 
 const result = await runConformance({
-	name: "telegram",
+	name: "alarm",
 	faces: {
-		owner: "8811",
-		kinds: ["chat.message"],
-		commands: ["stop", "compact", "clear", "status"],
+		kinds: ["alarm.ringing"],
+		commands: ["stop", "status"],
 	},
-	handlers: { onDelivery: sendIt },
+	handlers: { onConversation: (state) => console.log(state.transcript.length) },
 });
 
 if (result.failed.length > 0) throw new Error(`${result.failed[0].name}: ${result.failed[0].error.message}`);
 ```
 
 `runConformance` builds the connector itself, against a fake mason that serves `mason.peer` over a real Chord link, and
-drives every case the protocol defines: the session as state, submissions and their duplicate ids, events and an
-ungranted kind, a notice that starts nothing, a delivery carrying the address it came from, the duplicate answer, a lost
-acknowledgement collapsing after a reconnect, an uncertain send that is never retried, the control vocabulary, a spent
-budget, the journal replaying a call made while the link was down, and attachments with a cap. A case for a face the
-fixture does not implement is skipped, and the report says which.
+drives every case the protocol defines: the session as state, one submission and its duplicate id, words that name an
+actor the grant does not, words to an entry that grants no `user`, an event of a granted kind and of an ungranted one, an
+append carrying no address, the control vocabulary, a spent budget that keeps the call journaled, the journal replaying a
+call made while the link was down, and attachments with a cap. A case for a face the fixture does not implement is
+skipped, and the report says which.
 
 There is no tools-face case: a meaningful one needs live MCP discovery, which is the server half.
 

@@ -291,50 +291,26 @@ test("a local turn is delivered by the entry the call commits", async () => {
 	]);
 });
 
-test("a connector turn is queued to its origin, under the id the entry and the stream share", async () => {
-	const { setIntegrations } = await import("../src/server/integrations.ts");
-	setIntegrations({ telegram: TELEGRAM as never });
-	try {
-		const appended: unknown[] = [];
-		const result = await sendTool.execute(
-			{ text: "Nothing until Thursday." },
-			apiFor({ callId: "call-8", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
-			{} as never,
-		);
-		assert.equal(outputText(result.output), "queued for delivery to telegram");
-		assert.deepEqual(appended, [
-			{
-				kind: "app.reply",
-				data: {
-					deliveryId: "reply:call-8",
-					blocks: [{ type: "text", text: "Nothing until Thursday." }],
-					target: { connector: "telegram", ref: "team" },
-					origin: { connector: "telegram", ref: "team" },
-				},
+test("a connector turn commits its words and records the origin, under the id the entry and the stream share", async () => {
+	const appended: unknown[] = [];
+	const result = await sendTool.execute(
+		{ text: "Nothing until Thursday." },
+		apiFor({ callId: "call-8", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
+		{} as never,
+	);
+	assert.equal(outputText(result.output), "delivered to the transcript");
+	// One entry: the words, and the origin that says which append they answer. There is no address to name — the
+	// conversation is the one surface — so nothing is queued and nothing is addressed (#201).
+	assert.deepEqual(appended, [
+		{
+			kind: "app.reply",
+			data: {
+				deliveryId: "reply:call-8",
+				blocks: [{ type: "text", text: "Nothing until Thursday." }],
+				origin: { connector: "telegram", ref: "team" },
 			},
-		]);
-	} finally {
-		setIntegrations({});
-	}
-});
-
-test("a connector the operator switched off mid-turn is refused, and nothing is addressed to it", async () => {
-	const { setIntegrations } = await import("../src/server/integrations.ts");
-	// The boot's snapshot still says the turn's words came from telegram, and the operator switched it off in the file
-	// while the turn was running: sending there would land where nobody is reading, which the refusal says out loud.
-	setIntegrations({ telegram: { ...TELEGRAM, enabled: false } as never });
-	try {
-		const appended: unknown[] = [];
-		const result = await sendTool.execute(
-			{ text: "Nothing until Thursday." },
-			apiFor({ callId: "call-12", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
-			{} as never,
-		);
-		assert.match(outputText(result.output), /cannot deliver: "telegram" is not an enabled connector/);
-		assert.deepEqual(appended, [], "nothing is committed to a connector that can no longer be reached");
-	} finally {
-		setIntegrations({});
-	}
+		},
+	]);
 });
 
 test("a fire that named its conversation answers in it, and one that did not records the work and reaches nobody", async () => {
@@ -353,8 +329,11 @@ test("a fire that named its conversation answers in it, and one that did not rec
 			),
 			{} as never,
 		);
-		assert.equal(outputText(answered.output), "queued for delivery to telegram");
-		assert.ok((withOrigin[0] as { data: { target?: unknown } }).data.target !== undefined);
+		assert.equal(outputText(answered.output), "delivered to the transcript");
+		assert.deepEqual((withOrigin[0] as { data: { origin?: unknown } }).data.origin, {
+			connector: "telegram",
+			ref: "team",
+		});
 	} finally {
 		setIntegrations({});
 	}
@@ -372,7 +351,7 @@ test("a fire that named its conversation answers in it, and one that did not rec
 	assert.match(text, /nobody was reached/);
 	assert.match(text, /in the transcript/);
 	assert.equal(appended.length, 1, "the work is recorded even when nobody is reached");
-	assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined);
+	assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
 });
 
 test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
@@ -396,7 +375,7 @@ test("an address the model names routes nothing: the turn's origin is the only d
 			{} as never,
 		);
 		assert.match(outputText(named.output), /nobody was reached/, "the named address reaches nobody");
-		assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined, "nothing was addressed");
+		assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
 	} finally {
 		setIntegrations({});
 	}

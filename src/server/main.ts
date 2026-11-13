@@ -102,8 +102,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
 		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
 	});
-	// The connector door: one Chord socket per connector, the send outbox. Opened before the
-	// listener so a delivery cannot be owed before there is anything to send it with.
+	// The connector door: one Chord socket per connector, each admitted by its own host. Opened before the listener, so a
+	// socket that arrives in the first instant finds the door it is admitted by.
 	const connectors = await createConnectorDoor({
 		runtime,
 		workspaceDir: runtime.workspaceDir,
@@ -176,8 +176,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			supervisor.close();
 			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
 			await runWatch.stop();
-			// The door first: it stops the state watch and closes every connector socket, and a delivery that arrives during
-			// shutdown should not start an outbox flush against a runtime that is about to close.
+			// The door first: it stops the state watch and closes every connector socket, so a call that arrives during
+			// shutdown cannot place work against a runtime that is about to close.
 			await connectors.close();
 			// `WebSocketServer.close()` only calls back once every client has gone, and a connector holds its socket
 			// open: terminate the clients first, or shutdown waits forever.
