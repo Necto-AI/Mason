@@ -39,8 +39,8 @@ const chat = {
 const toolsOnly = { name: "external-calculator", version: "0.1.0", faces: {} };
 const eventsOnly = { name: "external-alarm", version: "0.1.0", faces: { kinds: ["alarm.ringing", "alarm.silenced"] } };
 
-if (CONTRACTS.map((contract) => contract.name).join(",") !== "mason.peer,mason.connector") {
-	console.error("the published contracts are not the two the protocol names");
+if (CONTRACTS.map((contract) => contract.name).join(",") !== "mason.peer") {
+	console.error("the published contract set is not the one the protocol names");
 	process.exit(1);
 }
 

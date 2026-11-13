@@ -8,8 +8,8 @@
  * section silently.
  *
  * So this packs the root, installs the tarball into an empty project outside the repository, and drives the installed
- * `mason` there with a temporary `HOME` and `MASON_ROOT`: `onboard --yes --connector console`, then `doctor`, then the
- * prompt rendered by the installed `dist/scripts/prompt.js`. It also fails on a `.ts` file under the installed `dist`,
+ * `mason` there with a temporary `HOME` and `MASON_ROOT`: `init` with its flags, `new`, then `doctor`, then the prompt
+ * rendered by the installed `dist/scripts/prompt.js`. It also fails on a `.ts` file under the installed `dist`,
  * because a consumer's Node refuses to strip types inside `node_modules`.
  *
  * `npm pack` runs the package's own `prepack`, so this builds `dist/` in the checkout — the one thing it writes, and the
@@ -77,15 +77,13 @@ async function main(): Promise<void> {
 		// switch the runtime plays a model under, which is what makes this cost nothing and reach no network.
 		const env = environment(join(workspace, "home"), join(workspace, "root"));
 
-		await step("a first run, onboard and doctor, with the installed command", async () => {
-			const onboard = await run(
-				join(project, "node_modules", ".bin", "mason"),
-				["onboard", "--yes", "--connector", "console"],
-				project,
-				env,
-			);
-			if (onboard.code !== 0) throw new Error(`onboard ended ${onboard.code}:\n${onboard.stdout}${onboard.stderr}`);
-			const doctor = await run(join(project, "node_modules", ".bin", "mason"), ["doctor"], project, env);
+		await step("a first run, flags only, and a doctor, with the installed command", async () => {
+			const mason = join(project, "node_modules", ".bin", "mason");
+			const init = await run(mason, ["init", "--provider", "faux", "--model", "faux-1"], project, env);
+			if (init.code !== 0) throw new Error(`init ended ${init.code}:\n${init.stdout}${init.stderr}`);
+			const made = await run(mason, ["new", "bot"], project, env);
+			if (made.code !== 0) throw new Error(`new ended ${made.code}:\n${made.stdout}${made.stderr}`);
+			const doctor = await run(mason, ["doctor"], project, env);
 			if (doctor.code !== 0) throw new Error(`doctor ended ${doctor.code}:\n${doctor.stdout}${doctor.stderr}`);
 		});
 
@@ -121,7 +119,7 @@ async function main(): Promise<void> {
 		await rm(workspace, { recursive: true, force: true });
 	}
 	console.log(
-		`PROOF OK: ${PACKAGE} packs, installs, onboards, passes doctor, and renders its prompt from its own dist`,
+		`PROOF OK: ${PACKAGE} packs, installs, runs its first run from flags, passes doctor, and renders its prompt from its own dist`,
 	);
 }
 

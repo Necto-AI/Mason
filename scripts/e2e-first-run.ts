@@ -8,24 +8,39 @@
  *
  *     node --experimental-strip-types scripts/e2e-first-run.ts [--keep]
  *
- * What it proves, in order: a clean root onboards and ends doctor 0; a second onboard asks nothing and changes nothing;
- * a second bot is created and targeted; a fleet with no target refuses by name; a real turn over the console connector
- * answers; and nothing was written outside the temporary root — no `agent/` or `service/` at the root itself, no stray
- * `~/.mason`.
+ * What it proves, in order: flags are the whole first run (`mason init` with its three answers, then `mason new`, and a
+ * second init asks nothing and changes nothing); the root holds `common/` and one bot and no halves of its own; `mason
+ * doctor` ends green; `mason up` answers `/api/health` for the bot it serves; and one turn is answered — a scripted Chord
+ * client holding the single user grant on that bot's console entry, whose credential is minted through the surviving
+ * path, appends one submission and reads exactly one reply row out of the conversation state. Nothing is written outside
+ * the temporary root: no `agent/` or `service/` at the root itself, no stray `~/.mason`.
+ *
+ * The client is Chord's, not the SDK's, because this is the proof of the wire: the state member is what a person's client
+ * applies, and the assertion that outlives the delivery removal is the row it holds — one reply, under one id.
  */
 import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHost, type StateEvent } from "@earendil-works/chord";
+import { apply } from "@earendil-works/chord/delta";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { type ConversationState, connectorHost, MasonPeer, type PeerRef } from "mason-protocol";
+import { nodeWebSocketLink } from "mason-connector";
+import WebSocket from "ws";
+import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { startServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
+import { SEND_TOOL } from "../src/shared/contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const keep = process.argv.includes("--keep");
+
+/** The bot this run makes, and the name every command finds it by. */
+const BOT = "bot";
 
 interface Result {
 	readonly code: number;
@@ -53,9 +68,6 @@ function check(ok: boolean, what: string, detail = ""): void {
 /** One CLI run, with the environment a first run has: a scratch root, the offline model, and no inherited target. */
 async function mason(directory: string, args: readonly string[], extra: NodeJS.ProcessEnv = {}): Promise<Result> {
 	const env: NodeJS.ProcessEnv = { ...process.env, PORT: freePort, ...extra, MASON_ROOT: directory, MASON_HOME: "" };
-	delete env.MASON_BOT;
-	delete env.PI_PROVIDER;
-	delete env.PI_MODEL;
 	env.PI_FAUX_MODEL = "1";
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, ["--experimental-strip-types", join(root, "bin", "mason.ts"), ...args], {
@@ -96,59 +108,46 @@ async function main(): Promise<void> {
 	const home = join(directory, "home");
 	console.log(`root: ${directory}`);
 
-	// 1. A clean machine, the way a person starts.
-	const onboard = await mason(directory, ["onboard", "--yes", "--connector", "console"], { HOME: home });
-	check(onboard.code === 0, "onboard on an empty root exits 0", onboard.stderr || onboard.stdout);
-	check(/9 checks: 9 ok, 0 failed/.test(onboard.stdout), "onboard ends with a doctor that passes", onboard.stdout);
-	check(onboard.stdout.includes("console"), "the connector it was asked for is the one it granted", onboard.stdout);
+	// 1. A clean machine, the way a person starts: flags, then a bot. Nothing is asked, because nothing can be.
+	const init = await mason(directory, ["init", "--provider", "faux", "--model", "faux-1"], { HOME: home });
+	check(init.code === 0, "init on an empty root exits 0", init.stderr || init.stdout);
+	check(/the provider answered/.test(init.stdout), "init verifies the provider before it writes", init.stdout);
+	const made = await mason(directory, ["new", BOT], { HOME: home });
+	check(made.code === 0, "new creates the first bot and ends doctor 0", made.stderr || made.stdout);
+	check(/7 checks: 7 ok, 0 failed/.test(made.stdout), "the doctor it ends with passes", made.stdout);
 
 	// 2. Again: nothing asked, nothing written twice.
 	const before = await treeShape(directory);
-	const again = await mason(directory, ["onboard", "--yes", "--connector", "console"], { HOME: home });
-	check(again.code === 0, "a second onboard exits 0", again.stderr || again.stdout);
-	check(/nothing asked about providers or keys/.test(again.stdout), "a second onboard asks nothing", again.stdout);
-	check(/nothing installed twice/.test(again.stdout), "a second onboard installs nothing twice", again.stdout);
+	const again = await mason(directory, ["init"], { HOME: home });
+	check(again.code === 0, "a second init exits 0", again.stderr || again.stdout);
+	check(/already initialised; nothing asked, nothing written/.test(again.stdout), "a second init asks nothing", again.stdout);
 	const after = await treeShape(directory);
 	check(
 		JSON.stringify(before) === JSON.stringify(after),
-		"a second onboard changes nothing on disk",
+		"a second init changes nothing on disk",
 		`before: ${before.length} entries, after: ${after.length}`,
 	);
 
-	// 3. The root is a fleet: `common/` and bots, and no halves at the root itself.
+	// 3. The root is a common store and one bot, and no halves at the root itself.
 	const entries = await readdir(directory);
 	check(entries.includes("common"), "the root holds common/", entries.join(", "));
+	check(entries.includes(BOT), `the root holds the bot it made (${BOT})`, entries.join(", "));
 	check(
 		!entries.includes("agent") && !entries.includes("service"),
 		"the root holds no home halves",
 		entries.join(", "),
 	);
 
-	// 4. Which bot a command targets.
-	const bots = await mason(directory, ["bots"], { HOME: home });
-	check(bots.code === 0 && /\(current\)/.test(bots.stdout), "bots names the one bot as current", bots.stdout);
+	// 4. The bot is reachable: one granted connector, with a credential this home holds.
+	const doctor = await mason(directory, ["doctor"], { HOME: home });
+	check(doctor.code === 0, "doctor exits 0 for the bot it made", doctor.stderr || doctor.stdout);
+	check(/granted: console/.test(doctor.stdout), "the console is the connector it granted", doctor.stdout);
 
-	// 5. A second bot, then the refusal a fleet needs.
-	const second = await mason(directory, ["new", "bob", "--yes", "--connector", "console", "--no-start"], {
-		HOME: home,
-	});
-	check(second.code === 0, "new bob exits 0", second.stderr || second.stdout);
-	const two = await mason(directory, ["bots"], { HOME: home });
-	check(two.code === 0 && !/\(current\)/.test(two.stdout), "with two bots nothing is current", two.stdout);
-	check(/no target:.*holds 2 bots/.test(two.stdout), "bots says why nothing is current", two.stdout);
-	const ambiguous = await mason(directory, ["status"], { HOME: home });
-	check(ambiguous.code === 1, "status with two bots and no target exits 1", ambiguous.stdout);
-	check(/holds 2 bots: .*bob/.test(ambiguous.stderr), "the refusal names both bots", ambiguous.stderr);
-
-	const targeted = await mason(directory, ["doctor", "-b", "bob"], { HOME: home });
-	check(targeted.code === 0, "doctor -b bob exits 0", targeted.stderr || targeted.stdout);
-
-	// 6. A real turn: the server on its own port, the console client, one answer.
+	// 5. The server, on its own port, and the health answer that names the home it serves.
 	const port = 19000 + Math.floor(Math.random() * 500);
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		MASON_ROOT: directory,
-		MASON_BOT: "bob",
 		MASON_HOME: "",
 		PI_FAUX_MODEL: "1",
 		PORT: String(port),
@@ -171,34 +170,49 @@ async function main(): Promise<void> {
 	check(ready, "mason up answers /api/health", log);
 	if (ready) {
 		const health = (await (await fetch(`http://127.0.0.1:${port}/api/health`)).json()) as { home?: string };
-		check(health.home === join(directory, "bob"), "the health answer names the bot it serves", String(health.home));
+		check(health.home === join(directory, BOT), "the health answer names the bot it serves", String(health.home));
 	}
 	server.kill("SIGTERM");
 	await new Promise((done) => server.on("close", done));
 
-	// 7. `mason chat` over a real socket. The server is opened in this process because the faux provider has to be
-	// *scripted* to answer, and no environment variable scripts it: everything on the client side is the real command.
+	// 6. One turn, answered. The server is opened in this process because the faux provider has to be *scripted*, and the
+	// client is a Chord client on the console entry with a credential minted by the surviving path.
 	const chatPort = port + 1;
 	const served = await startServer({
 		port: chatPort,
 		hostname: "127.0.0.1",
-		houseHome: join(directory, "bob"),
+		houseHome: join(directory, BOT),
 		storage: "memory",
-		dataDir: join(directory, "chat-data"),
+		dataDir: join(directory, "turn-data"),
 		modelAccess: scripted(),
 		onReport: () => {},
 	});
+	const issued = await mintConnectorCredential(join(directory, BOT), "console", { replace: true });
+	const client = createHost({ name: connectorHost("console"), self: { connector: "console" }, onError: () => {} });
+	const link = nodeWebSocketLink(WebSocket as never)(`ws://127.0.0.1:${chatPort}/api/connector`, {
+		credential: issued.credential,
+	});
 	try {
-		const chat = await mason(
-			directory,
-			["chat", "-b", "bob", "--once", "Say the word ok.", "--url", `ws://127.0.0.1:${chatPort}/api/connector`],
-			{
-				HOME: home,
-			},
-		);
-		check(chat.code === 0, "a turn over the console connector exits 0", chat.stderr || chat.stdout);
-		check(/first run/.test(chat.stdout) === false && chat.stdout.trim().length > 0, "the turn answered", chat.stdout);
+		client.connect(link, { principal: { connector: "console" } });
+		const peer = (await client.get(MasonPeer, {})) as unknown as PeerRef;
+		let state: ConversationState | undefined;
+		peer.conversation.events((frame: StateEvent<ConversationState>) => {
+			state = frame.type === "ops" ? (apply(structuredClone(state), frame.ops) as ConversationState) : frame.value;
+		});
+		const outcome = await peer.append({
+			type: "submission",
+			appendId: "first-run-1",
+			content: [{ type: "text", text: "Say the word ok." }],
+			origin: { ref: "first-run", actor: { id: "local", name: "you" } },
+		});
+		check(outcome.outcome === "accepted", "the client's submission was accepted", JSON.stringify(outcome));
+		const answered = await waitFor(async () => replyRows(state).length >= 1);
+		check(answered, "the turn produced a reply row in the conversation", JSON.stringify(state?.transcript));
+		const rows = replyRows(state);
+		check(rows.length === 1, "exactly one reply row for the turn", JSON.stringify(rows));
+		check(rows[0]?.text === "ok", "and it carries the words the turn sent", JSON.stringify(rows));
 	} finally {
+		await client.close().catch(() => {});
 		await served.close();
 	}
 
@@ -212,13 +226,20 @@ async function main(): Promise<void> {
 	process.exit(failures === 0 ? 0 : 1);
 }
 
-/** The faux provider with one scripted turn: a `reply` call, then the round that answers it. */
+/** The committed reply rows of a state: what a person's window reads, and the whole of a delivery. */
+function replyRows(state: ConversationState | undefined): Array<{ id: string; text: string }> {
+	return (state?.transcript ?? []).flatMap((row) =>
+		row.kind === "delivered" && row.streaming !== true ? [{ id: row.id, text: row.text }] : [],
+	);
+}
+
+/** The faux provider with one scripted turn: a `send` call, then the round that answers it. */
 function scripted(): ResolvedModel {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
 	faux.setResponses([
-		fauxAssistantMessage([fauxToolCall("send", { text: "ok" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "ok" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxText("sent")),
 	]);
 	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };
