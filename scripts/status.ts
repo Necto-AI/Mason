@@ -26,7 +26,7 @@ export async function runStatus(argv: readonly string[]): Promise<number> {
 			console.log(usage());
 			return 0;
 		}
-		// The same resolution `mason up`, `mason doctor` and `mason setup` use: `MASON_HOME` names one home directly, else
+		// The same resolution `mason up`, `mason doctor` and `mason chat` use: `MASON_HOME` names one home directly, else
 		// the targeted bot under the root. Reading the root here made status the one verb that described a different home
 		// than the one being served.
 		const house = housePaths();
