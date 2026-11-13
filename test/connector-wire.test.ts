@@ -171,12 +171,14 @@ describe("the connector wire", () => {
 		}
 	});
 
-	it("fails on a bigger row, with both numbers in the message", () => {
-		// The row the fixture would make one repeat longer, against the ceiling today: the arithmetic alone, no socket.
-		const gate = verdict(1401, 1281);
+	it("fails on a bigger row, with both numbers in the message", async () => {
+		// The arithmetic alone, no socket: one byte over the committed ceiling is a regression, and the message names both
+		// numbers so the log reads without the file open.
+		const baseline = await baselineOf();
+		const gate = verdict(baseline + 1, baseline);
 		assert.equal(gate.verdict, "regression");
-		assert.match(gate.message, /1401/);
-		assert.match(gate.message, /1281/);
+		assert.match(gate.message, new RegExp(`${baseline + 1} bytes`));
+		assert.match(gate.message, new RegExp(`baseline ${baseline}`));
 	});
 });
 

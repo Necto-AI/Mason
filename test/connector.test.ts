@@ -276,7 +276,7 @@ describe("an event", () => {
 					"a recorded send that reaches nobody",
 				);
 				const sent = (await entries(served, REPLY_ENTRY_KIND))[0];
-				assert.equal(sent?.data === undefined ? undefined : (sent.data as { target?: unknown }).target, undefined);
+				assert.equal(Object.hasOwn((sent?.data ?? {}) as object, "target"), false, "no destination is recorded");
 				assert.match(JSON.stringify(await entriesOf(served.server)), /nobody was reached/);
 			} finally {
 				await connected.close();

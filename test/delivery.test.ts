@@ -351,7 +351,7 @@ test("a fire that named its conversation answers in it, and one that did not rec
 	assert.match(text, /nobody was reached/);
 	assert.match(text, /in the transcript/);
 	assert.equal(appended.length, 1, "the work is recorded even when nobody is reached");
-	assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined);
+	assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
 });
 
 test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
@@ -375,7 +375,7 @@ test("an address the model names routes nothing: the turn's origin is the only d
 			{} as never,
 		);
 		assert.match(outputText(named.output), /nobody was reached/, "the named address reaches nobody");
-		assert.equal((appended[0] as { data: { target?: unknown } }).data.target, undefined, "nothing was addressed");
+		assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
 	} finally {
 		setIntegrations({});
 	}
