@@ -113,9 +113,12 @@ function transitionsOf(before: ConversationState, after: Change, revision: numbe
 	if (!before.busy && after.busy && after.activeRunTaskId !== undefined) {
 		news.push({ kind: "run.started", revision, runTaskId: after.activeRunTaskId });
 	}
-	const known = new Set(before.transcript.map((row) => row.id));
+	// What the reader already had, as a message: the row streaming under the same id is the one that has yet to commit,
+	// so a commit that lands in the very next revision is still one the reader has not been told about.
+	const known = new Set(
+		before.transcript.flatMap((row) => (row.kind === "delivered" && row.streaming !== true ? [row.id] : [])),
+	);
 	for (const row of after.transcript) {
-		// Only a committed row is a message: the row streaming under the same id is the one that will commit.
 		if (row.kind !== "delivered" || row.streaming === true || known.has(row.id)) continue;
 		news.push({ kind: "message.committed", revision, rowId: row.id });
 	}

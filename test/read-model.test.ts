@@ -169,6 +169,34 @@ describe("what a token costs on the wire", () => {
 });
 
 describe("the transitions a revision reports", () => {
+	it("reports a commit in the revision right after the one that held the row streaming", () => {
+		// The order one turn can arrive in: a token, then the commit that lands it, with no revision between them. The
+		// previous revision held the row under the id it commits with, streaming — and still nothing had been committed.
+		const model = createReadModel();
+		const question = [userEntry(1, "Is the deploy healthy?")];
+		model.next(viewOf([]));
+		model.next(viewOf(question, liveDocs("", "m1", { taskId: 16 })));
+		const writing = model.next(viewOf(question, liveDocs("The deploy is", "m1", { taskId: 16 })));
+		assert.deepEqual(
+			writing.transcript.map((row) => row.id),
+			["1", "reply:m1"],
+			"the revision before the commit holds the row under the id the commit will land under",
+		);
+		assert.equal(writing.transcript[1]?.kind === "delivered" && writing.transcript[1].streaming, true);
+		assert.deepEqual(writing.transitions, [], "a token is the same row being written, so it reports nothing");
+
+		const committed = model.next(viewOf([...question, replyEntry(2, "reply:m1", "The deploy is healthy.")]));
+		assert.deepEqual(
+			committed.transitions.map((one) => one.kind),
+			["message.committed", "run.stopped"],
+			"the commit is reported even though the row it lands was streaming in the revision before",
+		);
+		assert.deepEqual(committed.transitions[0], {
+			kind: "message.committed",
+			revision: committed.revision,
+			rowId: "reply:m1",
+		});
+	});
 	it("names the six things that can happen, each in the revision that reports it", () => {
 		const model = createReadModel();
 		const snapshot = model.next(viewOf([]));
