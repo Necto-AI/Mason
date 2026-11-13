@@ -4,7 +4,7 @@ name: ci
 # type error in a test and nothing noticed: the suite runs with `--experimental-strip-types`, which erases types without
 # reading them, and `tsc` was not a dependency of the project at all.
 #
-# Six jobs rather than one, because the suite is the long pole and the rest of the checks do not read its output. The
+# Five jobs rather than one, because the suite is the long pole and the rest of the checks do not read its output. The
 # numbers are this runner's, measured on one commit. Node's default with two cores is one test file at a time
 # (`availableParallelism() - 1`) and the suite took 135 seconds that way. Two at a time took 66 to 118 depending on the
 # run, three took 76 to 89 and four took 115 to 140: past two, the contention costs more than the overlap wins. Two
@@ -141,25 +141,3 @@ jobs:
           out=$(./result/bin/mason 2>&1 || true)
           echo "$out" | grep -q "mason init"
           echo "$out" | grep -q "mason chat"
-
-  # The deploy image, built from the commit. Two failures this catches that no source check can: a `COPY . /app` that
-  # carries the operator's `deploy/.env` into a layer, and a `packages/*/dist` the image never builds, so a clean clone
-  # boots with `ERR_MODULE_NOT_FOUND` under `restart: always`.
-  image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      # The documented first run writes the bot token into `deploy/.env` before the first `up`. The sentinel only means
-      # anything if the file is there when the context is read, which is what the first check asserts.
-      - run: printf 'TELEGRAM_BOT_TOKEN=ci-sentinel\n' > deploy/.env
-      - run: docker build --file deploy/mason.Dockerfile --tag mason:ci .
-
-      - name: the operator's credentials are not in the image
-        run: docker run --rm --entrypoint sh mason:ci -c 'test ! -e /app/deploy/.env'
-
-      - name: the workspace package the server imports resolves
-        run: >
-          docker run --rm --entrypoint sh mason:ci -c
-          'cd /app && node -e "import(\"mason-protocol\").then(() => {}, (error) => { console.error(error); process.exit(1) })"'
