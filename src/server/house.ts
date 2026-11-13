@@ -94,16 +94,9 @@ export interface HousePaths {
 	 * `HOUSE_ENTRIES`: the file arrived after the split, so no home from before it has one to carry across.
 	 */
 	readonly integrations: string;
-	/**
-	 * Which connectors an installer recorded, and the directory one connector's project was generated in
-	 * (`install-state.ts`). Written by the CLI alone: the server reads a connector's grant, never this, so a bad record
-	 * costs a setup and not a boot.
-	 */
-	readonly connectors: string;
-	readonly connectorsDir: string;
 	/** The key masonry logs into the tool machine with, and the pinned host key beside it. */
 	readonly sshDir: string;
-	/** The copy of pi's `settings.json` and `auth.json` the server reads (`deploy/mason-entrypoint.sh`). */
+	/** The copy of the provider credential, as `settings.json` and `auth.json` (`docs/SPEC.md`: the layout a tool never sees). */
 	readonly piDir: string;
 }
 
@@ -180,8 +173,6 @@ function layout(path: string): HousePaths {
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
 		integrations: join(serviceDir, "integrations.json"),
-		connectors: join(serviceDir, "connectors.json"),
-		connectorsDir: join(serviceDir, "connectors"),
 		sshDir: join(serviceDir, "ssh"),
 		piDir: join(serviceDir, "pi"),
 	};

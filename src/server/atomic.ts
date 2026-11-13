@@ -11,8 +11,8 @@
  * file, and the directory keeps whatever modes it already had, so both are re-applied on every write. The `catch` is
  * for filesystems without modes: there is nothing to set there, and a failure to set one is not a failed write.
  *
- * `writeTextAtomic` is the same promise for a file that is not JSON: a connector's `compose.yaml` holds the credential
- * the container opens its socket with, so it is written here and not with `fs.writeFile` (`connector-compose.ts`).
+ * `writeTextAtomic` is the same promise for text that arrives already serialised: `common/auth.json`, the timestamped copy
+ * that goes beside the file it replaces (`common.ts`), and a boot record (`integrations.ts`).
  */
 import { closeSync, openSync, statSync, unlinkSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";

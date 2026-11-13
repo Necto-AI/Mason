@@ -47,8 +47,8 @@ await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await mkdir(sshDir, { recursive: true, mode: 0o700 });
 await mkdir(home, { recursive: true, mode: 0o700 });
 // Both halves of the home: without containers they are ordinary sibling directories on one filesystem, and the split
-// is a layout here rather than a boundary — `bash` can see `service/` in the dev stack, which is why the writable-roots
-// policy is what protects it for a developer (deploy/README.md).
+// is a layout here rather than a boundary: `bash` can see `service/` in the dev stack, so nothing about this run
+// protects it for a developer.
 await mkdir(resolve(home, "agent", "workspace"), { recursive: true, mode: 0o700 });
 await mkdir(resolve(home, "service", "ssh"), { recursive: true, mode: 0o700 });
 // A home carried over from a real install can arrive 0777 on some filesystems; tightening here is cheap.
