@@ -120,7 +120,7 @@ test("the retired notice append is refused to a deployed consumer, not silently 
 	);
 	assert.throws(
 		() => bind(MasonPeer, undefined, deployed),
-		/isChordError|Error/,
+		(error: unknown) => isChordError(error, "contract_mismatch"),
 		"a consumer holding the retired member does not bind, which is the visible price of the cut",
 	);
 });
