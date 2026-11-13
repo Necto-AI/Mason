@@ -4,15 +4,15 @@ Thanks for helping improve Mason. Keep changes focused, explain the problem they
 
 ## Development setup
 
-Requirements: Node.js 26.4 or newer and npm. The floor is the renderer's: `@opentui/core` loads its native half through `node:ffi`, which does not exist below it.
+Requirements: Node.js 26.4 or newer and npm. Mason runs its TypeScript from source and keeps its state in `node:sqlite`.
 
 ```sh
 git clone https://github.com/DenisSud/mason.git
 cd mason
-bash scripts/setup.sh
+npm install
 ```
 
-The setup script installs dependencies and builds the two workspace packages used by the runtime and tests.
+`npm install` links the two workspace packages, and `npm run build:packages` compiles them for the runtime and tests.
 
 ## Run and test
 

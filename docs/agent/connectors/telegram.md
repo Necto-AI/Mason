@@ -21,5 +21,6 @@ carries the owner's words and nobody else's.
 
 ## When it is down
 
-A send that cannot be delivered stays owed: mason keeps trying while the connector reconnects, and tells you when the
-answer came back `uncertain` — a message that may or may not have arrived. Do not resend it yourself; say what happened.
+A send is a committed row of the conversation, so nothing is owed to a socket that is away: reconnect and the row is
+there, under the id it was committed with. A message that may not have left this connector's own side is its vendor's
+business, and it says so once rather than sending the same words twice.

@@ -117,34 +117,23 @@ _Avoid_: hook (alone), trigger, event
 **fire**:
 One wake of the bot by a routine or an event. A redelivery under the same identity is still one fire. Unlike a tool
 result, a fire is unsolicited input that can start a turn.
-_Avoid_: event (when a routine fired), invocation, delivery, submission
+_Avoid_: event (when a routine fired), invocation, submission
 
 **delegation**:
 One tool call that owns a conversation with a narrow job and returns a report. A conversation, not a peer: no home, no
 way to speak to anyone, never a deployment.
 _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
-**delivery**:
-One outbound act: mason calls `deliver` on the connector that owes an answer, with the address the turn's words came
-from and the blocks to send. The words were already committed, so a delivery follows the transcript rather than
-duplicating it.
-_Avoid_: message, notification
-
 **send**:
-The one mason-owned tool a turn uses to reach its reader: it answers where the turn's words came from and commits an
-`app.reply` entry. There is no address for a model to name, so a turn nobody wrote to records the send and says nobody
-was reached.
+The one mason-owned tool a turn uses to reach its reader: it commits an `app.reply` entry carrying the turn's origin, and
+that row of the conversation is the message. There is no address for a model to name, so a turn nobody wrote to records
+the send and says nobody was reached.
 _Avoid_: reply (the former name), send_to_user, message
 
-**delivery id**:
-The durable identity of one send: `reply:<callId>` of the call that asked for it. A resend after a lost acknowledgement
-carries it, which lets a connector answer `duplicate` instead of sending twice.
-_Avoid_: message id, request id
-
-**outbox**:
-The committed sends a connector has not acknowledged yet, read from the transcript, not a second store. A send is owed
-until an `app.delivery` entry says what became of it; an `uncertain` one is never retried.
-_Avoid_: queue, retry buffer
+**reply id**:
+The durable identity of one send: `reply:<callId>` of the call that asked for it, and the id of the row a reader's client
+renders. One message, one id, one row.
+_Avoid_: message id, request id, delivery id
 
 ## Integrations and connectors
 

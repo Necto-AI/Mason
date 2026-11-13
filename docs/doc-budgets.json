@@ -5,19 +5,19 @@
 	"ceilings": {
 		"AGENTS.md": 2350,
 		"CODE_OF_CONDUCT.md": 750,
-		"GLOSSARY.md": 1650,
-		"README.md": 700,
+		"GLOSSARY.md": 1568,
+		"README.md": 699,
 		"SECURITY.md": 250,
 		"docs/AGENTS.md": 911,
-		"docs/ARCHITECTURE.md": 1950,
-		"docs/CONNECTOR-PROTOCOL.md": 431,
-		"docs/SPEC.md": 9050,
+		"docs/ARCHITECTURE.md": 1705,
+		"docs/CONNECTOR-PROTOCOL.md": 430,
+		"docs/SPEC.md": 8964,
 		"docs/agent/README.md": 115,
-		"docs/agent/connectors/console.md": 125,
-		"docs/agent/connectors/telegram.md": 233,
+		"docs/agent/connectors/console.md": 121,
+		"docs/agent/connectors/telegram.md": 215,
 		"docs/agent/env.md": 262,
 		"docs/agent/events.md": 361,
-		"CONTRIBUTING.md": 275,
+		"CONTRIBUTING.md": 268,
 		"docs/release-notes/0.1.0.md": 900
 	}
 }
