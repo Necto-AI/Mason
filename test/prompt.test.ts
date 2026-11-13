@@ -143,7 +143,9 @@ test("the soul section is soul.md when it exists, and DEFAULT_SOUL when it does 
 test("the whole prompt fits in its budget, and the tool list is the six", async () => {
 	// A ceiling on the prompt, not on one section: this text is paid again on every turn of every conversation, and the
 	// sections grow a sentence at a time. Raising it is a decision, like raising a code ceiling. 4,000 became 4,400 for
-	// the reflection rule (#134), which is 641 characters of new resident text: 3,455 before it, 4,096 after.
+	// the reflection rule (#134), which is 641 characters of new resident text: 3,455 before it, 4,096 after. 4,400 became
+	// 5,600 for the delegation rule (#201 step 4), 1,301 characters of it: the tool exists and the model has to know when
+	// it is the wrong tool, that a worker cannot reach the person, and that a change is written and *then* reviewed.
 	await withHouseHome(async () => {
 		// The module's integrations are global: a test that set some would otherwise be counted here.
 		setIntegrations({});
@@ -151,14 +153,18 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 		for (const promptSection of PROMPT_SECTIONS) {
 			total += (await renderSection(promptSection))?.length ?? 0;
 		}
-		assert.ok(total <= 4_400, `the prompt is ${total} characters, over its 4,400`);
+		assert.ok(total <= 5_600, `the prompt is ${total} characters, over its 5,600`);
 	});
 
 	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));
-	// `codemode` is built per boot, so it is not in the base list, and it is the last tool a request carries. Growing
-	// this list is a decision of its own: a tool is a declaration in every request, and a capability the model may use
-	// without asking a script for it.
-	assert.deepEqual([...declared, "codemode"], ["read", "write", "edit", "bash", "send", "codemode"]);
+	// `codemode` and `delegate` are built per boot (a sandbox and a lease directory die with the process, and a child's
+	// role is the boot's), so neither is in the base list, and the two are the last tools a request carries. Growing this
+	// list is a decision of its own: a tool is a declaration in every request, and a capability the model may use without
+	// asking a script for it.
+	assert.deepEqual(
+		[...declared, "delegate", "codemode"],
+		["read", "write", "edit", "bash", "send", "delegate", "codemode"],
+	);
 });
 
 test("the codemode section is a count and three ways to look a tool up, not a catalogue", async () => {
@@ -732,7 +738,8 @@ test("the prompt opens with the soul and closes with the delivery rule", () => {
 	assert.equal(keys[0], "preamble", "the soul opens the prompt");
 	assert.equal(keys.at(-1), "delivery", "the delivery rule is the closest thing to the turn");
 	assert.ok(keys.indexOf("integrations") < keys.indexOf("codemode"), "what exists, then the tools a script can call");
-	assert.ok(keys.indexOf("codemode") < keys.indexOf("reflect"), "the turn's endings come after what it can reach");
+	assert.ok(keys.indexOf("codemode") < keys.indexOf("delegate"), "delegation is one more way to reach something");
+	assert.ok(keys.indexOf("delegate") < keys.indexOf("reflect"), "the turn's endings come after what it can reach");
 	assert.ok(keys.indexOf("reflect") < keys.indexOf("delivery"));
 });
 
@@ -759,6 +766,9 @@ test("the prompt is one registry: no other extension brings a section, and the o
 		// sit next to each other, and both before the two rules about the turn's ending.
 		"integrations",
 		"codemode",
+		// Handing a bounded task off and getting the answer back: one more way to reach something, and the only one that
+		// spends another model's turn.
+		"delegate",
 		// What a long turn owes the next one: the memory it keeps, which is the only part of the turn that outlives it.
 		"reflect",
 		// Last because the rule that decides whether the reader hears anything should be closest to the turn. The
