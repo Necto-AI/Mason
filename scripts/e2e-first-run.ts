@@ -9,11 +9,12 @@
  *     node --experimental-strip-types scripts/e2e-first-run.ts [--keep]
  *
  * What it proves, in order: flags are the whole first run (`mason init` with its three answers, then `mason new`, and a
- * second init asks nothing and changes nothing); the root holds `common/` and one bot and no halves of its own; `mason
- * doctor` ends green; `mason up` answers `/api/health` for the bot it serves; and one turn is answered — a scripted Chord
- * client holding the single user grant on that bot's console entry, whose credential is minted through the surviving
- * path, appends one submission and reads exactly one reply row out of the conversation state. Nothing is written outside
- * the temporary root: no `agent/` or `service/` at the root itself, no stray `~/.mason`.
+ * second init asks nothing and changes nothing, and a second `new` is refused because the root holds one bot); the root
+ * holds `common/` and one bot and no halves of its own; `mason doctor` ends green; `mason up` answers `/api/health` for
+ * the bot it serves; and one turn is answered — a scripted Chord client holding the single user grant on that bot's
+ * console entry, whose credential is minted through the surviving path, appends one submission and reads exactly one
+ * reply row out of the conversation state. Nothing is written outside the temporary root: no `agent/` or `service/` at
+ * the root itself, no stray `~/.mason`.
  *
  * The client is Chord's, not the SDK's, because this is the proof of the wire: the state member is what a person's client
  * applies, and the assertion that outlives the delivery removal is the row it holds — one reply, under one id.
@@ -116,7 +117,8 @@ async function main(): Promise<void> {
 	check(made.code === 0, "new creates the first bot and ends doctor 0", made.stderr || made.stdout);
 	check(/7 checks: 7 ok, 0 failed/.test(made.stdout), "the doctor it ends with passes", made.stdout);
 
-	// 2. Again: nothing asked, nothing written twice.
+	// 2. Again: nothing asked, nothing written twice — and a second bot refused, which is what makes the one bot the only
+	// one.
 	const before = await treeShape(directory);
 	const again = await mason(directory, ["init"], { HOME: home });
 	check(again.code === 0, "a second init exits 0", again.stderr || again.stdout);
@@ -127,6 +129,7 @@ async function main(): Promise<void> {
 		"a second init changes nothing on disk",
 		`before: ${before.length} entries, after: ${after.length}`,
 	);
+	check((await mason(directory, ["new", "second"], { HOME: home })).code === 1, "a second new exits 1");
 
 	// 3. The root is a common store and one bot, and no halves at the root itself.
 	const entries = await readdir(directory);
