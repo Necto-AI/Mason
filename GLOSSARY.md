@@ -28,9 +28,9 @@ split is the boundary between the server and the machine its tools run on.
 _Avoid_: house, state dir, `.mason`
 
 **root**:
-The directory the bots live under, `~/.mason` or `MASON_ROOT`: `common/` and one directory per bot, each one home. A
-command targets one with `-b`, else `MASON_BOT`, else the only bot.
-_Avoid_: fleet (that is the bots, not the directory), state dir
+The directory the bot lives under, `~/.mason` or `MASON_ROOT`: `common/` and the bot's directory, which is one home. One
+environment is one bot, so a command resolves it without a target.
+_Avoid_: fleet, state dir
 
 **common store**:
 The three files every bot under a root shares: the default provider and model, one key per provider, and where tools run.

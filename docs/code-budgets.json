@@ -2,10 +2,10 @@
 	"ceilings": {
 		"bin": 104,
 		"evals": 565,
-		"packages/connector/src": 1326,
+		"packages/connector/src": 1320,
 		"packages/protocol/src": 232,
-		"scripts": 2340,
-		"src/server": 5886,
+		"scripts": 2304,
+		"src/server": 5835,
 		"src/shared": 50
 	}
 }

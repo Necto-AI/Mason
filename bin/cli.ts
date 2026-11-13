@@ -14,7 +14,6 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { takeBot as takeBotArgs } from "../src/server/root.ts";
 
 /** The checkout root and the install share this file's relative neighbourhood, computed once from where it runs. */
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,7 +23,6 @@ const SCRIPTS: Readonly<Record<string, string>> = {
 	up: "../src/server/main.ts",
 	init: "../scripts/init.ts",
 	new: "../scripts/new.ts",
-	bots: "../scripts/bots.ts",
 	doctor: "../scripts/doctor.ts",
 	status: "../scripts/status.ts",
 	chat: "../scripts/chat.ts",
@@ -52,9 +50,8 @@ function usage(): never {
 
 Commands (the npm scripts, mapped thin):
   mason init                   the common store: provider, model, a key verified before it is written (flags only)
-  mason new <name>             one bot under the root: a home, its soul and skills, the console connector
-  mason bots                   the bots under the root, and which one a command targets
-  mason doctor                 seven read-only checks over one bot; exit 1 on any failure
+  mason new <name>             the bot under the root: a home, its soul and skills, the console connector
+  mason doctor                 seven read-only checks over the bot; exit 1 on any failure
   mason status                 one line: the bot, its model, its integrations, whether mason is up
   mason up                     serve the bot (the server this checkout starts with npm run dev)
   mason chat                   talk to the bot from this terminal, through the console connector
@@ -64,28 +61,17 @@ Commands (the npm scripts, mapped thin):
   mason surface                render the door tables (docs/SURFACE.md), relative to the current directory
   mason eval                   run the behaviour scenarios
 
-The root is $MASON_ROOT, else ~/.mason; a bot is one directory under it, and $MASON_HOME names one home directly.
--b <name> (or MASON_BOT) picks the bot when the root holds several; it goes after the command, as
-\`mason status -b bob\`. The one unauthenticated door is /api/health; everything else speaks the connector's credential.
+The root is $MASON_ROOT, else ~/.mason, and its one bot is the directory under it; $MASON_HOME names one home directly.
+The one unauthenticated door is /api/health; everything else speaks the connector's credential.
 Stop a running bot: SIGINT or SIGTERM.`);
 	process.exit(process.argv[2] === "--help" || process.argv[2] === "-h" ? 0 : 1);
-}
-
-/** `-b <name>` anywhere on the line: `root.ts` parses it once, and exports `MASON_BOT` for the child. */
-function takeBot(argv: readonly string[]): string[] {
-	try {
-		return takeBotArgs(argv);
-	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error));
-		process.exit(1);
-	}
 }
 
 async function main(): Promise<void> {
 	const [command, ...rest] = process.argv.slice(2);
 	const script = command !== undefined ? SCRIPTS[command] : undefined;
 	if (script === undefined) usage();
-	const args = takeBot(rest);
+	const args = rest;
 	// The wrapper has nothing of its own to say: the child's exit is this command's exit, and a script's
 	// stdout/stderr are the operator's terminal exactly as `npm run …` delivers them.
 	const { path, flags } = scriptLoader(script);

@@ -10,19 +10,18 @@
 import { readPiSettingsModel, resolveModelChoice } from "../src/server/common.ts";
 import { housePaths } from "../src/server/house.ts";
 import { type Integration, readIntegrations } from "../src/server/integrations.ts";
-import { takeBot } from "../src/server/root.ts";
 import { FAUX_MODEL } from "../src/server/runtime.ts";
 
 export function usage(): string {
 	return `usage: mason status
 
-  One line about the targeted bot: its name and home, the provider and model it would run, how many integrations and
-  connectors are configured, and whether mason is listening. -b <name> or MASON_BOT picks the bot.`;
+  One line about the bot: its name and home, the provider and model it would run, how many integrations and connectors
+  are configured, and whether mason is listening.`;
 }
 
 export async function runStatus(argv: readonly string[]): Promise<number> {
 	try {
-		const args = takeBot(argv);
+		const args = [...argv];
 		if (args.includes("--help") || args.includes("-h")) {
 			console.log(usage());
 			return 0;
@@ -31,9 +30,9 @@ export async function runStatus(argv: readonly string[]): Promise<number> {
 		// the targeted bot under the root. Reading the root here made status the one verb that described a different home
 		// than the one being served.
 		const house = housePaths();
-		const name = house.fleet?.bot ?? house.home.split("/").at(-1) ?? house.home;
+		const name = house.root?.bot ?? house.home.split("/").at(-1) ?? house.home;
 		const choice = await resolveModelChoice(house);
-		const fallback = choice === undefined && house.fleet === undefined ? readPiSettingsModel() : undefined;
+		const fallback = choice === undefined && house.root === undefined ? readPiSettingsModel() : undefined;
 		const model =
 			process.env.PI_FAUX_MODEL === "1"
 				? `${FAUX_MODEL.provider}/${FAUX_MODEL.modelId} (PI_FAUX_MODEL=1; configured ${choice?.provider ?? "none"}/${choice?.modelId ?? "none"})`

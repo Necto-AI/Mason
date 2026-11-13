@@ -66,10 +66,10 @@ export interface HousePaths {
 	/** The home itself: `MASON_HOME`, or one bot's directory under the mason root. Two halves hang below it. */
 	readonly home: string;
 	/**
-	 * The fleet root this bot lives under, and its name there. Absent when a home was addressed directly (`MASON_HOME`, an
-	 * explicit path): such a home is a fleet of one, and keeps the older fallbacks a fleet root deliberately drops.
+	 * The root this bot lives under, and its name there. Absent when a home was addressed directly (`MASON_HOME`, an
+	 * explicit path): such a home keeps the older fallbacks a root deliberately drops.
 	 */
-	readonly fleet?: { readonly root: string; readonly bot: string };
+	readonly root?: { readonly root: string; readonly bot: string };
 	/** The half the agent owns and the tool machine sees: the home's repository lives here. */
 	readonly agentDir: string;
 	/** The half the server owns and no tool ever sees. */
@@ -122,26 +122,18 @@ export function configureHouse(paths: HousePaths): HousePaths {
 }
 
 /**
- * Where a home is: the path given, else `MASON_HOME`, else the targeted bot under the mason root.
+ * Where a home is: the path given, else `MASON_HOME`, else the root's one bot.
  *
  * `~` is expanded here because `MASON_HOME=~/x` is what a person writes in a shell, and a literal `~` in a path is a
  * directory name no file is ever in.
  *
- * The root is the fleet layout (`root.ts`): `MASON_ROOT`, else `~/.mason`, holding `common/` and one directory per bot.
- * `MASON_HOME` still names one home directly, which is how a home written before the fleet layout keeps booting without a
- * move; a command that knows which bot it wants passes `botPaths` rather than relying on the ambient target.
+ * The root layout (`root.ts`) is `MASON_ROOT`, else `~/.mason`: `common/` and the bot's directory. `MASON_HOME` still
+ * names one home directly, which is how a home written before the layout keeps booting without a move; a command that
+ * already knows its home passes `botPaths` rather than relying on the ambient one.
  */
 export function housePaths(home?: string): HousePaths {
 	if (home !== undefined && home !== "") return layout(home);
 	const configured = process.env.MASON_HOME;
-	const targeted = process.env.MASON_BOT;
-	// Two ways to name a home at once: `-b bob` (exported as MASON_BOT) picks a bot under the root, `MASON_HOME` names one
-	// home directly. Preferring either silently serves the wrong transcript, so the conflict is the answer.
-	if (configured !== undefined && configured !== "" && targeted !== undefined && targeted !== "")
-		throw new Error(
-			`MASON_HOME=${configured} and MASON_BOT=${targeted} both name a home: MASON_HOME names one home directly and ` +
-				`-b picks a bot under the root. Unset one of them.`,
-		);
 	if (configured !== undefined && configured !== "") return layout(configured);
 	return botPaths(resolveBot(readRoot()));
 }
@@ -150,11 +142,11 @@ export function housePaths(home?: string): HousePaths {
  * A path that is a bot under a root, recognised from the path alone: its parent holds `common/` and it is one of the
  * parent's bots.
  *
- * `MASON_HOME=<root>/alice` names the same home `-b alice` names, and the boot has to treat it as a fleet bot either way:
- * a bot that sits under a root may not read pi's own `settings.json` for its model, or the same home reports one model
- * through `mason doctor` and runs another. This is the lookup that makes the two spellings one home.
+ * `MASON_HOME=<root>/alice` names the same home the root's bot is, and the boot has to treat it as one either way: a bot
+ * that sits under a root may not read pi's own `settings.json` for its model, or the same home reports one model through
+ * `mason doctor` and runs another. This is the lookup that makes the two spellings one home.
  */
-function fleetOf(home: string): HousePaths["fleet"] {
+function rootOf(home: string): HousePaths["root"] {
 	const resolved = expandHome(home);
 	const parent = dirname(resolved);
 	const name = basename(resolved);
@@ -163,21 +155,21 @@ function fleetOf(home: string): HousePaths["fleet"] {
 	return root.bots.some((bot) => bot.name === name) ? { root: root.root, bot: name } : undefined;
 }
 
-/** One bot's home under a root, with the fleet it belongs to recorded so model resolution knows it may not read pi's. */
+/** One bot's home under a root, with the root it belongs to recorded so model resolution knows it may not read pi's. */
 export function botPaths(target: BotTarget): HousePaths {
-	return { ...layout(target.home), fleet: { root: target.root, bot: target.name } };
+	return { ...layout(target.home), root: { root: target.root, bot: target.name } };
 }
 
 function layout(path: string): HousePaths {
 	const home = expandHome(path);
 	const agentDir = join(home, "agent");
 	const serviceDir = join(home, "service");
-	const fleet = fleetOf(home);
+	const root = rootOf(home);
 	return {
 		home,
 		agentDir,
 		serviceDir,
-		...(fleet === undefined ? {} : { fleet }),
+		...(root === undefined ? {} : { root }),
 		soul: join(serviceDir, "soul.md"),
 		profile: join(agentDir, "profile.md"),
 		logDir: join(agentDir, "log"),

@@ -64,7 +64,15 @@ export async function runNew(
 			throw new Error(`"${name}" is not a bot name: lowercase letters, digits and dashes, and not "${COMMON}"`);
 		const home = botHome(root.root, name);
 		if (existsSync(home))
-			throw new Error(`bot "${name}" already exists at ${home}: \`mason new <another name>\` makes a second one`);
+			throw new Error(`bot "${name}" already exists at ${home}: this root holds one bot`);
+		// One environment is one bot (#201): a second directory would be a root no command can name a home in, so the
+		// refusal is about the shape rather than about a name being taken.
+		const existing = root.bots[0];
+		if (existing !== undefined)
+			throw new Error(
+				`${root.root} already holds the bot "${existing.name}": one environment is one bot, and \`mason new\` ` +
+					"makes the first one. Move it out of the root to make another.",
+			);
 		if (!(await commonReady(root.root)))
 			throw new Error(
 				`${root.root} has no common store: run \`mason init\` first (it stores the provider every bot shares)`,

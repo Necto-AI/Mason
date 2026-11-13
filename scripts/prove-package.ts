@@ -136,7 +136,7 @@ function environment(home: string, masonRoot: string): NodeJS.ProcessEnv {
 		PI_FAUX_MODEL: "1",
 		PORT: String(20000 + Math.floor(Math.random() * 500)),
 	};
-	for (const name of ["MASON_BOT", "PI_PROVIDER", "PI_MODEL"]) delete env[name];
+	for (const name of ["PI_PROVIDER", "PI_MODEL"]) delete env[name];
 	return env;
 }
 

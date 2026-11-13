@@ -78,6 +78,16 @@ describe("a new bot", () => {
 		assert.equal(code, 1);
 	});
 
+	test("a root that already holds a bot refuses a second one, and says which", async () => {
+		const root = await initialisedRoot();
+		assert.equal(await runNew(["alice"], { root }), 0);
+		const code = await runNew(["carol"], { root });
+		assert.equal(code, 1);
+		const second = await runNew(["carol"], { root });
+		assert.equal(second, 1, "and it is still refused");
+		assert.equal(existsSync(join(root, "carol")), false, "no second home was created");
+	});
+
 	test("a root with no common store refuses, and names the command that writes one", async () => {
 		const root = await tempRoot();
 		assert.equal(await runNew(["alice"], { root }), 1);

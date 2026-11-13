@@ -1,21 +1,18 @@
 /**
- * The mason root: one directory per bot, and `common/` beside them.
+ * The mason root: one bot directory, and `common/` beside it.
  *
  * A bot is still one home in two halves (`house.ts`), and nothing about the split moves. What this module adds is the
- * directory above it: `~/.mason` (or `MASON_ROOT`) holds `common/` — the store every bot shares, written by `mason
- * init` — and one directory per bot, each of which is today's home, unchanged. `MASON_HOME` still names one home
- * directly, which is how a home from before the fleet layout keeps booting.
+ * directory above it: `~/.mason` (or `MASON_ROOT`) holds `common/` — the store the bot shares with the root, written by
+ * `mason init` — and one directory, the bot's home. One bot is the whole model (#201): v0 has one conversation per
+ * environment, so there is no target to pick and no `-b` to pick it with. `MASON_HOME` still names one home directly,
+ * which is how a home from before the root layout keeps booting.
  *
  * Two refusals live here, and both name the manual move rather than performing one. A root whose halves sit at the root
- * itself is a single home wearing the root's name, and opening it as a root would create `common/` and bot directories
- * beside an operator's soul; the error says where the halves belong. And a name that is not a directory under the root
- * is not a bot, so `-b` with a typo is a list of what there is instead of a home created in the wrong place.
+ * itself is a single home wearing the root's name, and opening it as a root would create `common/` and a bot directory
+ * beside an operator's soul; the error says where the halves belong. And a root holding more than one bot is a root from
+ * a version that had a fleet: `resolveBot` names them rather than guessing which one a command meant.
  *
- * Targeting is one order, written once: `-b` beats `MASON_BOT`, which beats "the only bot", which beats a refusal that
- * names every bot. Every command that has to know which bot it is about calls `resolveBot`, so no two verbs can disagree
- * about which home they mean.
- *
- * Listing is synchronous on purpose. `housePaths()` is a path computation every reader uses without awaiting it, and a
+ * Reading is synchronous on purpose. `housePaths()` is a path computation every reader uses without awaiting it, and a
  * bot's home has to be known before the first `await` of any command; one `readdirSync` of a directory with a handful of
  * entries is cheaper than making every reader asynchronous.
  */
@@ -145,16 +142,16 @@ export function refuseRootAsHome(home: string): void {
 	);
 	if (bots.length === 0) return;
 	throw new Error(
-		`${home} is a mason root, not one home: it holds ${COMMON}/ and the bots ${bots.map((bot) => bot.name).join(", ")}. ` +
-			"Pick one with `-b <name>`, or set MASON_HOME to the home you mean. Nothing was created.",
+		`${home} is a mason root, not one home: it holds ${COMMON}/ and the bot ${bots.map((bot) => bot.name).join(", ")}. ` +
+			"Set MASON_HOME to the home you mean. Nothing was created.",
 	);
 }
 
 /**
- * The root as it is: every bot directory, sorted by name, and where `common/` goes.
+ * The root as it is: the bot directories it holds, sorted by name, and where `common/` goes.
  *
- * A root that does not exist yet is an empty fleet, not a refusal: `mason init` is the command that creates it, and it
- * has to be able to look before it writes.
+ * A root that does not exist yet is empty, not a refusal: `mason init` is the command that creates it, and it has to be
+ * able to look before it writes.
  */
 export function readRoot(root = rootPath()): MasonRoot {
 	const resolved = expandHome(root);
@@ -172,19 +169,19 @@ export function readRoot(root = rootPath()): MasonRoot {
 }
 
 /**
- * The fleet commands work on a root, and `MASON_HOME` names one home instead: the two are different questions, and a
+ * The root commands work on a root, and `MASON_HOME` names one home instead: the two are different questions, and a
  * command that silently answered the wrong one would write to `~/.mason` while a person believed it was writing to their
- * home. `mason up`, `setup`, `chat` and `doctor` are per-home verbs and keep honouring it.
+ * home. `mason up`, `chat` and `doctor` are per-home verbs and keep honouring it.
  */
 export function refuseHomeEnv(env: NodeJS.ProcessEnv = process.env): void {
 	if (env.MASON_HOME === undefined || env.MASON_HOME === "") return;
 	throw new Error(
 		`MASON_HOME names one home (${env.MASON_HOME}), and this command works on a root. Unset it, or set MASON_ROOT to ` +
-			"the directory the bots live under. A single home keeps booting with `mason up`, `mason setup` and `mason doctor`.",
+			"the directory the bot lives under. A single home keeps booting with `mason up` and `mason doctor`.",
 	);
 }
 
-/** The root's entries, or none when it does not exist: a root that is not there is an empty fleet, not an error. */
+/** The root's entries, or none when it does not exist: a root that is not there is empty, not an error. */
 function readEntries(directory: string): Dirent[] {
 	try {
 		return readdirSync(directory, { withFileTypes: true });
@@ -193,74 +190,27 @@ function readEntries(directory: string): Dirent[] {
 	}
 }
 
-/** `-b <name>` (or `--bot=<name>`) taken out of argv: the one parser, so the wrapper and the `npm run` path cannot disagree. */
-export function takeBotFlag(argv: readonly string[]): { readonly bot?: string; readonly rest: readonly string[] } {
-	const rest: string[] = [];
-	let bot: string | undefined;
-	for (let index = 0; index < argv.length; index += 1) {
-		const arg = argv[index] ?? "";
-		if (arg === "-b" || arg === "--bot") {
-			const value = argv[index + 1];
-			if (value === undefined) throw new Error(`${arg} needs a bot name; \`mason bots\` lists them`);
-			bot = value;
-			index += 1;
-			continue;
-		}
-		if (arg.startsWith("--bot=")) {
-			bot = arg.slice("--bot=".length);
-			continue;
-		}
-		rest.push(arg);
-	}
-	return { ...(bot === undefined ? {} : { bot }), rest };
-}
-
-/** `takeBotFlag` plus the `MASON_BOT` export it implies: what a script calls before it resolves a home. */
-export function takeBot(argv: readonly string[]): string[] {
-	const { bot, rest } = takeBotFlag(argv);
-	if (bot !== undefined) process.env.MASON_BOT = bot;
-	return [...rest];
-}
-
 /** The names of every bot, for a refusal that has to list them. */
 export function botNames(root: MasonRoot): string {
 	return root.bots.map((bot) => bot.name).join(", ") || "none";
 }
 
 /**
- * Which bot a command is about: `-b`, else `MASON_BOT`, else the only bot, else a refusal naming every bot.
+ * The bot a command is about: the root's one bot, or a refusal that says which command makes it.
  *
- * A named bot that is not there is its own refusal rather than a fall-through to "the only bot": a typo must not land the
- * command on a different home. The three refusals all say the next command, because a person who has just typed one is
- * the person who needs it.
+ * There is no target to choose. One environment is one bot (#201), so a root holding two is a root from a version that
+ * had a fleet, and the refusal names them and says which one to keep rather than guessing which one a verb meant.
  */
-export function resolveBot(
-	root: MasonRoot,
-	options: { readonly bot?: string; readonly env?: NodeJS.ProcessEnv } = {},
-): BotTarget {
-	const env = options.env ?? process.env;
-	const named = options.bot ?? (env.MASON_BOT === "" ? undefined : env.MASON_BOT);
-	if (named !== undefined) {
-		if (!BOT_NAME.test(named))
-			throw new Error(
-				`"${named}" is not a bot name: lowercase letters, digits and dashes, starting with a letter or a digit`,
-			);
-		const found = root.bots.find((bot) => bot.name === named);
-		if (found === undefined)
-			throw new Error(
-				`there is no bot "${named}" under ${root.root}: it knows ${botNames(root)}. \`mason bots\` lists them, and ` +
-					"`mason new <name>` creates one.",
-			);
-		return { root: root.root, name: found.name, home: found.home };
-	}
-	const only = root.bots.length === 1 ? root.bots[0] : undefined;
-	if (only !== undefined) return { root: root.root, name: only.name, home: only.home };
+export function resolveBot(root: MasonRoot): BotTarget {
+	const only = root.bots[0];
+	if (only !== undefined && root.bots.length === 1) return { root: root.root, name: only.name, home: only.home };
 	if (root.bots.length === 0)
 		throw new Error(
 			`${root.root} has no bot yet: run \`mason init\` to initialise the root, then \`mason new <name>\` to create ` +
 				"the first one.",
 		);
 	throw new Error(
-		`${root.root} holds ${root.bots.length} bots: ${botNames(root)}. Pick one with \`-b <name>\`, or set MASON_BOT.`,
+		`${root.root} holds ${root.bots.length} bots: ${botNames(root)}. One environment is one bot: keep the one you ` +
+			"mean and move the others out of the root, or point MASON_HOME at one of them.",
 	);
 }

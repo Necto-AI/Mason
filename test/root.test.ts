@@ -2,9 +2,8 @@
  * `src/server/root.ts` — the directory above the home.
  *
  * A bot is today's home, unchanged, one directory under the root; `common/` sits beside it and is never a bot. These
- * tests pin the three things every command depends on: what counts as a bot, how a target is chosen (`-b` over
- * `MASON_BOT` over the only bot over a refusal that names them), and the two refusals — a root whose halves sit at the
- * root, and a name that is not there. Every root here is a temporary directory.
+ * tests pin the two things every command depends on: what counts as a bot, and which bot a command is about — the root's
+ * one, or a refusal that names the two it found. Every root here is a temporary directory.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -69,7 +68,7 @@ describe("the root and its bots", () => {
 		);
 	});
 
-	test("a root that does not exist yet is an empty fleet, not a refusal", async () => {
+	test("a root that does not exist yet is empty, not a refusal", async () => {
 		const root = join(await tempRoot(), "missing");
 		assert.deepEqual(readRoot(root).bots, []);
 	});
@@ -88,38 +87,29 @@ describe("the root and its bots", () => {
 	});
 });
 
-describe("which bot a command is about", () => {
-	test("-b beats MASON_BOT, MASON_BOT beats the only bot, and the only bot needs no answer", async () => {
+describe("the bot a command is about", () => {
+	test("a root with one bot is that bot, and no argument names it", async () => {
+		const root = await tempRoot();
+		const home = await bot(root, "alice");
+		assert.deepEqual(resolveBot(readRoot(root)), { root, name: "alice", home });
+	});
+
+	test("a root holding two bots is a refusal naming both, and the way to one of them", async () => {
+		// One environment is one bot (#201): there is no `-b` to pick with any more, so the refusal is about the shape of
+		// the root rather than about an answer the command is missing.
 		const root = await tempRoot();
 		await bot(root, "alice");
 		await bot(root, "bob");
 		const read = readRoot(root);
-		assert.equal(resolveBot(read, { bot: "alice", env: { MASON_BOT: "bob" } }).name, "alice");
-		assert.equal(resolveBot(read, { env: { MASON_BOT: "bob" } }).name, "bob");
-		assert.throws(() => resolveBot(read, { env: {} }), /holds 2 bots: alice, bob/);
-		assert.throws(() => resolveBot(read, { env: {} }), /-b <name>/);
-	});
-
-	test("a root with one bot targets it with nothing set", async () => {
-		const root = await tempRoot();
-		const home = await bot(root, "alice");
-		assert.deepEqual(resolveBot(readRoot(root), { env: {} }), { root, name: "alice", home });
-	});
-
-	test("a name that is not there is a refusal listing what is, never a fall-through", async () => {
-		const root = await tempRoot();
-		await bot(root, "alice");
-		assert.throws(
-			() => resolveBot(readRoot(root), { bot: "alise", env: {} }),
-			/there is no bot "alise" under .*: it knows alice/,
-		);
-		assert.throws(() => resolveBot(readRoot(root), { bot: "Alice", env: {} }), /not a bot name/);
+		assert.equal(read.bots.length, 2, "both are read, so the refusal can name them");
+		assert.throws(() => resolveBot(read), /holds 2 bots: alice, bob/);
+		assert.throws(() => resolveBot(read), /One environment is one bot/);
 	});
 
 	test("a root with no bot says the command that creates one", async () => {
 		const root = await tempRoot();
-		assert.throws(() => resolveBot(readRoot(root), { env: {} }), /has no bot yet/);
-		assert.throws(() => resolveBot(readRoot(root), { env: {} }), /has no bot yet: run `mason init`/);
+		assert.throws(() => resolveBot(readRoot(root)), /has no bot yet/);
+		assert.throws(() => resolveBot(readRoot(root)), /has no bot yet: run `mason init`/);
 	});
 });
 
@@ -131,12 +121,12 @@ describe("the paths", () => {
 		assert.equal(botHome("/srv/mason", "alice"), "/srv/mason/alice");
 	});
 
-	test("a fleet command refuses MASON_HOME, because a home is not a root", () => {
+	test("a root command refuses MASON_HOME, because a home is not a root", () => {
 		assert.doesNotThrow(() => refuseHomeEnv({}));
 		assert.throws(() => refuseHomeEnv({ MASON_HOME: "/home/x/.mason" }), /MASON_HOME names one home/);
 	});
 
-	test("refuseLegacyRoot is quiet on an empty or a fleet root", async () => {
+	test("refuseLegacyRoot is quiet on an empty or a real root", async () => {
 		const root = await tempRoot();
 		assert.doesNotThrow(() => refuseLegacyRoot(root));
 		await bot(root, "alice");

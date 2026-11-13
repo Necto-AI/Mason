@@ -125,7 +125,7 @@ export function doctorExitCode(checks: readonly DoctorCheck[]): 0 | 1 {
 	return checks.every((check) => check.ok) ? 0 : 1;
 }
 
-/** The two halves, and no bare home addressed as a fleet. */
+/** The two halves, and no bare home addressed as a root. */
 function checkHome(house: HousePaths): DoctorCheck {
 	const legacy = HOUSE_ENTRIES.map((entry) => entry.name).filter((name) => existsSync(join(house.home, name)));
 	if (legacy.length > 0)
@@ -141,9 +141,9 @@ function checkHome(house: HousePaths): DoctorCheck {
 			ok: false,
 			detail: `${house.home} is missing agent/ or service/`,
 			repair:
-				house.fleet === undefined
+				house.root === undefined
 					? "run `mason new <name>` to create the home"
-					: `run \`mason new ${house.fleet.bot}\` to finish this bot's home`,
+					: `run \`mason new ${house.root.bot}\` to finish this bot's home`,
 		};
 	return { name: "home", ok: true, detail: `${house.home} (agent/, service/)` };
 }
@@ -162,7 +162,7 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 		};
 	}
 	if (choice === undefined) {
-		const fallback = house.fleet === undefined ? readPiSettingsModel() : undefined;
+		const fallback = house.root === undefined ? readPiSettingsModel() : undefined;
 		if (fallback !== undefined)
 			return {
 				name: "model",
@@ -173,7 +173,7 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 			name: "model",
 			ok: false,
 			detail: `no provider and model resolve for ${house.home}`,
-			repair: house.fleet === undefined ? "run `mason init`" : `run \`mason init\` for the root ${house.fleet.root}`,
+			repair: house.root === undefined ? "run `mason init`" : `run \`mason init\` for the root ${house.root.root}`,
 		};
 	}
 	const ref = `${choice.provider}/${choice.modelId}`;
@@ -188,9 +188,9 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 	if (choice.key !== undefined) return { name: "model", ok: true, detail: `${runs}${ref}${from}, key stored` };
 	// A home addressed directly has no common store to check: its key is the one pi's own store or the provider's
 	// environment answers with, and this build reads neither.
-	if (choice.source === "bot" && house.fleet === undefined)
+	if (choice.source === "bot" && house.root === undefined)
 		return { name: "model", ok: true, detail: `${ref} from the bot's settings.json (a MASON_HOME home)` };
-	const where = house.fleet === undefined ? "common/auth.json" : commonPaths(house.fleet.root).auth;
+	const where = house.root === undefined ? "common/auth.json" : commonPaths(house.root.root).auth;
 	return {
 		name: "model",
 		ok: false,
@@ -202,9 +202,9 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 /** The execution environment: the local daemon this build ships, or the ssh target a runtime.json names. */
 async function checkRuntime(house: HousePaths): Promise<DoctorCheck> {
 	let runtime: Pick<CommonRuntime, "kind" | "host"> = { kind: "local", host: undefined };
-	if (house.fleet !== undefined) {
+	if (house.root !== undefined) {
 		try {
-			const read = await readCommonRuntime(house.fleet.root);
+			const read = await readCommonRuntime(house.root.root);
 			runtime = { kind: read.kind, host: read.host };
 		} catch (error) {
 			return {

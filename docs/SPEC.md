@@ -336,11 +336,11 @@ tokens writes no line.
 
 ### 3.6 The root, the common store, and the doctor
 
-`~/.mason` (or `MASON_ROOT`) is a **root**: `common/` plus one directory per bot, and each bot's directory is the home of
-§3.5 unchanged. `src/server/root.ts` owns the resolution: `-b` over `MASON_BOT` over the only bot over a refusal that
-names every bot; a root whose halves sit at the root itself is refused with the manual move, and `MASON_HOME` still names
-one home directly, which is how a home written before the root keeps booting. Every command resolves its bot through
-that one function, and `bin/mason.ts` turns `-b` into `MASON_BOT` for the child.
+`~/.mason` (or `MASON_ROOT`) is a **root**: `common/` plus the bot's directory, which is the home of §3.5 unchanged. One
+environment is one bot (#201), so `src/server/root.ts` resolves it without a target: the root's single bot, or a refusal
+that names the two it found. A root whose halves sit at the root itself is refused with the manual move, and `MASON_HOME`
+still names one home directly, which is how a home written before the root keeps booting. Every command resolves its
+home through that one function.
 
 `common/` is mason's own store, three files with one discipline each (`src/server/common.ts`): `settings.json`
 (`defaultProvider`, `defaultModel`) is read tolerantly and merged field by field, so a key a later version wrote survives
@@ -355,7 +355,7 @@ the configured model.
 
 The commands are skins over those functions: `mason init --provider --model [--key]` (the common store, the key verified
 with one completion before anything is written), `mason new <name>` (a home, its soul and seeded skills, the built-in
-console connector, then a doctor), `mason bots`, `mason status` (one line), `mason doctor` and `mason chat`. Flags are the
+console connector, then a doctor), `mason status` (one line), `mason doctor` and `mason chat`. Flags are the
 whole first run: nothing prompts, so a script and a person take one path. Doctor is seven read-only checks — the two
 halves, the model and its key, the execution environment, the server, the granted connectors and their credentials,
 `integrations.json` including whether it changed since the last boot, and the exit-code shape — printing one repair
