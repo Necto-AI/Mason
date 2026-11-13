@@ -261,7 +261,7 @@ export function refuseLegacyHome(paths: HousePaths): void {
  * home without `agent/` is an agent with no memory. A home that predates the split is refused before either is created.
  */
 export async function ensureHouse(paths: HousePaths, defaultSoul: string): Promise<void> {
-	// A root is not a home: writing one's halves over it leaves every fleet command refusing about directories mason made.
+	// A root is not a home: writing one's halves over it leaves every command refusing about directories mason made.
 	refuseRootAsHome(paths.home);
 	refuseLegacyHome(paths);
 	for (const directory of layoutDirectories(paths)) {

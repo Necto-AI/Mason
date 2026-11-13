@@ -130,8 +130,8 @@ function carriesFiles(path: string): boolean {
  * The inverse of `refuseLegacyRoot`: a *root* opened as one home.
  *
  * `~/.mason` is a root now, and a command that treats it as a home writes `agent/` and `service/` beside `common/` and the
- * bots — after which every fleet command refuses, about directories the tool just made. `mason prompt` did exactly that,
- * and the cost was permanent until somebody deleted the halves by hand. The check lives here because `ensureHouse` is the
+ * bots — after which every command refuses, about directories the tool just made. `mason prompt` did exactly that, and
+ * the cost was permanent until somebody deleted the halves by hand. The check lives here because `ensureHouse` is the
  * only writer, so every verb that could do it is covered by one refusal.
  */
 export function refuseRootAsHome(home: string): void {
