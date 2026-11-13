@@ -170,7 +170,8 @@ export function createSubagent(options: SubagentOptions): Extension {
 					dir: options.leaseDir,
 					writer: `delegate ${String(api.callId)}`,
 				});
-				if (!taken.held) return refusal(`The write lease was refused: ${leaseRefusalText(taken.holder)}`);
+				if (!taken.held)
+					return refusal(`The write lease was refused: ${leaseRefusalText(taken.holder, taken.path)}`);
 				lease = taken.lease;
 			}
 			try {

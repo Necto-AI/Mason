@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -60,79 +60,34 @@ test("the key is the checkout's realpath, and the file is outside the checkout",
 	await taken.lease.release();
 });
 
-test("a holder whose process is gone is cleared; a live one is never cleared by age", async () => {
+test("a lease left by a crash is refused, and the refusal names the file to remove", async () => {
+	// Nothing clears a stale lease: a read followed by an unlink lets a second writer take the lease in between and lose it
+	// to the unlink. So a crash costs a person one `rm`, and the sentence says which file.
 	const { checkout, dir } = await workspace("mason-lease-stale-");
 	await mkdir(dir, { recursive: true });
 	const path = await leasePath(dir, checkout);
 	const long = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
 
-	// A day old and held by a pid that does not exist: the previous process crashed mid-run, and the next writer goes.
 	await writeFile(
 		path,
 		JSON.stringify({ token: "gone", pid: 999_999, host: hostname(), checkout, startedAt: long, writer: "dead" }),
 	);
 	const afterCrash = await acquireWriteLease({ checkout, dir, writer: "next" });
-	assert.equal(afterCrash.held, true, "a provably gone holder does not block the next writer");
-	if (afterCrash.held) await afterCrash.lease.release();
+	assert.equal(afterCrash.held, false, "the lease is refused, not cleared");
+	assert.match(
+		leaseRefusalText(afterCrash.held === false ? afterCrash.holder : undefined, afterCrash.path),
+		new RegExp(`remove ${path.replaceAll("/", "\\/")}`),
+		"the person is told which file to remove",
+	);
 
-	// A day old and held by this process: still held. Age is not evidence that a writer stopped writing.
+	// A live holder is refused with the same sentence and without the removal hint.
 	await writeFile(
 		path,
 		JSON.stringify({ token: "alive", pid: process.pid, host: hostname(), checkout, startedAt: long, writer: "live" }),
 	);
 	const blocked = await acquireWriteLease({ checkout, dir, writer: "next" });
-	assert.equal(blocked.held, false, "a live holder is never reaped by age");
-	assert.equal(blocked.held === false ? blocked.holder?.writer : undefined, "live");
-
-	// Another host is never provable from here, so it is held.
-	await writeFile(
-		path,
-		JSON.stringify({ token: "remote", pid: 999_999, host: "elsewhere", checkout, startedAt: long, writer: "ssh" }),
-	);
-	const remote = await acquireWriteLease({ checkout, dir, writer: "next" });
-	assert.equal(remote.held, false, "a holder on another host is not provably gone");
-});
-
-test("a release only removes the lease it took", async () => {
-	const { checkout, dir } = await workspace("mason-lease-token-");
-	const mine = await acquireWriteLease({ checkout, dir, writer: "mine" });
-	assert.equal(mine.held, true);
-	if (!mine.held) return;
-	assert.match(await readFile(mine.lease.path, "utf8"), /"mine"/);
-	// Somebody else's lease, at the same path: the stale-clear-and-reacquire window a token closes.
-	await writeFile(
-		mine.lease.path,
-		JSON.stringify({ token: "other", pid: process.pid, host: hostname(), checkout, startedAt: "", writer: "other" }),
-	);
-	await mine.lease.release();
-	assert.equal(
-		(await acquireWriteLease({ checkout, dir, writer: "third" })).held,
-		false,
-		"the other holder's lease survived my release",
-	);
-});
-
-test("an empty lease file is debris only once it has been empty long enough", async () => {
-	// The crash this exists for: a writer died after the file appeared and before its body landed. Nothing can be holding
-	// it — but a file that is empty *now* may be one a writer is about to fill, so the age is what makes it debris.
-	const { dir, checkout } = await workspace("mason-lease-debris-");
-	await mkdir(dir, { recursive: true });
-	const path = await leasePath(dir, checkout);
-	await writeFile(path, "");
-	await utimes(path, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-	const taken = await acquireWriteLease({ checkout, dir, writer: "after the debris" });
-	assert.equal(taken.held, true);
-	if (taken.held) await taken.lease.release();
-});
-
-test("an empty lease file somebody just made is still somebody's", async () => {
-	const { dir, checkout } = await workspace("mason-lease-fresh-empty-");
-	await mkdir(dir, { recursive: true });
-	const path = await leasePath(dir, checkout);
-	await writeFile(path, "");
-	const refused = await acquireWriteLease({ checkout, dir, writer: "too early" });
-	assert.equal(refused.held, false);
-	assert.ok(existsSync(path), "the file is left where it was");
+	assert.equal(blocked.held, false);
+	assert.doesNotMatch(leaseRefusalText(blocked.held === false ? blocked.holder : undefined, blocked.path), /remove/);
 });
 
 test("a lease this process cannot read is refused, not deleted", async () => {

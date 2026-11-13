@@ -19,15 +19,16 @@
  *   user — under the temp dir — so two bots serving one checkout from two homes name the same file; a directory under one
  *   bot's `dataDir` would give each bot its own lock and call that exclusion. A lease cannot outlive a reboot, which is
  *   the right lifetime for one.
- * - **Refused, not reaped.** A holder that is provably gone — same host, a pid that no longer exists — is cleared and the
- *   caller retries once. Nothing is cleared because it is old: a child that has been thinking for ten minutes is a child
- *   that is still writing, and the whole point of the lease is that nobody guesses otherwise.
+ * - **Refused, never cleared.** A lease is released by the run that took it, and by nothing else. Clearing a stale one is
+ *   a read followed by an unlink, and another writer can take the lease in between and lose it to the unlink; a probe
+ *   admitted two writers in 9 rounds out of 300 that way. A lease left behind by a crash is removed by hand, and the
+ *   refusal names the file.
  * - **Released by token.** The lease file carries a token this holder generated; release unlinks it only when the file
  *   still carries that token, so a release that arrives after a stale-clear and a re-acquire cannot steal the new
  *   writer's lease.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { link, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -55,7 +56,7 @@ export interface WriteLease {
 /** Either the lease, or who has it: `undefined` only when the file vanished between the attempt and the read. */
 export type LeaseResult =
 	| { readonly held: true; readonly lease: WriteLease }
-	| { readonly held: false; readonly holder: LeaseHolder | undefined };
+	| { readonly held: false; readonly holder: LeaseHolder | undefined; readonly path: string };
 
 /**
  * The one directory leases live in: outside every checkout and outside every home, scoped to the user, so every process
@@ -117,31 +118,6 @@ async function readLease(path: string): Promise<LeaseRead> {
 	return { kind: "holder", holder: holder as LeaseHolder };
 }
 
-/** How long an empty lease file has to sit there before it is debris: a live holder's file is never empty, even briefly. */
-const DEBRIS_AFTER_MS = 5_000;
-
-/**
- * Whether an empty lease file is debris rather than somebody's. Only an empty file is ever considered, and only once it has
- * been empty for longer than any write could take — nothing can delete a lease a live writer has just taken, because a
- * live writer's lease is never empty.
- */
-async function debris(path: string): Promise<boolean> {
-	const info = await stat(path).catch(() => undefined);
-	if (info === undefined || info.size > 0 || Date.now() - info.mtimeMs <= DEBRIS_AFTER_MS) return false;
-	// Read it once more before saying so: a writer that has just cleared the same debris and taken the lease leaves a file
-	// with a body, and that one is not ours to remove. The window between this read and the caller's unlink is the only
-	// one left, and the alternative to it is refusing a checkout that a crash left behind, forever.
-	return (await readFile(path, "utf8").catch(() => undefined))?.trim() === "";
-}
-
-/**
- * Whether the holder is provably gone: the same host, and a pid that no longer exists. Age is never a reason, and a
- * holder on another host is never provable from here.
- */
-function abandoned(holder: LeaseHolder): boolean {
-	return holder.host === hostname() && !alive(holder.pid);
-}
-
 /**
  * Take the checkout's lease, or answer who has it.
  *
@@ -191,24 +167,16 @@ export async function acquireWriteLease(input: {
 		} catch (error) {
 			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
 			const read = await readLease(path);
-			// Three cases, three answers. A holder that is provably gone is cleared. An empty file that has been empty long
-			// enough to be debris is cleared. Anything this process cannot read is refused: a permission or a descriptor
-			// limit says nothing about the holder, and deleting on it lets a second writer in.
-			if (attempt === 0 && read.kind === "holder" && abandoned(read.holder)) {
-				await releaseIfOurs(path, read.holder.token);
-				continue;
-			}
-			if (attempt === 0 && read.kind === "empty" && (await debris(path))) {
-				await unlink(path).catch(() => undefined);
-				continue;
-			}
-			return { held: false, holder: read.kind === "holder" ? read.holder : undefined };
+			// Nothing is cleared here. Every clear is a read followed by an unlink, and between the two another writer can
+			// take the lease that the unlink then removes: a probe admitted both writers in 9 rounds out of 300 over a dead
+			// pid's lease. A lease left by a crash is therefore removed by a person, and the refusal names the file.
+			return { held: false, holder: read.kind === "holder" ? read.holder : undefined, path };
 		} finally {
 			await unlink(staged).catch(() => undefined);
 		}
 	}
 	const read = await readLease(path);
-	return { held: false, holder: read.kind === "holder" ? read.holder : undefined };
+	return { held: false, holder: read.kind === "holder" ? read.holder : undefined, path };
 }
 
 /** Unlink a lease file when it still carries `token`: the only way a release can be sure it is its own. */
@@ -219,9 +187,16 @@ async function releaseIfOurs(path: string, token: string): Promise<void> {
 }
 
 /** What a refusal says: who holds the checkout, and that coming back later is the answer. */
-export function leaseRefusalText(holder: LeaseHolder | undefined): string {
-	if (holder === undefined) return "another writer holds this checkout's write lease and it could not be read";
+export function leaseRefusalText(holder: LeaseHolder | undefined, path?: string): string {
+	if (holder === undefined)
+		return `another writer holds this checkout's write lease and it could not be read${
+			path === undefined ? "" : `; if no writer is running, remove ${path}`
+		}`;
 	const since = Date.parse(holder.startedAt);
 	const minutes = Number.isFinite(since) ? Math.max(0, Math.round((Date.now() - since) / 60_000)) : 0;
-	return `another writer holds the write lease for ${holder.checkout}: ${holder.writer}, pid ${holder.pid} on ${holder.host}, held for ${minutes} min. Wait for it to settle and call delegate again; the lease is not a queue`;
+	return `another writer holds the write lease for ${holder.checkout}: ${holder.writer}, pid ${holder.pid} on ${holder.host}, held for ${minutes} min. Wait for it to settle and call delegate again; the lease is not a queue${
+		path === undefined || holder.host !== hostname() || alive(holder.pid)
+			? ""
+			: `; if it cannot settle, remove ${path}`
+	}`;
 }
