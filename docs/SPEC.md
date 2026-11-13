@@ -230,7 +230,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 
 ```text
 ~/.mason/
-├── agent/                  # Mounted into the tool machine at this same absolute path (ADR 0002)
+├── agent/                  # Given to the tool machine at this same absolute path (ADR 0002)
 │   ├── profile.md          # Who Denis is: agent-managed, resident, capped, read through the execution environment
 │   ├── log/2026-10-20.md   # Dated facts, one per line, written with `write` on the tool machine
 │   ├── journal/            # Where the daily journal will be written
@@ -239,7 +239,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 │   ├── agents/             # Worker definitions, beside skills so `write` can edit them
 │   ├── workspace/          # The directory the agent works in; not the repo that runs it
 │   └── .git                # The home's repository: the agent's memory and its history
-└── service/                # Never mounted into the tool machine
+└── service/                # Sibling of agent/, not inside it
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # The connector credentials, as hashes, one per entry (§4.1b)
     ├── integrations.json   # The services mason reaches: each entry's MCP server, connector grant and commands, read once at boot
@@ -248,12 +248,12 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
     └── data/               # agent.sqlite, routines-state.json, seeded-skills.json (§4.1c)
 ```
 
-**The boundary is a mount until writable roots lands.** In the deployment `service/` does not exist in the tool
-machine's filesystem, so `bash` cannot reach the connector credentials, the database, the SSH key or the provider
-credential — the split holds for every tool, not only the ones that honour a policy. In the dev stack there
-are no containers: both halves are sibling directories on one filesystem and a tool can see `service/`, so the
-deployment is what makes the split meaningful for a developer. `service/` is unversioned. `agent/.git` is the memory repo, created when the home is first
-opened, and a home from before the split is refused at boot rather than migrated. `service/` is unversioned.
+**The boundary is a mount, and a deployment is what makes it.** The repository ships one shape: the halves are sibling
+directories on one filesystem, and a tool that can read one can read the other. A deployment that mounts `agent/` and not
+`service/` is what makes the split meaningful — the tool machine has no `service/`, so `bash` cannot reach the connector
+credentials, the database, the SSH key or the provider credential, for every tool and not only policy-honouring ones.
+Writable roots would hold it without a mount. `service/` is unversioned. `agent/.git` is the memory repo, created when
+the home is first opened, and a home from before the split is refused at boot rather than migrated.
 
 The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `integrations.json` and
 `agent.sqlite` are `0600`. It holds a transcript of everything Denis said, which is not a thing to leave readable by
