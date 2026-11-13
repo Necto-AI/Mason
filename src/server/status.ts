@@ -4,7 +4,8 @@
  * the module is the operator's view instead of the reader's: the prompt-cache report of a finished run.
  */
 import type { ConversationView, InboxState, LiveState, UsageState } from "@earendil-works/pi-durable";
-import type { AgentStatus, HookSummary, RunStatus } from "../shared/contract.ts";
+import type { RunStatus } from "../shared/contract.ts";
+import { ROLE_NAMES, type RoleMap } from "./common.ts";
 import type { IntegrationSummary } from "./integration-status.ts";
 
 export function liveOf(view: ConversationView | undefined): LiveState | undefined {
@@ -18,16 +19,6 @@ export function inboxOf(view: ConversationView | undefined): InboxState | undefi
 /** `true` while the conversation is working on an input; `pi.live.run` exists exactly then. */
 export function isBusy(view: ConversationView | undefined): boolean {
 	return liveOf(view)?.run !== undefined;
-}
-
-/** The names of the tools the running round has not finished. Names only — never arguments, never output. */
-export function runningToolNames(view: ConversationView | undefined): string[] {
-	const names: string[] = [];
-	for (const tool of liveOf(view)?.tools ?? []) {
-		if (tool.status === "done") continue;
-		if (!names.includes(tool.name)) names.push(tool.name);
-	}
-	return names;
 }
 
 export function queuedSubmissions(view: ConversationView | undefined): number {
@@ -49,12 +40,6 @@ export function deriveRunStatus(view: ConversationView | undefined): RunStatus {
 	return "idle";
 }
 
-export interface DeriveStatusOptions {
-	hooks: HookSummary[];
-	model?: { provider: string; modelId: string };
-	cwd?: string;
-}
-
 /**
  * The words a chat reads for a run status. `runStatus` is a token for a client, where it is mapped to a label the
  * client owns; a chat gets the sentence itself, because the relay posts this line into a conversation.
@@ -73,30 +58,35 @@ const RUN_STATUS_WORDS: Record<RunStatus, string> = {
  * view does not hold.
  *
  * The integrations are the caller's: `integration-status.ts` holds this boot's findings, and passing them in keeps the
- * sentence a pure function of what was found.
+ * sentence a pure function of what was found. The roles are the boot's for the same reason: they are what the
+ * conversations *will* run with, which the view can only show one conversation at a time.
  */
-export function statusLine(view: ConversationView | undefined, integrations: readonly IntegrationSummary[]): string {
+export function statusLine(
+	view: ConversationView | undefined,
+	integrations: readonly IntegrationSummary[],
+	roles: RoleMap,
+): string {
 	const queued = queuedSubmissions(view);
 	const connected = integrations.filter((entry) => entry.enabled && entry.connected).map((entry) => entry.name);
 	const unreachable = integrations.filter((entry) => entry.error !== null).length;
 	const waiting = queued === 0 ? "nothing queued" : `${queued} queued`;
 	const reached = connected.length === 0 ? "no integration connected" : `${connected.join(", ")} connected`;
 	const missed = unreachable === 0 ? "nothing unreachable since boot" : `${unreachable} unreachable since boot`;
-	return `${RUN_STATUS_WORDS[deriveRunStatus(view)]}: ${waiting}; ${reached}; ${missed}`;
+	return `${RUN_STATUS_WORDS[deriveRunStatus(view)]}: ${waiting}; ${reached}; ${missed}. ${roleLine(roles)}`;
 }
 
-export function deriveAgentStatus(view: ConversationView | undefined, options: DeriveStatusOptions): AgentStatus {
-	const live = liveOf(view);
-	const runTaskId = live?.run?.taskId;
-	return {
-		runStatus: deriveRunStatus(view),
-		busy: live?.run !== undefined,
-		...(runTaskId === undefined ? {} : { activeRunTaskId: String(runTaskId) }),
-		runningTools: runningToolNames(view),
-		hooks: options.hooks,
-		...(options.model === undefined ? {} : { model: options.model }),
-		...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-	};
+/**
+ * Both roles as one sentence: the model each runs and the level it thinks at.
+ *
+ * The client is told the pair rather than a name, because a role is a configuration and a status line that said "main"
+ * alone would leave a person to guess what it resolved to. A missing role is impossible here: the boot refuses a map it
+ * cannot complete and derives one when the store has none.
+ */
+export function roleLine(roles: RoleMap): string {
+	const named = ROLE_NAMES.map(
+		(name) => `${name} ${roles[name].provider}/${roles[name].modelId} at ${roles[name].thinking}`,
+	);
+	return `Roles: ${named.join("; ")}`;
 }
 
 /**

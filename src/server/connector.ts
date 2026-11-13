@@ -467,6 +467,9 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 							busy: isBusy(latest),
 							queued: queuedSubmissions(latest),
 							commands: [...CONTROL_OPS],
+							// The roles are the boot's, not the view's: a client that shows which model answered is
+							// told the pair a person configured, resolved to the catalog, rather than one conversation's.
+							roles: options.runtime.roles,
 						},
 					}
 				: {}),

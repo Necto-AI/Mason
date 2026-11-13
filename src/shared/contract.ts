@@ -80,16 +80,6 @@ export type HookSummary = {
 
 export type RunStatus = "idle" | "generating" | "running_tools" | "retrying" | "compacting";
 
-export type AgentStatus = {
-	runStatus: RunStatus;
-	busy: boolean;
-	activeRunTaskId?: string;
-	runningTools: string[];
-	model?: { provider: string; modelId: string };
-	cwd?: string;
-	hooks: HookSummary[];
-};
-
 /**
  * How long a name in a stored prefix may be: long as "Александра Петрова", short enough to read as `[from <name>]`. It
  * lives here because the prefix's own pattern enforces it, and the name written and the name parsed cannot drift.

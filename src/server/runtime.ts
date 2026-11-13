@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, Provider } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { createModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
@@ -26,11 +26,24 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { readCommonRuntime, readPiSettingsModel, resolveModelChoice, sshTargetFromRuntime } from "./common.ts";
+import {
+	type AgentRole,
+	commonPaths,
+	derivedRoles,
+	ROLE_NAMES,
+	type RoleMap,
+	readCommonAuth,
+	readCommonRuntime,
+	readPiSettingsModel,
+	readRoleMap,
+	resolveModelChoice,
+	sshTargetFromRuntime,
+} from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { EventLog } from "./events-log.ts";
 import { createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
+import { createSubagent } from "./extensions/subagent.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
 import {
@@ -40,14 +53,18 @@ import {
 	recordIntegrationBoot,
 	setIntegrations,
 } from "./integrations.ts";
+import { leaseDirOf } from "./lease.ts";
 import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { fauxSessionScript } from "./provider.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
- * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional: it is the only way the
- * agent reaches the reader, so no conversation may be without it.
+ * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional for every
+ * **person-facing** conversation: it is the only way the agent reaches the reader, so no conversation a person writes to
+ * may be without it. A task-owned child is not one — it is created after boot by `delegate`, which writes its selection
+ * explicitly without `delivery`, so the send tool and both gates are absent from it and its words reach the person only
+ * as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
  *
  * Code mode and the MCP tools are not here: `openAgentRuntime` builds both per boot, because each owns something that
  * dies with the runtime — a QuickJS sandbox and one client socket per integration — and a module constant would outlive
@@ -109,6 +126,8 @@ export interface AgentRuntime {
 	readonly mcp: McpCatalog;
 	readonly workspaceDir: string;
 	readonly model: AgentModelRef;
+	/** The two roles this boot runs: what the status line names and what a child conversation is configured with. */
+	readonly roles: RoleMap;
 	/**
 	 * The model this conversation was on before the boot moved it, when the configured one differs from the stored one.
 	 * The boot line says so once; nothing else needs it, and it is `undefined` on every ordinary boot.
@@ -143,6 +162,13 @@ export interface OpenAgentRuntimeOptions {
 	readonly storageOverride?: Storage;
 	/** Model choices; overridden by `PI_PROVIDER` / `PI_MODEL` / `PI_FAUX_MODEL`. */
 	readonly model?: AgentModelRef;
+	/** Where the write leases live, when something other than the machine-wide directory decides it: a test's own. */
+	readonly leaseDir?: string;
+	/**
+	 * The two roles for this boot, when something other than the store decides them: a test's scripted provider, or an
+	 * eval comparing two levels. Absent, they are the store's, or one model at `off`.
+	 */
+	readonly roles?: RoleMap;
 	/** `true` (or `PI_FAUX_MODEL=1`) plays the model offline: deterministic tests and UI checks. */
 	readonly faux?: boolean;
 	readonly env?: RuntimeEnvManager;
@@ -158,7 +184,8 @@ export interface OpenAgentRuntimeOptions {
 	readonly selection?: readonly Extension[];
 	/**
 	 * Whether to append missing base extensions to a stored explicit selection. Default true, because `delivery` must
-	 * never be absent from a real conversation; tests and evals turn it off when a narrowed selection is the point.
+	 * never be absent from a person-facing conversation; tests and evals turn it off when a narrowed selection is the
+	 * point, and a task-owned child never sees it at all — the repair runs on the root, once, before anything can run.
 	 */
 	readonly repairBase?: boolean;
 	/**
@@ -200,6 +227,75 @@ export interface ResolvedModel {
 	readonly models: Models;
 	readonly ref: AgentModelRef;
 	readonly faux: boolean;
+	/** The two roles this boot runs: the main one pinned to `ref`, the child as the store or Decision 8 names it. */
+	readonly roles?: RoleMap;
+}
+
+/**
+ * Refuse a role whose thinking level the catalog does not offer for its model.
+ *
+ * The sentence names the model *and* the levels it does offer, because the fix is choosing one of them and the catalog is
+ * the only thing that knows which: an operator who wrote `"…: "roles": {"subagent": {"…": "max"}}` for a model that
+ * maps only `high` is told exactly that. A provider the catalog does not know is skipped, because its models may simply
+ * not be loaded yet; a model that provider does not serve is refused, because a boot that accepted it would run a request
+ * that has no answer.
+ */
+export function validateRoles(models: Models, roles: RoleMap, where: string): void {
+	for (const name of ROLE_NAMES) {
+		const role = roles[name];
+		const model = models.getModel(role.provider, role.modelId);
+		// A provider the catalog does not know may simply not be loaded yet; a model it does not know under a provider it
+		// does is a typo, and a boot that accepted it would run a request that has no answer.
+		if (model === undefined) {
+			if (models.getProvider(role.provider) === undefined) continue;
+			throw new Error(
+				`${where}: role "${name}" names ${role.provider}/${role.modelId}, and that provider does not serve it`,
+			);
+		}
+		const supported = getSupportedThinkingLevels(model);
+		if (supported.includes(role.thinking)) continue;
+		throw new Error(
+			`${where}: role "${name}" runs ${role.provider}/${role.modelId} at thinking "${role.thinking}", which that model ` +
+				`does not support: it offers ${supported.join(", ")}`,
+		);
+	}
+}
+
+/** The level the main role asks for when an install names no roles: Decision 8's. */
+const MAIN_THINKING: AgentRole["thinking"] = "high";
+
+/** Decision 8's child: the model that answers as `subagent` where the catalog serves it at the level it names. */
+const SUBAGENT_ROLE: AgentRole = { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" };
+
+/**
+ * The pair a store that names no `roles` runs.
+ *
+ * The main role is the model the boot already resolved, never a model of its own: `resolveModelChoice` has weighed the
+ * bot's own file, a stored map, the common default and the environment, and a map that named a different model here would
+ * run one model while `doctor`, the runtime and the boot line reported another. What the default adds to `main` is the
+ * level, and to `subagent` a model — a child nobody configured has no other reason to pick one, so it takes Decision 8's
+ * where the catalog serves it at `max`, and the resolved model at `off` where it does not.
+ */
+export function defaultRoles(models: Models, ref: { readonly provider: string; readonly modelId: string }): RoleMap {
+	const model = models.getModel(SUBAGENT_ROLE.provider, SUBAGENT_ROLE.modelId);
+	const served = model !== undefined && getSupportedThinkingLevels(model).includes(SUBAGENT_ROLE.thinking);
+	return {
+		main: { provider: ref.provider, modelId: ref.modelId, thinking: levelOn(models, ref, MAIN_THINKING) },
+		subagent: served ? SUBAGENT_ROLE : derivedRoles(ref).subagent,
+	};
+}
+
+/**
+ * The level a model can be asked for. A bot's own pick is not the map's model, and a level the model does not offer
+ * reads as a request nobody made: `off` sends no reasoning parameter at all.
+ */
+function levelOn(
+	models: Models,
+	ref: { readonly provider: string; readonly modelId: string },
+	thinking: AgentRole["thinking"],
+): AgentRole["thinking"] {
+	const model = models.getModel(ref.provider, ref.modelId);
+	return model !== undefined && getSupportedThinkingLevels(model).includes(thinking) ? thinking : "off";
 }
 
 /**
@@ -222,10 +318,14 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 		// This queue used to be empty here, so a server booted under `PI_FAUX_MODEL=1` answered nothing: every turn died on
 		// "No more faux responses queued", which reads as a dead bot rather than as a script that was never loaded.
 		faux.setResponses(fauxSessionScript(env));
-		return { models, ref: options.model ?? FAUX_MODEL, faux: true };
+		const ref = options.model ?? FAUX_MODEL;
+		return { models, ref, faux: true, roles: options.roles ?? derivedRoles(ref) };
 	}
 	const runtime = await ModelRuntime.create({ allowModelNetwork: false });
 	const choice = await resolveModelChoice(house, env);
+	// The role map is the root's, like the default model: one decision for every bot under it, and a bot addressed
+	// directly has no store to keep one in.
+	const stored = house.root === undefined ? undefined : await readRoleMap(house.root.root);
 	const chosen = choice === undefined ? undefined : { provider: choice.provider, modelId: choice.modelId };
 	const ref = options.model ?? chosen ?? (house.root === undefined ? readPiSettingsModel() : undefined);
 	if (ref === undefined) {
@@ -236,9 +336,44 @@ export async function resolveModelAccess(options: OpenAgentRuntimeOptions, house
 						`defaultProvider/defaultModel in ${join(house.serviceDir, "settings.json")}`,
 		);
 	}
-	if (choice?.key !== undefined && choice.provider === ref.provider)
+	const configured = options.roles ?? stored;
+	const base = configured ?? defaultRoles(runtime, ref);
+	// A map somebody wrote is checked; the pair Decision 8 names is not, because it was picked by asking the same catalog,
+	// and refusing an install over a level it never chose would make the refusal about the wrong person.
+	if (configured !== undefined)
+		validateRoles(
+			runtime,
+			base,
+			options.roles === undefined
+				? commonPaths(house.root?.root ?? house.home).settings
+				: "the roles this boot was given",
+		);
+	// The main role's model is the model this boot resolved, always: the bot's own file, the map, the common default and
+	// the environment have already been weighed for it, and a role that named another model would run one while `doctor`,
+	// the runtime and the boot line named the other. The map decides only how far that model thinks.
+	// A map this boot was handed takes the model's identity the way a stored one does; a bot's own file still outranks it.
+	const pinned = choice?.source === "bot" ? ref : (options.roles?.main ?? ref);
+	const roles: RoleMap = {
+		...base,
+		main: {
+			provider: pinned.provider,
+			modelId: pinned.modelId,
+			thinking: levelOn(runtime, pinned, base.main.thinking),
+		},
+	};
+	if (choice?.key !== undefined && choice.provider === pinned.provider)
 		await runtime.setRuntimeApiKey(ref.provider, choice.key);
-	return { models: runtime, ref, faux: false };
+	// A role naming a second provider needs that provider's key too, and the only store mason keeps one in is the root's.
+	// A miss is not refused here: ModelRuntime reads its own credential store, which is where an operator may have it.
+	for (const provider of new Set(ROLE_NAMES.map((name) => roles[name].provider))) {
+		if (provider === ref.provider) continue;
+		const key =
+			house.root === undefined
+				? undefined
+				: (await readCommonAuth(house.root.root).catch(() => undefined))?.providers[provider]?.key;
+		if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+	}
+	return { models: runtime, ref: pinned, faux: false, roles };
 }
 
 /** Opens storage, the harness, and the root conversation; resumes any run a previous process left unfinished. */
@@ -311,15 +446,22 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			options.storageOverride ??
 			(options.storage === "memory" ? new MemoryStorage() : await openSqliteStorage(join(dataDir, "agent.sqlite")));
 
-		const { models, ref, faux } = options.modelAccess ?? (await resolveModelAccess(options, house));
+		const access = options.modelAccess ?? (await resolveModelAccess(options, house));
+		const { models, ref, faux } = access;
+		const roles = access.roles ?? derivedRoles(ref);
 
+		// Delegation, per boot like code mode: the lease directory and the child's role are this boot's, so an extension
+		// built once at import time could carry neither.
+		const subagent = createSubagent({ leaseDir: options.leaseDir ?? leaseDirOf(), role: roles.subagent });
 		const extensionList: readonly Extension[] = [
 			...BASE_EXTENSIONS,
+			subagent,
 			...(options.extensions ?? []),
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
 		];
 		const unconditional = unconditionalExtensionNames([
+			subagent.name,
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
 			codemode.extension.name,
 		]);
@@ -388,7 +530,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		// only when it creates the conversation, so a bot whose transcript predates a `defaultModel` change kept the old
 		// model for the life of the home while `mason status` and `doctor` reported the new one. Config takes effect at
 		// boot, which is when an operator expects a settings edit to land.
-		const previousModel = await applyModelChoice(root, ref, context);
+		const previousModel = await applyMainRole(root, roles.main, context);
 		// Before anything can run: a stored selection is used verbatim, so a doc written before a base extension existed —
 		// or before an integration offered tools — would leave the conversation without it, while a catalog said it had
 		// connected. A failed repair is a failed guarantee, so the server does not start with it.
@@ -408,6 +550,7 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			mcp,
 			workspaceDir,
 			model: ref,
+			roles,
 			...(previousModel === undefined ? {} : { previousModel }),
 			modelIsFaux: faux,
 			conversation: () => Promise.resolve(root),
@@ -494,20 +637,28 @@ async function readConversation(conversation: Conversation, context: Context): P
  * nothing is pruned. An unset or `{ add, remove }` selection already unions with the settings, so it needs nothing.
  */
 /**
- * Moves a stored conversation onto the model this boot was configured with, and answers the one it was on.
+ * Moves a stored conversation onto the role this boot resolved, and answers the model it was on.
  *
- * A run the last process left unfinished keeps its checkpoint's model for the turn it resumes: it started on that one,
- * and half an answer in a different model's voice is worse than one turn on the old model.
+ * The record is the conversation's own `pi.agent`, and it is what a run reads at each request: the model and the
+ * thinking level together, so a bot whose record says one model and whose boot says another cannot run half of each. A
+ * run the last process left unfinished keeps its checkpoint's model for the turn it resumes: it started on that one, and
+ * half an answer in a different model's voice is worse than one turn on the old model.
  */
-async function applyModelChoice(
+async function applyMainRole(
 	root: Conversation,
-	ref: AgentModelRef,
+	role: AgentRole,
 	context: Context,
 ): Promise<AgentModelRef | undefined> {
 	return root.commit(async (tx) => {
-		const stored = (await tx.doc(AgentDoc, root.id)).model;
-		if (stored?.provider === ref.provider && stored.modelId === ref.modelId) return undefined;
-		configure(tx, root.id, { model: ref });
+		const agent = await tx.doc(AgentDoc, root.id);
+		const stored = agent.model;
+		const moved = stored?.provider !== role.provider || stored.modelId !== role.modelId;
+		const releveled = (agent.thinkingLevel ?? "off") !== role.thinking;
+		if (!moved && !releveled) return undefined;
+		configure(tx, root.id, {
+			model: { provider: role.provider, modelId: role.modelId },
+			thinkingLevel: role.thinking,
+		});
 		return stored === undefined ? undefined : { provider: stored.provider, modelId: stored.modelId };
 	}, context);
 }

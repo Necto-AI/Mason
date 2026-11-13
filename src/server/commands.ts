@@ -124,7 +124,11 @@ export async function commandTarget(runtime: AgentRuntime): Promise<CommandTarge
 			await conversation.compact(instructions, BACKGROUND_CONTEXT);
 		},
 		status: async () =>
-			statusLine(await runtime.viewSnapshot(BACKGROUND_CONTEXT), integrationSummaries(currentIntegrations())),
+			statusLine(
+				await runtime.viewSnapshot(BACKGROUND_CONTEXT),
+				integrationSummaries(currentIntegrations()),
+				runtime.roles,
+			),
 		busy: async () => {
 			const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
 			return isBusy(view) || queuedSubmissions(view) > 0;

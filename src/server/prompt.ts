@@ -103,6 +103,27 @@ absorbed it, never silently. All of it lands inside \`agent/\`, and \`service/so
 was worth keeping, that is one line in the send.`;
 
 /**
+ * How a turn delegates, and the one sequence it is allowed to assume.
+ *
+ * The child cannot speak to the person and has no persona of its own, so the rule names what the turn owes it: the whole
+ * assignment, because the worker sees nothing else of the conversation, and a send of its answer, because the answer
+ * arrives as a tool result and nobody else will pass it on. The review sequence is written down rather than left to
+ * improvisation because it is the one order in the delegation that has a failure mode: a reviewer that starts before the
+ * writer settles would read a checkout that is still moving, and the write lease is what makes that impossible rather
+ * than unlikely.
+ */
+export const DELEGATION_RULE = `\`delegate\` runs one bounded task in a conversation of its own and returns what the worker answered to you. The
+worker sees only the \`task\` you write, and it cannot reach them: its words reach the reader only when you send them.
+- Delegate work that is separable and long: read a checkout and report on it, or change one thing in it and say what
+  changed. Small work you can do is work you should not hand off.
+- A reader gets \`read\` alone and never blocks anyone. A writer needs \`write: true\` and the checkout's path, and it
+  holds that checkout's write lease while it runs, so a second writer on the same checkout is refused until it settles.
+- A change that needs a review is two calls in order: the writer first, then a reader of the same checkout once the
+  writer has returned. The lease is released at settlement, so the reviewer is never blocked behind the writer.
+- Read what comes back before you use it. A worker that ran into its turn limit or its wall clock comes back as a
+  failure; that is a result to report, not a reason to retry the same words.`;
+
+/**
  * What the model is told about the services it can reach: a name and one line for a tool server, and the event kinds a
  * service raises.
  *
@@ -219,6 +240,8 @@ export const PROMPT_SECTIONS: readonly PromptSection[] = [
 	// declarations in every turn, and the script can ask for the one it needs. Declared here so `delivery` stays the
 	// prompt's last word; installed with its section, the vendor would place it by extension order instead.
 	CODEMODE_SECTION,
+	// The one way a turn hands work off, and the one sequence it may assume: a capability, beside the other two.
+	section("delegate", () => DELEGATION_RULE),
 	// What a long turn owes the next one. Beside the delivery rule because the two are the turn's two endings.
 	section("reflect", () => REFLECTION_RULE),
 	// Last on purpose: the rule that decides whether the reader hears anything sits closest to the turn.

@@ -10,11 +10,20 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { ControlOp } from "mason-protocol";
+import type { RoleMap } from "../src/server/common.ts";
 import type { IntegrationSummary } from "../src/server/integration-status.ts";
 import { type CommandTarget, runCommand } from "../src/server/main.ts";
-import { statusLine } from "../src/server/status.ts";
+import { roleLine, statusLine } from "../src/server/status.ts";
 
-const IDLE = "idle: nothing queued; no integration connected; nothing unreachable since boot";
+/** Two roles, one model each, so a line that mixed them up would read wrong. */
+const ROLES: RoleMap = {
+	main: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "high" },
+	subagent: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" },
+};
+
+const ROLES_LINE = roleLine(ROLES);
+
+const IDLE = `idle: nothing queued; no integration connected; nothing unreachable since boot. ${ROLES_LINE}`;
 
 interface Ran {
 	abort: number;
@@ -183,14 +192,18 @@ describe("the status line a chat reads", () => {
 	}
 
 	it("says what is running, what is waiting, and what answered at boot", () => {
-		assert.equal(statusLine(view({}), []), IDLE);
+		assert.equal(statusLine(view({}), [], ROLES), IDLE);
 		assert.equal(
-			statusLine(view({ run: { taskId: 1, inputs: [] }, generation: { attempt: 1 } }, 2), [
-				integration("telegram", { connected: true }),
-				integration("github", { connected: true }),
-				integration("docs", { error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no route' }),
-			]),
-			"answering: 2 queued; telegram, github connected; 1 unreachable since boot",
+			statusLine(
+				view({ run: { taskId: 1, inputs: [] }, generation: { attempt: 1 } }, 2),
+				[
+					integration("telegram", { connected: true }),
+					integration("github", { connected: true }),
+					integration("docs", { error: 'MCP integration "docs" at http://mason-docs:8080/mcp: no route' }),
+				],
+				ROLES,
+			),
+			`answering: 2 queued; telegram, github connected; 1 unreachable since boot. ${ROLES_LINE}`,
 		);
 	});
 
@@ -199,8 +212,9 @@ describe("the status line a chat reads", () => {
 			statusLine(
 				view({ run: { taskId: 1, inputs: [] }, generation: { attempt: 2, retry: { at: 0, error: "429" } } }),
 				[],
+				ROLES,
 			),
-			"retrying after a failure: nothing queued; no integration connected; nothing unreachable since boot",
+			`retrying after a failure: nothing queued; no integration connected; nothing unreachable since boot. ${ROLES_LINE}`,
 		);
 	});
 
@@ -210,13 +224,17 @@ describe("the status line a chat reads", () => {
 		// never counted because the boot never reaches one and so never records an error for it (`mcp.ts`) — that guarantee
 		// is the connection's, which is why it is not claimed here, where it could not fail.
 		assert.equal(
-			statusLine(view({}), [
-				integration("on", { connected: true }),
-				integration("off", { enabled: false, connected: true }),
-				integration("quiet"),
-				integration("broken", { error: "no route to mason-docs" }),
-			]),
-			"idle: nothing queued; on connected; 1 unreachable since boot",
+			statusLine(
+				view({}),
+				[
+					integration("on", { connected: true }),
+					integration("off", { enabled: false, connected: true }),
+					integration("quiet"),
+					integration("broken", { error: "no route to mason-docs" }),
+				],
+				ROLES,
+			),
+			`idle: nothing queued; on connected; 1 unreachable since boot. ${ROLES_LINE}`,
 		);
 	});
 });

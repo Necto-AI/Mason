@@ -177,7 +177,12 @@ async function checkModel(house: HousePaths, env: NodeJS.ProcessEnv): Promise<Do
 		};
 	}
 	const ref = `${choice.provider}/${choice.modelId}`;
-	const from = choice.source === "bot" ? " from the bot's settings.json" : "";
+	const from =
+		choice.source === "bot"
+			? " from the bot's settings.json"
+			: choice.source === "roles"
+				? " from the root's roles"
+				: "";
 	// The switch is not the store: `PI_FAUX_MODEL=1` makes the turn run the offline provider whatever the file names, so it
 	// can neither satisfy "this provider has a key" nor let the check report a model the boot will not use.
 	const offline = env.PI_FAUX_MODEL === "1";
