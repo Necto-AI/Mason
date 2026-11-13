@@ -363,8 +363,8 @@ command per failure and exiting 1 on any of them. Nothing repairs, and "nothing 
 started is not a misconfiguration.
 
 `service/integrations.json` carries `"version": "0.1"`: every write stamps it, a file without one is `0.1`, and any other
-value is refused with both versions named. `mason chat` grants the console entry — owner, controls — through the same
-writer the boot reads, and every other connector's grant is written by hand and validated there. The boot records the
+value is refused with both versions named. `mason new` and `mason chat` write the console entry — owner, controls —
+through the same writer the boot reads; every other grant is hand-written and validated there. The boot records the
 hash it read in `service/data/boot.json`, which is how doctor says "restart to apply".
 
 ---
