@@ -131,9 +131,6 @@ export function subagentRequestId(callId: string): string {
 const ENGINE = "delegate";
 
 export function createSubagent(options: SubagentOptions): Extension {
-	const turns = SUBAGENT_TURNS;
-	const timeout = SUBAGENT_TIMEOUT_MS;
-
 	const tool = defineTool({
 		name: SUBAGENT_TOOL,
 		description: `Delegate one bounded task to a worker and wait for its answer. The worker is a separate conversation: it starts with only the task you write and it cannot reach the person, so its answer comes back to you as this call's result and you are the one who sends it. Two shapes: a reader (the default) gets \`read\` alone, for a review, a search, or a question about a checkout; a writer (\`write: true\` with the checkout's absolute path) also gets \`write\`, \`edit\` and \`bash\`, and holds that checkout's write lease until it settles, so a second writer on the same checkout is refused while it runs. Give it the whole assignment in \`task\` — it cannot see this conversation. A worker that loops stops at its turn limit and a worker that hangs is stopped by the wall clock; both come back as failures you have to handle. For a change that needs a review, delegate the change first and the review as a second call once the first has returned: the lease is released at settlement, so the review is never blocked behind the writer.`,
@@ -158,7 +155,7 @@ export function createSubagent(options: SubagentOptions): Extension {
 
 			const child = await findOrCreateChild(api, context, {
 				role: options.role,
-				turns,
+				turns: SUBAGENT_TURNS,
 				cwd: where,
 				readOnly: !writing,
 			});
@@ -182,13 +179,13 @@ export function createSubagent(options: SubagentOptions): Extension {
 					{ type: "input", content: assignment, requestId: subagentRequestId(api.callId) },
 					context,
 				);
-				const raced = await withTimeout(submission.wait(context), timeoutMs ?? timeout);
+				const raced = await withTimeout(submission.wait(context), timeoutMs ?? SUBAGENT_TIMEOUT_MS);
 				if (raced.timedOut) {
 					// Aborting is what settles the child: its run ends `aborted`, its task is terminal, and the parent's
 					// own abort scope is empty again. Nothing is left running behind the failure this call returns.
 					await handle.abort(context);
 					return refusal(
-						`${ENGINE}: the worker ran past its ${Math.round((timeoutMs ?? timeout) / 1000)} s wall clock and was stopped; its transcript is kept in conversation ${String(child.id)}. Do not retry the whole thing blind: split it, or do the part that hung yourself.`,
+						`${ENGINE}: the worker ran past its ${Math.round((timeoutMs ?? SUBAGENT_TIMEOUT_MS) / 1000)} s wall clock and was stopped; its transcript is kept in conversation ${String(child.id)}. Do not retry the whole thing blind: split it, or do the part that hung yourself.`,
 					);
 				}
 				const settled = raced.value;
@@ -208,8 +205,8 @@ export function createSubagent(options: SubagentOptions): Extension {
 						role: "subagent",
 						model: { provider: options.role.provider, modelId: options.role.modelId },
 						thinking: options.role.thinking,
-						turns,
-						timeoutMs: timeoutMs ?? timeout,
+						turns: SUBAGENT_TURNS,
+						timeoutMs: timeoutMs ?? SUBAGENT_TIMEOUT_MS,
 						write: writing,
 						...(where === undefined ? {} : { checkout: where }),
 					},
