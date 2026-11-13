@@ -143,7 +143,7 @@ function renderIntegrations(): string | undefined {
 export const DOCS_GROUNDING = `\`/mason/docs/README.md\` is the read-only reference, not your memory: read its page when unsure how something here works.`;
 
 /**
- * What the index lists: every page the image ships, README first, and a `connectors/` page only for a connector this
+ * What the index lists: every page mason ships, README first, and a `connectors/` page only for a connector this
  * home is actually granted. A page about a chat that was never installed is a page the agent would read and find nothing
  * to do with.
  */

@@ -26,10 +26,10 @@ export interface DocPage {
 }
 
 /**
- * The pages the image ships, README first and then alphabetical.
+ * The pages mason ships, README first and then alphabetical.
  *
  * Read from the server's side of the same directory the tool machine mounts, because the index is rendered by the server
- * and the mount is a deployment detail — a page the image does not carry is a page the index does not offer.
+ * and the mount is a deployment detail — a page the package does not carry is a page the index does not offer.
  */
 export async function readDocsIndex(docsDir = SHIPPED_DOCS_DIR): Promise<DocPage[]> {
 	const pages: DocPage[] = [];
