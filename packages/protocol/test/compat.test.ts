@@ -11,9 +11,11 @@
  * name: `bind()` returns early when two fingerprints match, so a test that handed the served contract back to itself
  * would pass without reading a single member. The fingerprint assertion is what keeps this on the covered path.
  *
- * What is frozen is the member list, because that is what this change alters. The schemas those three members are
- * declared with are restated by reference: a change to one of them is a different claim, pinned by "the shape the type
- * says and the shape the schema validates are one shape" in `contracts.test.ts`.
+ * What is frozen is the member list and the fingerprint, because that is what this change alters: the fingerprint is the
+ * one `packages/protocol/src/index.ts` had at `e59a4c3`, so a restatement that drifts — a schema edited underneath it, a
+ * member renamed — fails here instead of quietly proving that *a* three-member contract binds. The schemas those members
+ * are declared with are otherwise restated by reference: a change to one of them is a different claim, pinned by "the
+ * shape the type says and the shape the schema validates are one shape" in `contracts.test.ts`.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -49,6 +51,8 @@ function peerBeforeConversation(): RemoteContract {
 
 test("a connector deployed before the conversation member existed still binds", () => {
 	const deployed = peerBeforeConversation();
+	// The one number this suite rests on: it is `MasonPeer.fingerprint` at `e59a4c3`, the contract v1 shipped.
+	assert.equal(deployed.fingerprint, "ac4fd4ec7911fb23");
 	assert.notEqual(
 		deployed.fingerprint,
 		MasonPeer.fingerprint,
