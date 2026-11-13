@@ -105,18 +105,19 @@ Bytes never cross the contract. A connector `POST`s them to `/api/connector/atta
 
 ## Versioning
 
-The contract names carry no version suffix. Chord's own `version` field on each contract is the number that changes, and
-a provider that breaks a consumer must declare an adapter. Within major 1 the envelope only grows: a field added is a
-field a peer ignores, and every object here has `additionalProperties: true` for exactly that reason. A field may also
-be retired inside major 1 for the same reason: an open object binds whether or not it carries one, so a deployed
-connector keeps working with `session.targets` gone and simply reads no targets. Major 1 stays the version (#200); a
-bump would refuse every connector already deployed to remove a field nobody has to bind.
+The contract names carry no version suffix. Chord's `version` field is the number that changes, and a provider that
+breaks a consumer must declare an adapter. Within major 1 the envelope only grows: a field added is one a peer ignores, so
+every object here is `additionalProperties: true`. A field may also be retired inside major 1: an open object binds whether
+or not it carries one, so a connector keeps working with `session.targets` gone. A **union member** is not a field:
+retiring one is a contract change, so a consumer naming it no longer binds and must be rebuilt (#201 removed the `notice`
+append and rebuilt the console, this repository's only connector). Major 1 stays (#200): a bump would refuse every
+connector already deployed.
 
-A **member** may be added inside major 1 as well, and `conversation` is the first one: binding is directional, so a
-provider has to cover what its consumer names and is free to offer more. A connector deployed before the member existed
-names `session`, `append` and `control`, and those are what it is served; it receives no `conversation` frames at all,
-because Chord streams only the members a consumer's own contract declares. The compatibility test in `test/` freezes the
-description such a connector holds and binds it to the served contract, which is the proof rather than the promise.
+A **member** may be added inside major 1 too, and `conversation` is the first one: binding is directional, so a
+provider covers what its consumer names and may offer more. A connector deployed before it existed names `session`,
+`append` and `control`, and those are what it is served, so it still binds where its `append` already matches the served
+one; it receives no `conversation` frames at all: Chord streams only the members a consumer declares.
+`test/compat.test.ts` freezes and binds that description to the served contract: the proof, not the promise.
 
 ## What an SDK has to implement
 

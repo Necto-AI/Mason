@@ -18,8 +18,8 @@
  * One member was retired rather than added, and it is pinned separately below: #201 removes the `notice` append shape, and
  * a union member is not a field — a deployed consumer that still names it is not covered by the served append any more,
  * which is `coverage`'s answer and, through it, `bind`'s refusal. "The retired notice append is refused" is the test that
- * says so; the price is recorded in `PROTOCOL.md`'s versioning section, and it is why the two connectors this step keeps
- * are rebuilt in the same change.
+ * says so; the price is recorded in `PROTOCOL.md`'s versioning section, and it is why the console, the only connector this
+ * repository ships, is rebuilt in the same change.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
