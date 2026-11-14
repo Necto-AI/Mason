@@ -14,7 +14,8 @@
  * `writeTextAtomic` is the same promise for text that arrives already serialised: `common/auth.json`, the timestamped copy
  * that goes beside the file it replaces (`common.ts`), and a boot record (`integrations.ts`).
  */
-import { closeSync, openSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -54,6 +55,10 @@ export async function writeTextAtomic(path: string, text: string): Promise<void>
  * store here is read, changed and written whole, so two writers that each read the old file lose one of the two changes
  * and both exit 0 — which is what a person saw as a credential that printed once and then did not exist.
  *
+ * The holder writes a token into the lock and its release removes the file only while that token is still there: a lock
+ * reaped as stale has been retaken by somebody else, and an unlink removes whatever is at the path, not what this caller
+ * created. `lease.ts` holds the same rule for the same reason.
+ *
  * A lock is held around the *read* as well as the write: the point is that the file a writer merged into is the file it
  * saw, and a read outside the lock is a lost update waiting for a second writer.
  */
@@ -79,10 +84,12 @@ const LOCK_STALE_MS = 30_000;
 /** The `O_EXCL` half: a file beside the store, released in a `finally`. */
 async function takeFileLock<T>(path: string, work: () => Promise<T>): Promise<T> {
 	const lock = `${path}.lock`;
+	// What this holder writes into the lock, so the release below removes only the file it created.
+	const token = randomUUID();
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	for (let attempt = 0; ; attempt += 1) {
 		try {
-			closeSync(openSync(lock, "wx", 0o600));
+			writeFileSync(lock, token, { flag: "wx", mode: 0o600 });
 			break;
 		} catch (error) {
 			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
@@ -112,6 +119,12 @@ async function takeFileLock<T>(path: string, work: () => Promise<T>): Promise<T>
 	try {
 		return await work();
 	} finally {
-		unlinkSync(lock);
+		// Only the file this holder created: a lock reaped as stale has been retaken by somebody else, and an unlink removes
+		// whatever is at the path (the module's opening note). A release that fails must not fail a write that landed.
+		try {
+			if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
+		} catch {
+			// Gone already, or removed between the read and this line: there is nothing of this holder's left to remove.
+		}
 	}
 }
