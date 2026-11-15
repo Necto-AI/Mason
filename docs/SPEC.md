@@ -74,7 +74,7 @@ mason/
 │       ├── env.ts                     # pi-env Connection + RemoteExecutionEnv
 │       ├── house.ts                   # The home: agent/ and service/ paths, soul/profile reads, log, git
 │       ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
-│       ├── mcp.ts                     # The live tool catalog: mcp_search, mcp_describe, mcp_call
+│       ├── mcp.ts                     # The live tool catalog: mcp_search, mcp_describe, mcp_call, mcp_read_resource
 │       ├── integrations.ts            # service/integrations.json: the services the agent reaches
 │       ├── attachments.ts             # Content ids and bytes: the connector's upload store
 │       ├── limits.ts                  # The budgets and caps every refusal names
@@ -133,19 +133,21 @@ you everything the agent is told. A test fails if another base extension grows a
 | `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
 | `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
-| `integrations` | `<integrations>` | boot configuration: one `name: description` line per enabled integration with an MCP server, sorted by name; omitted when there is none |
-| `codemode` | `<codemode>` | a count of the tools a script can call, and the three globals that find one (`ALL_TOOLS`, `searchTools`, `describeTool`); no declaration is resident |
+| `docs` | `<docs>` | an index of the shipped `docs/agent` pages and the markdown resources a service listed, read with `mcp_read_resource` |
+| `integrations` | `<integrations>` | boot configuration: one sorted line per enabled integration with its tool count and docs pointer, read from the boot's snapshot; omitted when none is enabled |
+| `codemode` | `<codemode>` | a count of the tools a script can call, and `ALL_TOOLS`, `searchTools`, `describeTool`; no declaration is resident |
+| `delegate` | `<delegate>` | plain text: one bounded child, its checkout lease, and the order of an implement-then-review pass |
 | `reflect` | `<reflect>` | plain text: what a turn of ten tool rounds or more owes the next one, with the profile and the log first and a skill rarely, and the guards each write has |
 
 Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
-`profile.md`), a **computation** over the filesystem (`skills`), a **constant** in `prompt.ts` (the wake rule, the tone
-rules, the delivery invariant), or a **computation the prompt does not own** — the **boot configuration**
-(`integrations.json`, rendered as its enabled names and their descriptions, sorted so two renders of one file are the
-same bytes) and the **count of callable tools**, read off the request's own agent.
+`profile.md`), a **computation** over the filesystem (`skills`, `docs`), a **constant** in `prompt.ts` (the wake rule,
+the tone rules, the delivery invariant), or a **computation the prompt does not own** — the **boot configuration**
+(`integrations.json` and the MCP surface, rendered as sorted lines so two renders of one boot are the same bytes) and
+the **count of callable tools**, read off the request's own agent.
 
-There is deliberately **no `docs` section**. pi's own default prompt points a coding agent at its README and `docs/`
-tree so it can change its own extensions, themes and skills; mason's agent is not meant to have that. A test asserts
-the rendered prompt names no path into pi, no documentation tree, and no `docs` section key (§5). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
+The `docs` section indexes mason's shipped pages and each service's markdown resources. There is no mount: a service's
+page is read through `mcp_read_resource`, and the shipped pages stay in the package as mason's own reference. A test
+asserts the render names no `/mason/docs` path and no pi documentation tree (§5). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
 what the runtime installs.
 
 ### 3.3 `src/server/hooks.ts` — The Routine and Event Engine
@@ -193,23 +195,13 @@ export interface EventHookConfig {
      - `scheduledRequestId(hook, nowMs)` → `hook:<id>:slot:<n>`: a timer. One fire per interval slot, so re-arming a timer cannot double-fire.
      - Anything else is a **gesture** — the run supervisor, a caller with no `requestId` — and `gestureRequestId()` gives each its own random key: an act is an intent, so two acts are two fires, and a fire after a restart cannot collide with one from before it.
      A named delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
-  5. An event fire steers: `whenBusyFor("hook")` places it in the turn in flight, and pi-durable puts it at the boundary after the tool round that is running, so a message arriving mid-work is read by that work. The case that decided it: a queued chat message cancelling a poster sat twenty-eight minutes and the poster went out anyway. A fire that asks for a follow-up gets one: a routine whose report has nothing to interrupt for says so at the submit (`src/server/admission.ts`).
+  5. An event fire waits its turn by default: the entry's `whenBusy` is `followUp` unless it says `steer`, and a `steer` is placed at the boundary after the running tool round, so the work in flight reads it. The case that decided the capability: a queued chat message cancelling a poster sat twenty-eight minutes and the poster went out anyway (`src/server/admission.ts`).
   6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The answer is one Mason-owned call, `send` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript and targets it. No template names a vendor's tool: the instruction says where its words came from, not which tool a medium exposes. An event with no origin records the send and answers the model that nobody was reached — a message nobody received is the failure this arrangement exists to avoid. An origin naming a connector other than the socket's own cannot arrive: the socket is the connector, and the grant is the ceiling.
-- **Where the wake rules come from.** A **routine** is the agent's own timer, an entry `{ name, intervalSeconds, prompt }` of `agent/routines.json` (§3.5), and nothing is built in: an absent file is zero routines, what a deployment ships. Validation gates the file: a name is `[a-z0-9-]` and unique, an interval at least 30 seconds, a non-empty prompt. A malformed file is one notice, the last good set armed. The agent edits it with `write` — there is no tool to build — and the edit re-arms the set: a new name arms, a removed one stops, a changed interval or prompt resets its slot.
-- **The boot scan.** `lastFiredAt`, `fireCount`, `nextFireAt` persist in `service/data/routines-state.json` (`0600`), never inside `agent/`. On start, a routine waits the remainder of its persisted `nextFireAt` instead of a fresh interval — a wake that was pending survives the restart — and a past-due slot fires once from its own slot key: a long downtime is one catch-up fire, never a stampede of the missed slots.
+- **Where the wake rules come from.** `agent/events.json` is one array the agent owns. An **integration event** is `{ source, kind, enabled, whenBusy, prompt }`; a **routine** is `{ source: "routine", name, enabled, whenBusy, prompt, schedule }`. `source` is an integration name or `routine`, `enabled` defaults to `false`, `whenBusy` to `followUp`. A routine's `schedule` is `{ every, unit, at, timezone }`, plus `days` weekly or `day` (1 to 31) monthly; a malformed file is one notice and the last good set.
+- **Seeding.** On boot, every event kind an MCP-enabled integration declares in its manifest is appended to `agent/events.json` disabled, with its `prompt` and `whenBusy`; a connector-only integration sends the same manifest in its session. An existing entry is never overwritten. The grant names the kinds the connector may send; a granted kind with no enabled entry is logged and wakes nothing.
+- **The boot scan.** `lastFiredAt`, `fireCount`, `nextFireAt` and the schedule's `anchor` persist in `service/data/routines-state.json` (`0600`). A schedule counts from its anchor: the first fire is the first occurrence after creation, a restart waits the remainder of the slot, and a past-due slot fires once from its wall-clock key.
 - **The supervisor's lifecycle hook.** `retry-failed-run` is defined where it fires, `src/server/run-retry.ts`: disabled, no interval, nothing schedules it.
-- **A connector's event: `append {type: "event"}`** (`src/server/connector.ts`, §4.1d), the only way a service wakes the agent: an append on the socket its grant opened, not a second door. It carries an `appendId`, a `kind`, and an optional `summary`, `payload` and `origin`; the grant's `kind` → routine map picks the routine, and the payload reaches the model fenced as untrusted data (above). An event that names an origin gives its turn a reader; one without leaves `send` saying nobody was reached rather than claiming a delivery. A granted kind with no live routine is written to the event log and wakes nothing. There is no signed POST any more: #104 removed `POST /api/events/<integration>`, the HMAC path and its envelope (§4.1d).
-
-  What the old door did, and where each part lives:
-
-  | Then | Now |
-  |---|---|
-  | one hook per integration, named in its trigger | an operator-editable `kind` → routine map on the connector's grant |
-  | HMAC over the body, `X-Mason-Signature` | a connector credential on the WebSocket upgrade, read per connection |
-  | `id` deduplicated in the durable log | `appendId`, deduplicated by the transcript and the event log |
-  | `commands` listed on the integration entry | `connector.commands`, the closed set of `control` ops |
-  | `payload` one rendered string | `payload` JSON data plus `summary`, fenced the same way |
-  | budgets: 6 fires and 6 commands a minute | the connector socket's classes, per connector (§4.1d) |
+- **A connector's event: `append {type: "event"}`** (`src/server/connector.ts`, §4.1d), the only way a service wakes the agent: an append on the socket its grant opened, not a second door. It carries an `appendId`, a `kind`, and an optional `summary`, `payload` and `origin`. A kind outside `connector.events.kinds` is refused; a granted kind with no enabled entry in `agent/events.json` is written to the event log and wakes nothing. The payload reaches the model fenced as untrusted data (above), and an event that names an origin gives its turn a reader. There is no signed POST any more: #104 removed `POST /api/events/<integration>`, the HMAC path and its envelope (§4.1d).
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
@@ -218,7 +210,7 @@ export interface EventHookConfig {
   - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has an MCP server, `codemode`, always, and `subagent`, the `delegate` tool. `prompt` is the only one with sections (§3.2). `delivery` is unconditional for every **person-facing** conversation: it carries the send tool and the gate that decides whether a turn's reader hears anything, so no conversation a person writes to may be without it. A task-owned child is not one: its selection is written explicitly in the creating commit, `coding-tools` alone, so the send tool and both gates are absent by construction and its words reach the person only as the tool result. `mcp` is absent rather than empty when no entry has one, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: three tools that read the live catalog (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has an MCP server, `codemode`, always, and `subagent`, the `delegate` tool. `prompt` is the only one with sections (§3.2). `delivery` is unconditional for every **person-facing** conversation: it carries the send tool and the gate that decides whether a turn's reader hears anything, so no conversation a person writes to may be without it. A task-owned child is not one: its selection is written explicitly in the creating commit, `coding-tools` alone, so the send tool and both gates are absent by construction and its words reach the person only as the tool result. `mcp` is absent rather than empty when no entry has one, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: four tools that read the live catalog and its docs (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
 - **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has an MCP server, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional. It runs on the root only, which is why a child's narrowed selection stays narrowed.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The roles.** `roles` in `common/settings.json` maps `main` and `subagent` to a provider, a model id and a thinking level. `main` runs the model the boot resolved — the bot's file, then the map, then the common default, then `PI_PROVIDER`/`PI_MODEL` — and the map decides only how far it thinks. Absent, `main` takes that model at `high` and `subagent` Decision 8's child at `max`, or the resolved model at `off` where the catalog cannot serve it. A level the model does not offer is refused at boot naming the ones it does; an unknown provider is skipped, an unknown model under a known one is refused (`validateRoles` in `src/server/runtime.ts`). The boot writes the main role into the root's `pi.agent` — model and thinking together, one record per conversation — and `delegate` writes the subagent role into the child's in the commit that creates it. That record is the run record: it is what each request reads, and a boot that agrees with it writes nothing.
@@ -239,14 +231,14 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 │   ├── log/2026-10-20.md   # Dated facts, one per line, written with `write` on the tool machine
 │   ├── journal/            # Where the daily journal will be written
 │   ├── skills/<name>/SKILL.md  # Denis's own skills, and the shipped ones seeded here on first boot
-│   ├── routines.json       # The timers the agent owns (§3.3)
+│   ├── events.json         # The events and routines the agent lets wake it (§3.3)
 │   ├── agents/             # Worker definitions, beside skills so `write` can edit them
 │   ├── workspace/          # The directory the agent works in; not the repo that runs it
 │   └── .git                # The home's repository: the agent's memory and its history
 └── service/                # Sibling of agent/, not inside it
     ├── soul.md             # The first section of the system prompt: the agent's own voice
     ├── config.json         # The connector credentials, as hashes, one per entry (§4.1b)
-    ├── integrations.json   # The services mason reaches: each entry's MCP server, connector grant and commands, read once at boot
+    ├── integrations.json   # Operator wiring: each entry's MCP server and connector grant, read once at boot
     ├── ssh/                # The key mason logs into the tool machine with, and the pinned host key
     ├── pi/                 # The copy of the provider credential
     └── data/               # agent.sqlite, routines-state.json, seeded-skills.json (§4.1c)
@@ -263,10 +255,10 @@ The home is `0700` and so is every directory in it; `soul.md`, `config.json`, `i
 `agent.sqlite` are `0600`. It holds a transcript of everything Denis said, which is not a thing to leave readable by
 every other account on the machine.
 
-`integrations.json` describes every service mason may reach — an MCP server that lends it tools, a connector that wakes
-it, and whether the entry is on — and is read once at boot, because the tool list and the prompt section are decided
-there and a list that changed under a running turn would re-price the prefix and change what the model can do between
-two messages of one conversation.
+`integrations.json` is operator wiring: an MCP server that lends tools, a connector grant that names the event kinds it
+may send, and whether the entry is on. It is read once at boot, because the tool list and the prompt section are decided
+there and a list that changed under a running turn would re-price the prefix. What wakes the bot is not here: it is
+`agent/events.json`, which the agent edits.
 
 The skills walk is one accepted deviation from the rest of this section: it reads symbolic links as nothing (a link is
 skipped rather than followed) and it does not honour a `.gitignore` inside `agent/skills/`, so a skill kept out of the
@@ -491,17 +483,18 @@ becomes the child host `connector:<name>` with the principal the credential stam
 supersedes the first, closed with a reason. No ping, no version handshake, no frame of our own.
 
 **The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the `commands` the grant
-holds, the event `kinds` and their routine, the limits — re-read whenever it changes. Nothing is accepted before it
-resolves, which is what `host.get` already does.
+holds, the event `kinds`, the limits, and the `dev.mason/integration` manifest a connector sent at the handshake — re-read
+whenever it changes. Nothing is accepted before it resolves, which is what `host.get` already does. A connector's manifest
+is optional; an MCP service declares the same shape in its `initialize` result's `_meta`.
 
 **Admission is one append.** `append` takes an `appendId`, an optional opaque `origin` (`{ref, messageId?, actor?}`) and
 one of two types. `submission` places ordinary human conversation: an `app.connector` entry whose `data.origin` is the
 origin, and nothing else — one bot has one person, so there is no name to attribute. It is refused with
 `mason.face_not_granted` when the entry grants no `user`, with `mason.actor_unknown` when the actor is not the entry's
 `owner` (and for any actor at all when the entry names none), and it spends the submission budget. `event` is written to
-`service/data/events/YYYY-MM-DD.jsonl` always, and wakes the bot only when its kind's routine is live and enabled; a kind
-the grant does not name is `mason.kind_not_permitted`. A connector with something to say raises an event; there is no
-append that writes a row of its own.
+`service/data/events/YYYY-MM-DD.jsonl` always, and wakes the bot only when `agent/events.json` has an enabled entry for
+that `source` and `kind`; a kind the grant does not name is `mason.kind_not_permitted`. A connector with something to say
+raises an event; there is no append that writes a row of its own.
 
 Every append is deduplicated durably: both are claimed by request id (`:submission:`, `:fire:`), and an event also by
 the event log, because an absent routine makes no entry. A resend is answered `{"outcome": "duplicate"}` and creates no
@@ -530,10 +523,6 @@ message and a reason across the link and nothing else, so a structured `retryAft
 **What is not here.** No approval step and no question (§4.1e). No rooms or conversation allow-list: one person, one bot
 (#129 is multi-user). No vendor tool named on an entry.
 
-What is not here was removed on purpose: the signed event door and the boot-frozen MCP registration (#104), and the
-JSON-RPC envelope this section used to describe (#156). A message to `/api/events/<name>` reaches nothing, and an entry
-that still names a `trigger` refuses the boot with the sentence that says so.
-
 `mason-telegram` and `mason-slack` live in their own repositories and import nothing from this one: their diff here is
 an entry with `connector.events` and a credential, and no `user` face — a connector reports and is asked, and never
 carries a person's words. The console connector (`scripts/chat.ts`) is in this repository, holds the one `user` grant,
@@ -542,11 +531,17 @@ and opens the same socket: it is the developer adapter v0 keeps.
 ### 4.1e The tool catalog
 
 A script asks what a service can do *now*. `src/server/mcp.ts` owns it, and it is not a tool list: `mcp` registers
-`mcp_search`, `mcp_describe` and `mcp_call`, and they are `callers: ["tools"]` — a script reaches them and the model is
-never offered them. Nothing a server says enters the registry, so the `codemode` section, the declared tool list and the
-deferred list are the same bytes on every turn of one build. `mcp_search` matches words against names and descriptions;
-`mcp_describe` answers `{integration, tool, description, approval, version, inputSchema}`; `mcp_call` sends
-`{integration, tool, arguments, version}`.
+`mcp_search`, `mcp_describe`, `mcp_call` and `mcp_read_resource`, and they are `callers: ["tools"]` — a script reaches them
+and the model is never offered them. Nothing a server says enters the registry, so the `codemode` section, the declared
+tool list and the deferred list are the same bytes on every turn of one build. `mcp_search` matches words against names
+and descriptions; `mcp_describe` answers `{integration, tool, description, approval, version, inputSchema}`; `mcp_call`
+sends `{integration, tool, arguments, version}`; `mcp_read_resource` reads a markdown resource by uri or page name.
+
+**The manifest, and the docs.** An MCP `initialize` result may carry `_meta["dev.mason/integration"]`:
+`{ about, events: [{ kind, description, prompt, whenBusy? }], docs?: [name] }`, validated by the one JSON Schema a
+connector also sends in its session. An invalid manifest, an empty tool description, a missing or unknown
+`dev.mason/approval` marker, or a manifest doc not listed as `text/markdown` refuses that integration. The result is a boot
+snapshot: the prompt's tool count and docs pointer do not move on a reconnect.
 
 **Freshness has three parts.** A server that sends `notifications/tools/list_changed` is re-listed, once per burst. A
 server that dropped is reconnected by the next question asked of it, so a container's restart is noticed without a

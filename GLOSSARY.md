@@ -124,8 +124,7 @@ The agent's text that a user client renders. At most one per generation. A messa
 _Avoid_: reply, response, delivery
 
 **routine**:
-A timer the agent owns: a name, an interval and the prompt that fires. It lives in `agent/routines.json`, which the
-agent edits; a deployment ships none. Marked `[ROUTINE: name]`.
+A timer the agent owns: a name, a schedule and the prompt that fires. One entry in `agent/events.json`, the agent edits; a deployment ships none. Marked `[ROUTINE: name]`.
 _Avoid_: cron job, schedule, timer, hook
 
 **event**:
@@ -192,7 +191,7 @@ _Avoid_: attachment id, file token
 
 **tool catalog**:
 What one MCP server offers *now*: each tool's name, description, JSON Schema and approval marker, read and never
-registered. A script asks it (`mcp_search`, `mcp_describe`, `mcp_call`), so a redeploy does not move the prompt.
+registered. A script asks it (`mcp_search`, `mcp_describe`, `mcp_call`, `mcp_read_resource`), so a redeploy does not move the prompt.
 _Avoid_: tool list, MCP tools (that is what a catalog holds)
 
 ## The conversation

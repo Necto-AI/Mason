@@ -54,3 +54,14 @@ replaced rather than kept:
   container restart no longer re-prices the prompt but a config change is still a restart; the integration still owns
   its upstream credential; and every integration is still optional unless marked `required`.
 
+
+## Amendment, 2026-11-16: the service owns its metadata, the agent owns the wake
+
+#220 split the integration record from the agent's decision. `service/integrations.json` is operator wiring: the MCP url,
+the credential, the switch and the connector grant, whose `events.kinds` is the ceiling on what a connector may send. What
+actually wakes the bot is `agent/events.json`, which only the agent edits: an event entry or a routine, with `enabled`,
+`whenBusy` and `prompt`. A service declares its events, docs and about line in a `dev.mason/integration` manifest — over
+MCP's `initialize` `_meta`, or in a connector's session — and boot seeds every declared event disabled. The operator's
+file no longer decides which event wakes anything, and the vendor prompt is a default the agent can rewrite rather than a
+prompt section the operator trusts. Docs are MCP resources with `mimeType: "text/markdown"`, read through
+`mcp_read_resource`; no `/mason/docs` mount is part of the contract.
