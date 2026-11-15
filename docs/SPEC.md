@@ -222,7 +222,7 @@ export interface EventHookConfig {
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it.
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
 - **The reflection gate.** The same extension carries a second gate over the same plumbing: a turn has two endings, and both are about what it leaves behind. `beforeRequest` counts the turn's tool rounds (the assistant messages that carried a call after the newest input a person or a fire wrote, so a gate's own continuation is stepped over rather than taken for a new turn) and memoizes the moment it reaches ten; `onYield` continues the run once with `REFLECTION_ASK` (`src/shared/contract.ts`), asking for what was learned into `agent/profile.md`, one dated log line, and a skill only when a procedure repeated. The count survives the delivery reminder, because a count that restarted would ask only the turns nobody had to rescue. The ask is a `pi.user` entry: the projection drops it, and the origin read is the run's pointer rather than a text scan. Its guards are words: what code enforces is the tool machine's mount, which makes `agent/` writable and `service/soul.md` not (ADR 0013: no gateway, no approval).
-- **The delivery gate.** What the model writes is the message, so no call's absence loses it, but a submission turn can still end with no text, and the reader sees silence. The `delivery` extension therefore carries a `GenerationTask` `onYield` hook. `onYield` sees the turn's final answer and asks whether it wrote anything; when it did not, the run continues once with `DELIVERY_REMINDER` from `src/shared/contract.ts`. The turn's kind comes from `pi.live.run.first`, the run's first placed entry: a submission entry (`pi.user`, `app.connector`) owes the reader a message, and a hook or event entry may stay silent. No entry kind is scanned and no text searched, so a compaction cannot become the input (#199); a run with no `first` is a local turn and is not scanned for one. The reminder is a `pi.user` entry (the only role a continuation can add), and `isDeliveryReminder()` is what the projection reads to drop it; a person's own line that merely opens with the marker is a reminder only if it matches, so nothing anybody typed leaves their transcript. Once per turn, memoised: a second silent answer becomes one `notice` — "The agent finished without writing you a message." — because a turn the reader cannot interpret is worse than one that admits failure (§4.1a).
+- **The delivery gate.** What the model writes is the message, so no call's absence loses it, but a submission turn can still end with no text, and the reader sees silence. The `delivery` extension therefore carries a `GenerationTask` `onYield` hook. `onYield` sees the turn's final answer and asks whether it wrote anything; when it did not, the run continues once with `DELIVERY_REMINDER` from `src/shared/contract.ts`. The turn's kind comes from `pi.live.run.first`, the run's first placed entry: a submission entry (`pi.user`, `app.connector`) owes the reader a message, and a hook or event entry may stay silent. No entry kind is scanned and no text searched, so a compaction cannot become the input (#199); a run with no `first` is a local turn and is not scanned for one. The reminder is a `pi.user` entry, and `isDeliveryReminder()` is what the projection reads to drop it; a person's own line that only opens with the marker is not one, so nothing anybody typed leaves their transcript. Once per turn, memoised: a second silent answer becomes one `notice` — "The agent finished without writing you a message." — because a turn the reader cannot interpret is worse than one that admits failure (§4.1a).
 
 ### 3.5 `~/.mason/` — The Agent's Home
 
@@ -285,11 +285,10 @@ and the one after it render the same text, in the same order, with the same tool
 the next turn patches that section — which is why `soul.md` is written by a person and `profile.md` is rewritten rather
 than appended to per turn.
 
-The budgets, in the same order: `preamble` is the soul (the operator's voice, ~200 characters by default) then the
-wake rule (~800); `tone` ~600; `cwd` one path; `skills` one line per skill and never a body; `profile` 4,800 characters,
-cut on a line boundary with a `(truncated …)` marker; `docs` one line per granted page and no body, so a document grows
-without costing anything until it is read; `integrations` one line per service, omitted when there is none; `codemode`
-~600; `delegate` ~1,600; `reflect` ~1,000; `delivery` ~600.
+The budgets, in the same order: `preamble` is the soul (~200 characters) then the wake rule (~800); `tone` ~600; `cwd`
+one path; `skills` one line per skill; `profile` 4,800 characters, cut on a line boundary with a `(truncated …)` marker;
+`docs` one line per granted page; `integrations` one line per service, omitted when there is none; `codemode` ~600;
+`delegate` ~1,600; `reflect` ~1,000; `delivery` ~600.
 
 **The tool list does not change.** The tools a turn is offered come from `BASE_EXTENSIONS` and the per-boot extensions
 (§3.4), never from the conversation: nothing inside a turn adds or removes one, because a tool that appears
@@ -397,8 +396,9 @@ Two rules keep it honest:
   not forwarded, only the text. One generation is one row: while the answer streams, the partial is rendered under the
   id it commits with (the message's place in the transcript), and the committed row keeps that id. `runId` names the
   run that produced it — the turn-input entry the run started from — so a client can group a failed run's rows, and a
-  failed run marks them `failed` rather than leaving them looking delivered. A failed run's reason never crosses: one
-  coarse notice stands for the run. A hook trigger crosses as nothing at all: a proactive turn is the message it wrote,
+  failed run marks them `failed` rather than leaving them looking delivered. The mark is `pi.live.runFailure`'s: it
+  lives while that run is the newest, a retry keeps it in the process that watched the failure, and a restart after the
+  retry reads the history as delivered. A run with no `first` shows the notice and marks no row. A failed run's reason never crosses: one coarse notice stands for the run. A hook trigger crosses as nothing at all: a proactive turn is the message it wrote,
   and the schedule, its payload and the prompt it built are the schedule's business, not the conversation's.
 
 Consequences: no tool row, reasoning, usage or error cause crosses. An origin stays on the

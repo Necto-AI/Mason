@@ -111,8 +111,6 @@ export interface TranscriptFold {
 	readonly expected: boolean;
 	/** How many agent messages the transcript holds: the next message row's ordinal. */
 	readonly messages: number;
-	/** Where in `items` the current run's rows begin, once its first entry is known. */
-	readonly runStart?: number;
 }
 
 /** What one pass over the entries carries between them: the fold being built, and the run the view names. */
@@ -122,9 +120,8 @@ interface FoldState {
 	input?: string;
 	expected: boolean;
 	messages: number;
-	/** The run whose rows are being folded: its first entry, and where its first row landed in `items`. */
+	/** The run whose rows are being folded: its first entry. */
 	runId?: string;
-	runStart?: number;
 }
 
 /**
@@ -182,27 +179,25 @@ export function foldTranscript(
 					...(resumed.input === undefined ? {} : { input: resumed.input }),
 					expected: resumed.expected,
 					messages: resumed.messages,
-					...(resumed.runStart === undefined ? {} : { runStart: resumed.runStart }),
 				};
-	// The run's first entry may have been folded in an earlier revision: the pointer names the run either way. A resumed
-	// fold that never saw its first entry has no row index to mark from, so it names the run and records the notice, and
-	// the rows it did not see are the one slice that fold cannot mark.
-	if (run.id !== undefined && firstIndex >= 0) state.runId = run.id;
+	// The pointer names the run for every row folded while it is in the view; a row is marked by that name, not by where
+	// it sits, so a later run's failure cannot reach back into an earlier turn.
+	if (run.id !== undefined) state.runId = run.id;
 	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
-		if (index === firstIndex && state.runStart === undefined) state.runStart = state.items.length;
 		foldEntry(entries[index] as EntryRecord, index, firstIndex, state);
 	}
 	// The run that died, once: its messages are marked, and one coarse notice says so. Both are derived from the run
 	// record, so a retried provider attempt (which writes no record) is not mistaken for a failed run, while an aborted or
 	// turn-limited one is not missed for having no error entry.
 	if (run.failed !== undefined) {
+		markRunFailed(state, run.id);
 		const notice: TranscriptItem = {
 			kind: "notice",
 			id: `${FAILED_NOTICE_PREFIX}${String(run.failed.taskId)}`,
 			text: RUN_FAILED_NOTICE,
 		};
-		state.items.push(notice);
-		markRunFailed(state);
+		// A resumed fold sees the same record again: the notice is one row, not one per revision that still reads it.
+		if (!state.items.some((row) => row.kind === "notice" && row.id === notice.id)) state.items.push(notice);
 	}
 	const fold: TranscriptFold = {
 		items: state.items,
@@ -212,7 +207,6 @@ export function foldTranscript(
 		...(state.input === undefined ? {} : { input: state.input }),
 		expected: state.expected,
 		messages: state.messages,
-		...(state.runStart === undefined ? {} : { runStart: state.runStart }),
 	};
 	return { fold, tail: streamingItems(view, fold, run) };
 }
@@ -257,11 +251,12 @@ function foldEntry(entry: EntryRecord, index: number, firstIndex: number, state:
 		const text = textOfBlocks(record.blocks);
 		if (isBlank(text)) return;
 		state.messages += 1;
+		const runId = rowRunId(state, index, firstIndex);
 		state.items.push({
 			kind: "delivered",
 			id: record.deliveryId,
 			text,
-			...(rowRunId(state, index, firstIndex) === undefined ? {} : { runId: rowRunId(state, index, firstIndex) }),
+			...(runId === undefined ? {} : { runId }),
 		});
 		state.spoke = true;
 		return;
@@ -306,12 +301,19 @@ function beginTurn(state: FoldState, id: string, expected: boolean): void {
 	state.spoke = false;
 }
 
-/** Mark every message the failed run produced failed, keeping each row's id and text so a client's key still finds it. */
-function markRunFailed(state: FoldState): void {
-	if (state.runStart === undefined) return;
-	for (let index = state.runStart; index < state.items.length; index += 1) {
+/**
+ * Mark every message the failed run produced failed, by the run each row names.
+ *
+ * The run id is the grouping a client reads (`runId`), so it is the grouping the marking uses: a row of an earlier turn
+ * cannot be reached, a resumed fold marks the same rows again without changing them, and a pointerless failure has no
+ * name to mark by — it records the notice and leaves the rows as they were.
+ */
+function markRunFailed(state: FoldState, runId: string | undefined): void {
+	if (runId === undefined) return;
+	for (let index = 0; index < state.items.length; index += 1) {
 		const row = state.items[index];
 		if (row?.kind !== "delivered" || row.failed === true) continue;
+		if (row.runId !== runId) continue;
 		state.items[index] = { ...row, failed: true };
 	}
 }

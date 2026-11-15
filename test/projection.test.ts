@@ -290,6 +290,95 @@ describe("the transcript the client is sent", () => {
 		]);
 	});
 
+	it("does not mark an earlier turn's message when a later run fails", () => {
+		// The marking is by the run each row names, not by a row position a resumed fold remembered: a second turn's
+		// failure must not reach back into the first turn's answer.
+		const first = foldTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Question one." }]),
+					assistant(2, [{ type: "text", text: "first answer" }], { stopReason: "stop" }),
+				],
+				{ "pi.live": { run: { taskId: 1, inputs: [], turns: 1, first: 1 } } },
+			),
+		).fold;
+		const second = foldTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Question one." }]),
+					assistant(2, [{ type: "text", text: "first answer" }], { stopReason: "stop" }),
+					entry(3, "pi.user", [{ role: "user", content: "Question two." }]),
+					assistant(4, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+				],
+				{ "pi.live": { runFailure: { taskId: 2, inputs: [], reason: "model_error", first: 3 } } },
+			),
+			first,
+		).fold;
+		assert.deepEqual(second.items, [
+			{ kind: "user", id: "1", text: "Question one." },
+			{ kind: "delivered", id: "message:1", text: "first answer", runId: "1" },
+			{ kind: "user", id: "3", text: "Question two." },
+			{ kind: "delivered", id: "message:2", text: "partial", runId: "3", failed: true },
+			{ kind: "notice", id: "failed:2", text: "Something went wrong, and the turn did not finish." },
+		]);
+	});
+
+	it("appends the failed notice once, however many revisions still read the run record", () => {
+		// A commit that changes nothing a reader sees still folds the view. The record stays until the next run starts, so
+		// the notice must be one row, not one per revision.
+		const view = viewOf(
+			[
+				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+				assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+			],
+			{ "pi.live": { runFailure: { taskId: 16, inputs: [], reason: "model_error", first: 1 } } },
+		);
+		const first = foldTranscript(view).fold;
+		const second = foldTranscript(view, first).fold;
+		const third = foldTranscript(view, second).fold;
+		assert.deepEqual(
+			third.items.filter((row) => row.kind === "notice").map((row) => row.id),
+			["failed:16"],
+			"one notice for one failed run",
+		);
+	});
+
+	it("reads a failed run's rows as delivered after a restart that followed a retry", () => {
+		// The failed mark is the run record's (`pi.live.runFailure`), and the record lives until the next run starts. A
+		// fresh fold after the retry has no record, so the history reads as delivered: the retry's message is the one that
+		// settled the turn. A resumed fold keeps the marks it already published. This pins the lifetime SPEC §4.1a states.
+		const failed = viewOf(
+			[
+				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+				assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+			],
+			{ "pi.live": { runFailure: { taskId: 16, inputs: [], reason: "model_error", first: 1 } } },
+		);
+		const before = foldTranscript(failed).fold;
+		const retried = viewOf([
+			entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+			assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+			entry(3, HOOK_ENTRY_KIND, [{ role: "user", content: "[EVENT: retry]" }], {
+				data: { hookId: "retry-failed-run", hookName: "Retry a failed run" },
+			}),
+			assistant(4, [{ type: "text", text: "The report, finished." }], { stopReason: "stop" }),
+		]);
+		assert.deepEqual(
+			foldTranscript(retried, before)
+				.fold.items.filter((row) => row.kind === "delivered")
+				.map((row) => row.failed),
+			[true, undefined],
+			"the resumed fold keeps the mark it published, and the retry's message is clean",
+		);
+		assert.deepEqual(
+			foldTranscript(retried)
+				.fold.items.filter((row) => row.kind === "delivered")
+				.map((row) => row.failed),
+			[undefined, undefined],
+			"a fresh fold has no run record to read, and says so rather than inventing one",
+		);
+	});
+
 	it("keeps one run's messages under the entry the run started at, through a steer", () => {
 		// A steer placed mid-run joins the run; it does not start a second one. Every row of the run names the input the
 		// run began at, so a failure after the steer marks the messages written before it too.

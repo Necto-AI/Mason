@@ -37,7 +37,8 @@ protocol has no envelope, no sequence number and no cursor of its own.
 A `delivered` row streams under the id the committed row carries — the message's place in the transcript — so a message
 a person watches arrive becomes the row it settles into: one message, one id, one row. `runId` is the turn-input entry
 the run started from, so a client can group a failed run's messages without knowing an entry id; `failed` marks the
-messages of a run that died. Continuity is by id, not by presence: a row can leave the transcript for the tool phase of a
+messages of the run `pi.live.runFailure` names, so it lives while that run is the newest and a restart after a retry
+reads the history as delivered. Continuity is by id, not by presence: a row can leave the transcript for the tool phase of a
 turn and return committed under the same id a revision later, so a client keyed by id keeps its place. A revision that reports nothing carries an empty `transitions`; a snapshot describes the revision it is, never a
 history to replay.
 
