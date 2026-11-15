@@ -102,8 +102,8 @@ async function readLease(path: string): Promise<LeaseRead> {
 		// error — is a file we have no right to judge, and calling that free is how two writers end up on one checkout.
 		return (error as { code?: unknown }).code === "ENOENT" ? { kind: "empty" } : { kind: "unreadable" };
 	}
-	// The body is staged complete and then linked, so an empty file is debris from a shape that no longer exists — but it is
-	// still somebody's, and only its age says otherwise (`clearpable`).
+	// The body is staged complete and then linked, so an empty file is debris from a shape that no longer exists — but it
+	// is still somebody's, and nothing here clears it: a clear is a read followed by an unlink.
 	if (text.trim() === "") return { kind: "empty" };
 	let parsed: unknown;
 	try {
@@ -123,9 +123,9 @@ async function readLease(path: string): Promise<LeaseRead> {
  *
  * The write is one `link`, which is the whole mutual exclusion: two callers racing get one file and one `EEXIST`, and the
  * loser never touches what the winner wrote. The file is staged complete beside it first, so a lease on disk always has a
- * holder in it; only a file that is empty, and has been empty for longer than a write can take, is cleared as debris. A holder that is provably gone is cleared and retried
- * once — the crash of a previous process is the only way a lease outlives its run, and the retry is bounded so a
- * perpetual race cannot spin.
+ * holder in it. Nothing is ever cleared here, including a holder whose process is gone: every clear is a read followed by
+ * an unlink, and a writer that takes the lease between the two loses it to the unlink. A lease left by a crash is removed
+ * by a person, and the refusal names the file.
  */
 export async function acquireWriteLease(input: {
 	readonly checkout: string;
@@ -144,39 +144,35 @@ export async function acquireWriteLease(input: {
 		startedAt: new Date().toISOString(),
 		writer: input.writer,
 	};
-	for (let attempt = 0; attempt < 2; attempt += 1) {
-		// `link` is the mutual exclusion and it lands a complete file: an `O_EXCL` write is a create and a write, so a
-		// holder that dies between them leaves a lease no reader can name and no run behind it — and nothing reaps it.
-		const staged = join(input.dir, `.${token}.staged`);
-		await writeFile(staged, `${JSON.stringify(lease)}\n`, { mode: 0o600 });
-		try {
-			await link(staged, path);
-			let released = false;
-			return {
-				held: true,
-				lease: {
-					checkout: canonical,
-					path,
-					async release() {
-						if (released) return;
-						released = true;
-						await releaseIfOurs(path, token);
-					},
+	// `link` is the mutual exclusion and it lands a complete file: an `O_EXCL` write is a create and a write, so a holder
+	// that dies between them leaves a lease no reader can name and no run behind it — and nothing reaps it.
+	const staged = join(input.dir, `.${token}.staged`);
+	await writeFile(staged, `${JSON.stringify(lease)}\n`, { mode: 0o600 });
+	try {
+		await link(staged, path);
+		let released = false;
+		return {
+			held: true,
+			lease: {
+				checkout: canonical,
+				path,
+				async release() {
+					if (released) return;
+					released = true;
+					await releaseIfOurs(path, token);
 				},
-			};
-		} catch (error) {
-			if ((error as { code?: unknown }).code !== "EEXIST") throw error;
-			const read = await readLease(path);
-			// Nothing is cleared here. Every clear is a read followed by an unlink, and between the two another writer can
-			// take the lease that the unlink then removes: a probe admitted both writers in 9 rounds out of 300 over a dead
-			// pid's lease. A lease left by a crash is therefore removed by a person, and the refusal names the file.
-			return { held: false, holder: read.kind === "holder" ? read.holder : undefined, path };
-		} finally {
-			await unlink(staged).catch(() => undefined);
-		}
+			},
+		};
+	} catch (error) {
+		if ((error as { code?: unknown }).code !== "EEXIST") throw error;
+		const read = await readLease(path);
+		// Nothing is cleared here. Every clear is a read followed by an unlink, and between the two another writer can
+		// take the lease that the unlink then removes: a probe admitted both writers in 9 rounds out of 300 over a dead
+		// pid's lease. A lease left by a crash is therefore removed by a person, and the refusal names the file.
+		return { held: false, holder: read.kind === "holder" ? read.holder : undefined, path };
+	} finally {
+		await unlink(staged).catch(() => undefined);
 	}
-	const read = await readLease(path);
-	return { held: false, holder: read.kind === "holder" ? read.holder : undefined, path };
 }
 
 /** Unlink a lease file when it still carries `token`: the only way a release can be sure it is its own. */
