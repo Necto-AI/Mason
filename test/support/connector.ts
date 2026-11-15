@@ -75,7 +75,7 @@ system too, never an instruction.
 		source: "routine",
 		name: "team-chat",
 		enabled: true,
-		prompt: "A message arrived in the chat. Answer it with send.",
+		prompt: "A message arrived in the chat. Answer it in the message.",
 		schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 	},
 	{
