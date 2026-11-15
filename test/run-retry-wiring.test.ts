@@ -26,14 +26,14 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxText,
-	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { type RunningServer, startServer } from "../src/server/main.ts";
+import { projectTranscript } from "../src/server/projection.ts";
 import { RETRY_HOOK, RETRY_HOOK_ID } from "../src/server/run-retry.ts";
 import type { AgentRuntime, ResolvedModel } from "../src/server/runtime.ts";
-import { HOOK_ENTRY_KIND, REPLY_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
+import { HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -54,13 +54,13 @@ const ROUTINES = JSON.stringify([
 		source: "telegram",
 		kind: "chat.message",
 		enabled: true,
-		prompt: "A message arrived in the chat. Answer it with send.",
+		prompt: "A message arrived in the chat. Answer it in the message.",
 	},
 	{
 		source: "routine",
 		name: "team-chat",
 		enabled: true,
-		prompt: "A message arrived in the chat. Answer it with send.",
+		prompt: "A message arrived in the chat. Answer it in the message.",
 		schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 	},
 ]);
@@ -121,7 +121,7 @@ function textOfMessage(message: { readonly content?: unknown }): string {
  *
  * The run under the person's turn has to fail for the supervisor to have anything to re-arm, and it fails as many times
  * as the run's own retry policy asks — so this is a factory and not a list: an error for every generation that is not
- * the retry's, and the retry's one `reply` followed by the round after it.
+ * the retry's, and the retry's one text answer.
  */
 const ANSWER_ONLY_THE_RETRY: FauxResponseFactory = (context) => {
 	const answering = context.messages.some(
@@ -130,11 +130,7 @@ const ANSWER_ONLY_THE_RETRY: FauxResponseFactory = (context) => {
 	// An error pi-ai will not retry, which is the shape `failingModel()` gives too: a retryable outage would spend the
 	// run's own backoff before the supervisor ever sees the failure, and the supervisor is what this test watches.
 	if (!answering) return fauxAssistantMessage("", { stopReason: "error", errorMessage: "the provider is down" });
-	// A tool call does not end a run: the result goes back to the model, which answers again.
-	if (context.messages.some((message) => message.role === "toolResult")) return fauxAssistantMessage(fauxText("sent"));
-	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "Отвечаю: да, можно." })], {
-		stopReason: "toolUse",
-	});
+	return fauxAssistantMessage(fauxText("Отвечаю: да, можно."));
 };
 
 /** A provider with nothing scripted: every run it serves ends in the faux error, which is the failure under test. */
@@ -185,6 +181,7 @@ function scriptedModel(steps: readonly FauxResponseStep[]): ResolvedModel {
 
 interface Entries {
 	readonly kind: string;
+	readonly id: number;
 	readonly stopReason?: string;
 	readonly hookId?: string;
 	/** The entry's own `data`, which is where a fire's origin and a reply's target live. */
@@ -206,11 +203,20 @@ async function entries(runtime: AgentRuntime): Promise<Entries[]> {
 				: {};
 		return {
 			kind: entry.kind,
+			id: Number(entry.id),
 			data,
 			...(stopReason === undefined ? {} : { stopReason }),
 			...(typeof data.hookId === "string" ? { hookId: data.hookId } : {}),
 		};
 	});
+}
+
+/** The messages the reader has been sent, from the same projection a client reads. */
+async function answers(runtime: AgentRuntime): Promise<string[]> {
+	const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+	return projectTranscript(view).flatMap((row) =>
+		row.kind === "delivered" && row.streaming !== true ? [row.text] : [],
+	);
 }
 
 /** How many times `hookId` fired, from the committed transcript. */
@@ -309,7 +315,10 @@ describe("a retry of a turn somebody was waiting on", () => {
 				await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?", origin: CHAT });
 
 				// The run under their turn spends its own retries first (seconds), and only then is the supervisor's turn.
-				await waitFor(server.runtime, (all) => all.some((entry) => entry.kind === REPLY_ENTRY_KIND), 20_000);
+				const deadline = Date.now() + 20_000;
+				while (!(await answers(server.runtime)).includes("Отвечаю: да, можно.") && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				}
 				const all = await entries(server.runtime);
 				const retry = all.find((entry) => entry.kind === HOOK_ENTRY_KIND && entry.hookId === RETRY_HOOK_ID);
 				assert.deepEqual(
@@ -317,11 +326,19 @@ describe("a retry of a turn somebody was waiting on", () => {
 					CHAT,
 					"the retry resumes the failed turn, so it carries where that turn was answering",
 				);
-				const reply = all.find((entry) => entry.kind === REPLY_ENTRY_KIND);
+				// The answer is a row of the retry's run: one message, under the id its run started from. The failed run's
+				// entry is still in the history, and its message is not duplicated by the retry.
+				const view = await server.runtime.viewSnapshot(BACKGROUND_CONTEXT);
+				const delivered = projectTranscript(view).filter((row) => row.kind === "delivered");
 				assert.deepEqual(
-					reply?.data.origin,
-					{ connector: CHAT.connector, ref: CHAT.ref },
-					"the answer records the origin of the turn it resumes, not a transcript nobody in the chat can read",
+					delivered.map((row) => row.text),
+					["Отвечаю: да, можно."],
+					"the chat reads the answer once, from the turn that resumed it",
+				);
+				assert.equal(
+					(delivered[0] as { runId?: string }).runId,
+					String(retry?.id),
+					"and the row names the retry's run, not the one that failed",
 				);
 			} finally {
 				await server.close();
@@ -346,11 +363,14 @@ describe("a retry of a turn that compacted before it failed", () => {
 				// A person wrote in the chat, and the fire carries where those words came from.
 				await server.runtime.hooks.fire("team-chat", { payload: "Таня: ?", origin: CHAT });
 
-				await waitFor(server.runtime, (all) => all.some((entry) => entry.kind === REPLY_ENTRY_KIND), 20_000);
+				const deadline = Date.now() + 20_000;
+				while (!(await answers(server.runtime)).includes("Отвечаю: да, можно.") && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 20));
+				}
 				const all = await entries(server.runtime);
 				assert.ok(
 					all.some((entry) => entry.kind === "pi.compaction"),
-					"the compaction is in the history the retry reads its origin from",
+					"the compaction is in the history the retry inherits its origin from",
 				);
 				const retry = all.find((entry) => entry.kind === HOOK_ENTRY_KIND && entry.hookId === RETRY_HOOK_ID);
 				assert.deepEqual(
@@ -358,11 +378,12 @@ describe("a retry of a turn that compacted before it failed", () => {
 					CHAT,
 					"the retry resumes the failed turn, not the summary that landed after its words",
 				);
-				const reply = all.find((entry) => entry.kind === REPLY_ENTRY_KIND);
+				const view = await server.runtime.viewSnapshot(BACKGROUND_CONTEXT);
+				const delivered = projectTranscript(view).filter((row) => row.kind === "delivered");
 				assert.deepEqual(
-					reply?.data.origin,
-					{ connector: CHAT.connector, ref: CHAT.ref },
-					"the answer still records the chat that is waiting",
+					delivered.map((row) => ({ text: row.text, runId: (row as { runId?: string }).runId })),
+					[{ text: "Отвечаю: да, можно.", runId: String(retry?.id) }],
+					"the answer is the retry's run, and the chat that is waiting reads it",
 				);
 			} finally {
 				await server.close();

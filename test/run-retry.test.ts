@@ -6,11 +6,21 @@ import { test } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { planRunRetry, RunRetrySupervisor, readRunOutcome, retryOrigin } from "../src/server/run-retry.ts";
 
-/** A view with nothing but the entries a test cares about. `live` decides whether the run is still going. */
+/**
+ * A view with nothing but the entries a test cares about. `busy` decides whether the run is still going, and a view whose
+ * newest answer failed carries the run record with the pointer the supervisor reads: the failed run's first entry.
+ */
 function viewOf(
 	entries: Array<{ id: number; kind: string; stopReason?: string; errorMessage?: string; data?: unknown }>,
 	busy = false,
 ): ConversationView {
+	const failed = entries.some((entry) => entry.kind === "pi.assistant" && entry.stopReason === "error");
+	const input = entries.find((entry) => entry.kind !== "pi.assistant");
+	const live = busy
+		? { run: { taskId: 1 } }
+		: failed && input !== undefined
+			? { runFailure: { taskId: 1, inputs: [], reason: "model_error", first: input.id } }
+			: undefined;
 	return {
 		entries: entries.map((entry) => ({
 			id: entry.id,
@@ -26,7 +36,7 @@ function viewOf(
 				},
 			],
 		})),
-		docs: busy ? { "pi.live": { run: { taskId: 1 } } } : {},
+		docs: live === undefined ? {} : { "pi.live": live },
 	} as unknown as ConversationView;
 }
 

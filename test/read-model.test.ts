@@ -11,7 +11,6 @@ import { after, describe, it } from "node:test";
 import { diffRevisions, type Op } from "@earendil-works/chord/delta";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { createReadModel } from "../src/server/read-model.ts";
-import { REPLY_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
 
 type Entry = Record<string, unknown>;
 
@@ -24,9 +23,9 @@ function entry(id: number, kind: string, model: unknown[], extra: Record<string,
 	return { id, kind, model, ...extra };
 }
 
-/** One committed reply, as `send` writes it. */
-function replyEntry(id: number, deliveryId: string, text: string): Entry {
-	return entry(id, REPLY_ENTRY_KIND, [], { data: { deliveryId, blocks: [{ type: "text", text }] } });
+/** One committed agent message: the assistant generation's text, which is the row. */
+function messageEntry(id: number, text: string): Entry {
+	return entry(id, "pi.assistant", [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }]);
 }
 
 /** One write nothing reads, as the outbox recorded them before the cut: a row the fold has to leave out. */
@@ -44,17 +43,14 @@ function userEntry(id: number, text: string): Entry {
 	return entry(id, "pi.user", [{ role: "user", content: text }]);
 }
 
-/** The round in flight, carrying the send call a client watches being written. */
-function liveDocs(text: string, callId = "m1", run?: { taskId: number }): Record<string, unknown> {
+/** The round in flight, carrying the text a client watches being written. */
+function liveDocs(text: string, run?: { taskId: number }): Record<string, unknown> {
 	return {
 		"pi.live": {
 			...(run === undefined ? {} : { run }),
 			generation: {
 				attempt: 1,
-				message: {
-					role: "assistant",
-					content: [{ type: "toolCall", id: callId, name: SEND_TOOL, arguments: { text } }],
-				},
+				message: { role: "assistant", content: [{ type: "text", text }] },
 			},
 		},
 	};
@@ -69,10 +65,7 @@ function liveDocs(text: string, callId = "m1", run?: { taskId: number }): Record
 function longConversation(turns: number): Entry[] {
 	const entries: Entry[] = [];
 	for (let turn = 0; turn < turns; turn += 1) {
-		entries.push(
-			userEntry(turn * 2 + 1, `Question ${turn}?`),
-			replyEntry(turn * 2 + 2, `reply:c${turn}`, `Answer ${turn}.`),
-		);
+		entries.push(userEntry(turn * 2 + 1, `Question ${turn}?`), messageEntry(turn * 2 + 2, `Answer ${turn}.`));
 	}
 	return entries;
 }
@@ -170,13 +163,13 @@ describe("what a token costs on the wire", () => {
 		const model = createReadModel();
 		const entries = [
 			userEntry(1, "Ship it."),
-			replyEntry(2, "reply:m1", "Shipped."),
-			retiredDeliveryEntry(3, "reply:m1", "rejected"),
+			messageEntry(2, "Shipped."),
+			retiredDeliveryEntry(3, "message:1", "rejected"),
 		];
 		const state = model.next(viewOf(entries));
 		assert.deepEqual(
 			state.transcript.map((row) => row.id),
-			["1", "reply:m1"],
+			["1", "message:1"],
 			"the message, and nothing about how it travelled",
 		);
 	});
@@ -189,7 +182,7 @@ describe("what a token costs on the wire", () => {
 		const entries = [
 			userEntry(1, "Ship it."),
 			retiredNoticeEntry(2, "the channel was muted"),
-			replyEntry(3, "reply:m1", "Shipped."),
+			messageEntry(3, "Shipped."),
 		];
 		const state = model.next(viewOf(entries));
 		assert.deepEqual(
@@ -199,7 +192,7 @@ describe("what a token costs on the wire", () => {
 		);
 		assert.deepEqual(
 			state.transcript.map((row) => row.id),
-			["1", "reply:m1"],
+			["1", "message:1"],
 			"the message and the reply, and nothing the medium said about itself",
 		);
 	});
@@ -226,17 +219,17 @@ describe("the transitions a revision reports", () => {
 		const model = createReadModel();
 		const question = [userEntry(1, "Is the deploy healthy?")];
 		model.next(viewOf([]));
-		model.next(viewOf(question, liveDocs("", "m1", { taskId: 16 })));
-		const writing = model.next(viewOf(question, liveDocs("The deploy is", "m1", { taskId: 16 })));
+		model.next(viewOf(question, liveDocs("", { taskId: 16 })));
+		const writing = model.next(viewOf(question, liveDocs("The deploy is", { taskId: 16 })));
 		assert.deepEqual(
 			writing.transcript.map((row) => row.id),
-			["1", "reply:m1"],
+			["1", "message:1"],
 			"the revision before the commit holds the row under the id the commit will land under",
 		);
 		assert.equal(writing.transcript[1]?.kind === "delivered" && writing.transcript[1].streaming, true);
 		assert.deepEqual(writing.transitions, [], "a token is the same row being written, so it reports nothing");
 
-		const committed = model.next(viewOf([...question, replyEntry(2, "reply:m1", "The deploy is healthy.")]));
+		const committed = model.next(viewOf([...question, messageEntry(2, "The deploy is healthy.")]));
 		assert.deepEqual(
 			committed.transitions.map((one) => one.kind),
 			["message.committed", "run.stopped"],
@@ -245,7 +238,7 @@ describe("the transitions a revision reports", () => {
 		assert.deepEqual(committed.transitions[0], {
 			kind: "message.committed",
 			revision: committed.revision,
-			rowId: "reply:m1",
+			rowId: "message:1",
 		});
 	});
 	it("names the six things that can happen, each in the revision that reports it", () => {
@@ -255,7 +248,7 @@ describe("the transitions a revision reports", () => {
 		const revision = (view: ConversationView) => model.next(view);
 		const kinds = (state: { transitions: readonly { kind: string }[] }) => state.transitions.map((one) => one.kind);
 
-		const running = revision(viewOf([userEntry(1, "Do the thing.")], liveDocs("", "m1", { taskId: 16 })));
+		const running = revision(viewOf([userEntry(1, "Do the thing.")], liveDocs("", { taskId: 16 })));
 		assert.deepEqual(kinds(running), ["run.started"]);
 		assert.deepEqual(
 			running.transitions[0],
@@ -266,7 +259,7 @@ describe("the transitions a revision reports", () => {
 
 		const queued = revision(
 			viewOf([userEntry(1, "Do the thing.")], {
-				...liveDocs("", "m1", { taskId: 16 }),
+				...liveDocs("", { taskId: 16 }),
 				"pi.inbox": { items: [{ id: 7, mode: "followUp", content: "Then the logs." }] },
 			}),
 		);
@@ -274,8 +267,8 @@ describe("the transitions a revision reports", () => {
 		assert.deepEqual(queued.transitions[0], { kind: "queue.added", revision: queued.revision, queueId: 7 });
 
 		const answered = revision(
-			viewOf([userEntry(1, "Do the thing."), replyEntry(2, "reply:m1", "Done.")], {
-				...liveDocs("", "m1", { taskId: 16 }),
+			viewOf([userEntry(1, "Do the thing."), messageEntry(2, "Done.")], {
+				...liveDocs("", { taskId: 16 }),
 				"pi.inbox": { items: [{ id: 7, mode: "followUp", content: "Then the logs." }] },
 			}),
 		);
@@ -283,10 +276,10 @@ describe("the transitions a revision reports", () => {
 		assert.deepEqual(answered.transitions[0], {
 			kind: "message.committed",
 			revision: answered.revision,
-			rowId: "reply:m1",
+			rowId: "message:1",
 		});
 
-		const withdrawn = revision(viewOf([userEntry(1, "Do the thing."), replyEntry(2, "reply:m1", "Done.")]));
+		const withdrawn = revision(viewOf([userEntry(1, "Do the thing."), messageEntry(2, "Done.")]));
 		assert.deepEqual(kinds(withdrawn), ["queue.withdrawn", "run.stopped"]);
 		assert.deepEqual(withdrawn.transitions[0], { kind: "queue.withdrawn", revision: withdrawn.revision, queueId: 7 });
 		assert.deepEqual(withdrawn.transitions[1], {
@@ -297,7 +290,7 @@ describe("the transitions a revision reports", () => {
 
 		// A run that dies is the other ending, and it is one transition, never both. What says it died is `pi.live`: the
 		// commit that ends a run without an answer records why, and the reason itself stays on the server.
-		const failed = revision(viewOf([userEntry(1, "Do the thing.")], liveDocs("", "m2", { taskId: 17 })));
+		const failed = revision(viewOf([userEntry(1, "Do the thing.")], liveDocs("", { taskId: 17 })));
 		assert.deepEqual(kinds(failed), ["run.started"]);
 		const ended = revision(
 			viewOf(
@@ -306,9 +299,9 @@ describe("the transitions a revision reports", () => {
 					entry(2, "pi.assistant", [{ role: "assistant", content: [], stopReason: "error" }]),
 				],
 				{
-					...liveDocs("", "m2"),
+					...liveDocs(""),
 					"pi.live": {
-						...(liveDocs("", "m2")["pi.live"] as object),
+						...(liveDocs("")["pi.live"] as object),
 						runFailure: { taskId: 17, inputs: [], reason: "model_error", detail: "usage limit reached" },
 					},
 				},
@@ -324,10 +317,8 @@ describe("the transitions a revision reports", () => {
 		// next revision's list describes only what the next revision changed.
 		const model = createReadModel();
 		model.next(viewOf([]));
-		const first = model.next(viewOf([userEntry(1, "One.")], liveDocs("", "m1", { taskId: 16 })));
-		const second = model.next(
-			viewOf([userEntry(1, "One."), userEntry(2, "Two.")], liveDocs("", "m1", { taskId: 16 })),
-		);
+		const first = model.next(viewOf([userEntry(1, "One.")], liveDocs("", { taskId: 16 })));
+		const second = model.next(viewOf([userEntry(1, "One."), userEntry(2, "Two.")], liveDocs("", { taskId: 16 })));
 		assert.deepEqual(
 			first.transitions.map((one) => one.kind),
 			["run.started"],

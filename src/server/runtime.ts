@@ -63,10 +63,10 @@ import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional for every
- * **person-facing** conversation: it is the only way the agent reaches the reader, so no conversation a person writes to
- * may be without it. A task-owned child is not one — it is created after boot by `delegate`, which writes its selection
- * explicitly without `delivery`, so the send tool and both gates are absent from it and its words reach the person only
- * as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
+ * **person-facing** conversation: it is the only thing that holds a turn to writing its message, so no conversation a
+ * person writes to may be without it. A task-owned child is not one — it is created after boot by `delegate`, which
+ * writes its selection explicitly without `delivery`, so both gates are absent from it and its words reach the person
+ * only as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
  *
  * Code mode and the MCP tools are not here: `openAgentRuntime` builds both per boot, because each owns something that
  * dies with the runtime — a QuickJS sandbox and one client socket per integration — and a module constant would outlive
@@ -77,9 +77,21 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 	CodingTools,
 	// The one extension with sections: every section of the prompt is declared in `prompt.ts`, in order.
 	Prompt,
-	// reply, and the gate that makes a turn say something.
+	// The two gates over a turn's ending: a message for a submission, and what a long turn kept.
 	Delivery,
 ];
+
+/**
+ * The extensions a boot builds for itself, beside the base list, and the names `docs/SURFACE.md` renders.
+ *
+ * `subagent` and `codemode` are in every boot; `mcp` is in a boot whose enabled integrations have a server. They are
+ * built per boot rather than declared at import because each owns something that dies with the process — a lease
+ * directory, a QuickJS sandbox, one client socket per integration. `scripts/surface.ts` renders exactly this list, and
+ * `npm run gen:surface` is what keeps the document and the boot from drifting.
+ */
+export const PER_BOOT_EXTENSIONS = ["subagent", "codemode"] as const;
+/** The per-boot extension a boot installs only when an enabled integration has an MCP server. */
+export const MCP_EXTENSION_NAME = "mcp";
 
 /**
  * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,

@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ATTACHMENT_BYTES, ATTACHMENT_TTL_MS } from "../src/server/attachments.ts";
+import { ATTACHMENT_BYTES, ATTACHMENT_LIMIT, ATTACHMENT_TTL_MS } from "../src/server/attachments.ts";
 import { CONNECTOR_PATH } from "../src/server/connector.ts";
 import {
 	CONNECTOR_CONTROL_LIMIT,
@@ -20,7 +20,7 @@ import {
 	FIRE_WINDOW_MS,
 	JSON_BODY_MAX_BYTES,
 } from "../src/server/limits.ts";
-import { BASE_EXTENSIONS } from "../src/server/runtime.ts";
+import { BASE_EXTENSIONS, MCP_EXTENSION_NAME, PER_BOOT_EXTENSIONS } from "../src/server/runtime.ts";
 
 export const SURFACE_PATH = "docs/SURFACE.md";
 export const SERVER_SOURCE = "src/server/main.ts";
@@ -60,8 +60,9 @@ export function unclaimed(source: string, doors: readonly Door[] = DOORS): strin
 export function renderSurface(): string {
 	const rows = DOORS.map((door) => `| \`${door.path}\` | ${door.kind} | ${door.why} |`).join("\n");
 	const extensions = BASE_EXTENSIONS.map((extension) => extension.name).join(", ");
+	const perBoot = PER_BOOT_EXTENSIONS.join(", ");
 	const budgets = [
-		`${CONNECTOR_SUBMISSION_LIMIT} submissions, ${CONNECTOR_FIRE_LIMIT} fires and ${CONNECTOR_CONTROL_LIMIT} controls a minute per connector`,
+		`${CONNECTOR_SUBMISSION_LIMIT} submissions, ${CONNECTOR_FIRE_LIMIT} fires, ${CONNECTOR_CONTROL_LIMIT} controls and ${ATTACHMENT_LIMIT} attachments a minute per connector`,
 		`${JSON_BODY_MAX_BYTES / 1024} KiB of JSON in one call`,
 		`${ATTACHMENT_BYTES / 1024 / 1024} MiB an attachment, kept for ${ATTACHMENT_TTL_MS / 3_600_000} h`,
 		`a window of ${FIRE_WINDOW_MS / 1000} s`,
@@ -85,7 +86,11 @@ ${rows}
 
 ## Extensions a boot installs
 
-${extensions}, then \`mcp\` when an enabled entry has an MCP server, and \`codemode\` always.
+The base list, in this order: ${extensions}.
+
+Then the ones the boot builds for itself: ${perBoot} always, and \`${MCP_EXTENSION_NAME}\` when an enabled entry has an MCP
+server. A per-boot extension owns something that dies with the process — a lease directory, a QuickJS sandbox, one client
+socket per integration — which is why none of them is a module constant.
 
 The tool list is pinned by the prompt test, because the prompt is where it is announced. No MCP tool schema is ever
 in it: a service's tools are reached from a script.
@@ -107,6 +112,16 @@ function main(): void {
 		return;
 	}
 	const rendered = renderSurface();
+	// Every per-boot name the boot installs is in the document. A render that dropped one would still be a valid string
+	// and a stale document nobody could tell from a correct one, so the render is checked against the list it names.
+	const missing = [...PER_BOOT_EXTENSIONS, MCP_EXTENSION_NAME].filter(
+		(name) => !rendered.includes(name === MCP_EXTENSION_NAME ? `\`${name}\`` : name),
+	);
+	if (missing.length > 0) {
+		console.error(`[surface] no row for the per-boot extension(s) ${missing.join(", ")}`);
+		process.exitCode = 1;
+		return;
+	}
 	if (process.argv.includes("--check")) {
 		const committed = readFileSync(target, "utf8");
 		if (committed !== rendered) {

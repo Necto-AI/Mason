@@ -21,7 +21,6 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxText,
-	fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentModelRef } from "./runtime.ts";
@@ -38,14 +37,12 @@ export interface ProviderAccess {
  * The script the offline provider holds for a *served* bot: how many answers, and what they say.
  *
  * `mason up` under `PI_FAUX_MODEL=1` is not `init`'s case. `init` makes one completion and reads the words, so
- * one plain "ok" is the whole script; a served bot has to reach a person, and the only thing that reaches a person is
- * the `send` tool. A turn scripted as text alone therefore answers nothing at all — the turn runs, the answer is
- * recorded as working notes and no reader is sent it, which is a process that looks alive and cannot speak.
+ * one plain "ok" is the whole script; a served bot has to answer a turn, and what reaches a person is the text itself.
+ * The projection turns an assistant generation's text into the message row, so one text answer is one turn that speaks.
  *
- * So each answer is a pair: the `send` call that delivers the words, then the round that closes the turn. `PI_FAUX_REPEAT`
- * says how many pairs the queue holds and `PI_FAUX_TEXT` says what they deliver, so a recorded demo or an end-to-end
- * script can run a whole session against a deterministic provider without any pretence of a hosted model. Unset, it is
- * one pair saying "ok".
+ * `PI_FAUX_REPEAT` says how many answers the queue holds and `PI_FAUX_TEXT` says what they say, so a recorded demo or an
+ * end-to-end script can run a whole session against a deterministic provider without any pretence of a hosted model.
+ * Unset, it is one answer saying "ok".
  */
 export function fauxSessionScript(env: NodeJS.ProcessEnv): FauxResponseStep[] {
 	const parsed = Number.parseInt(env.PI_FAUX_REPEAT ?? "", 10);
@@ -54,8 +51,7 @@ export function fauxSessionScript(env: NodeJS.ProcessEnv): FauxResponseStep[] {
 	const text = env.PI_FAUX_TEXT !== undefined && env.PI_FAUX_TEXT.trim() !== "" ? env.PI_FAUX_TEXT : "ok";
 	const script: FauxResponseStep[] = [];
 	for (let index = 0; index < repeat; index += 1) {
-		script.push(fauxAssistantMessage([fauxToolCall("send", { text })], { stopReason: "toolUse" }));
-		script.push(fauxAssistantMessage(fauxText("sent")));
+		script.push(fauxAssistantMessage(fauxText(text)));
 	}
 	return script;
 }

@@ -4,9 +4,8 @@
  * it.
  *
  * Every case drives a real Chord client over a real socket against a real server, because the number has to be mason's
- * read model and not a model of it. The row is measured with the per-call id replaced by a placeholder: the id is
- * `reply:<callId>` and the call id the provider mints has no fixed length, so the raw row is not a number a ceiling can
- * hold.
+ * read model and not a model of it. The row is measured as it crosses: an agent message's id is its place in the
+ * transcript (`message:<n>`), so the row is deterministic and no placeholder is needed.
  *
  * Bytes are deterministic, so they gate the run. The milliseconds are printed and never fail it: a spread that is the
  * machine's is the reviewer's to read, not the build's to enforce.
@@ -20,7 +19,6 @@ import { after, describe, it } from "node:test";
 import type { StateEvent } from "@earendil-works/chord";
 import { apply } from "@earendil-works/chord/delta";
 import type { ConversationState } from "mason-protocol";
-import { REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
 import {
 	connectConnector,
 	holdPeer,
@@ -33,9 +31,6 @@ import {
 /** The answer every case measures: one fixed length, so a number that moves is the wire and not the words. */
 const FIXTURE = "Here is the answer. ".repeat(60).trim();
 
-/** Where the call id goes before measuring. Its replacement, not its value: the id is per call and has no fixed length. */
-const PLACEHOLDER_ID = "reply:<call-id>";
-
 /** The ceiling, committed: above it the run fails, below it the run passes and says the number can come down. */
 const BASELINE = "test/connector-wire-baseline.json";
 const BASELINE_FILE = new URL(BASELINE, new URL("../", import.meta.url));
@@ -46,9 +41,9 @@ const SUMMARY = process.env.GITHUB_STEP_SUMMARY;
 /** What this run measured. Each case records a row before it asserts on it, so a failing run still prints the numbers. */
 const measured: { rowBytes?: number; baseline?: number; resumeMs?: number } = {};
 
-/** The bytes one committed reply row costs on the wire, with the per-call id normalised. */
+/** The bytes one committed agent message costs on the wire. */
 function rowBytes(row: { id: string; text: string }): number {
-	return Buffer.byteLength(JSON.stringify({ kind: "delivered", id: PLACEHOLDER_ID, text: row.text }));
+	return Buffer.byteLength(JSON.stringify({ kind: "delivered", id: row.id, text: row.text }));
 }
 
 type Verdict = "ok" | "stale" | "regression";
@@ -61,7 +56,7 @@ type Verdict = "ok" | "stale" | "regression";
  */
 function verdict(bytes: number, baseline: number): { readonly verdict: Verdict; readonly message: string } {
 	if (bytes > baseline) {
-		return { verdict: "regression", message: `wire: the reply row grew: ${bytes} bytes, baseline ${baseline}` };
+		return { verdict: "regression", message: `wire: the message row grew: ${bytes} bytes, baseline ${baseline}` };
 	}
 	if (bytes < baseline) return { verdict: "stale", message: `baseline-stale: ${bytes} bytes, baseline ${baseline}` };
 	return { verdict: "ok", message: `${bytes} bytes, baseline ${baseline}` };
@@ -80,7 +75,7 @@ async function baselineOf(): Promise<number> {
 	return value;
 }
 
-/** How many entries of one kind the transcript holds. */
+/** How many entries of one kind the transcript holds: the assistant entry is what the row projects from. */
 async function countOf(served: ServedConnector, kind: string): Promise<number> {
 	const entries = await served.server.runtime.conversation();
 	const page = await entries.entries({}, 1000, undefined, { signal: AbortSignal.timeout(5_000) } as never);
@@ -115,16 +110,16 @@ async function submitFixture(peer: Awaited<ReturnType<typeof holdPeer>>, appendI
 }
 
 describe("the connector wire", () => {
-	it("costs a measured number of bytes per reply row", async () => {
+	it("costs a measured number of bytes per message row", async () => {
 		const served = await serveConnector({ steps: replyTurns([FIXTURE]) });
 		try {
 			const heldPeer = await holdPeer(served);
 			try {
 				await submitFixture(heldPeer);
-				await until(async () => (await countOf(served, REPLY_ENTRY_KIND)) === 1, "the committed reply");
+				await until(async () => (await countOf(served, "pi.assistant")) >= 1, "the committed answer");
 				await until(() => committedRows(heldState(heldPeer.frames)).length === 1, "the row in the state");
 				const rows = committedRows(heldState(heldPeer.frames));
-				assert.equal(rows.length, 1, "one reply row for the turn");
+				assert.equal(rows.length, 1, "one message row for the turn");
 				measured.rowBytes = rowBytes(rows[0] as { id: string; text: string });
 				measured.baseline = await baselineOf();
 				const gate = verdict(measured.rowBytes, measured.baseline);
@@ -152,7 +147,7 @@ describe("the connector wire", () => {
 			} finally {
 				await first.close();
 			}
-			await until(async () => (await countOf(served, REPLY_ENTRY_KIND)) === 1, "the committed reply");
+			await until(async () => (await countOf(served, "pi.assistant")) >= 1, "the committed answer");
 			const started = Date.now();
 			const heldPeer = await holdPeer(served);
 			try {
@@ -161,7 +156,7 @@ describe("the connector wire", () => {
 				assert.equal(
 					committedRows(heldState(heldPeer.frames))[0]?.text,
 					FIXTURE,
-					"the row a client that connected later holds is the reply",
+					"the row a client that connected later holds is the answer",
 				);
 			} finally {
 				await heldPeer.close();
@@ -191,7 +186,7 @@ after(async () => {
 	const rows: string[] = [];
 	if (measured.rowBytes !== undefined && measured.baseline !== undefined) {
 		const gate = verdict(measured.rowBytes, measured.baseline);
-		rows.push(`| bytes per reply row | ${measured.rowBytes} | ≤ ${measured.baseline} | ${gate.verdict} |`);
+		rows.push(`| bytes per message row | ${measured.rowBytes} | ≤ ${measured.baseline} | ${gate.verdict} |`);
 	}
 	if (measured.resumeMs !== undefined) {
 		rows.push(`| ms to hand a later client the row | ${measured.resumeMs} | reported only | reported |`);

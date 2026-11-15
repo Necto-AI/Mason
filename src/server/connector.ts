@@ -13,9 +13,10 @@
  * 3. **The session is state.** The connector reads its grants as a state member of `mason.peer`, so there is no hello to
  *    answer and no face to negotiate: what the operator granted is what it sees, and it cannot change under a live
  *    socket.
- * 4. **The conversation is the state, and the state is the answer.** A reply committed as an `app.reply` entry is a row
- *    of the `conversation` member the door publishes, and that is how it reaches a reader: there is no second method to
- *    call, nothing to deliver and nothing to acknowledge.
+ * 4. **The conversation is the state, and the state is the answer.** The agent's message is a row of the `conversation`
+ *    member the door publishes, and that is how it reaches a reader: there is no second method to call, nothing to
+ *    deliver and nothing to acknowledge. The member is served only to a grant with a `user`: an event client reads no
+ *    transcript, and its cell stays empty because nothing is published to it.
  *
  * What is *not* here: the owner's token. A connector credential opens this socket and the attachment endpoints and
  * nothing else; the config is read per request, so a revoke lands on the next connection rather than the next restart.
@@ -63,7 +64,7 @@ import {
 	type FireLimiter,
 } from "./limits.ts";
 import { validateIntegrationManifest } from "./mcp.ts";
-import { createReadModel } from "./read-model.ts";
+import { createReadModel, EMPTY_CONVERSATION } from "./read-model.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
 
@@ -125,6 +126,8 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	// grant and nobody else's.
 	host.serve(MasonPeer, (input, principal, self) => {
 		const name = principal.connector;
+		// The manifest a connector sent in its handshake: one contract for docs, tools and events. A connector that sends
+		// none is deleted from the table rather than left with a stale one, and its events are seeded disabled.
 		const declared = (input as { readonly metadata?: unknown }).metadata;
 		if (declared === undefined) {
 			metadata.delete(name);
@@ -135,39 +138,47 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 				options.runtime.hooks.seed(name, manifest.events);
 			}
 		}
-		const conversation = self.state("conversation", ConversationStateSchema, { init: () => state });
-		// The door's one watch, opened and closed with this object: a socket that goes takes its subscription with it,
-		// and the door keeps one watch for the process rather than one per socket.
-		const feed = self.resource("conversation-feed", {
-			version: 1,
-			open: () => {
-				const listeners = new Set<(value: ConversationState) => void>();
-				const relay = (value: ConversationState) => {
-					for (const listener of [...listeners]) listener(value);
-				};
-				watchers.add(relay);
-				return {
-					subscribe(listener: (value: ConversationState) => void) {
-						listeners.add(listener);
-						// The value the cell was initialised with: a publish that landed between the init and this listener is not
-						// lost, and the handler ignores a revision the cell already holds.
-						listener(state);
-						return () => listeners.delete(listener);
-					},
-					stop() {
-						listeners.clear();
-						watchers.delete(relay);
-					},
-				};
-			},
-			close: (opened) => opened.stop(),
+		// One contract, two surfaces, and the grant is what decides which. A `user` grant is a reader: it is served the
+		// conversation state and its feed. An entry without one is an event client, and its cell stays the empty value:
+		// there is nothing a transcript could tell it that it is allowed to read, so nothing is published to it.
+		const reads = grantOf(name).user !== undefined;
+		const conversation = self.state("conversation", ConversationStateSchema, {
+			init: () => (reads ? state : EMPTY_CONVERSATION),
 		});
-		// The rows are shared with the previous revision on purpose: a diff that sees the same containers appends to the
-		// tail instead of replacing the transcript.
-		self.on("publish", feed, (value, ctx) => {
-			if (value.revision <= conversation.value.revision) return;
-			conversation.replace(ctx, value, { diff: true });
-		});
+		if (reads) {
+			// The door's one watch, opened and closed with this object: a socket that goes takes its subscription with it,
+			// and the door keeps one watch for the process rather than one per socket.
+			const feed = self.resource("conversation-feed", {
+				version: 1,
+				open: () => {
+					const listeners = new Set<(value: ConversationState) => void>();
+					const relay = (value: ConversationState) => {
+						for (const listener of [...listeners]) listener(value);
+					};
+					watchers.add(relay);
+					return {
+						subscribe(listener: (value: ConversationState) => void) {
+							listeners.add(listener);
+							// The value the cell was initialised with: a publish that landed between the init and this listener is not
+							// lost, and the handler ignores a revision the cell already holds.
+							listener(state);
+							return () => listeners.delete(listener);
+						},
+						stop() {
+							listeners.clear();
+							watchers.delete(relay);
+						},
+					};
+				},
+				close: (opened) => opened.stop(),
+			});
+			// The rows are shared with the previous revision on purpose: a diff that sees the same containers appends to the
+			// tail instead of replacing the transcript.
+			self.on("publish", feed, (value, ctx) => {
+				if (value.revision <= conversation.value.revision) return;
+				conversation.replace(ctx, value, { diff: true });
+			});
+		}
 		return {
 			variant: "default",
 			session: self.state("session", SessionSchema, sessionOf(name)),
@@ -247,7 +258,9 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		const grant = grantOf(name);
 		return {
 			protocol: PROTOCOL_MAJOR,
-			commands: [...(grant.commands ?? [])],
+			// A command is a reader's act: stopping a turn, compacting a conversation, reading a status. An entry with no
+			// `user` grant is served none, so an event client cannot spend a word the contract would refuse anyway.
+			commands: grant.user === undefined ? [] : [...(grant.commands ?? [])],
 			kinds: [...(grant.events?.kinds ?? [])].sort(),
 			limits: {
 				submissionsPerMinute: CONNECTOR_SUBMISSION_LIMIT,
@@ -440,6 +453,14 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 
 	async function control(name: string, args: ControlArgs): Promise<ControlResult> {
 		const grant = grantOf(name);
+		if (grant.user === undefined) {
+			// The refusal names the grant that is missing, not the command: a control is a reader's act, and this entry
+			// has no reader to act for. The contract stays one `mason.peer`; the grant decides the surface.
+			throw masonError(
+				ERROR_CODE.faceNotGranted,
+				`"${name}" holds no user grant: controls belong to the client that reads the conversation, and this entry does not`,
+			);
+		}
 		const op = args.op;
 		if (!(CONTROL_OPS as readonly string[]).includes(op)) {
 			// An undeclared op spends nothing: a typo must not cost the minute a real `/stop` needs.

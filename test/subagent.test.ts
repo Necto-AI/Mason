@@ -37,7 +37,6 @@ import { TargetDoc } from "../src/server/env.ts";
 import { SUBAGENT_TOOL, SUBAGENT_TURNS } from "../src/server/extensions/subagent.ts";
 import { acquireWriteLease } from "../src/server/lease.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import { SEND_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -121,8 +120,9 @@ function said(text: string): FauxResponseStep {
 	return fauxAssistantMessage(fauxText(text));
 }
 
-function delivered(text: string, id = "sent"): FauxResponseStep {
-	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text }, { id })], { stopReason: "toolUse" });
+/** A parent turn that answers with a message: the text is what the reader gets. */
+function delivered(text: string): FauxResponseStep {
+	return fauxAssistantMessage(fauxText(text));
 }
 
 /** The child's record: the model, the level, the turn limit and the selection, read from `pi.agent` in one commit. */
@@ -237,12 +237,12 @@ test("one child, owned by the tool task, on the subagent role, with no delivery 
 		assert.match(record.instructions ?? "", /^You are a worker/, "a worker brief instead of the persona");
 		assert.equal(record.cwd, null, "a reader works where the agent works");
 
-		// The selection is the whole of what it can reach: no delivery, so no `send` and neither gate.
+		// The selection is the whole of what it can reach: no delivery extension, so neither gate, and no tool that would
+		// reach the person. Its words reach them only as the tool result.
 		const conversation = await runtime.harness.conversation(child, BACKGROUND_CONTEXT);
 		const agent = await conversation?.agent(BACKGROUND_CONTEXT);
 		const names = (agent?.tools ?? []).map((tool) => tool.name);
-		assert.deepEqual(names, ["read"], "a reader gets `read` alone");
-		assert.ok(!names.includes(SEND_TOOL), "and no way to speak to the person");
+		assert.deepEqual(names, ["read"], "a reader gets `read` alone, and nothing that speaks");
 		assert.deepEqual(
 			(agent?.extensions ?? []).map((extension) => extension.name),
 			["coding-tools"],

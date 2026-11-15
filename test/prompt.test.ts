@@ -166,10 +166,7 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 	// role is the boot's), so neither is in the base list, and the two are the last tools a request carries. Growing this
 	// list is a decision of its own: a tool is a declaration in every request, and a capability the model may use without
 	// asking a script for it.
-	assert.deepEqual(
-		[...declared, "delegate", "codemode"],
-		["read", "write", "edit", "bash", "send", "delegate", "codemode"],
-	);
+	assert.deepEqual([...declared, "delegate", "codemode"], ["read", "write", "edit", "bash", "delegate", "codemode"]);
 });
 
 test("the codemode section is a count and three ways to look a tool up, not a catalogue", async () => {
@@ -182,7 +179,7 @@ test("the codemode section is a count and three ways to look a tool up, not a ca
 	const rendered =
 		(await renderSection(
 			CODEMODE_SECTION,
-			promptInput({ agent: { callable: [{ name: "bash" }, { name: "send" }, { name: "mcp_call" }] } }),
+			promptInput({ agent: { callable: [{ name: "bash" }, { name: "delegate" }, { name: "mcp_call" }] } }),
 		)) ?? "";
 	assert.match(rendered, /<codemode>\n3 tools can be called from a script/, "the count is the prompt's one number");
 	assert.match(rendered, /`ALL_TOOLS` names them/, "the list is a global, not a paragraph");

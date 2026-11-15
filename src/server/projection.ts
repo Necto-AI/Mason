@@ -3,8 +3,13 @@
  *
  * This module is the wire boundary, and the only place that decides what crosses it. Everything the model does —
  * reasoning, tool calls, tool arguments, tool output, usage, the raw entries — stays here, on the server. What leaves
- * is the conversation as a person reads it: their own words, the messages the agent chose to send (`send`),
- * and a coarse notice when a run failed.
+ * is the conversation as a person reads it: their own words, one agent message per generation, and a coarse notice when
+ * a run failed.
+ *
+ * A message is the assistant generation's own text. There is no tool whose call commits it and no entry kind of its own:
+ * the text a turn wrote *is* the row, so a missed call cannot lose the answer (#199, #200). The row's id is the message's
+ * place in the transcript, which is known while the generation streams and does not change when it commits — the partial
+ * row and the committed row are one row, under one id.
  *
  * The rule is a whitelist, not a filter: a transcript item exists only because something here names it. A new entry
  * kind or a new tool cannot leak by default — it is invisible until this file says otherwise. The raw view stays
@@ -18,7 +23,6 @@ import {
 	isDeliveryReminder,
 	isReflectionAsk,
 	REPLY_ENTRY_KIND,
-	SEND_TOOL,
 	splitAuthor,
 } from "../shared/contract.ts";
 import { replyRecordOf, textOfBlocks } from "./replies.ts";
@@ -26,7 +30,7 @@ import { replyRecordOf, textOfBlocks } from "./replies.ts";
 /**
  * Whether a message says nothing: empty, whitespace only, or invisible characters alone.
  *
- * `minLength: 1` admits a lone space and a lone zero-width space, which the renderer would pad into an empty bubble.
+ * A generation can end with a lone space or a zero-width space, which the renderer would pad into an empty bubble.
  */
 function isBlank(text: string): boolean {
 	return text.replace(/[\s\u200b-\u200d\ufeff]/g, "") === "";
@@ -55,32 +59,27 @@ function textOfMessage(message: unknown): string {
 		.join("");
 }
 
-interface CallBlock {
-	type?: string;
-	id?: unknown;
-	name?: unknown;
-	arguments?: unknown;
-}
+/** The id prefix of an agent message: one row per generation, and the ordinal is the message's place in the transcript. */
+const MESSAGE_ROW_PREFIX = "message:";
 
-function callsOf(message: unknown): CallBlock[] {
-	return contentBlocks(message).filter((part): part is CallBlock => (part as CallBlock).type === "toolCall");
+function messageRowId(ordinal: number): string {
+	return `${MESSAGE_ROW_PREFIX}${ordinal}`;
 }
 
 /**
  * The reader's transcript: every entry a person is meant to see, in order, and nothing else.
  *
- * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them. A send is
- * the `app.reply` entry `send` commits, which is the delivery itself: the assistant message that carried the call
- * contributes nothing, so a message appears once whether it was streamed or committed. An event is a row of its own,
- * because a wake nobody can see is a wake nobody can explain. Tool results are read for failure alone, never forwarded.
+ * A person's words are an input entry — `app.connector` through a connector, `pi.user` when mason wrote them. The agent's
+ * text is the assistant entry every generation commits, one row per generation; an older home's `app.reply` entry still
+ * reads as one, under the id it was written with. An event is a row of its own, because a wake nobody can see is a wake
+ * nobody can explain. Tool results are read for failure alone, never forwarded.
  *
- * The round in flight contributes the same shape, streaming: a reply appears as the model writes it, exactly as it will
- * stand once committed. A streaming reply whose entry has already landed is skipped — the entry is the truth, and two
- * copies of one message is a duplicate a client would render twice.
+ * The round in flight contributes the same shape, streaming: a message appears as the model writes it, under the id it
+ * will commit with, so the row a person watches become the message without a second row appearing.
  *
  * Three kinds reach here and stop: `app.command` (a chat asked for `/stop`, and the trace of that request belongs to the
- * log, not the reader), `pi.compaction`, and `app.delivery` in a home written before the outbox went. None carries a word
- * for the reader, and the tests pin that they do not cross the wire.
+ * log, not the reader), `pi.compaction`, and a home written before the outbox went. None carries a word for the reader, and
+ * the tests pin that they do not cross the wire.
  */
 export function projectTranscript(view: ConversationView | undefined): TranscriptItem[] {
 	const { fold, tail } = foldTranscript(view);
@@ -90,7 +89,7 @@ export function projectTranscript(view: ConversationView | undefined): Transcrip
 /** The id prefix of the notice a run that died leaves: the fold and the row it becomes spell it once. */
 const FAILED_NOTICE_PREFIX = "failed:";
 const RUN_FAILED_NOTICE = "Something went wrong, and the turn did not finish.";
-const SILENT_NOTICE = "The agent finished without sending you a message.";
+const SILENT_NOTICE = "The agent finished without writing you a message.";
 
 /**
  * The committed rows of a transcript, folded once so a later revision can reuse them.
@@ -101,11 +100,29 @@ const SILENT_NOTICE = "The agent finished without sending you a message.";
 export interface TranscriptFold {
 	/** The rows, one object per row: a later revision reuses these objects, which is what makes its diff a tail diff. */
 	readonly items: readonly TranscriptItem[];
-	/** Whether the turn being read has already been told anything, after the last entry folded. */
+	/** Whether the turn being read has already written anything, after the last entry folded. */
 	readonly spoke: boolean;
 	/** The newest entry folded, and how many there were: a view that rewrote them is not a view that appended. */
 	readonly last: string;
 	readonly count: number;
+	/** The entry that started the turn being read: the run its messages belong to, and what `runId` names. */
+	readonly input?: string;
+	/** Whether that turn is a submission, which owes the reader a message. A hook or event turn may be silent. */
+	readonly expected: boolean;
+	/** Where in `items` the turn's rows begin, so a failed run can mark its own messages and no earlier one. */
+	readonly turnStart: number;
+	/** How many agent messages the transcript holds: the next message row's ordinal. */
+	readonly messages: number;
+}
+
+/** What one pass over the entries carries between them: the fold being built, and the turn boundary it is inside. */
+interface FoldState {
+	items: TranscriptItem[];
+	spoke: boolean;
+	input?: string;
+	expected: boolean;
+	turnStart: number;
+	messages: number;
 }
 
 /**
@@ -121,31 +138,37 @@ export function foldTranscript(
 	before?: TranscriptFold,
 ): { readonly fold: TranscriptFold; readonly tail: TranscriptItem[] } {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
-	const outcomes = new Map<string, boolean>();
-	const replies = new Set<string>();
-	for (const entry of entries) {
-		if (entry.kind === "pi.tool-result") {
-			const message = messageOf(entry) as { toolCallId?: unknown; isError?: unknown } | undefined;
-			if (typeof message?.toolCallId === "string") outcomes.set(message.toolCallId, message.isError === true);
-			continue;
-		}
-		if (entry.kind !== REPLY_ENTRY_KIND) continue;
-		const record = replyRecordOf(entry);
-		if (record !== undefined) replies.add(record.deliveryId);
-	}
 	const id = (index: number): string => (entries[index] === undefined ? "" : String(entries[index]?.id));
 	// A turn nobody has read the start of has spoken until an entry says otherwise: the default the whole view gets.
 	const resumed =
 		before !== undefined && before.count <= entries.length && before.last === id(before.count - 1)
 			? before
 			: undefined;
-	const items: TranscriptItem[] = resumed === undefined ? [] : [...resumed.items];
-	let spoke = resumed === undefined ? true : resumed.spoke;
+	const state: FoldState =
+		resumed === undefined
+			? { items: [], spoke: true, expected: false, turnStart: 0, messages: 0 }
+			: {
+					items: [...resumed.items],
+					spoke: resumed.spoke,
+					...(resumed.input === undefined ? {} : { input: resumed.input }),
+					expected: resumed.expected,
+					turnStart: resumed.turnStart,
+					messages: resumed.messages,
+				};
 	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
-		spoke = foldEntry(entries[index] as EntryRecord, items, spoke);
+		foldEntry(entries[index] as EntryRecord, state);
 	}
-	const fold: TranscriptFold = { items, spoke, last: id(entries.length - 1), count: entries.length };
-	return { fold, tail: streamingItems(view, outcomes, replies) };
+	const fold: TranscriptFold = {
+		items: state.items,
+		spoke: state.spoke,
+		last: id(entries.length - 1),
+		count: entries.length,
+		...(state.input === undefined ? {} : { input: state.input }),
+		expected: state.expected,
+		turnStart: state.turnStart,
+		messages: state.messages,
+	};
+	return { fold, tail: streamingItems(view, fold) };
 }
 
 /**
@@ -155,88 +178,120 @@ export function foldTranscript(
  * become*. An entry kind this does not name contributes nothing, which is the property the tests in
  * `test/projection.test.ts` exist to keep.
  */
-function foldEntry(entry: EntryRecord, items: TranscriptItem[], spoke: boolean): boolean {
+function foldEntry(entry: EntryRecord, state: FoldState): void {
 	if (entry.kind === HOOK_ENTRY_KIND) {
-		// A fire is a turn that owed the person words, whether it names a kind or is a routine's timer: an event is the
-		// reader's business and says so as a row of its own, and a routine's message is the row — but a fire that sent
-		// nothing is a silence, and the schedule is the schedule's business either way.
+		// A fire starts a turn of its own. An event is the reader's business and says so as a row of its own; a routine's
+		// timer does not cross, and either way the turn may end without a message. A retry's fire is a turn like any other:
+		// the answer it produces is its own message, and the failed run's rows stay what they were.
 		const kind = (entry.data as { kind?: unknown } | undefined)?.kind;
-		if (typeof kind === "string" && kind !== "") items.push({ kind: "event", id: String(entry.id), name: kind });
-		return false;
+		if (typeof kind === "string" && kind !== "")
+			state.items.push({ kind: "event", id: String(entry.id), name: kind });
+		beginTurn(state, String(entry.id), false);
+		return;
 	}
 	if (entry.kind === "pi.user" || entry.kind === CONNECTOR_ENTRY_KIND) {
-		const spoken = textOfMessage(messageOf(entry)).trim();
-		// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder, in
-		// either shape a local turn and a fired turn get, and the reflection ask at the end of a long turn.
-		const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(spoken) || isReflectionAsk(spoken));
-		if (spoken !== "" && !gate) {
-			const { text, author } = splitAuthor(spoken);
-			items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
-			return false;
-		}
-		return gate ? spoke : false;
+		const written = textOfMessage(messageOf(entry)).trim();
+		// A gate's own words are user entries the model reads, not ones the reader sent: the delivery reminder and the
+		// reflection ask. They continue the turn they were asked in, so they neither begin one nor appear in it.
+		const gate = entry.kind !== CONNECTOR_ENTRY_KIND && (isDeliveryReminder(written) || isReflectionAsk(written));
+		if (gate) return;
+		if (written === "") return;
+		const { text, author } = splitAuthor(written);
+		state.items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
+		beginTurn(state, String(entry.id), true);
+		return;
 	}
 	if (entry.kind === REPLY_ENTRY_KIND) {
+		// Read-only history: no turn writes one any more, and an older home's entry still projects as the message it was.
 		const record = replyRecordOf(entry);
-		if (record === undefined) return spoke;
+		if (record === undefined) return;
 		const text = textOfBlocks(record.blocks);
-		if (isBlank(text)) return spoke;
-		items.push({ kind: "delivered", id: record.deliveryId, text });
-		return true;
+		if (isBlank(text)) return;
+		state.messages += 1;
+		state.items.push({
+			kind: "delivered",
+			id: record.deliveryId,
+			text,
+			...(state.input === undefined ? {} : { runId: state.input }),
+		});
+		state.spoke = true;
+		return;
 	}
 	if (entry.kind === "pi.assistant") {
-		// A run that died is the reader's business; the reason it died is not. One coarse line, once per run.
-		const failed = (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "error";
-		if (failed && items[items.length - 1]?.kind !== "notice") {
-			items.push({ kind: "notice", id: `${FAILED_NOTICE_PREFIX}${entry.id}`, text: RUN_FAILED_NOTICE });
-			return true;
+		const message = messageOf(entry) as { stopReason?: unknown } | undefined;
+		const text = textOfMessage(message);
+		if (!isBlank(text)) {
+			state.messages += 1;
+			state.items.push({
+				kind: "delivered",
+				id: messageRowId(state.messages),
+				text,
+				...(state.input === undefined ? {} : { runId: state.input }),
+			});
+			state.spoke = true;
 		}
-		// Decided after the calls, because an answer that carries its own delivery is not silence. A tool round is
-		// not speech either: only the entries and calls this file forwards above count as having said something.
-		if (!failed && !spoke && (messageOf(entry) as { stopReason?: unknown } | undefined)?.stopReason === "stop") {
-			// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the
-			// person wondering whether the agent is working or gone.
-			items.push({ kind: "notice", id: `silent:${entry.id}`, text: SILENT_NOTICE });
-			return true;
+		// A run that died is the reader's business; the reason it died is not. The messages it produced are marked, so a
+		// retry's new rows do not leave the failed ones looking delivered, and one coarse notice stands for the run.
+		if (message?.stopReason === "error") {
+			markTurnFailed(state);
+			if (state.items[state.items.length - 1]?.kind !== "notice") {
+				state.items.push({ kind: "notice", id: `${FAILED_NOTICE_PREFIX}${entry.id}`, text: RUN_FAILED_NOTICE });
+			}
+			state.spoke = true;
+			return;
+		}
+		// Decided after the message, because an answer that wrote something is not silence. A tool round is not speech
+		// either: only the entries this file forwards above count as having said something.
+		if (message?.stopReason === "stop" && !state.spoke && state.expected) {
+			// The gate gave the turn a second chance and it stayed silent anyway. Saying so is still better than the person
+			// wondering whether the agent is working or gone. A hook or event turn may be silent, so it gets no notice.
+			state.items.push({ kind: "notice", id: `silent:${entry.id}`, text: SILENT_NOTICE });
+			state.spoke = true;
 		}
 	}
-	return spoke;
+}
+
+/** Start a turn at `id`: its rows begin after what is already in the transcript, and it owes a message only if a person does. */
+function beginTurn(state: FoldState, id: string, expected: boolean): void {
+	state.input = id;
+	state.expected = expected;
+	state.spoke = false;
+	state.turnStart = state.items.length;
+}
+
+/** Mark every message this turn produced failed, keeping each row's id and text so a client's key still finds it. */
+function markTurnFailed(state: FoldState): void {
+	for (let index = state.turnStart; index < state.items.length; index += 1) {
+		const row = state.items[index];
+		if (row?.kind !== "delivered" || row.failed === true) continue;
+		state.items[index] = { ...row, failed: true };
+	}
 }
 
 /**
- * The calls of the in-flight round, projected the same way, marked streaming.
+ * The generation in flight, projected the same way, marked streaming.
  *
- * A reply streams under the id its entry will carry — `reply:<callId>` — so the bubble a reader is watching becomes the
- * message without a second row appearing.
+ * It carries the id its committed row will carry — the next message's ordinal — so the bubble a reader is watching
+ * becomes the message without a second row appearing. The partial is skipped when the turn already committed the same
+ * words, which is the revision where an entry landed and `pi.live` has not cleared yet.
  */
-function streamingItems(
-	view: ConversationView | undefined,
-	outcomes: Map<string, boolean>,
-	replies: Set<string>,
-): TranscriptItem[] {
+function streamingItems(view: ConversationView | undefined, fold: TranscriptFold): TranscriptItem[] {
 	const live = view?.docs["pi.live"] as LiveState | undefined;
 	const inFlight = live?.generation?.message;
 	if (inFlight === undefined) return [];
-	const items: TranscriptItem[] = [];
-	for (const call of callsOf(inFlight)) {
-		if (typeof call.id !== "string") continue;
-		// A call whose result already committed is in the transcript proper; only a call still awaiting one streams.
-		if (outcomes.has(call.id)) continue;
-		const args = (typeof call.arguments === "object" && call.arguments !== null ? call.arguments : {}) as Record<
-			string,
-			unknown
-		>;
-		if (call.name === SEND_TOOL) {
-			const text = typeof args.text === "string" ? args.text : "";
-			if (isBlank(text)) continue;
-			const deliveryId = `reply:${call.id}`;
-			// The entry has landed, so the committed row is the message; a streaming copy beside it would be the same
-			// words twice.
-			if (replies.has(deliveryId)) continue;
-			items.push({ kind: "delivered", id: deliveryId, text, streaming: true });
-		}
-	}
-	return items;
+	const text = textOfMessage(inFlight);
+	if (isBlank(text)) return [];
+	const newest = fold.items[fold.items.length - 1];
+	if (newest?.kind === "delivered" && newest.streaming !== true && newest.text === text) return [];
+	return [
+		{
+			kind: "delivered",
+			id: messageRowId(fold.messages + 1),
+			text,
+			streaming: true,
+			...(fold.input === undefined ? {} : { runId: fold.input }),
+		},
+	];
 }
 
 /**

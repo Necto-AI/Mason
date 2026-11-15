@@ -1,4 +1,4 @@
-# The connector contract, v1
+# The connector contract, major 1
 
 A connector is a [Chord](https://github.com/earendil-works/pi) host. It opens one WebSocket to mason and everything
 after that is one contract, defined in [`src/index.ts`](src/index.ts). Nothing in this document is a frame: the wire is
@@ -11,7 +11,7 @@ Chord's, and a peer that speaks Chord speaks this.
 | member | what it does |
 |---|---|
 | state `session` | the handshake: this connector's commands, granted kinds, budgets, and its `dev.mason/integration` manifest when it sent one |
-| state `conversation` | the conversation a person reads — transcript rows, queue, run status — with its revision and diffs |
+| state `conversation` | the conversation a person reads — transcript rows, queue, run status — with its revision and diffs. Served to a grant that holds a `user`; an event grant's cell stays empty |
 | `append(append)` | hands mason one of two things: a person's words, or an event |
 | `control(op)` | spends one control out of the `session.commands` vocabulary |
 
@@ -28,16 +28,17 @@ protocol has no envelope, no sequence number and no cursor of its own.
 | field | what it is |
 |---|---|
 | `revision` | a counter mason owns: it rises by one for every published value within one mason process, and starts again at 0 when mason restarts |
-| `transcript` | the reader's rows, in order: `user`, `delivered` (a message, `streaming` while the model writes it), `event`, `notice` |
+| `transcript` | the reader's rows, in order: `user`, `delivered` (an agent message: one row per generation, `streaming` while the model writes it, `failed` when its run died, `runId` naming that run), `event`, `notice` |
 | `queue` | the submissions waiting behind the running turn, each with `withdrawable` |
 | `run` | one token: `idle`, `generating`, `running_tools`, `retrying`, `compacting` |
 | `busy` | whether a turn is running; `activeRunTaskId` names it when it is |
 | `transitions` | the transitions that produced *this* revision, and no others: `message.committed`, `run.started`, `run.stopped`, `run.errored`, `queue.added`, `queue.withdrawn` |
 
-A `delivered` row streams under the id the committed row carries, so a message a person watches arrive becomes the row
-it settles into: one message, one id, one row. Continuity is by id, not by presence: a row can leave the transcript for
-the tool phase of a turn and return committed under the same id a revision later, so a client keyed by id keeps its
-place. A revision that reports nothing carries an empty `transitions`; a snapshot describes the revision it is, never a
+A `delivered` row streams under the id the committed row carries — the message's place in the transcript — so a message
+a person watches arrive becomes the row it settles into: one message, one id, one row. `runId` is the turn-input entry
+the run started from, so a client can group a failed run's messages without knowing an entry id; `failed` marks the
+messages of a run that died. Continuity is by id, not by presence: a row can leave the transcript for the tool phase of a
+turn and return committed under the same id a revision later, so a client keyed by id keeps its place. A revision that reports nothing carries an empty `transitions`; a snapshot describes the revision it is, never a
 history to replay.
 
 Two frames carry this member: a snapshot, and the diffs that follow it. A snapshot is authoritative — a client applies
@@ -62,8 +63,8 @@ task id or a queue id — so it reacts to what happened without re-deriving the 
 6. **The origin is opaque:** connector-minted, stored byte for byte, never parsed.
 7. **One person, one surface.** At most one enabled connector holds the `user` face; mason refuses the boot of a
    deployment that grants it to two, and the refusal names the rule.
-8. **The answer is the transcript.** A turn's reply is a row of `conversation`, and no address exists to send it
-   anywhere else: no grant, no prompt and no model names one.
+8. **The answer is the transcript.** A turn's message is a row of `conversation`, and no address exists to send it
+   anywhere else: no grant, no prompt and no model names one. What the model writes is the message; no call commits it.
 9. **Within major 1, additions only.** Unknown fields are ignored on both sides: every object in the contract is `open`.
 10. **Nothing crosses the wire that the projection does not name.**
 
@@ -83,9 +84,9 @@ declared event to `agent/events.json` disabled, and refuses the connection if th
 ## The origin
 
 An append may carry an `origin`: a `ref` the connector minted, the medium's own `messageId` when it has one, and the
-`actor` when it attributes one. Mason stores it with the entry the append becomes, and with the reply that answers that
-turn, so a later reader can tell which append a row answers. It is never parsed and never returned as a destination:
-with one surface and no delivery, the transcript is the answer.
+`actor` when it attributes one. Mason stores it with the entry the append becomes, so a later reader can tell which
+append a turn answers. It is provenance, never a destination: no row carries it, nothing is returned as an address, and
+the transcript is the answer.
 
 An events-only connector may raise an alert with an origin and no words, which is the whole reason the two inbound
 methods became one append.
@@ -102,7 +103,7 @@ line to put it in.
 
 | code | meaning |
 |---|---|
-| `mason.face_not_granted` | this entry does not grant the face the append needs |
+| `mason.face_not_granted` | this entry does not grant the face the append needs, or the `user` grant a control belongs to |
 | `mason.actor_unknown` | the actor is not the one person this bot works for |
 | `mason.kind_not_permitted` | the kind is not in this entry's grant |
 | `mason.rate_limited` | the minute's budget for this class is spent; try later |
@@ -131,6 +132,9 @@ provider covers what its consumer names and may offer more. A connector deployed
 `append` and `control`, and those are what it is served, so it still binds where its `append` already matches the served
 one; it receives no `conversation` frames at all: Chord streams only the members a consumer declares.
 `test/compat.test.ts` freezes and binds that description to the served contract: the proof, not the promise.
+
+The wire kind `delivered` is inside major 1 and stays: it is the code name for an agent message, and a kind rename
+would break every client that renders a row. Adding `runId` to it is an addition, and a client that ignores it binds.
 
 ## What an SDK has to implement
 

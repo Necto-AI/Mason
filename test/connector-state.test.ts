@@ -16,7 +16,15 @@ import { after, describe, it } from "node:test";
 import type { StateEvent } from "@earendil-works/chord";
 import { apply } from "@earendil-works/chord/delta";
 import type { ConversationState } from "mason-protocol";
-import { holdPeer, replyTurns, serveConnector, until } from "./support/connector.ts";
+import {
+	connectConnector,
+	connectorHome,
+	holdPeer,
+	refusalOf,
+	replyTurns,
+	serveConnector,
+	until,
+} from "./support/connector.ts";
 
 /** The answer the streaming case measures: long enough that a paced provider has several chunks to publish. */
 const ANSWER = "The deploy is healthy and the migration is done. ".repeat(8).trim();
@@ -190,8 +198,8 @@ describe("the conversation a connector holds", () => {
 				}
 				assert.deepEqual(open, [], "every run the client was told started was also told stopped");
 				assert.ok(
-					runs.filter((one) => one.kind === "run.started").length > 2,
-					"a handed-over turn tells the client about the task it replaced, so two turns are more than two runs",
+					runs.filter((one) => one.kind === "run.started").length >= 2,
+					"two turns are at least two runs, and the client is told about each one it saw start",
 				);
 				assert.equal(
 					news.filter((one) => one.kind === "run.errored").length,
@@ -346,6 +354,54 @@ describe("the conversation a connector holds", () => {
 					"an update only ever adds to the message",
 				);
 				assert.equal(committed(client.value)[0]?.text, ANSWER, "and the row that commits is the whole answer");
+			} finally {
+				await peer.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+});
+
+describe("an event grant's conversation", () => {
+	it("is empty, never published, and spends no control", async () => {
+		const home = await connectorHome();
+		const served = await serveConnector({ home, steps: replyTurns(["answered"]) });
+		try {
+			const peer = await holdPeer(served, { name: "alarm-only", credential: home.alarmCredential });
+			try {
+				await until(() => peer.frames.length > 0, "the snapshot a hold begins with");
+				assert.deepEqual(peer.ref.session.value.commands, [], "the session offers the client no control");
+				const snapshot = peer.frames[0];
+				assert.equal(snapshot?.type, "snap", "the hold begins with a snapshot");
+				assert.deepEqual(
+					snapshot?.type === "snap" ? snapshot.value.transcript : undefined,
+					[],
+					"an event client is served no transcript",
+				);
+
+				// A turn on the grant that does read the conversation must not reach this client: nothing is published to a
+				// cell the door never feeds.
+				const user = await connectConnector(served);
+				try {
+					await user.connector.submit({
+						origin: { ref: "team" },
+						content: [{ type: "text", text: "is anyone there" }],
+					});
+					await until(
+						() => (user.states.at(-1)?.transcript ?? []).some((row) => row.kind === "delivered"),
+						"the user client's answer",
+					);
+				} finally {
+					await user.close();
+				}
+				assert.equal(peer.frames.length, 1, "no revision of a conversation this client cannot read was sent");
+
+				assert.equal(
+					await refusalOf(peer.ref.control({ op: "status" })),
+					"mason.face_not_granted",
+					"a control is a reader's act, and the refusal names the missing grant",
+				);
 			} finally {
 				await peer.close();
 			}

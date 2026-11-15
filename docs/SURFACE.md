@@ -19,11 +19,15 @@ connector presents a credential mason issued for it.
 
 ## Extensions a boot installs
 
-coding-tools, prompt, delivery, then `mcp` when an enabled entry has an MCP server, and `codemode` always.
+The base list, in this order: coding-tools, prompt, delivery.
+
+Then the ones the boot builds for itself: subagent, codemode always, and `mcp` when an enabled entry has an MCP
+server. A per-boot extension owns something that dies with the process — a lease directory, a QuickJS sandbox, one client
+socket per integration — which is why none of them is a module constant.
 
 The tool list is pinned by the prompt test, because the prompt is where it is announced. No MCP tool schema is ever
 in it: a service's tools are reached from a script.
 
 ## What a caller may spend
 
-Budgets: 60 submissions, 6 fires and 6 controls a minute per connector; 32 KiB of JSON in one call; 25 MiB an attachment, kept for 24 h; a window of 60 s.
+Budgets: 60 submissions, 6 fires, 6 controls and 30 attachments a minute per connector; 32 KiB of JSON in one call; 25 MiB an attachment, kept for 24 h; a window of 60 s.

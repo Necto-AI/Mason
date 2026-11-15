@@ -6,9 +6,9 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { ATTACHMENT_BYTES } from "../src/server/attachments.ts";
-import { CONNECTOR_ENTRY_KIND, SEND_TOOL } from "../src/shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND } from "../src/shared/contract.ts";
 import { connectConnector, entriesOf, serveConnector, until } from "./support/connector.ts";
 
 const BYTES = new TextEncoder().encode("a photograph, allegedly");
@@ -93,10 +93,7 @@ describe("the attachment endpoint", () => {
 describe("a submission with a file", () => {
 	it("reaches the model as an image block and as a path a tool can open", async () => {
 		const served = await serveConnector({
-			steps: [
-				fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "nice photo" })], { stopReason: "toolUse" }),
-				fauxAssistantMessage(fauxText("done")),
-			],
+			steps: [fauxAssistantMessage(fauxText("nice photo"))],
 		});
 		try {
 			const connected = await connectConnector(served);

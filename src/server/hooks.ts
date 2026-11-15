@@ -244,6 +244,10 @@ export interface FireOptions {
 
 /**
  * What every fired hook's input opens with, so the turn it starts is recognisable from the text alone.
+ *
+ * The model sees it — a proactive turn has to read as one — and so does a reader with only the conversation's messages
+ * to go on. Routing is not this text's: the gate reads the input's kind from `pi.live.run.first`, and an `app.hook` is a
+ * hook's turn, which may stay silent.
  */
 export function routineMarker(name: string): string {
 	return `[ROUTINE: ${name}]`;

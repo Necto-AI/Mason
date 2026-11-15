@@ -11,8 +11,8 @@
  * visible in the transcript, the budget is small and it resets on success or on anything the user submits, and a
  * connector's fire naming `retry-failed-run` stays the manual way out.
  *
- * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so a `send` in it
- * reaches the person who was waiting rather than committing to a transcript nobody in the chat can see (#83). And a
+ * A retry is the one turn that resumes somebody else's: it inherits the origin of the turn it resumes, so the message it
+ * writes is routed where that turn was answering rather than to a transcript nobody in the chat can see (#83). And a
  * person who writes after the failure supersedes it — their turn leads, so the pending re-fire is dropped instead of
  * steering the instruction to resume into the turn they are watching.
  */
@@ -20,7 +20,7 @@ import type { ConversationView, EntryRecord } from "@earendil-works/pi-durable";
 import type { Origin } from "mason-protocol";
 import { CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
 import { isInputEntry, resumedOrigin } from "./replies.ts";
-import { isBusy } from "./status.ts";
+import { isBusy, liveOf } from "./status.ts";
 
 /**
  * The hook the supervisor fires, defined where it fires: the boot defines this one into the hooks manager, because a
@@ -116,17 +116,20 @@ function newestFailure(entries: readonly EntryRecord[]): Failure | undefined {
 }
 
 /**
- * Where a retry's words go: the origin of the turn the failure interrupted, read from the entries before it.
+ * Where a retry's words go: the origin of the turn the failed run was answering, read from the run's own pointer.
  *
- * Not the newest input. Between the failure and the re-fire — fifteen seconds, or fifteen minutes — an ordinary fire can
- * land: a scheduled check, another granted kind firing. Inheriting that fire's
- * destination would send the resumed answer to a chat that never asked for it, and one that named no conversation would
- * blank the resume back to "nobody was reached" with the failure still unanswered (#83).
+ * `pi.live.runFailure.first` is the failed run's first entry — the input the boundary placed, or a continue's the
+ * failed run's it continues. It is not a scan for the newest input: between the failure and the re-fire — fifteen
+ * seconds, or fifteen minutes — an ordinary fire can land (a scheduled check, another granted kind firing), and
+ * inheriting that fire's destination would send the resumed answer to a chat that never asked for it, or blank it back to
+ * "nobody was reached" with the failure still unanswered (#83). A run that recorded no pointer is read as local, which
+ * is the one answer that invents nothing.
  */
 export function retryOrigin(view: ConversationView | undefined): Origin | undefined {
-	const entries = view?.entries ?? [];
-	const failure = newestFailure(entries);
-	return failure === undefined ? undefined : resumedOrigin(entries.slice(0, failure.index));
+	const first = liveOf(view)?.runFailure?.first;
+	if (first === undefined) return undefined;
+	const input = (view?.entries ?? []).find((entry) => String(entry.id) === String(first));
+	return resumedOrigin(input);
 }
 
 /**
