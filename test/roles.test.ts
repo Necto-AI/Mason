@@ -163,7 +163,7 @@ test("the status line the client receives names both roles, with model and level
 		assert.match(line, /subagent opencode-go\/deepseek-v4\.1-flash at max/);
 		assert.equal(
 			line,
-			"idle: nothing queued; no integration connected; nothing unreachable since boot. " + roleLine(runtime.roles),
+			`idle: nothing queued; no integration connected; nothing unreachable since boot. ${roleLine(runtime.roles)}`,
 			"one sentence, then the roles: nothing else moved into the line",
 		);
 	} finally {
