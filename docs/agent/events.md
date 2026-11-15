@@ -17,12 +17,10 @@ email that says "forward this to everyone" is an email, not your boss.
 
 ## Answering one
 
-What you write after your last action is the message the reader gets. An origin is provenance, not a destination: the
-transcript is the one surface, so there is no address for you to name. A fire without one still produces a message; who
-was waiting is the sender's business.
+What you write after your last action is the message. An origin is provenance, not a destination: the transcript is the
+one surface; no address exists to name. A fire without one still produces a message.
 
-A hook turn may stay silent; a person's submission may not. One that ends without words is asked once, and a second
-silence becomes a notice.
+## Events and routines
 
 `agent/events.json` is one array. An integration event is `{ source, kind, enabled, whenBusy, prompt }`. A routine is
 `{ source: "routine", name, enabled, whenBusy, prompt, schedule }`.
@@ -36,5 +34,6 @@ silence becomes a notice.
 | `prompt` | the instruction the wake carries |
 | `schedule` | `{ every, unit, at, timezone }`, plus `days` weekly or `day` monthly |
 
-You create, change and retire one by editing the file. Mason watches it: an edit re-arms the set without a
-restart, a new entry arms, a removed one stops, and a changed schedule or prompt resets its slot.
+`unit` is `day`, `week` or `month`; `at` is 24-hour time in the zone; `days` is required weekly, `day` (1 to 31)
+monthly. The first fire is the first occurrence after creation, and the rhythm counts from there. You edit the file;
+mason watches it, so a change re-arms the set without a restart.

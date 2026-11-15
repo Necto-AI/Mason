@@ -18,10 +18,11 @@ import { projectTranscript } from "../src/server/projection.ts";
 import { connectEventClient, connectorHome, serveConnector, temporaryDirectory, until } from "./support/connector.ts";
 import { fakeServer, SEARCH_TOOL } from "./support/fake-mcp.ts";
 
-const ROUTINE = JSON.stringify([
+const EVENTS = JSON.stringify([
 	{
-		name: "workspace-check",
-		intervalSeconds: 3_600,
+		source: "alarm-only",
+		kind: "alarm.ringing",
+		enabled: true,
 		prompt: "An alarm rang. Read the payload and say what needs attention.\n{{payload}}",
 	},
 ]);
@@ -30,7 +31,7 @@ test("an event client wakes a headless bot, and no user client is connected", as
 	const directory = await temporaryDirectory();
 	const paths = housePaths(join(directory, "house"));
 	await mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
-	await writeFile(join(paths.agentDir, "routines.json"), ROUTINE);
+	await writeFile(join(paths.agentDir, "events.json"), EVENTS);
 	const home = await connectorHome();
 	const alarm = await mintConnectorCredential(paths.home, "alarm-only");
 	// An events-only entry that also lends a tool catalog: no `user`, one granted kind, one MCP server.
@@ -40,7 +41,7 @@ test("an event client wakes a headless bot, and no user client is connected", as
 				enabled: true,
 				description: "the alarm system",
 				mcp: { url: "http://mcp.test/mcp", credential: "connector-issued-for-mason" },
-				connector: { events: { hooks: { "alarm.ringing": "workspace-check" } } },
+				connector: { events: { kinds: ["alarm.ringing"] } },
 			},
 		},
 	};

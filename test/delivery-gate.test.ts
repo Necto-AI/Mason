@@ -56,13 +56,15 @@ async function seedRoutine(directory: string): Promise<void> {
 				source: "telegram",
 				kind: "chat.message",
 				enabled: true,
-				prompt: "A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
+				prompt:
+					"A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
 			},
 			{
 				source: "routine",
 				name: "team-chat",
 				enabled: true,
-				prompt: "A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
+				prompt:
+					"A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
 				schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 			},
 		]),

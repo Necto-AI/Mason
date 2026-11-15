@@ -151,6 +151,9 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 	// the reflection rule (#134), which is 641 characters of new resident text: 3,455 before it, 4,096 after. 4,400 became
 	// 5,600 for the delegation rule (#201 step 4), 1,301 characters of it: the tool exists and the model has to know when
 	// it is the wrong tool, that a worker cannot reach the person, and that a change is written and *then* reviewed.
+	// 5,600 became 5,700 when the integration contract (#222) put the tool count and docs pointer on each integration
+	// line, and the docs index learned a service's markdown resources: the resident prefix grew, which is the trade the
+	// contract chose, and the merged prompt is 5,641.
 	await withHouseHome(async () => {
 		// The module's integrations are global: a test that set some would otherwise be counted here.
 		setIntegrations({});
@@ -158,7 +161,7 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 		for (const promptSection of PROMPT_SECTIONS) {
 			total += (await renderSection(promptSection))?.length ?? 0;
 		}
-		assert.ok(total <= 5_600, `the prompt is ${total} characters, over its 5,600`);
+		assert.ok(total <= 5_700, `the prompt is ${total} characters, over its 5,700`);
 	});
 
 	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));
