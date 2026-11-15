@@ -13,8 +13,8 @@ statement about the prompt and the harness, which is what these files exist to p
 ## What is real and what is stubbed
 
 Real: the production prompt registry (`src/server/prompt.ts`), the harness (`openAgentRuntime`), the extension set a
-scenario runs with (prompt, `reply`), the projection that decides what a reader
-sees (`src/server/projection.ts`), and the model. Every turn is a real model call, plus the calls its tool steps need.
+scenario runs with (the prompt and the two delivery gates), the projection that decides what a reader sees
+(`src/server/projection.ts`), and the model. Every turn is a real model call, plus the calls its tool steps need.
 
 Stubbed: `bash`, `read`, `write` and `edit` keep their production names, descriptions and parameters, and answer from
 the scenario instead of from a machine (`lib/stubs.ts`). No `pi-env` daemon runs. `edit` reports success and changes
@@ -107,8 +107,7 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
     { "hook": { "name": "Morning brief", "description": "Check today's calendar.", "payload": "" } }
   ],
   "expect": {
-    "calls": { "send": { "min": 1, "max": 1 }, "read": { "min": 1 } },
-    "before": [{ "tool": "read", "then": "send" }],
+    "calls": { "read": { "min": 1 } },
     "text": ["3"],
     "maxInputTokens": 10000
   }
@@ -129,10 +128,9 @@ One JSON file in `scenarios/`. Copy the closest existing one and change it:
   be called. `expect.before` is a pair `{ tool, then }`: `tool` must be called, and before `then`.
 - `expect.text` and `expect.absentText` are substrings the delivered transcript must and must not contain,
   case-insensitive. `expect.log` is regexes today's log file must match.
-- `expect.maxTools` bounds work calls: everything except `reply`, which is the delivery channel rather than
-  effort. `expect.maxInputTokens` bounds the run's summed input tokens. `expect.reminders` bounds how often the delivery
-  gate had to rescue a turn, which is how a model that stops answering in `reply` shows up even though the
-  reader is now guaranteed an answer.
+- `expect.maxTools` bounds work calls: every tool call the model made. `expect.maxInputTokens` bounds the run's summed
+  input tokens. `expect.reminders` bounds how often the delivery gate had to rescue a silent submission, which is how a
+  model that stops writing its message shows up even though the reader is guaranteed an answer.
 
 Two checks are not optional and need no `expect` entry: every turn must deliver at least one message
 (`turn.N.delivered`) and the run must finish (`finished`), so a scenario cannot pass by staying silent.
@@ -152,20 +150,20 @@ passed 15.
 | remember | **0/3** | a recalled preference is delivered on the next turn |
 | long-task | not run | a long turn keeps what it learned, and the preference is answered two turns later |
 
-The scenario writes the fact down with `write` rather than `remember`, which the six-tool cut removed; the numbers in
-the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the recall
-question ended without `reply`,
-so the reader got nothing ([#21](https://github.com/Necto-AI/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
-four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
-silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
-to the log and read back through the same path.
+The scenario writes the fact down with `write`; the tool the first cut of these evals used for it is gone, and the
+numbers in the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the
+recall question ended without a message, so the reader got nothing
+([#21](https://github.com/Necto-AI/mason/issues/21)). The delivery gate (§3.4) fixed it: in the four runs right after
+it landed, three needed a reminder and all four produced a message, so the reader never saw silence; the twelve runs in
+the table needed none. The rest of the scenario was green throughout: the fact is written to the log and read back
+through the same path.
 
 `long-task` was added with the reflection gate (#134) and has not been run against a model: the eval costs real
 tokens, so its `maxInputTokens` is a bound carried over from `remember`'s two turns rather than a measured one, and the
 first run of it is the run that should set it.
 
-The gate changes what green means. `calls.reply` still measures the model's own discipline; `reminders` measures
-how often it needed help, and that is the number to watch — a model that stops delivering still turns the suite green,
+The gate changes what green means. `maxTools` measures the model's own discipline; `reminders` measures how often it
+needed help, and that is the number to watch — a model that stops writing its message still turns the suite green,
 because the reader is guaranteed an answer either way.
 
 `hook-acts` had the widest message variance: different shapes of the same brief, and once a closing offer of extra work

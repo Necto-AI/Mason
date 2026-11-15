@@ -4,16 +4,16 @@
 
 mason is a headless, always-on agent backend, and an interface attaches to it (`GLOSSARY.md`,
 `docs/adr/0004-mason-is-a-headless-backend.md`): a durable, proactive bot on `pi-durable`, plus one contract — a
-connector socket that carries a person's words in and the agent's send out. mason owns the tool and the projection —
+connector socket that carries a person's words in and the agent's message out. mason owns the tool and the projection —
 what the model may call, and what may cross the wire — and never the rendering.
 
 1. **Durable Agent Harness + `pi-env` Split:** runs a persistent `Harness` on SQLite (`@earendil-works/pi-durable`),
    executes `CodingTools` (`read`, `write`, `edit`, `bash`) through `@earendil-works/pi-env` (`RemoteExecutionEnv` over a
    `Connection` to the `pi-env` daemon), and wakes the agent without a person's input: a routine's timer, or an event a
    connector fires (§3.3).
-2. **Six tools, one reply path:** `read`, `write`, `edit`, `bash`, `send` and `codemode`. A service's tools are reached
-   only from a script, through the live catalog (§4.1e). `send` commits an `app.reply` entry that records the turn's
-   origin, and that row is the message (§4.1a).
+2. **Six tools, one message path:** `read`, `write`, `edit`, `bash`, `delegate` and `codemode`. A service's tools are
+   reached only from a script, through the live catalog (§4.1e). A generation's text is the agent's message, projected
+   as one row per generation, and no tool commits or addresses it (§4.1a).
 3. **The projection:** `src/server/projection.ts` derives `transcript`, `queued` and `agentStatus` from the durable view,
    and the durable `ConversationView` itself never crosses (§4.1a).
 
@@ -67,7 +67,7 @@ mason/
 │       ├── integration-status.ts      # What the boot's connections came to, for the report
 │       ├── commands.ts                # The four controls, and the claim that makes a control id an identity
 │       ├── hooks.ts                   # What wakes the bot: a routine's timer, a connector's event
-│       ├── replies.ts                 # What a turn's send is: its origin, and the entry carrying it
+│       ├── replies.ts                 # A turn's origin, and the old `app.reply` entry read back
 │       ├── projection.ts              # The wire boundary: what a reader sees
 │       ├── status.ts                  # the status and role lines, from the committed view
 │       ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
@@ -85,9 +85,9 @@ mason/
 │       ├── http-proxy.ts              # The outbound proxy a connector's tools inherit
 │       └── extensions/
 │           ├── codemode.ts            # The script tool: ALL_TOOLS, searchTools, describeTool
-│           ├── delivery.ts            # The send tool, and the two gates over a turn's ending
+│           ├── delivery.ts            # The two gates over a turn's ending: a message, and what it kept
 │           ├── subagent.ts            # delegate: one foreground child, its role, its bounds, its lease
-│           ├── nested.ts              # A nested call's shape, shared by codemode and delivery
+│           ├── nested.ts              # A nested call's shape, shared by the tools that refuse one
 │           └── skills.ts              # The skills index: one root, agent/skills/, seeded at boot
 └── test/                              # One file per mechanism; the pin that fails when it is removed
 ```
@@ -125,19 +125,21 @@ The execution target is the seam that resolves a conversation to a machine: an `
 No other extension contributes a section, and the root agent carries no `instructions`, so reading that one file tells
 you everything the agent is told. A test fails if another base extension grows a section (§5).
 
+`PROMPT_SECTIONS` is the list, in reading order.
+
 | key | tag | source |
 |---|---|---|
 | `preamble` | none (the prompt's opening) | `service/soul.md`, else `DEFAULT_SOUL`, then the wake rule: how to read `[ROUTINE: …]` and `[EVENT: …]`, act and report once |
-| `tone` | `<tone>` | plain text: how a reply sounds, and what it never does |
+| `tone` | `<tone>` | plain text: how a message sounds, and what it never does |
 | `cwd` | `<cwd>` | `input.env?.cwd` |
-| `delivery` | `<delivery>` | plain text: words reach the reader only through a delivery call, and which call depends on who is reading |
-| `skills` | `<skills>` | pi's `loadSkills` over the two roots, rendered by `formatSkillsForPrompt`; omitted when empty |
+| `skills` | `<skills>` | the one root, `agent/skills/`, walked by `discoverSkills` and rendered by `renderSkills`; omitted when empty |
 | `profile` | `<profile>` | `agent/profile.md` capped, or the first-run interview instruction |
 | `docs` | `<docs>` | an index of the shipped `docs/agent` pages and the markdown resources a service listed, read with `mcp_read_resource` |
 | `integrations` | `<integrations>` | boot configuration: one sorted line per enabled integration with its tool count and docs pointer, read from the boot's snapshot; omitted when none is enabled |
 | `codemode` | `<codemode>` | a count of the tools a script can call, and `ALL_TOOLS`, `searchTools`, `describeTool`; no declaration is resident |
 | `delegate` | `<delegate>` | plain text: one bounded child, its checkout lease, and the order of an implement-then-review pass |
 | `reflect` | `<reflect>` | plain text: what a turn of ten tool rounds or more owes the next one, with the profile and the log first and a skill rarely, and the guards each write has |
+| `delivery` | `<delivery>` | plain text: the text the model writes is the message, the conversation is the one surface, and a submission that writes nothing leaves the reader with silence |
 
 Section text is one of four kinds, and nothing else is allowed: a **file** the person can edit (`soul.md`,
 `profile.md`), a **computation** over the filesystem (`skills`, `docs`), a **constant** in `prompt.ts` (the wake rule,
@@ -146,8 +148,10 @@ the tone rules, the delivery invariant), or a **computation the prompt does not 
 the **count of callable tools**, read off the request's own agent.
 
 The `docs` section indexes mason's shipped pages and each service's markdown resources. There is no mount: a service's
-page is read through `mcp_read_resource`, and the shipped pages stay in the package as mason's own reference. A test
-asserts the render names no `/mason/docs` path and no pi documentation tree (§5). `Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
+page is read through `mcp_read_resource`, and the shipped pages stay in the package as mason's own reference. pi's
+default prompt points a coding agent at its own docs so it can change its extensions; mason's agent is not meant to have
+that. A test asserts the render names no `/mason/docs` path and no pi documentation tree (§5).
+`Prompt = defineExtension({ name: "prompt", sections: PROMPT_SECTIONS })` is
 what the runtime installs.
 
 ### 3.3 `src/server/hooks.ts` — The Routine and Event Engine
@@ -196,29 +200,29 @@ export interface EventHookConfig {
      - Anything else is a **gesture** — the run supervisor, a caller with no `requestId` — and `gestureRequestId()` gives each its own random key: an act is an intent, so two acts are two fires, and a fire after a restart cannot collide with one from before it.
      A named delivery collapses however late it repeats; a gesture is never collapsed, because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no way in.
   5. An event fire waits its turn by default: the entry's `whenBusy` is `followUp` unless it says `steer`, and a `steer` is placed at the boundary after the running tool round, so the work in flight reads it. The case that decided the capability: a queued chat message cancelling a poster sat twenty-eight minutes and the poster went out anyway (`src/server/admission.ts`).
-  6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. The answer is one Mason-owned call, `send` (`src/server/extensions/delivery.ts`), which reads the turn's origin from the transcript and targets it. No template names a vendor's tool: the instruction says where its words came from, not which tool a medium exposes. An event with no origin records the send and answers the model that nobody was reached — a message nobody received is the failure this arrangement exists to avoid. An origin naming a connector other than the socket's own cannot arrive: the socket is the connector, and the grant is the ceiling.
+  6. **Who hears the answer.** A fire carries an **origin** when its sender could name a conversation, and the entry it lands as (`app.hook`) keeps it. Provenance is all it is: the answer is the text the turn writes, projected as a conversation row, and no template names a tool or an address. An event with no origin still writes its message; whether a medium was listening is not a destination, and a submission that writes nothing is the failure the gate catches. An origin naming a connector other than the socket's own cannot arrive: the socket is the connector, and the grant is the ceiling.
 - **Where the wake rules come from.** `agent/events.json` is one array the agent owns. An **integration event** is `{ source, kind, enabled, whenBusy, prompt }`; a **routine** is `{ source: "routine", name, enabled, whenBusy, prompt, schedule }`. `source` is an integration name or `routine`, `enabled` defaults to `false`, `whenBusy` to `followUp`. A routine's `schedule` is `{ every, unit, at, timezone }`, plus `days` weekly or `day` (1 to 31) monthly; a malformed file is one notice and the last good set.
 - **Seeding.** On boot, every event kind an MCP-enabled integration declares in its manifest is appended to `agent/events.json` disabled, with its `prompt` and `whenBusy`; a connector-only integration sends the same manifest in its session. An existing entry is never overwritten. The grant names the kinds the connector may send; a granted kind with no enabled entry is logged and wakes nothing. A home that still has `agent/routines.json` gets one boot notice and the file is not read; each entry moves to `source: "routine"` with a schedule by hand.
 - **The boot scan.** `lastFiredAt`, `fireCount`, `nextFireAt` and the schedule's `anchor` persist in `service/data/routines-state.json` (`0600`). A schedule counts from its anchor: the first fire is the first occurrence after creation, a restart waits the remainder of the slot, and a past-due slot fires once from its wall-clock key.
 - **The supervisor's lifecycle hook.** `retry-failed-run` is defined where it fires, `src/server/run-retry.ts`: disabled, no interval, nothing schedules it.
-- **A connector's event: `append {type: "event"}`** (`src/server/connector.ts`, §4.1d), the only way a service wakes the agent: an append on the socket its grant opened, not a second door. It carries an `appendId`, a `kind`, and an optional `summary`, `payload` and `origin`. A kind outside `connector.events.kinds` is refused; a granted kind with no enabled entry in `agent/events.json` is written to the event log and wakes nothing. The payload reaches the model fenced as untrusted data (above), and an event that names an origin gives its turn a reader. There is no signed POST any more: #104 removed `POST /api/events/<integration>`, the HMAC path and its envelope (§4.1d).
+- **A connector's event: `append {type: "event"}`** (`src/server/connector.ts`, §4.1d), the only way a service wakes the agent: an append on the socket its grant opened, not a second door. It carries an `appendId`, a `kind`, and an optional `summary`, `payload` and `origin`. A kind outside `connector.events.kinds` is refused; a granted kind with no enabled entry in `agent/events.json` is written to the event log and wakes nothing. The payload reaches the model fenced as untrusted data (above). An event that names an origin gives its turn a reader; one without still writes its message to the transcript, because the transcript is the one surface and there is no second delivery. There is no signed POST any more: #104 removed `POST /api/events/<integration>`, the HMAC path and its envelope (§4.1d).
 
 ### 3.4 `src/server/runtime.ts` — Durable Harness Bootstrap
 
 - Opens SQLite storage at `~/.mason/service/data/agent.sqlite` via `openNodeSqliteStorage` from `@earendil-works/pi-durable/storage/sqlite/node` (or `MemoryStorage` in tests). The directory is `MASON_DATA` when set, else `<home>/service/data`, and the file is `0600` (§4.1c): the transcript is not a property of the directory the server happened to be started from.
 - Model configuration:
-  - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `glm-5.3-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
+  - Uses `ModelRuntime.create({ allowModelNetwork: false })` from `@earendil-works/pi-coding-agent/src/core/model-runtime.ts` so `~/.pi/agent/auth.json` and `~/.pi/agent/models.json` work out of the box (defaults to `settings.json`'s `defaultProvider`/`defaultModel`, e.g. `opencode-go` / `deepseek-v4.1-flash`, or env `PI_PROVIDER` / `PI_MODEL`).
   - Also supports `PI_FAUX_MODEL=1` (using `fauxProvider` from `@earendil-works/pi-ai/providers/faux`) for deterministic offline testing and UI verification.
 - Calls `harness.resume()` on startup so any run interrupted by a crash or restart resumes automatically.
-- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has an MCP server, `codemode`, always, and `subagent`, the `delegate` tool. `prompt` is the only one with sections (§3.2). `delivery` is unconditional for every **person-facing** conversation: it carries the send tool and the gate that decides whether a turn's reader hears anything, so no conversation a person writes to may be without it. A task-owned child is not one: its selection is written explicitly in the creating commit, `coding-tools` alone, so the send tool and both gates are absent by construction and its words reach the person only as the tool result. `mcp` is absent rather than empty when no entry has one, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: four tools that read the live catalog and its docs (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The per-boot two belong to the boot because each owns something that dies with the runtime — a client socket per integration, and a QuickJS sandbox that is permanent once closed.
-- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `mcp` when an entry has an MCP server, then `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional. It runs on the root only, which is why a child's narrowed selection stays narrowed.
+- **The extension selection.** `BASE_EXTENSIONS` — `coding-tools`, `prompt`, `delivery` — is what every conversation gets, and three more are built per boot and installed alongside them: `mcp`, when an enabled integration has an MCP server, `codemode`, always, and `subagent`, the `delegate` tool. `prompt` is the only one with sections (§3.2). `delivery` is unconditional for every **person-facing** conversation: it carries the gates that decide whether a turn's reader hears anything and whether a long turn kept what it learned, so no conversation a person writes to may be without it. A task-owned child is not one: its selection is written explicitly in the creating commit, `coding-tools` alone, so both gates are absent by construction and its words reach the person only as the tool result. `mcp` is absent rather than empty when no entry has one, so a build with no integration has exactly the surface it had before MCP existed. What `mcp` installs does not depend on any server answering: four tools that read the live catalog and its docs (§4.1e), so a container that restarts, redeploys or redefines a tool moves nothing the prompt is built from. The three belong to the boot because each owns something that dies with the runtime: a lease directory and a child role (`subagent`), a socket per integration (`mcp`), and a QuickJS sandbox (`codemode`).
+- **The startup repair.** A stored selection that is an explicit list of names is used verbatim by `pi-durable` (`selectExtensions`), so a `pi.agent` doc written before a base extension existed leaves the conversation without it — and without `delivery` a turn has no way to reach the reader at all and no turn has the gate. On every open, `openAgentRuntime` therefore appends what that selection lacks — the base names in base order, then `subagent`, `mcp` when an entry has an MCP server, and `codemode` — in one commit, before `hooks.start()` and `harness.resume()`, so nothing can run against the stale selection. The stored order is kept and nothing is pruned; a selection stored as an edit (`{ add, remove }`) or left unset already unions with the base selection and is left exactly as it is; a selection that is already complete is not written to. The repair cannot tell a legacy doc from a deliberate narrowing of the selection, so it silently rewrites user state — that is the price of `delivery` being unconditional. It runs on the root only, which is why a child's narrowed selection stays narrowed.
 - **The harness settings.** `followUpMode: "all"`: queued follow-ups drain as one turn, because the model prioritises between them and nothing here can rank a fired hook against a wish the reader typed. `steeringMode: "one-at-a-time"`: one queued steer is placed per boundary, so a burst of chat messages reaches the running turn one at a time instead of all at once, and a steer never preempts a tool call that has already started. `stream.cacheRetention: "long"`: an always-on agent idles past the provider's five-minute cache window constantly, and the long retention is what stops every wake-up from re-paying for the whole prefix (§3.5).
 - **The roles.** `roles` in `common/settings.json` maps `main` and `subagent` to a provider, a model id and a thinking level. `main` runs the model the boot resolved — the bot's file, then the map, then the common default, then `PI_PROVIDER`/`PI_MODEL` — and the map decides only how far it thinks. Absent, `main` takes that model at `high` and `subagent` Decision 8's child at `max`, or the resolved model at `off` where the catalog cannot serve it. A level the model does not offer is refused at boot naming the ones it does; an unknown provider is skipped, an unknown model under a known one is refused (`validateRoles` in `src/server/runtime.ts`). The boot writes the main role into the root's `pi.agent` — model and thinking together, one record per conversation — and `delegate` writes the subagent role into the child's in the commit that creates it. That record is the run record: it is what each request reads, and a boot that agrees with it writes nothing.
 - **Delegation.** `delegate` (`src/server/extensions/subagent.ts`) is one foreground child conversation owned by the tool call's task, created inside its commit and found before it is created: the task's memo names it, and a scan of the conversations the task owns covers a crash between the creation and the memo. The child is configured with the `subagent` role, `maxTurns` of eight, the worker brief as `instructions` instead of the persona, and the explicit selection above; one input is submitted with the call's request id, so a re-execution after a restart returns the submission already made. The call is `replay: "safe"`, which is what makes that re-execution reuse rather than duplicate. A wall clock — mason's, because no vendor API declares a run deadline — races the wait, and a child past it is aborted, which settles its run and leaves no task behind. A read-only child gets `read` alone; a writer needs `checkout` and holds that checkout's write lease for its run (`src/server/lease.ts`), refused rather than queued to a second writer on the same checkout and released at settlement, so an implement-then-review pass is never blocked. The answer comes back as the tool result; the parent is what sends it.
 - **The workspace.** A conversation's `cwd` defaults to `~/.mason/agent/workspace`, created by `ensureHouse`, not to `process.cwd()`: the agent works in its own directory, not in the program that runs it.
 - **The agent's home.** `housePaths()` resolves a home from an explicit path, else `MASON_HOME`, else `~/.mason`; `openAgentRuntime` resolves it once from `houseHome` and configures it for the prompt sections, which are installed at import time and cannot be handed arguments (§3.5).
-- **The reflection gate.** The same extension carries a second gate over the same plumbing: a turn has two endings, and both are about what it leaves behind. `beforeRequest` counts the turn's tool rounds (the assistant messages that carried a call after the newest input a person or a fire wrote, so a gate's own continuation is stepped over rather than taken for a new turn) and memoizes the moment it reaches ten; `onYield` continues the run once with `REFLECTION_ASK` (`src/shared/contract.ts`), asking for what was learned into `agent/profile.md`, one dated log line, and a skill only when a procedure repeated. The count survives the delivery reminder, because a count that restarted would ask only the turns nobody had to rescue. The ask is a `pi.user` entry: the projection drops it, and the routing read beside `send` steps over it. Its guards are words: what code enforces is the tool machine's mount, which makes `agent/` writable and `service/soul.md` not (ADR 0013: no gateway, no approval).
-- **The delivery gate.** `send` is a tool, so calling it is the model's choice and the prompt is only advice: a turn can end with the model's prose in the transcript and nothing on the wire, and the reader sees silence. The `delivery` extension therefore carries a `GenerationTask` `onYield` hook. `beforeRequest` reads the turn's progress and memoizes it; `onYield` continues the run with one reminder when a turn is about to end undelivered. Delivery is a top-level act, because the projection renders a message only out of the `app.reply` entry a top-level call committed: a call made from inside another tool, the way `tools.send()` in a code-mode script is, is refused with an instruction to return the text and send it directly. What counts as delivered is the one operation — `send` — so the gate and the tool cannot disagree about what reaching a reader means. The memo is per generation and a tool round starts a new one, so the context is the durable record, not the memo. The reminder is a `pi.user` entry (the only role a continuation can add) carrying `DELIVERY_REMINDER` from `src/shared/contract.ts`; `isDeliveryReminder()` is what the projection reads to drop it, and a person's own line that merely opens with the marker is a reminder only if it matches, so nothing anybody typed leaves their transcript. Once per turn: a generation whose context already holds the reminder does not remind again, and a second silent answer becomes one `notice` — "The agent finished without sending you a message." — because a turn the reader cannot interpret is worse than a turn that admits it failed (§4.1a).
+- **The reflection gate.** The same extension carries a second gate over the same plumbing: a turn has two endings, and both are about what it leaves behind. `beforeRequest` counts the turn's tool rounds (the assistant messages that carried a call after the newest input a person or a fire wrote, so a gate's own continuation is stepped over rather than taken for a new turn) and memoizes the moment it reaches ten; `onYield` continues the run once with `REFLECTION_ASK` (`src/shared/contract.ts`), asking for what was learned into `agent/profile.md`, one dated log line, and a skill only when a procedure repeated. The count survives the delivery reminder, because a count that restarted would ask only the turns nobody had to rescue. The ask is a `pi.user` entry: the projection drops it, and the origin read is the run's pointer rather than a text scan. Its guards are words: what code enforces is the tool machine's mount, which makes `agent/` writable and `service/soul.md` not (ADR 0013: no gateway, no approval).
+- **The delivery gate.** What the model writes is the message, so no call's absence loses it, but a submission turn can still end with no text, and the reader sees silence. The `delivery` extension therefore carries a `GenerationTask` `onYield` hook. `onYield` sees the turn's final answer and asks whether it wrote anything; when it did not, the run continues once with `DELIVERY_REMINDER` from `src/shared/contract.ts`. The turn's kind comes from `pi.live.run.first`, the run's first placed entry: a submission entry (`pi.user`, `app.connector`) owes the reader a message, and a hook or event entry may stay silent. No entry kind is scanned and no text searched, so a compaction cannot become the input (#199); a run with no `first` is a local turn and is not scanned for one. The reminder is a `pi.user` entry (the only role a continuation can add), and `isDeliveryReminder()` is what the projection reads to drop it; a person's own line that merely opens with the marker is a reminder only if it matches, so nothing anybody typed leaves their transcript. Once per turn, memoised: a second silent answer becomes one `notice` — "The agent finished without writing you a message." — because a turn the reader cannot interpret is worse than one that admits failure (§4.1a).
 
 ### 3.5 `~/.mason/` — The Agent's Home
 
@@ -281,14 +285,11 @@ and the one after it render the same text, in the same order, with the same tool
 the next turn patches that section — which is why `soul.md` is written by a person and `profile.md` is rewritten rather
 than appended to per turn.
 
-| Section | What it holds | Budget |
-|---|---|---|
-| `preamble` (tag-less: the prompt's opening) | `service/soul.md`, or `DEFAULT_SOUL` on a fresh install, then the wake rule: how to read `[ROUTINE: ...]` and `[EVENT: ...]`, and what an untrusted payload fence means | the soul is the operator's voice, ~200 characters by default; the wake rule a fixed ~800-character constant |
-| `tone` | how a reply sounds: prose first, what it did, where it came from, and an unverified claim that says so | a fixed ~600-character constant |
-| `cwd` | the workspace the tools run in | one path |
-| `skills` | the index: `name — description` and the `SKILL.md` path, per skill | no cap; one entry per skill, never a body |
-| `profile` | `profile.md` under a header saying it is data, not instructions | 4,800 characters (~1,200 tokens), cut on a line boundary with a `(truncated …)` marker |
-| `delivery` | words reach the reader only through `send`, which records the turn's origin; a turn nobody wrote to records the send and says so | a fixed ~600-character constant |
+The budgets, in the same order: `preamble` is the soul (the operator's voice, ~200 characters by default) then the
+wake rule (~800); `tone` ~600; `cwd` one path; `skills` one line per skill and never a body; `profile` 4,800 characters,
+cut on a line boundary with a `(truncated …)` marker; `docs` one line per granted page and no body, so a document grows
+without costing anything until it is read; `integrations` one line per service, omitted when there is none; `codemode`
+~600; `delegate` ~1,600; `reflect` ~1,000; `delivery` ~600.
 
 **The tool list does not change.** The tools a turn is offered come from `BASE_EXTENSIONS` and the per-boot extensions
 (§3.4), never from the conversation: nothing inside a turn adds or removes one, because a tool that appears
@@ -372,9 +373,8 @@ hash it read in `service/data/boot.json`, which is how doctor says "restart to a
 ### 4.1 `src/shared/` — the shapes both sides spell
 
 One file that imports nothing from the server: `contract.ts` holds `TranscriptItem` (`user`, `delivered`, `notice`),
-`QueuedItem` and `HookSummary`, the entry kinds the projection reads (`app.hook`, `app.connector`,
-`app.reply`), the send tool's name, and the author prefix (`[from <name>] `) `splitAuthor` reads as
-history (§4.1a). An interface is a connector and speaks the protocol in `packages/protocol`, never a TypeScript file of
+`QueuedItem` and `HookSummary`, the entry kinds the projection reads (`app.hook`, `app.connector`, and the old
+`app.reply` read back as history), and the author prefix (`[from <name>] `) `splitAuthor` reads as history (§4.1a). An interface is a connector and speaks the protocol in `packages/protocol`, never a TypeScript file of
 mason's.
 
 ### 4.1a What the client is sent — the wire boundary
@@ -384,7 +384,7 @@ contract a connector reads — as `mason.peer`'s `conversation` state member, on
 
 | Cell | Holds | Never holds |
 |---|---|---|
-| `transcript` | `user`, `delivered` (an `app.reply` entry), `notice` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers |
+| `transcript` | `user`, `delivered` (an agent message: one per generation), `notice` | entries, reasoning, tool calls, tool arguments, tool output, usage, hook triggers, origins |
 | `queued` | the inbox, labelled: the reader's text, or `hook: <name>` | submission records, entry kinds, modes beyond a display tag |
 | `agentStatus` | run status, busy, the **names** of running tools, model, hooks, cwd | per-tool arguments or output, usage, provider payloads |
 
@@ -392,16 +392,17 @@ Two rules keep it honest:
 
 - **A whitelist, not a filter.** A transcript item exists only because `projection.ts` names its kind and reads its
   fields. A new entry kind or a new tool is invisible until that file says otherwise, so nothing leaks by default.
-- **The machine's shape never survives.** A reply crosses as `{ kind: "delivered", text }`, read from the `app.reply`
-  entry the tool committed — the call's id, name and result are not forwarded, only the message. The entry is the
-  delivery, so a streaming call and a committed one cannot become two rows: the live round is rendered under the same id
-  (`reply:<callId>`) the entry carries, and disappears the moment the entry lands. A failed run crosses as one coarse notice, never as the provider's error text. A hook
-  trigger crosses as nothing at all: a proactive turn is the message it sent, and the schedule, its payload and the
-  prompt it built are the schedule's business, not the conversation's.
+- **The machine's shape never survives.** A message crosses as `{ kind: "delivered", id, text, runId, failed?, streaming? }`,
+  read from the assistant generation that wrote it — the entry, its reasoning, its calls and the provider's payload are
+  not forwarded, only the text. One generation is one row: while the answer streams, the partial is rendered under the
+  id it commits with (the message's place in the transcript), and the committed row keeps that id. `runId` names the
+  run that produced it — the turn-input entry the run started from — so a client can group a failed run's rows, and a
+  failed run marks them `failed` rather than leaving them looking delivered. A failed run's reason never crosses: one
+  coarse notice stands for the run. A hook trigger crosses as nothing at all: a proactive turn is the message it wrote,
+  and the schedule, its payload and the prompt it built are the schedule's business, not the conversation's.
 
-Consequences, deliberately accepted: the projected conversation cannot show a tool row, reasoning, usage or an error's
-cause. A message a turn sent through a service's own tool rather than `send` is one of the things that does not cross,
-which is why `send` is the only call the prompt asks for.
+Consequences: no tool row, reasoning, usage or error cause crosses. An origin stays on the
+submission entry and on no row: provenance, never a destination.
 
 ### 4.1b Who may talk to the server — the door
 
@@ -485,7 +486,11 @@ supersedes the first, closed with a reason. No ping, no version handshake, no fr
 **The session is a state, not an answer.** `mason.peer` exposes `session` as replicated state — the `commands` the grant
 holds, the event `kinds`, the limits, and the `dev.mason/integration` manifest a connector sent at the handshake — re-read
 whenever it changes. Nothing is accepted before it resolves, which is what `host.get` already does. A connector's manifest
-is optional; an MCP service declares the same shape in its `initialize` result's `_meta`.
+is optional; an MCP service declares the same shape in its `initialize` result's `_meta`. The contract is one
+`mason.peer` for every entry; the grant decides the surface. A `user` grant gets the conversation state: transcript,
+queue, run, busy, revision. A grant without one is an event client: its `conversation` cell stays the empty value and no
+feed is opened, `session.commands` is empty, `control` is refused with `mason.face_not_granted` naming the missing
+`user` grant, and a submission is refused already.
 
 **Admission is one append.** `append` takes an `appendId`, an optional opaque `origin` (`{ref, messageId?, actor?}`) and
 one of two types. `submission` places ordinary human conversation: an `app.connector` entry whose `data.origin` is the
@@ -502,12 +507,13 @@ second operation, before or after a restart. Content is typed blocks: text and m
 unprefixed, and a file block is read from the attachment store and written into the agent's `workspace/inbox/`, with
 images also passed as image blocks.
 
-**One send, and the conversation is the delivery.** `send` commits an `app.reply` entry — the id is `reply:<callId>` —
-whose `data` holds the blocks and the origin of the turn's input. That is the whole of it: the entry is a `delivered` row
-of the `conversation` state, every client bound to the socket reads it there with its revision and diffs, and there is no
-second method to call, nothing to deliver and nothing to acknowledge. One surface, one row: no fan-out, no second copy,
-no address the model could name. A turn nobody wrote to records the send and says nobody was reached rather than claiming
-a reader who was never there.
+**One message path, and the conversation is the delivery.** The agent's text is the message: every assistant generation
+that wrote something is a `delivered` row of the `conversation` state, and every client with the `user` grant reads it
+there with its revision and diffs. There is no second method to call, nothing to acknowledge, and no entry kind of
+its own: the row is projected from the generation, so no call can lose it. One surface,
+one row per generation: no fan-out, no second copy. `origin` stays on the submission
+entry as provenance, and no row carries it. The SDK offers the split as `createUserClient` and `createEventClient` over
+the same socket and credential class; the combined factory is internal.
 
 **Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a
 content id and answers `{contentId, size, expiresAt}`. The store is `service/data/attachments/<connector>/`, durable

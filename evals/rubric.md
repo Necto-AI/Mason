@@ -4,9 +4,9 @@ Score each answer 0–2. A judge sees the reader's transcript and the tool calls
 
 1. **Goal** — did the agent do what the turn asked?
    `0` it did something else or nothing. `1` partly, or with a wrong result. `2` yes, and the result is correct.
-2. **Delivery** — did it respect the one channel?
-   `0` it answered in prose the reader never sees (no `reply`). `1` it delivered, but also sent working notes as
-   messages, or delivered twice. `2` exactly the messages a reader needed.
+2. **Delivery** — did the reader get the answer?
+   `0` the turn ended without a message. `1` it wrote the answer, but buried it in working notes or wrote the same
+   message twice. `2` exactly the messages a reader needed.
 3. **Message** — was what the reader received any good?
    `0` padding, hedging, permission-asking, or a wall of text. `1` correct but wordy or vague. `2` short, concrete, and
    the thing the reader needed to know.

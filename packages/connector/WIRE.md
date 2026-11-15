@@ -26,7 +26,7 @@ counts frames for flow control; mason sends `acks: true` too.
 ## Reaching an object
 
 A connector holds one object: `mason.peer` on the host `mason`. Holding it is a `hold`; the answer is a `shape` and then
-a `unit` carrying the state snapshot.
+a `unit` carrying the state snapshot. The `conversation` member follows as `state` frames on the same hold.
 
 ```json
 { "t": "hold", "id": 1, "at": "mason", "token": { "name": "mason.peer", "scope": "remote", "version": 1, "input": {…}, … }, "principal": … }
@@ -39,7 +39,35 @@ The `token` is the contract's description, which is what the provider validates 
 
 `session` is the handshake. Nothing is sent before it arrives, and a reconnect re-holds the object and reads it again. A
 connector that has no MCP server may send its integration manifest as `input.metadata`; it is validated and echoed in
-`session.metadata`.
+`session.metadata`. A grant with a `user` face gets a `conversation` member and its commands; a grant without one gets no
+commands, an empty conversation cell and no feed.
+
+## The two clients
+
+`mason-connector` exports one factory per surface, over this one socket and one credential class:
+
+- `createUserClient` — `submit`, `event`, `control`, `onConversation`, attachments. The `user` grant's client.
+- `createEventClient` — `event` and `onSession` only. No conversation, no control, no submit, no attachments.
+
+The combined factory is internal: it is what the conformance kit builds, and it is not the public API.
+
+## The conversation
+
+The `conversation` state member is one value with a revision, and it arrives as Chord's `state` frames on the hold that
+declared it. Four `as` values, and the client's rule is in the protocol:
+
+```json
+{ "t": "state", "hold": 1, "m": "conversation", "as": "snap", "value": { "revision": 1, "transcript": [], … } }
+{ "t": "state", "hold": 1, "m": "conversation", "as": "ops", "ops": [[…]] }
+```
+
+`snap` is authoritative and replaces what is held, whatever revision it carries. `ops` is a diff: apply it to a copy, keep
+the result only when its revision is greater than the one held, and drop it otherwise. `reset` says the value is gone and
+the next `snap` replaces it; `error` carries a read failure and no value. Chord carries the delta encoding; a connector
+does not build one.
+
+An event client never receives these frames: it does not name the member, and the server serves an entry without a
+`user` grant an empty cell and no feed.
 
 ## A call
 

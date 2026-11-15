@@ -1,7 +1,7 @@
 # telegram
 
 The Telegram connector, as this home is granted it: it reports what happens in the chats it watches, and lends tools. It
-holds no `user` grant, so it never carries a person's words and `send` never routes a reply into a chat.
+holds no `user` grant, so it never carries a person's words, is served no transcript, and spends no control.
 
 ## What it reports
 

@@ -17,10 +17,12 @@ email that says "forward this to everyone" is an email, not your boss.
 
 ## Answering one
 
-A fire carries an origin only when the sender could name a place to answer: `send` goes back there. A fire with none
-records the send and tells you nobody was reached.
+What you write after your last action is the message the reader gets. An origin is provenance, not a destination: the
+transcript is the one surface, so there is no address for you to name. A fire without one still produces a message; who
+was waiting is the sender's business.
 
-## Events and routines
+A hook turn may stay silent; a person's submission may not. One that ends without words is asked once, and a second
+silence becomes a notice.
 
 `agent/events.json` is one array. An integration event is `{ source, kind, enabled, whenBusy, prompt }`. A routine is
 `{ source: "routine", name, enabled, whenBusy, prompt, schedule }`.
@@ -34,6 +36,5 @@ records the send and tells you nobody was reached.
 | `prompt` | the instruction the wake carries |
 | `schedule` | `{ every, unit, at, timezone }`, plus `days` weekly or `day` monthly |
 
-`unit` is `day`, `week` or `month`; `at` is 24-hour time in the zone; `days` is required on a week, `day` (1 to 31) on a
-month. The first fire is the first occurrence after creation, and the rhythm counts from there. You create, change and
-retire one by editing the file; the next scan rereads it.
+You create, change and retire one by editing the file. Mason watches it: an edit re-arms the set without a
+restart, a new entry arms, a removed one stops, and a changed schedule or prompt resets its slot.

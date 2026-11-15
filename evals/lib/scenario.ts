@@ -42,7 +42,7 @@ export interface Expected {
 	readonly reminders?: { readonly min?: number; readonly max?: number };
 	/** The run must not send more prompt tokens than this. */
 	readonly maxInputTokens?: number;
-	/** Tool calls spent on work — everything except `reply`, which is the delivery channel, not effort. */
+	/** Tool calls spent on work: every call the model made, because no call is the message any more. */
 	readonly maxTools?: number;
 }
 
@@ -117,7 +117,7 @@ export function check(trace: Trace, expected: Expected, writtenText: string): Ch
 		add(`written.${pattern}`, new RegExp(pattern, "im").test(writtenText));
 	}
 	if (expected.maxTools !== undefined) {
-		const work = trace.toolCalls.filter((call) => call.name !== "send").length;
+		const work = trace.toolCalls.length;
 		add("maxTools", work <= expected.maxTools, `${work} work call(s) <= ${expected.maxTools}`);
 	}
 	if (expected.maxInputTokens !== undefined) {
