@@ -1,12 +1,12 @@
 # mason
 
-mason is a headless, always-on agent backend: one durable agent, one home, its tools, and connectors. There is no
+mason is a headless, always-on agent backend: one durable agent, one home, its tools, and its clients. There is no
 application in this repository; this glossary is the vocabulary for the backend and for what attaches to it.
 
 ## The backend
 
 **mason**:
-The backend: a durable agent engine plus the contracts a connector speaks — a socket in, a reply out, a home, a
+The backend: a durable agent engine plus the contracts a client speaks — a socket in, messages out, a home, a
 credential. It defines one bot; it does not define a team of them.
 _Avoid_: the bot, the app, the platform, the assistant
 
@@ -14,17 +14,28 @@ _Avoid_: the bot, the app, the platform, the assistant
 One deployed mason: one identity, one home, one conversation, one set of tools. A second bot is a second deployment.
 _Avoid_: agent, instance, assistant (an *agent* in pi's sense is a conversation's resolved prompt and tool set)
 
-**interface**:
-A role a connector plays when it reaches a person: a chat, or another user-facing surface. Not a separate kind of thing,
-and mason has no interface type.
-_Avoid_: frontend, UI (for the abstract thing), channel
+**client**:
+Any app that talks to mason. It opens the one socket at `/api/connector` with the credential minted for its
+integration. Two kinds: user and event clients.
+_Avoid_: connector (that is a code class), peer, integration
 
+**user client**:
+The one client with the `user` grant. It appends user messages and reads the conversation state. Appiary is it.
+_Avoid_: interface, frontend, UI (for the process)
+
+**event client**:
+A client that appends events and reads no transcript. It gets its grant and the result of each append.
+_Avoid_: notification connector, event source, webhook
+
+**headless bot**:
+A bot with no user client. Event clients in, MCP tools out.
+_Avoid_: worker, background agent
 
 ## The home
 
 **home**:
-The bot's own directory tree: one directory under the root, or whatever `MASON_HOME` names. It is split in two, and the
-split is the boundary between the server and the machine its tools run on.
+The bot's own directory tree: one directory under the root, or whatever `MASON_HOME` names. Its two halves are the
+boundary between the server and the machine its tools run on.
 _Avoid_: house, state dir, `.mason`
 
 **root**:
@@ -84,8 +95,9 @@ _Avoid_: hidden tool, lazy tool
 ## The work
 
 **turn**:
-Everything between an input arriving and the answer that settles it. One turn may cost several model requests.
-_Avoid_: run, cycle, interaction
+One submission to the answer that settles it. One turn may cost several model requests and produce several agent
+messages.
+_Avoid_: run, cycle, interaction (a run is the harness's execution of a turn)
 
 **generation**:
 One model request and its answer, inside a turn. A tool round starts another one.
@@ -96,18 +108,30 @@ The model's tool calls and their results, between two generations of the same tu
 _Avoid_: tool step, iteration
 
 **submission**:
-A person's input as mason receives it: its content, origin, attribution, and whether it still waits in the queue.
-_Avoid_: message (that is what is read afterwards), prompt, request
+One inbound act to the agent: a user message or an event. Mason claims its id forever, so a resend is the same act.
+_Avoid_: input, request, message (a message is the text; a submission is the envelope)
+
+**message**:
+Readable text meant to be read: a user message or an agent message.
+_Avoid_: reply, output, content
+
+**user message**:
+A person's words in a submission.
+_Avoid_: prompt, input
+
+**agent message**:
+The agent's text that a user client renders. At most one per generation. A message from a failed run is marked failed.
+_Avoid_: reply, response, delivery
 
 **routine**:
 A timer the agent owns: a name, an interval and the prompt that fires. It lives in `agent/routines.json`, which the
-agent edits, and a deployment ships none. Marked in the transcript `[ROUTINE: name]`.
+agent edits; a deployment ships none. Marked `[ROUTINE: name]`.
 _Avoid_: cron job, schedule, timer, hook
 
 **event**:
-A fire a connector sends over its socket, of a kind its grant names. It wakes a turn with the payload, fenced as
-untrusted data. Marked in the transcript `[EVENT: kind]`.
-_Avoid_: webhook, trigger, hook, notification
+A notification from an event client, of a kind its grant names. It wakes a turn with the payload, fenced as untrusted
+data. An event turn may be silent.
+_Avoid_: webhook, trigger, hook
 
 **lifecycle hook**:
 A call the vendor runtime makes inside a running turn — `beforeRequest`, `onYield`, `afterRun`, `beforeTool`. It is not
@@ -115,8 +139,8 @@ a way for anything outside the conversation to wake the bot.
 _Avoid_: hook (alone), trigger, event
 
 **fire**:
-One wake of the bot by a routine or an event. A redelivery under the same identity is still one fire. Unlike a tool
-result, a fire is unsolicited input that can start a turn.
+One wake of the bot by a routine or an event. A redelivery under the same identity is one fire. Unlike a tool result,
+a fire is unsolicited input that can start a turn.
 _Avoid_: event (when a routine fired), invocation, submission
 
 **delegation**:
@@ -127,66 +151,48 @@ _Avoid_: worker (the former name), subagent (that is the API), helper, child bot
 
 **role**:
 What a conversation runs on: a provider, a model and a thinking level, from `roles` in the common store. `main` is the
-conversation a person writes to; `subagent` is what a delegation runs. Recorded per conversation in `pi.agent`.
+person's conversation; `subagent` is a delegation's. Recorded per conversation in `pi.agent`.
 _Avoid_: profile (that is the person), persona, preset, tier
 
 **write lease**:
-One writer at a time on one checkout, keyed on the checkout's realpath and held for a write-capable delegation's run. A
-second writer is refused, never queued; it is released at settlement, and never reaped by age.
+One writer at a time on one checkout, keyed on its realpath and held for a write-capable delegation's run. A second
+writer is refused, never queued; released at settlement, never reaped by age.
 _Avoid_: lock (that is the store's), mutex, semaphore
 
-**send**:
-The one mason-owned tool a turn uses to reach its reader: it commits an `app.reply` entry carrying the turn's origin, and
-that row of the conversation is the message. There is no address for a model to name, so a turn nobody wrote to records
-the send and says nobody was reached.
-_Avoid_: reply (the former name), send_to_user, message
-
-**reply id**:
-The durable identity of one send: `reply:<callId>` of the call that asked for it, and the id of the row a reader's client
-renders. One message, one id, one row.
-_Avoid_: message id, request id, delivery id
-
-## Integrations and connectors
+## Integrations and clients
 
 **integration**:
-One entry in `service/integrations.json`: a service mason may reach, with an MCP server, a connector grant, or both. Only
-an entry with a grant has a connector.
-_Avoid_: service, app, plugin
+One entry in `service/integrations.json`: a service mason may reach, with an MCP server, a client grant, or both. The
+record, not the process.
+_Avoid_: service, app, plugin, interface
 
 **MCP server**:
-The endpoint an integration points at, over Streamable HTTP, that lends the bot tools. Mason is the client and holds the
-credential the server issued it, never the one it issued the connector.
+The endpoint an integration points at, over Streamable HTTP, that lends the bot tools. Mason calls it and holds the
+credential the server issued it, never the one mason issued the client.
 _Avoid_: tool surface, tools face
 
-**connector**:
-An external process mason admitted on `/api/connector`, with the credential minted for its integration: it appends a
-person's words or an event, and the answer is a row of the conversation it reads. Tools are the entry's MCP server,
-never the socket.
-_Avoid_: integration (that is the entry), plugin, client, app
-
 **append**:
-The one inbound call: a submission or an event, each with an id mason dedupes forever and an origin it never parses.
-One call for two shapes lets an events-only connector be answered.
+The one inbound call: a submission. It carries a user message or an event, each with an id mason dedupes forever and an
+origin it never parses.
 _Avoid_: submit, fire, envelope
 
 **payload**:
 The data an event carries. It reaches the model fenced as untrusted data and never becomes an instruction.
 _Avoid_: envelope, event body, message
 
-**connector credential**:
-The credential mason issues one entry so its process can open `/api/connector` and the attachment endpoints. A hash in
-`service/config.json`, read on every connection, and the only credential mason issues.
+**credential**:
+The secret mason issues one integration so its client can open `/api/connector` and the attachment endpoints. A hash in
+`service/config.json`, read on every connection.
 _Avoid_: token, API key, session
 
 **content id**:
 The name of one uploaded file, `cnt_<hex>`. Bytes cross the transfer endpoint by this id, never base64 in a frame and
-never a shared path, and an id is served only to the connector that uploaded it.
+never a shared path, and an id is served only to the client that uploaded it.
 _Avoid_: attachment id, file token
 
 **tool catalog**:
 What one MCP server offers *now*: each tool's name, description, JSON Schema and approval marker, read and never
-registered as a tool. A script asks it (`mcp_search`, `mcp_describe`, `mcp_call`), so a server that redeploys does not
-move the prompt.
+registered. A script asks it (`mcp_search`, `mcp_describe`, `mcp_call`), so a redeploy does not move the prompt.
 _Avoid_: tool list, MCP tools (that is what a catalog holds)
 
 ## The conversation
@@ -196,37 +202,51 @@ The human a home works for. One bot, one person: who that is, is `agent/profile.
 _Avoid_: user, member, owner (see **owner actor**)
 
 **actor**:
-Who caused a submission or an event: the external id a connector asserted. mason accepts exactly one, the entry's
-`owner`; anything else is refused.
+Who caused a submission or an event: the external id a client asserted. mason accepts exactly one, the entry's `owner`;
+anything else is refused.
 _Avoid_: user (for the actor), author (that is a name on a message written before the cutover)
 
 **owner actor**:
-The one external actor id a connector's grant names in `connector.user.owner`. Its words are the person's, and it may
-drive the controls the entry grants.
+The one external actor id a client's grant names as its owner. Its words are the person's, and it may drive the controls
+the entry grants.
 _Avoid_: approver, admin, primary user
 
 **origin**:
-The connector and the opaque `ref` it minted on the append a turn came from, plus the actor when it named one: where an
-answer goes. Data on the entry, never prose in a prompt. A retry inherits the origin of the turn it resumes.
-_Avoid_: source, channel, session, conversation (there is one, and it is the transcript)
+Where a submission came from: the client, the source id it minted, and the actor when it named one. Provenance, never a
+destination.
+_Avoid_: source, channel, session
 
-**ref**:
-The address a connector mints into `origin.ref`, kept byte for byte with the reply answering that append. Mason
-never parses it, so a medium with no chat ids is a connector like any other.
-_Avoid_: address, room id, conversation id
+**source id**:
+The client's own id for the thread or message a submission came from, such as a chat id or an issue URL. Mason stores it
+byte for byte and never parses it.
+_Avoid_: address, room id, conversation id, ref
+
+**conversation**:
+The durable log of a bot's submissions, model entries, tool results and messages. The transcript is projected from it.
+_Avoid_: history, chat log
+
+**conversation state**:
+The user client's view of the conversation: transcript, queue, run, busy, revision and transitions. An event client is
+not served it.
+_Avoid_: rich interface, snapshot, feed
 
 ## The wire
 
 **transcript**:
-What a reader is shown: their words, what the agent delivered, and coarse notices, derived from the conversation.
-_Avoid_: conversation, history, chat log
+What a user client reads: user messages, agent messages, events and notices, derived from the conversation.
+_Avoid_: history, chat log
 
 **projection**:
-The whitelist that turns a conversation into a transcript. Anything it does not name does not cross.
+The whitelist that turns a conversation into a transcript. Anything it does not name does not cross; reasoning, tool
+calls, arguments and output never do.
 _Avoid_: serializer, mapper, view
 
+**notice**:
+A server-written transcript line: a failed run, a silent turn. It is not a message.
+_Avoid_: system message, banner
+
 **revision**:
-The counter on the conversation a client holds, and the transitions that produced it: a snapshot is authoritative and
-always applied, while a diff whose revision is not greater than the one held is already applied. Mason owns it,
-because a Chord diff carries ops and no number; it is process-scoped, and starts again at 0 with mason.
+The counter on the conversation state a client holds. A snapshot is authoritative; a diff applies only when its
+revision is greater. Mason owns it because a Chord diff carries no number; it is process-scoped and starts again at 0
+with mason.
 _Avoid_: version, sequence, cursor, timestamp
