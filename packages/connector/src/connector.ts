@@ -73,6 +73,12 @@ export interface ConnectorConfig {
 	readonly fetch?: Fetcher;
 	/** How long a call to mason may take before it is left journaled. Chord's own default is 60 s. */
 	readonly readyTimeout?: number;
+	/**
+	 * Whether this client holds the `conversation` state member. The two public factories decide it from the grant: a
+	 * user client reads the conversation, an event client has none. The conformance kit builds the combined connector and
+	 * passes the fixture's own answer.
+	 */
+	readonly holdConversation?: boolean;
 }
 
 /** How a Chord link is opened for one connection: `webSocketLink` in production, a pair of memory links in a test. */
@@ -288,7 +294,9 @@ export function createConnector(config: ConnectorConfig): Connector {
 			link.close(lastError);
 			throw error;
 		}
-		held.conversation.events((frame) => holdConversation(frame));
+		// An event client has no transcript: it does not hold the member, so the provider streams none of it. Binding is
+		// directional, and a consumer that names no member is served none (PROTOCOL.md, "the ten rules").
+		if (config.holdConversation !== false) held.conversation.events((frame) => holdConversation(frame));
 		const state = held.session.value;
 		peer = held;
 		session = state;

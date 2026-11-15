@@ -23,7 +23,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { type ConnectorStore, createConnector, nodeWebSocketLink, type StoreEntry } from "mason-connector";
+import { type ConnectorStore, createUserClient, nodeWebSocketLink, type StoreEntry } from "mason-connector";
 import { CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { writeFileAtomic } from "../src/server/atomic.ts";
 import type { ConnectorGrant } from "../src/server/connectors.ts";
@@ -245,46 +245,43 @@ export async function runChat(argv: readonly string[]): Promise<number> {
 	 */
 	const seen = new Set<string>();
 	let first = true;
-	const connector = createConnector({
+	const connector = createUserClient({
 		name: CONSOLE,
 		version: "0.2.0",
 		url: socketUrl(args.url),
 		credential: issued.credential,
 		store: fileStore(join(paths.serviceDir, "console-ledger.json")),
 		link: nodeWebSocketLink(WebSocket as never),
-		handlers: {
-			onSession() {
-				connected = true;
-				if (args.once === undefined)
-					console.log(dim("[chat] connected. type a message; /help lists the controls\n"));
-			},
-			onClosed(reason) {
-				if (args.once === undefined) console.log(dim(`[chat] socket closed: ${reason}`));
-				// The SDK reconnects on its own, and it should: a socket that drops mid-conversation has a person waiting.
-				// A one-shot command has nobody waiting, so it says what is wrong instead of retrying in the dark.
-				if (!connected) {
-					closed?.(reason);
-					closed = undefined;
-				}
-			},
-			onConversation(state) {
-				for (const row of state.transcript) {
-					// A row still being written is not the answer yet: the committed row is the message, under the same id.
-					if (row.kind !== "delivered" || row.streaming === true) continue;
-					if (seen.has(row.id)) continue;
-					seen.add(row.id);
-					if (first) continue;
-					if (args.once !== undefined) {
-						console.log(row.text);
-						delivered?.(row.text);
-						delivered = undefined;
-					} else {
-						console.log(`\nmason: ${row.text}\n`);
-					}
-				}
-				first = false;
-			},
-		},
+	});
+	connector.onSession(() => {
+		connected = true;
+		if (args.once === undefined) console.log(dim("[chat] connected. type a message; /help lists the controls\n"));
+	});
+	connector.onClosed((reason) => {
+		if (args.once === undefined) console.log(dim(`[chat] socket closed: ${reason}`));
+		// The SDK reconnects on its own, and it should: a socket that drops mid-conversation has a person waiting.
+		// A one-shot command has nobody waiting, so it says what is wrong instead of retrying in the dark.
+		if (!connected) {
+			closed?.(reason);
+			closed = undefined;
+		}
+	});
+	connector.onConversation((state) => {
+		for (const row of state.transcript) {
+			// A row still being written is not the answer yet: the committed row is the message, under the same id.
+			if (row.kind !== "delivered" || row.streaming === true) continue;
+			if (seen.has(row.id)) continue;
+			seen.add(row.id);
+			if (first) continue;
+			if (args.once !== undefined) {
+				console.log(row.text);
+				delivered?.(row.text);
+				delivered = undefined;
+			} else {
+				console.log(`\nmason: ${row.text}\n`);
+			}
+		}
+		first = false;
 	});
 
 	try {

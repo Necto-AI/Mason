@@ -42,12 +42,16 @@ export {
 	type Fetcher,
 } from "./attachments.ts";
 export {
-	type Connector,
-	type ConnectorConfig,
-	type ConnectorHandlers,
-	type ConnectorStatus,
+	type ClientConfig,
+	createEventClient,
+	createUserClient,
+	type EventClient,
+	type EventClientStatus,
+	type UserClient,
+	type UserClientStatus,
+} from "./clients.ts";
+export {
 	type ControlInput,
-	createConnector,
 	type EventInput,
 	type InboundOutcome,
 	type LinkFactory,
