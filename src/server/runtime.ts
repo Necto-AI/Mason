@@ -3,6 +3,7 @@
  * the extension registry, the `pi-env` execution split, and the root conversation.
  */
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -689,7 +690,13 @@ async function appendMissingExtensions(
 
 async function openSqliteStorage(path: string): Promise<Storage> {
 	mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
-	const storage = await openNodeSqliteStorage(path);
+	await assertSqliteFile(path);
+	let storage: Storage;
+	try {
+		storage = await openNodeSqliteStorage(path);
+	} catch (error) {
+		throw new Error(sqliteRefusal(path, error instanceof Error ? error.message : String(error)));
+	}
 	// SQLite creates the file with the process umask; the transcript inside it deserves the same 0600 as the config.
 	try {
 		chmodSync(path, 0o600);
@@ -697,4 +704,38 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 		// No modes on this filesystem; nothing to set.
 	}
 	return storage;
+}
+
+/** The first bytes of every SQLite database: a file that does not start with them is not one. */
+const SQLITE_HEADER = "SQLite format 3\u0000";
+
+/**
+ * Refuse a file that is not a database before SQLite touches it.
+ *
+ * `openNodeSqliteStorage` succeeds on a corrupt file and the first query fails instead, with a message about a malformed
+ * database and no path in it — a boot that dies inside the harness with nothing to act on. A header check is the one read
+ * that names the file while the repair is still a move. An absent or empty file is not corrupt: SQLite creates both.
+ */
+async function assertSqliteFile(path: string): Promise<void> {
+	let handle: Awaited<ReturnType<typeof open>>;
+	try {
+		handle = await open(path, "r");
+	} catch {
+		return;
+	}
+	try {
+		const header = Buffer.alloc(SQLITE_HEADER.length);
+		const { bytesRead } = await handle.read(header, 0, header.length, 0);
+		if (bytesRead === 0) return;
+		if (bytesRead < header.length || header.toString("latin1") !== SQLITE_HEADER) {
+			throw new Error(sqliteRefusal(path, "it does not start with SQLite's header"));
+		}
+	} finally {
+		await handle.close();
+	}
+}
+
+/** What a boot says about a database it cannot open: the path, and the one command that starts a fresh conversation. */
+function sqliteRefusal(path: string, why: string): string {
+	return `${path} cannot be opened as SQLite storage (${why}). Move it aside and boot again: \`mv ${path} ${path}.corrupt\` keeps the old file for inspection and starts a fresh conversation.`;
 }
