@@ -21,7 +21,7 @@ import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { Origin } from "mason-protocol";
 import type { HookSummary } from "../shared/contract.ts";
 import { entryFor, whenBusyFor } from "./admission.ts";
-import { nextFireAt, parseSchedule, type Schedule } from "./schedule.ts";
+import { nextFireAt, parseSchedule, renderSchedule, type Schedule } from "./schedule.ts";
 import { fenceUntrusted } from "./untrusted.ts";
 
 export interface EventHookConfig {
@@ -64,6 +64,9 @@ export function eventHookId(source: string, kind: string): string {
 export function hookIdOf(event: EventConfig): string {
 	return event.source === "routine" ? (event.name as string) : eventHookId(event.source, event.kind as string);
 }
+
+/** Node's largest `setTimeout` delay; a longer slot re-arms when this one expires instead of firing early. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** The id the run supervisor's retry lifecycle hook occupies (`RETRY_HOOK_ID` in `run-retry.ts`). */
 export const RESERVED_ROUTINE_ID: ReadonlySet<string> = new Set(["retry-failed-run"]);
@@ -414,7 +417,9 @@ export class HooksManager {
 			enabled: hook.enabled,
 			fireCount: hook.fireCount,
 			...(hook.intervalMs === undefined ? {} : { intervalMs: hook.intervalMs }),
-			...(hook.schedule === undefined ? {} : { schedule: hook.schedule }),
+			...(hook.schedule === undefined
+				? {}
+				: { schedule: hook.schedule, scheduleText: renderSchedule(hook.schedule) }),
 			...(hook.lastFiredAt === undefined ? {} : { lastFiredAt: hook.lastFiredAt }),
 		}));
 	}
@@ -489,7 +494,11 @@ export class HooksManager {
 
 	#arm(id: string): void {
 		const hook = this.#hooks.get(id);
-		if (hook === undefined || !hook.enabled || this.#closed) return;
+		if (hook === undefined || this.#closed) return;
+		if (!hook.enabled) {
+			this.#disarm(id);
+			return;
+		}
 		this.#disarm(id);
 		let state = this.#state[id];
 		if (state === undefined) {
@@ -509,7 +518,17 @@ export class HooksManager {
 				void this.#catchUp(hook, dueMs);
 				return;
 			}
-			const timer = setTimeout(() => void this.#due(hook, dueMs), waitMs);
+			const clamped = waitMs > MAX_TIMER_MS;
+			const timer = setTimeout(
+				() => {
+					if (clamped && this.#now().getTime() < dueMs) {
+						this.#arm(id);
+						return;
+					}
+					void this.#due(hook, dueMs);
+				},
+				Math.min(waitMs, MAX_TIMER_MS),
+			);
 			timer.unref();
 			this.#timers.set(id, timer);
 			return;
@@ -528,16 +547,31 @@ export class HooksManager {
 			void this.#catchUp(hook, dueMs);
 			return;
 		}
-		const timer = setTimeout(() => void this.#due(hook, dueMs), waitMs);
+		const clamped = waitMs > MAX_TIMER_MS;
+		const timer = setTimeout(
+			() => {
+				if (clamped && this.#now().getTime() < dueMs) {
+					this.#arm(id);
+					return;
+				}
+				void this.#due(hook, dueMs);
+			},
+			Math.min(waitMs, MAX_TIMER_MS),
+		);
 		timer.unref();
 		this.#timers.set(id, timer);
 	}
 
 	/** The slot is due now: one fire, then the next slot is written at once, so a timeout never stacks. */
 	async #due(hook: EventHookConfig, dueMs: number): Promise<void> {
-		this.#advance(hook, dueMs);
+		const live = this.#hooks.get(hook.id);
+		if (live === undefined || !live.enabled) {
+			this.#disarm(hook.id);
+			return;
+		}
+		this.#advance(live, dueMs);
 		try {
-			await this.fire(hook.id, { requestId: scheduledRequestId(hook.id, dueMs) });
+			await this.fire(live.id, { requestId: scheduledRequestId(live.id, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
@@ -545,9 +579,14 @@ export class HooksManager {
 
 	/** A slot the process did not keep: one catch-up fire from the missed slot's own key, then skip the rest. */
 	async #catchUp(hook: EventHookConfig, dueMs: number): Promise<void> {
-		this.#advance(hook, dueMs);
+		const live = this.#hooks.get(hook.id);
+		if (live === undefined || !live.enabled) {
+			this.#disarm(hook.id);
+			return;
+		}
+		this.#advance(live, dueMs);
 		try {
-			await this.fire(hook.id, { requestId: scheduledRequestId(hook.id, dueMs) });
+			await this.fire(live.id, { requestId: scheduledRequestId(live.id, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}

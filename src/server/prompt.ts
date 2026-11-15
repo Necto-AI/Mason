@@ -164,10 +164,9 @@ function renderIntegrations(): string | undefined {
 /**
  * Where the reference is, and when to go and read it.
  *
- * The pages are mason's and are mounted read-only (`docs.ts` names the mount), so the agent cannot damage them and
- * cannot be left reading a description of a version that has moved. The prompt carries an index and one line about when
- * to open it: the rule for what stays resident instead is **a rule stays in the prompt if the turn is already broken by
- * the time the agent would go and read it.**
+ * Mason's pages ship in the package; a service's are markdown resources it lists, read through `mcp_read_resource`. The
+ * prompt carries an index only: the rule for what stays resident instead is **a rule stays in the prompt if the turn is
+ * already broken by the time the agent would go and read it.**
  */
 export const DOCS_GROUNDING = `The index is the reference, not your memory. Mason's pages ship with the package; an integration's markdown
 pages are read with \`mcp_read_resource\`.`;

@@ -2,7 +2,7 @@
  * Durable harness bootstrap: SQLite storage, model access (real providers or the faux provider),
  * the extension registry, the `pi-env` execution split, and the root conversation.
  */
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -423,6 +423,13 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
+		// A home from before #220 is migrated by hand: say so once, rather than booting with no routines and no clue.
+		if (existsSync(join(house.agentDir, "routines.json"))) {
+			console.log(
+				`[events] ${join(house.agentDir, "routines.json")} is retired: move each entry into agent/events.json with ` +
+					'source: "routine" and a schedule; it is not read',
+			);
+		}
 		// The events and routines are read from the agent's half of the home, and their state lives in the server's half.
 		const hooks = new HooksManager({
 			conversation: () => harness.root(BACKGROUND_CONTEXT),

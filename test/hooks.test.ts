@@ -426,10 +426,77 @@ describe("agent/events.json", () => {
 				assert.equal(hooks.get("digest")?.whenBusy, "steer");
 				assert.equal(hooks.get("digest")?.schedule?.unit, "day");
 				assert.equal(
+					hooks.list()[0]?.scheduleText,
+					"Every day at 09:00",
+					"the UI sentence follows the same schedule",
+				);
+				assert.equal(
 					(await stateOf(paths.state)).digest?.nextFireAt,
 					"2026-10-20T09:00:00.000Z",
 					"the first slot is the next wall-clock occurrence after the anchor",
 				);
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
+	it("keeps a slot past Node's 24.8-day timer cap, without firing early", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await eventHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([
+					{
+						source: "routine",
+						name: "quarterly",
+						enabled: true,
+						prompt: "Read the quarterly.",
+						schedule: { every: 3, unit: "month", at: "10:00", timezone: "UTC", day: 1 },
+					},
+				]),
+			);
+			const clock = testClock(ALIGNED_START);
+			const hooks = manager(testRuntime, paths, clock);
+			try {
+				hooks.start();
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				assert.equal(
+					hooks.get("quarterly")?.fireCount,
+					0,
+					"a clamped timer waits instead of firing the future slot",
+				);
+				const next = Date.parse(String((await stateOf(paths.state)).quarterly?.nextFireAt));
+				assert.ok(next - clock.at() > 24 * 24 * 60 * 60 * 1_000, "the slot is further out than the timer cap");
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
+	it("disarms a routine the agent switches off, so a pending slot cannot wake once", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await eventHome();
+			const clock = testClock(ALIGNED_START);
+			const routine = {
+				source: "routine",
+				name: "digest",
+				enabled: true,
+				prompt: "Read the digest.",
+				schedule: { every: 1, unit: "day" as const, at: "09:00", timezone: "UTC" },
+			};
+			await writeFile(paths.file, JSON.stringify([routine]));
+			await writeFile(
+				paths.state,
+				JSON.stringify({ digest: { nextFireAt: new Date(clock.at() + 400).toISOString(), anchor: ALIGNED_START } }),
+			);
+			const hooks = manager(testRuntime, paths, clock);
+			try {
+				hooks.start();
+				hooks.setEvents([{ ...routine, schedule: routine.schedule, whenBusy: "followUp", enabled: false }]);
+				await new Promise((resolve) => setTimeout(resolve, 700));
+				assert.equal(hooks.get("digest")?.fireCount, 0, "the pending timer was disarmed, not left to wake");
+				assert.equal((await stateOf(paths.state)).digest?.nextFireAt, new Date(clock.at() + 400).toISOString());
 			} finally {
 				await hooks.close();
 			}

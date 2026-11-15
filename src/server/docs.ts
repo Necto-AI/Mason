@@ -23,8 +23,8 @@ export interface DocPage {
 /**
  * The pages mason ships, README first and then alphabetical.
  *
- * Read from the server's side of the same directory the tool machine mounts, because the index is rendered by the server
- * and the mount is a deployment detail — a page the package does not carry is a page the index does not offer.
+ * Read from the package's own directory: the index is rendered by the server, and a page the package does not carry is a
+ * page the index does not offer. A deployment does not have to mount it; a service's docs are MCP resources.
  */
 export async function readDocsIndex(docsDir = SHIPPED_DOCS_DIR): Promise<DocPage[]> {
 	const pages: DocPage[] = [];

@@ -7,7 +7,8 @@
  * appeared when a container restarted, or vanished because a server redeployed, used to arrive as a deferred tool — which meant the
  * `codemode` section that lists the tools a script can call was different between two turns of one build, and the
  * prefix stopped being reusable. So nothing a server says is registered here. The registry gets four stable tools,
- * `mcp_search`, `mcp_describe` and `mcp_call`, and the answer they give is whatever the servers say *now*.
+ * `mcp_search`, `mcp_describe`, `mcp_call` and `mcp_read_resource`, and the answer they give is whatever the servers say
+ * *now*.
  *
  * That is the whole of mason's MCP surface, and it is `callers: ["tools"]`: a script reaches it, the model is never
  * offered it, and `tool_search` cannot promote a server's forty schemas into the declared list. Progressive disclosure
@@ -867,7 +868,7 @@ function versionOf(tool: McpTool): string {
  *
  * `callers: ["tools"]` on each: the model is never offered them, so no server's schema can enter the declared list, and
  * `tool_search` has nothing of MCP's to promote. A script reads them from the `codemode` section, which is why their
- * descriptions say how the three fit together rather than what one does.
+ * descriptions say how the four fit together rather than what one does.
  */
 function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call" | "readResource">): ToolRegistration[] {
 	const search = defineTool({

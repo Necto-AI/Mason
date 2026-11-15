@@ -110,6 +110,15 @@ describe("the next fire", () => {
 		);
 	});
 
+	it("fires the earlier wall clock in a southern fall-back too", () => {
+		const daily = schedule({ every: 1, unit: "day", at: "02:30", timezone: "Australia/Sydney" });
+		assert.equal(
+			nextFireAt(daily, new Date("2026-04-04T12:00:00.000Z")).toISOString(),
+			"2026-04-04T15:30:00.000Z",
+			"02:30 AEDT is the earlier occurrence; the AEST one an hour later is not the slot",
+		);
+	});
+
 	it("counts every day of a DST week, not every 24 hours", () => {
 		const daily = schedule({ every: 1, unit: "day", at: "09:00", timezone: "America/New_York" });
 		const before = nextFireAt(daily, new Date("2026-03-07T14:00:00.000Z"));

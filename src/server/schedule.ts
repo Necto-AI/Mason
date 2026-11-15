@@ -276,15 +276,19 @@ function localParts(instant: Date, timezone: string): LocalParts {
  */
 function instantOf(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
 	const wallMs = Date.UTC(year, month - 1, day, hour, minute);
+	// A day before the wall clock carries the offset on the other side of a transition, which is how a fall-back hour's
+	// earlier occurrence is found in a southern zone as well as a northern one.
+	const before = new Date(wallMs - 26 * 60 * 60 * 1_000);
 	const first = new Date(wallMs - offsetMs(new Date(wallMs), timezone));
 	const second = new Date(wallMs - offsetMs(first, timezone));
 	const third = new Date(wallMs - offsetMs(second, timezone));
-	const all = [first, second, third];
+	const fourth = new Date(wallMs - offsetMs(before, timezone));
+	const all = [first, second, third, fourth];
 	const candidates = all.filter(
 		(candidate, index) => all.findIndex((other) => other.getTime() === candidate.getTime()) === index,
 	);
 	const exact = candidates.filter((candidate) => matches(candidate, year, month, day, hour, minute, timezone));
-	if (exact.length > 0) return exact[0] as Date;
+	if (exact.length > 0) return exact.sort((left, right) => left.getTime() - right.getTime())[0] as Date;
 	// The gap has no matching instant. The later candidate is the first clock after it (03:30 for a skipped 02:30), which
 	// is the one a person means when they say "the 02:30 run"; the earlier one would be before the clock they named.
 	return new Date(Math.max(...candidates.map((candidate) => candidate.getTime()))) as Date;

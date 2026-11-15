@@ -84,6 +84,8 @@ export type HookSummary = {
 		days?: readonly string[];
 		day?: number;
 	};
+	/** The schedule as the sentence a UI shows: "Every 2 weeks on Monday at 09:00". */
+	scheduleText?: string;
 	lastFiredAt?: string;
 	fireCount: number;
 };
