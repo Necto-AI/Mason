@@ -2,7 +2,7 @@
 	"name": "mason-connector",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/DenisSud/mason.git"
+		"url": "git+https://github.com/Necto-AI/mason.git"
 	},
 	"version": "0.1.0",
 	"description": "The TypeScript SDK for a mason connector: one Chord host, the durable journal, the conversation it holds, attachments, MCP helpers, and the fake-mason conformance suite.",

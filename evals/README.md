@@ -155,7 +155,7 @@ passed 15.
 The scenario writes the fact down with `write` rather than `remember`, which the six-tool cut removed; the numbers in
 the table are the runs from before that. It first failed on `turn.2.delivered`: the turn that answers the recall
 question ended without `reply`,
-so the reader got nothing ([#21](https://github.com/DenisSud/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
+so the reader got nothing ([#21](https://github.com/Necto-AI/mason/issues/21)). The delivery gate (§3.4) fixed it: in the
 four `remember` runs right after it landed, three needed a reminder and all four delivered, so the reader never saw
 silence; the twelve runs in the table needed none. The rest of the scenario was green throughout: the fact is written
 to the log and read back through the same path.

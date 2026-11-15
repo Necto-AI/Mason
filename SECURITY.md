@@ -11,7 +11,7 @@ The 0.1.x line is supported: a security fix ships in a new 0.1.x release, and no
 ## Reporting a vulnerability
 
 Report it privately through GitHub Security Advisories: open
-[the repository's Security advisories page](https://github.com/DenisSud/mason/security/advisories/new) and choose
+[the repository's Security advisories page](https://github.com/Necto-AI/mason/security/advisories/new) and choose
 "Report a vulnerability". A public issue is the wrong door — it is readable by everyone before there is a fix.
 
 Do not put any of this in a public issue, or in anything attached to one:
