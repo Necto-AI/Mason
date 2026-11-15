@@ -10,8 +10,9 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import type { ConversationState } from "mason-protocol";
 import WebSocket from "ws";
-import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
+import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND } from "../src/shared/contract.ts";
 import {
 	connectConnector,
 	connectorHome,
@@ -22,10 +23,11 @@ import {
 	until,
 } from "./support/connector.ts";
 
-/** The text of the one committed reply, as the reader's row holds it. */
-function replyText(entry: Record<string, unknown>): string {
-	const blocks = (entry.data as { blocks?: ReadonlyArray<{ text?: string }> } | undefined)?.blocks ?? [];
-	return blocks.map((block) => block.text ?? "").join("");
+/** The messages the reader has been sent: the committed rows of the newest state this socket applied. */
+function answers(state: ConversationState | undefined): string[] {
+	return (state?.transcript ?? []).flatMap((row) =>
+		row.kind === "delivered" && row.streaming !== true ? [row.text] : [],
+	);
 }
 
 /** Every entry of one kind, oldest first, as plain JSON. */
@@ -34,7 +36,7 @@ async function entries(served: Awaited<ReturnType<typeof serveConnector>>, kind:
 }
 
 describe("a connector's words", () => {
-	it("become an ordinary attributed submission, and the send records the turn's origin", async () => {
+	it("become an ordinary attributed submission, and the answer reaches the reader as a row", async () => {
 		const served = await serveConnector({
 			home: await connectorHome(),
 			steps: replyTurns(["the calendar is clear"]),
@@ -47,16 +49,14 @@ describe("a connector's words", () => {
 					content: [{ type: "text", text: "what is on my calendar" }],
 				});
 				assert.equal(outcome.status, "accepted");
-				await until(async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1, "the send to arrive");
-				assert.equal(
-					replyText((await entries(served, REPLY_ENTRY_KIND))[0] as Record<string, unknown>),
-					"the calendar is clear",
-					"the answer is the reply row",
+				await until(
+					() => answers(connected.states.at(-1)).includes("the calendar is clear"),
+					"the answer to arrive",
 				);
 
 				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
 				assert.equal(submitted.length, 1);
-				// The origin is the durable record the send is routed from: a restart cannot lose where the words came from.
+				// The origin is the durable record of where the words came from: a restart cannot lose it, and no row carries it.
 				assert.deepEqual(submitted[0]?.data, {
 					origin: { connector: "telegram", ref: "team", messageId: "m1", actor: { id: "8811", name: "Denis" } },
 				});
@@ -157,6 +157,13 @@ describe("a connector's words", () => {
 				assert.equal(refused.status === "refused" ? refused.code : undefined, "mason.face_not_granted");
 				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "nothing landed");
 				assert.equal((await entries(served, HOOK_ENTRY_KIND)).length, 0, "and no turn was started");
+				// The contract stays one `mason.peer`; the grant decides the surface. No command is offered, and a control
+				// is refused naming the grant that is missing rather than the op.
+				assert.deepEqual(connected.connector.status().session?.commands, [], "an event client spends no control");
+				assert.deepEqual(answers(connected.states.at(-1)), [], "and it is served no transcript");
+				const control = await connected.connector.control({ op: "status" });
+				assert.equal(control.handled, false, "the control was refused");
+				assert.match(control.reply ?? "", /no user grant/, "the refusal names the grant");
 			} finally {
 				await connected.close();
 			}
@@ -245,7 +252,7 @@ describe("an event", () => {
 		}
 	});
 
-	it("carries its origin into the entry, so the send has a reader", async () => {
+	it("carries its origin into the entry, so the answer has a reader", async () => {
 		const served = await serveConnector({ home: await connectorHome(), steps: replyTurns(["on it"]) });
 		try {
 			const connected = await connectConnector(served);
@@ -256,7 +263,7 @@ describe("an event", () => {
 					payload: "are you there",
 					origin: { ref: "team", messageId: "m7" },
 				});
-				await until(async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1, "the answer to the event");
+				await until(() => answers(connected.states.at(-1)).includes("on it"), "the answer to the event");
 				const hooks = await entries(served, HOOK_ENTRY_KIND);
 				assert.deepEqual((hooks[0]?.data as { origin?: unknown }).origin, {
 					connector: "telegram",
@@ -271,19 +278,19 @@ describe("an event", () => {
 		}
 	});
 
-	it("with no address records the work and tells the model nobody was reached", async () => {
+	it("with no address commits the answer to the transcript and invents no destination", async () => {
 		const served = await serveConnector({ home: await connectorHome(), steps: replyTurns(["nobody is listening"]) });
 		try {
 			const connected = await connectConnector(served);
 			try {
 				await connected.connector.event({ appendId: "alarm-2", kind: "chat.message", payload: "ring" });
-				await until(
-					async () => (await entries(served, REPLY_ENTRY_KIND)).length === 1,
-					"a recorded send that reaches nobody",
+				await until(() => answers(connected.states.at(-1)).includes("nobody is listening"), "the answer to arrive");
+				const hooks = await entries(served, HOOK_ENTRY_KIND);
+				assert.equal(
+					Object.hasOwn((hooks[0]?.data ?? {}) as object, "origin"),
+					false,
+					"the fire named no destination, and none was invented",
 				);
-				const sent = (await entries(served, REPLY_ENTRY_KIND))[0];
-				assert.equal(Object.hasOwn((sent?.data ?? {}) as object, "target"), false, "no destination is recorded");
-				assert.match(JSON.stringify(await entriesOf(served.server)), /nobody was reached/);
 			} finally {
 				await connected.close();
 			}

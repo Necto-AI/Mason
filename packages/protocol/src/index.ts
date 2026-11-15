@@ -293,16 +293,31 @@ export type Session = Static<typeof SessionSchema>;
 /**
  * One row of the reader's transcript, exactly as mason's projection emits it.
  *
- * The vocabulary is mason's own (`src/shared/contract.ts`), restated here because the wire validates it; the projection
- * is typed against both spellings, so a field added on one side and not the other is a type error rather than a row a
- * client silently drops. Nothing here is the model's working notes: an entry kind this does not name never crosses.
+ * The vocabulary is mason's own (`src/shared/contract.ts`), restated here because the wire validates it. The two
+ * spellings are asserted equal in `test/projection.test.ts` ("the transcript row is the wire row"), so a field added on
+ * one side and not the other is a type error rather than a row a client silently drops. Nothing here is the model's
+ * working notes: an entry kind this does not name never crosses.
+ *
+ * `delivered` is the wire kind for an agent message. `runId` names the run that produced it — the turn-input entry the
+ * run started from — and `failed` marks the messages of a run that died; `streaming` marks the one still being written.
  */
 export const TranscriptItemSchema = union([
 	obj({ kind: lit("user"), id: str(), text: str(), author: opt(str()), at: opt(num()) }, { open: true }),
-	obj({ kind: lit("delivered"), id: str(), text: str(), failed: opt(bool()), streaming: opt(bool()) }, { open: true }),
+	obj(
+		{
+			kind: lit("delivered"),
+			id: str(),
+			text: str(),
+			failed: opt(bool()),
+			streaming: opt(bool()),
+			runId: opt(str()),
+		},
+		{ open: true },
+	),
 	obj({ kind: lit("event"), id: str(), name: str() }, { open: true }),
 	obj({ kind: lit("notice"), id: str(), text: str() }, { open: true }),
 ]);
+export type TranscriptItem = Static<typeof TranscriptItemSchema>;
 
 /** One queued submission, labelled for the reader. `withdrawable` is false once the inbox has taken it. */
 export const QueuedItemSchema = obj(

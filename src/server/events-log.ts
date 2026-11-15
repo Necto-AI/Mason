@@ -26,7 +26,7 @@ export interface EventLine {
 	readonly hook: string;
 	readonly appendId: string;
 	readonly summary?: string;
-	/** The address the connector minted, when the event named one: what a send can answer it at. */
+	/** The address the connector minted, when the event named one: where the turn's answer came from. */
 	readonly ref?: string;
 	readonly payload: unknown;
 }

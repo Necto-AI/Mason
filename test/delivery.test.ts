@@ -1,7 +1,10 @@
 /**
- * `reply` is the one channel the agent's words reach the reader through, so the registration facts the
- * durability rules depend on are pinned here: the replay policy, the unconditional registration, and the fact that
- * `execute()` delivers by returning.
+ * The message path, from the model's text to the reader's row, and the extension that holds a submission turn to it.
+ *
+ * There is no tool whose call is a delivery any more: an assistant generation's text is the message, and the projection
+ * is the only thing that turns it into a row. What this file pins is the registration facts that remain — no delivery
+ * tool, both gates, the base extension the repair keeps — and one real turn, answered by the faux provider, whose row is
+ * the message and whose gate does not have to rescue it.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -9,9 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { ConversationView } from "@earendil-works/pi-durable";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { Delivery, sendTool } from "../src/server/extensions/delivery.ts";
+import { Delivery } from "../src/server/extensions/delivery.ts";
+import { projectTranscript } from "../src/server/projection.ts";
 import { Prompt } from "../src/server/prompt.ts";
 import {
 	type AgentRuntime,
@@ -19,6 +24,7 @@ import {
 	openAgentRuntime,
 	unconditionalExtensionNames,
 } from "../src/server/runtime.ts";
+import { DELIVERY_REMINDER, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
 
 /**
  * Every extension a boot installs unconditionally, in order: the base list, then the ones `openAgentRuntime` builds per
@@ -28,28 +34,18 @@ import {
  */
 const BOOT_EXTENSIONS: readonly string[] = unconditionalExtensionNames(["subagent", "codemode"]);
 
-test("send is replay-unsafe, so a restart never delivers the same message twice", () => {
-	assert.equal(sendTool.name, "send");
-	// Explicit in the registration, though it is pi's default: an interrupted call settles as an `interrupted`
-	// error result instead of rerunning, and a rerun would send the reader the message a second time.
-	assert.equal(sendTool.replay, "unsafe");
-});
-
-test("the delivery extension rides in the base extension list, not behind a toggle", () => {
-	assert.deepEqual(
-		Delivery.tools?.map((tool) => tool.name),
-		["send"],
-	);
+test("delivery carries the two gates and no tool: the message is the text the model wrote", () => {
+	assert.equal(Delivery.name, "delivery");
+	assert.deepEqual(Delivery.tools ?? [], [], "there is nothing for the model to call");
+	assert.equal(Delivery.hooks?.length, 2, "the delivery gate and the reflection gate");
 	assert.ok(
 		BASE_EXTENSIONS.some((extension) => extension.name === Delivery.name),
-		"every conversation can speak",
+		"every conversation's turn is held to the message path",
 	);
-});
-
-test("the tool description says the rule the refusal enforces: call it directly, never from inside a script", () => {
-	// The refusal is the backstop for a model that sends from a script anyway; the description is what asks it not to,
-	// so the sentence the refusal answers is pinned here.
-	assert.match(sendTool.description, /never from inside a script/);
+	// The six declared tools are the four coding tools, `delegate` and `codemode`; nothing named `send` exists to be
+	// registered, and no prompt can name one.
+	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));
+	assert.deepEqual(declared, ["read", "write", "edit", "bash"]);
 });
 
 /** The same agent over the same storage in the same directory: a restart. */
@@ -104,8 +100,8 @@ test("a selection stored before delivery existed still speaks after a reopen", a
 				"the missing base names are appended in base order, and the stored order survives",
 			);
 			assert.ok(
-				agent.tools.some((tool) => tool.name === sendTool.name),
-				"the model is offered the one way it can reach the reader",
+				agent.extensions.some((extension) => extension.name === Delivery.name),
+				"the turn is held to the message path even in a conversation stored before it existed",
 			);
 		} finally {
 			await after.close();
@@ -193,211 +189,67 @@ test("a selection that is already complete is not written to", async () => {
 	}
 });
 
-/**
- * A turn's transcript, as `execute` reads it: `entries` oldest first, and whatever the tool appends is recorded.
- *
- * The tool's two jobs are both about what the transcript says — which entry started the turn, and which entry the call
- * leaves behind — so the fake is a log rather than a stub: an assertion reads the entry the reply committed, not a
- * return value alone.
- */
-interface FakeEntry {
-	id: number;
-	kind: string;
-	model?: unknown[];
-	data?: unknown;
-}
-
-function apiFor(
-	turn: { readonly callId: string; readonly entries?: readonly FakeEntry[] },
-	appended: unknown[] = [],
-): never {
-	return {
-		callId: turn.callId,
-		conversationId: 1,
-		commit: async (run: (tx: unknown) => Promise<unknown>) =>
-			run({
-				scanEntries: async () => ({ items: [...(turn.entries ?? [])].reverse(), next: undefined }),
-				appendEntry: async (_conversationId: number, draft: unknown) => {
-					appended.push(draft);
-					return { id: appended.length, ...(draft as object) };
-				},
-			}),
-	} as never;
-}
-
-/** A turn mason wrote itself: an ordinary `pi.user` entry. */
-function localTurn(text: string): FakeEntry[] {
-	return [{ id: 1, kind: "pi.user", model: [{ role: "user", content: text }] }];
-}
-
-/** A person's words through a connector: the origin is in the entry's data. */
-function connectorTurn(text: string): FakeEntry[] {
-	return [
-		{
-			id: 1,
-			kind: "app.connector",
-			model: [{ role: "user", content: text }],
-			data: { origin: { connector: "telegram", ref: "team" } },
-		},
-	];
-}
-
-/** A fire: an `app.hook` entry, carrying an origin only when the fire named a conversation. */
-function hookTurn(text: string, origin?: Record<string, string>): FakeEntry[] {
-	return [
-		{
-			id: 1,
-			kind: "app.hook",
-			model: [{ role: "user", content: text }],
-			data: {
-				hookId: "team-chat",
-				hookName: "Team chat message",
-				payload: "hi",
-				firedAt: "now",
-				...(origin === undefined ? {} : { origin }),
-			},
-		},
-	];
-}
-
-/** The text of a result, as the model reads it: the only channel a refusal has. */
-function outputText(output: readonly { readonly type: string; readonly text?: string }[] | undefined): string {
-	return (output ?? []).flatMap((item) => (item.type === "text" ? [item.text ?? ""] : [])).join("");
-}
-
-/** The one integration a connector reply can be routed to; every other test in this file boots a home with none. */
-const TELEGRAM = {
-	enabled: true,
-	connector: {
-		user: { owner: "8811" },
-	},
-} as const;
-
-test("a local turn is delivered by the entry the call commits", async () => {
-	const appended: unknown[] = [];
-	const result = await sendTool.execute(
-		{ text: "Standup moved to nine." },
-		apiFor({ callId: "call-7", entries: localTurn("Move standup.") }, appended),
-		{} as never,
-	);
-	assert.equal(result.isError, undefined);
-	assert.equal(outputText(result.output), "delivered to the transcript");
-	// The commit is the delivery: one `app.reply` entry, no target, no origin — the transcript is the medium.
-	assert.deepEqual(appended, [
-		{
-			kind: "app.reply",
-			data: { deliveryId: "reply:call-7", blocks: [{ type: "text", text: "Standup moved to nine." }] },
-		},
-	]);
-});
-
-test("a connector turn commits its words and records the origin, under the id the entry and the stream share", async () => {
-	const appended: unknown[] = [];
-	const result = await sendTool.execute(
-		{ text: "Nothing until Thursday." },
-		apiFor({ callId: "call-8", entries: connectorTurn("[from Denis] what is on my calendar") }, appended),
-		{} as never,
-	);
-	assert.equal(outputText(result.output), "delivered to the transcript");
-	// One entry: the words, and the origin that says which append they answer. There is no address to name — the
-	// conversation is the one surface — so nothing is queued and nothing is addressed (#201).
-	assert.deepEqual(appended, [
-		{
-			kind: "app.reply",
-			data: {
-				deliveryId: "reply:call-8",
-				blocks: [{ type: "text", text: "Nothing until Thursday." }],
-				origin: { connector: "telegram", ref: "team" },
-			},
-		},
-	]);
-});
-
-test("a fire that named its conversation answers in it, and one that did not records the work and reaches nobody", async () => {
-	const { setIntegrations } = await import("../src/server/integrations.ts");
-	setIntegrations({ telegram: TELEGRAM as never });
+test("a submission answered in prose produces one message row, and the gate has nothing to rescue", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "mason-message-path-"));
 	try {
-		const withOrigin: unknown[] = [];
-		const answered = await sendTool.execute(
-			{ text: "on it" },
-			apiFor(
-				{
-					callId: "call-9",
-					entries: hookTurn("[EVENT: chat.message]", { connector: "telegram", ref: "team" }),
-				},
-				withOrigin,
-			),
-			{} as never,
-		);
-		assert.equal(outputText(answered.output), "delivered to the transcript");
-		assert.deepEqual((withOrigin[0] as { data: { origin?: unknown } }).data.origin, {
-			connector: "telegram",
-			ref: "team",
-		});
-	} finally {
-		setIntegrations({});
-	}
+		const runtime = await openRuntime(directory);
+		try {
+			const conversation = await runtime.conversation();
+			const placed = await conversation.submit({ type: "input", content: "Say hello." }, BACKGROUND_CONTEXT);
+			await placed.wait(BACKGROUND_CONTEXT);
 
-	// A schedule, a repository event, a retry: the fire names no conversation, so no medium carries the words. The entry
-	// is still committed — the work is recorded — and the result says nobody was reached rather than claiming a delivery.
-	const appended: unknown[] = [];
-	const orphan = await sendTool.execute(
-		{ text: "Morning: three things need you." },
-		apiFor({ callId: "call-10", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
-		{} as never,
-	);
-	assert.notEqual(orphan.isError, true);
-	const text = outputText(orphan.output);
-	assert.match(text, /nobody was reached/);
-	assert.match(text, /in the transcript/);
-	assert.equal(appended.length, 1, "the work is recorded even when nobody is reached");
-	assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
-});
-
-test("an address the model names routes nothing: the turn's origin is the only destination there is", async () => {
-	// The schema refuses the argument before a call reaches `execute`: `send` declares one property and closes the object,
-	// so a model replaying an older prompt's `to` is told `invalid_arguments` rather than having the field quietly dropped.
-	assert.equal(
-		(sendTool.parameters as { readonly additionalProperties?: unknown }).additionalProperties,
-		false,
-		"an argument the schema does not declare is refused, not ignored",
-	);
-	const { setIntegrations } = await import("../src/server/integrations.ts");
-	setIntegrations({ telegram: TELEGRAM as never });
-	try {
-		const appended: unknown[] = [];
-		// This call bypasses that check, which is the point: an address that does arrive routes nothing. `send` has no
-		// address parameter any more, so the words cannot be sent past the turn's own origin — and this turn has none, so
-		// the message is recorded and nobody is reached. Naming a connector that exists does not make it a destination.
-		const named = await sendTool.execute(
-			{ text: "the brief", to: "telegram/team" } as never,
-			apiFor({ callId: "call-11", entries: hookTurn("[ROUTINE: morning brief]") }, appended),
-			{} as never,
-		);
-		assert.match(outputText(named.output), /nobody was reached/, "the named address reaches nobody");
-		assert.equal(Object.hasOwn((appended[0] as { data: object }).data, "target"), false, "nothing was addressed");
+			const view = await runtime.viewSnapshot(BACKGROUND_CONTEXT);
+			const transcript = projectTranscript(view);
+			assert.deepEqual(
+				transcript.filter((row) => row.kind === "delivered").map((row) => row.text),
+				["ok"],
+				"the faux provider's text answer is the reader's one message",
+			);
+			// The gate counts the row, so it does not remind and the turn is not marked silent.
+			assert.equal(
+				transcript.some((row) => row.kind === "delivered" && row.streaming === true),
+				false,
+				"the answer committed",
+			);
+			assert.equal(
+				transcript.some((row) => row.kind === "notice"),
+				false,
+				"a turn that wrote a message gets no notice",
+			);
+			const page = await conversation.entries({}, 1000, undefined, BACKGROUND_CONTEXT);
+			const reminder = page.items.some((entry) =>
+				(entry.model ?? []).some((message) => {
+					const content = (message as { content?: unknown }).content;
+					return typeof content === "string" && content.includes(DELIVERY_REMINDER.slice(0, 20));
+				}),
+			);
+			assert.equal(reminder, false, "and it does not ask for the message again");
+		} finally {
+			await runtime.close();
+		}
 	} finally {
-		setIntegrations({});
+		await rm(directory, { recursive: true, force: true });
 	}
 });
 
-test("a turn with no input at all is read as a local turn, as a resumed one is", async () => {
-	const result = await sendTool.execute(
-		{ text: "Resuming." },
-		apiFor({ callId: "call-13", entries: [] }),
-		{} as never,
+test("a home written before the cut still shows the message its app.reply entry committed", () => {
+	// Read-only history. No turn writes one any more, but the records are on disk and a reader who upgrades still sees
+	// what was said, under the id it was said with.
+	const view = {
+		conversation: { id: 1 },
+		entries: [
+			{ id: 1, kind: "pi.user", model: [{ role: "user", content: "Check the deploy." }] },
+			{
+				id: 2,
+				kind: REPLY_ENTRY_KIND,
+				model: [],
+				data: { deliveryId: "reply:call-1", blocks: [{ type: "text", text: "The deploy is healthy." }] },
+			},
+		],
+		docs: {},
+	} as unknown as ConversationView;
+	assert.deepEqual(
+		projectTranscript(view).filter((row) => row.kind === "delivered"),
+		[{ kind: "delivered", id: "reply:call-1", text: "The deploy is healthy.", runId: "1" }],
 	);
-	assert.equal(outputText(result.output), "delivered to the transcript");
-});
-
-test("a call made from inside a script is refused, and told where the message has to go", async () => {
-	// A nested call's ID is `<parentCallId>/<key>`, which is what tells the two apart.
-	const result = await sendTool.execute(
-		{ text: "Standup moved to nine." },
-		apiFor({ callId: "call-7/1", entries: localTurn("Move standup.") }),
-		{} as never,
-	);
-	assert.equal(result.isError, true, "a nested delivery is an error, not a delivery");
-	assert.match(outputText(result.output), /cannot deliver from inside a script/);
-	assert.match(outputText(result.output), /call send from the turn/, "the model is told what to do");
 });

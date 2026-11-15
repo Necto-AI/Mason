@@ -14,18 +14,16 @@ One process is one bot: started by `npm run dev` in a checkout, or by `mason up`
 - **`src/server/main.ts`** is the process: an HTTP server with three doors and the WebSocket upgrade that turns into a
   connector's socket. Everything a request can reach is routed here.
 - **The durable Harness and SQLite** (`src/server/runtime.ts`) hold the conversation. The transcript is the truth: every
-  answer, every send is an entry, and a restart resumes from the log rather than from
-  memory.
+  answer is an entry, and a restart resumes from the log, not memory.
 - **`@earendil-works/pi-env` is the execution split** (`src/server/env.ts`): the model and the harness run here, and the
   tools that touch files run on the tool machine, which is the only place `~/.mason/agent/` is mounted.
 - **Connectors are the out-of-process edge** (`src/server/connector.ts`, `packages/protocol`): one Chord socket at
   `/api/connector`, opened by a service that carries a *user* face, an *events* face, or both. An integration's *MCP
   server* is the other direction: mason calls it with that server's credential.
 - **The home is `~/.mason/<bot>/`** (`src/server/house.ts`): `agent/`, which the tool machine mounts — `profile.md`, the
-  dated `log/`, `skills/`, `workspace/`, and the git history of all of it — and `service/`, which the tool machine never
-  sees. `~/.mason` itself is the root (`src/server/root.ts`): `common/` and one directory per bot.
+  dated `log/`, `skills/`, `workspace/`, and its git history — and `service/`, which the tool machine never sees. `~/.mason` itself is the root (`src/server/root.ts`): `common/` and one directory per bot.
 - **The prompt** is `src/server/prompt.ts` and only that file: every section, in reading order.
-- **Tools** are extensions (`src/server/extensions/`) plus the two per-boot ones, `mcp` and `codemode`.
+- **Tools** are extensions (`src/server/extensions/`) plus the three per-boot ones, `subagent`, `mcp` and `codemode`.
 - **Hooks** (`src/server/hooks.ts`) are the ways a turn starts without a person: a timer, a fire, and the run
   supervisor's retry.
 
@@ -38,7 +36,7 @@ place. "Pinned by" is the test that fails when the mechanism is removed, or a no
 
 | Goal | Owner | Mechanism | Pinned by |
 |---|---|---|---|
-| A new agent capability (a tool) | `src/server/extensions/<name>.ts`, then the array in `src/server/runtime.ts` | `defineTool` + `defineExtension`, added to `BASE_EXTENSIONS`. A tool that a script may also call is `callers: ["tools"]`. Nothing a service offers becomes a tool: it is asked for through `mcp_search` / `mcp_describe` / `mcp_call` / `mcp_read_resource` | `test/delivery.test.ts` (the registration facts of `send`), `test/mcp.test.ts` (a connected server moves no tool). The extensions line in `docs/SURFACE.md` shows a mere addition to `BASE_EXTENSIONS` |
+| A new agent capability (a tool) | `src/server/extensions/<name>.ts`, then the array in `src/server/runtime.ts` | `defineTool` + `defineExtension`, added to `BASE_EXTENSIONS`. A tool that a script may also call is `callers: ["tools"]`. Nothing a service offers becomes a tool: it is asked for through `mcp_search` / `mcp_describe` / `mcp_call` / `mcp_read_resource` | `test/delivery.test.ts` (the delivery extension carries no tool, and the base list installs it), `test/mcp.test.ts` (a connected server moves no tool). The extensions line in `docs/SURFACE.md` shows a mere addition to `BASE_EXTENSIONS` |
 | A model role, or a child's bounds | `src/server/common.ts` (`roles`, read at boot), `src/server/runtime.ts` (`validateRoles`), `src/server/extensions/subagent.ts` | Two roles, `main` and `subagent`, each a provider, a model and a thinking level; the level is refused at boot when the catalog does not offer it. A child's record is written whole in the creating commit — model, level, `maxTurns`, the brief, the exact selection — because a task-owned conversation otherwise starts as a copy of its owner's | `test/roles.test.ts` (the boot record, the refusal naming the levels, one record moved), `test/subagent.test.ts` (the child's shape, its transcript, abort, budget, timeout, the lease) |
 | A new prompt section | `src/server/prompt.ts` | `section(key, render)` in `PROMPT_SECTIONS`, in reading order. A section renders from files on the tool machine and must render byte-identically while nothing changed | `test/prompt.test.ts` — "every section renders byte-identically in the next turn" |
 | A new way for words to arrive (a connector face) | `src/server/connector.ts`, plus the entry's `connector.user` grant in `service/integrations.json` | The face is advertised at the handshake from the grant; `admission.ts` decides where the submission waits. The credential is minted by `npm run connector` and is the entry's, never a person's | `test/connector.test.ts` (submissions, actors, rooms, capabilities), `test/admission.test.ts` |
@@ -67,7 +65,7 @@ A change that breaks one is not a trade-off to weigh, it is the wrong change.
    decision. Pinned by `test/connector.test.ts` and `npm run gen:surface:check`.
 2. **Nothing reaches a reader before the projection.** `src/server/projection.ts` derives `transcript` and `queued` from
    the committed view; reasoning, tool calls, arguments and output are in neither. `conversation`
-   is that projection, revision and diffs included; a reply is a row. Pinned by `test/projection.test.ts`.
+   is that projection, revision and diffs included; an agent message is a row. Pinned by `test/projection.test.ts`.
 3. **The prompt prefix is stable.** The prompt is `PROMPT_SECTIONS` and the extensions installed at boot; a tool schema
    that arrived mid-conversation would re-price every later turn, which is why an integration's tools are a catalog
    (`docs/SPEC.md` §4.1e). Pinned by `test/prompt.test.ts` (a section renders byte-identically twice) and

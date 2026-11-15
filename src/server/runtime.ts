@@ -3,6 +3,7 @@
  * the extension registry, the `pi-env` execution split, and the root conversation.
  */
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -41,9 +42,9 @@ import {
 } from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { EventLog } from "./events-log.ts";
-import { createCodemode } from "./extensions/codemode.ts";
+import { CODEMODE_EXTENSION, createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
-import { createSubagent } from "./extensions/subagent.ts";
+import { createSubagent, SUBAGENT_EXTENSION } from "./extensions/subagent.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
 import {
@@ -55,17 +56,17 @@ import {
 	setIntegrations,
 } from "./integrations.ts";
 import { leaseDirOf } from "./lease.ts";
-import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
+import { MCP_EXTENSION, type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { fauxSessionScript } from "./provider.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
 
 /**
  * The extensions every conversation gets unless it says otherwise. `delivery` is unconditional for every
- * **person-facing** conversation: it is the only way the agent reaches the reader, so no conversation a person writes to
- * may be without it. A task-owned child is not one — it is created after boot by `delegate`, which writes its selection
- * explicitly without `delivery`, so the send tool and both gates are absent from it and its words reach the person only
- * as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
+ * **person-facing** conversation: it is the only thing that holds a turn to writing its message, so no conversation a
+ * person writes to may be without it. A task-owned child is not one — it is created after boot by `delegate`, which
+ * writes its selection explicitly without `delivery`, so both gates are absent from it and its words reach the person
+ * only as the tool result. Nothing re-adds what a child did not select: the repair below only ever touches the root.
  *
  * Code mode and the MCP tools are not here: `openAgentRuntime` builds both per boot, because each owns something that
  * dies with the runtime — a QuickJS sandbox and one client socket per integration — and a module constant would outlive
@@ -76,9 +77,44 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
 	CodingTools,
 	// The one extension with sections: every section of the prompt is declared in `prompt.ts`, in order.
 	Prompt,
-	// reply, and the gate that makes a turn say something.
+	// The two gates over a turn's ending: a message for a submission, and what a long turn kept.
 	Delivery,
 ];
+
+/**
+ * The extensions a boot builds for itself, beside the base list, and the names `docs/SURFACE.md` renders.
+ *
+ * `subagent` and `codemode` are in every boot; `mcp` is in a boot whose enabled integrations have a server. They are
+ * built per boot rather than declared at import because each owns something that dies with the process — a lease
+ * directory, a QuickJS sandbox, one client socket per integration. `scripts/surface.ts` renders exactly this list, and
+ * `npm run gen:surface` is what keeps the document and the boot from drifting.
+ */
+export const PER_BOOT_EXTENSIONS = [SUBAGENT_EXTENSION, CODEMODE_EXTENSION] as const;
+/** The per-boot extension a boot installs only when an enabled integration has an MCP server. */
+export const MCP_EXTENSION_NAME = MCP_EXTENSION;
+
+/**
+ * What a boot must have built: the per-boot list, plus `mcp` when this boot reached a server.
+ *
+ * It is called with the names of the extensions the boot actually built, so a per-boot extension added inline and not to
+ * `PER_BOOT_EXTENSIONS` fails the boot instead of silently escaping the document `scripts/surface.ts` renders. The
+ * surface check is the other half: it fails when a name this list holds is missing from the render.
+ */
+export function assertPerBootExtensions(names: readonly string[]): void {
+	const known = new Set<string>([...PER_BOOT_EXTENSIONS, MCP_EXTENSION_NAME]);
+	const built = new Set(names);
+	// `mcp` is the conditional one: present when a boot reached a server, absent when no entry has one. The other two are
+	// unconditional, and a name outside the known set is a per-boot extension the document does not name.
+	const extra = [...built].filter((name) => !known.has(name));
+	const missing = PER_BOOT_EXTENSIONS.filter((name) => !built.has(name));
+	if (extra.length > 0 || missing.length > 0) {
+		throw new Error(
+			`the boot's per-boot extensions are ${[...built].join(", ")}; the names the surface knows are ${[...known].join(", ")}` +
+				`${extra.length > 0 ? `; not in the list: ${extra.join(", ")}` : ""}` +
+				`${missing.length > 0 ? `; built by no boot here: ${missing.join(", ")}` : ""}`,
+		);
+	}
+}
 
 /**
  * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,
@@ -471,6 +507,13 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
 		];
+		// The per-boot names a document may render are the ones this boot actually built: a fourth built inline and left
+		// out of `PER_BOOT_EXTENSIONS` refuses the boot rather than escaping the surface check.
+		assertPerBootExtensions([
+			subagent.name,
+			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
+			codemode.extension.name,
+		]);
 		const unconditional = unconditionalExtensionNames([
 			subagent.name,
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
@@ -689,7 +732,13 @@ async function appendMissingExtensions(
 
 async function openSqliteStorage(path: string): Promise<Storage> {
 	mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
-	const storage = await openNodeSqliteStorage(path);
+	await assertSqliteFile(path);
+	let storage: Storage;
+	try {
+		storage = await openNodeSqliteStorage(path);
+	} catch (error) {
+		throw new Error(sqliteRefusal(path, error instanceof Error ? error.message : String(error)));
+	}
 	// SQLite creates the file with the process umask; the transcript inside it deserves the same 0600 as the config.
 	try {
 		chmodSync(path, 0o600);
@@ -697,4 +746,38 @@ async function openSqliteStorage(path: string): Promise<Storage> {
 		// No modes on this filesystem; nothing to set.
 	}
 	return storage;
+}
+
+/** The first bytes of every SQLite database: a file that does not start with them is not one. */
+const SQLITE_HEADER = "SQLite format 3\u0000";
+
+/**
+ * Refuse a file that is not a database before SQLite touches it.
+ *
+ * `openNodeSqliteStorage` succeeds on a corrupt file and the first query fails instead, with a message about a malformed
+ * database and no path in it — a boot that dies inside the harness with nothing to act on. A header check is the one read
+ * that names the file while the repair is still a move. An absent or empty file is not corrupt: SQLite creates both.
+ */
+async function assertSqliteFile(path: string): Promise<void> {
+	let handle: Awaited<ReturnType<typeof open>>;
+	try {
+		handle = await open(path, "r");
+	} catch {
+		return;
+	}
+	try {
+		const header = Buffer.alloc(SQLITE_HEADER.length);
+		const { bytesRead } = await handle.read(header, 0, header.length, 0);
+		if (bytesRead === 0) return;
+		if (bytesRead < header.length || header.toString("latin1") !== SQLITE_HEADER) {
+			throw new Error(sqliteRefusal(path, "it does not start with SQLite's header"));
+		}
+	} finally {
+		await handle.close();
+	}
+}
+
+/** What a boot says about a database it cannot open: the path, and the one command that starts a fresh conversation. */
+function sqliteRefusal(path: string, why: string): string {
+	return `${path} cannot be opened as SQLite storage (${why}). Move it aside and boot again: \`mv ${path} ${path}.corrupt\` keeps the old file for inspection and starts a fresh conversation.`;
 }

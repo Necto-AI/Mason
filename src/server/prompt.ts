@@ -1,9 +1,9 @@
 /**
  * The agent's entire system prompt, in one place and in order.
  *
- * Nine sections stand between the model and the turn: who it is, how it speaks, where it works, what it knows (its
- * skills, the person it works for), what it can reach, what a long turn owes the next one, and the one rule that decides
- * whether anyone hears it. Every section is declared here: its key, whether it is tagged, and where its text comes from
+ * Eleven sections stand between the model and the turn: who it is, how it speaks, where it works, what it knows (its
+ * skills, the person it works for, the reference it can read), what it can reach, how it hands work off, what a long
+ * turn owes the next one, and the one rule that decides whether anyone hears it. Every section is declared here: its key, whether it is tagged, and where its text comes from
  * (a service-owned file `service/soul.md`, an agent-owned file read through the execution environment, the boot's
  * configuration, a count of the tools a script can call, or a constant in this file). No other extension contributes a
  * section, so an audit reads one file and a test fails if anything else appears.
@@ -72,17 +72,17 @@ export const TONE = `Write as a colleague would message them: plain sentences, y
 - Say you did not check it, in the sentence that gives the claim.`;
 
 /**
- * The delivery invariant, in every turn: words reach the reader through one call and never as prose, so anything the
- * model writes outside it is working notes nobody reads.
+ * The delivery invariant, in every turn: what the model writes is the message the reader gets.
  *
- * The call is `send`, and it is the same call everywhere — the transcript, a chat, a schedule. Where it goes is the
- * turn's origin, read from the transcript, and nothing else: there is no address to name, so this section names one
- * operation and the rule that keeps it one — never another medium's tool, never an address.
+ * There is no tool to call and no address to name. The turn's own text is projected as its message, one per generation,
+ * and it goes wherever the turn came from because the conversation is the one surface. The rule that keeps it one is
+ * the sentence this section exists for: a turn that ends without words leaves the reader with silence.
  */
-export const DELIVERY_INVARIANT = `Nothing you write in a turn reaches them: words reach them through \`send\`, and everything else is a
-working note. A send goes back wherever the turn came from — the connector that carried the words, or the transcript —
-so never reach for a chat by another tool's name, and no address of your own goes with it: a turn nobody wrote to
-records the message and says nobody was reached. Answer every turn with a send, even one line.`;
+export const DELIVERY_INVARIANT = `What you write after your last action is the message they read: every generation's text is a row of their
+conversation, so write the answer itself and not a note about it. It goes back wherever the turn came from — the
+connector that carried the words, or the transcript — so never reach for a chat by another tool's name, and no address
+of your own exists to name. A submission turn that ends without writing anything leaves them with silence. Write
+something, even one line.`;
 
 /** Roughly 1200 tokens of profile: enough for who he is and how he wants to be treated, and no more. */
 const PROFILE_MAX_CHARS = 4_800;
@@ -101,20 +101,21 @@ next turn. Before it ends: read \`agent/profile.md\` and add what you learned ab
 \`agent/log/YYYY-MM-DD.md\` for what must not be forgotten; and write a skill only when a procedure repeated, its
 description under 60 characters. The log line is the rule and the skill is the exception. Retire a skill by naming what
 absorbed it, never silently. All of it lands inside \`agent/\`, and \`service/soul.md\` is the operator's file. If nothing
-was worth keeping, that is one line in the send.`;
+was worth keeping, that is one line in the message.`;
 
 /**
  * How a turn delegates, and the one sequence it is allowed to assume.
  *
  * The child cannot speak to the person and has no persona of its own, so the rule names what the turn owes it: the whole
- * assignment, because the worker sees nothing else of the conversation, and a send of its answer, because the answer
- * arrives as a tool result and nobody else will pass it on. The review sequence is written down rather than left to
+ * assignment, because the worker sees nothing else of the conversation, and a message carrying its answer, because the
+ * answer arrives as a tool result and nobody else will pass it on. The review sequence is written down rather than left to
  * improvisation because it is the one order in the delegation that has a failure mode: a reviewer that starts before the
  * writer settles would read a checkout that is still moving, and the write lease is what makes that impossible rather
  * than unlikely.
  */
 export const DELEGATION_RULE = `\`delegate\` runs one bounded task in a conversation of its own and returns what the worker answered to you. The
-worker sees only the \`task\` you write, and it cannot reach them: its words reach the reader only when you send them.
+worker sees only the \`task\` you write, and it cannot reach them: its words reach the reader only when you write them
+in your message.
 - Delegate work that is separable and long: read a checkout and report on it, or change one thing in it and say what
   changed. Small work you can do is work you should not hand off.
 - A reader gets \`read\` alone and never blocks anyone. A writer needs \`write: true\` and the checkout's path, and it
@@ -130,8 +131,8 @@ worker sees only the \`task\` you write, and it cannot reach them: its words rea
  *
  * Health, tool counts and schemas are deliberately absent. Health changes between turns and a resident section that
  * changed with it would re-price the prefix on every reconnect; a schema belongs to the tool, and the tool is described
- * when a script asks for it. A send's destination is absent for a different reason: it is the turn's own origin, read
- * from the transcript, so there is no list of places for the model to read or write.
+ * when a script asks for it. A message's destination is absent for a different reason: the conversation is the one
+ * surface, so there is no list of places for the model to read or write.
  */
 export const INTEGRATIONS_POINTER = `Services you can reach. Each line names the service, its tool count and its docs page. A service's tools
 are not in your declared list: \`searchTools("<what you want>")\` finds the name, and \`mcp_read_resource\` reads a page.`;

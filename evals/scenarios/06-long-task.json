@@ -69,9 +69,6 @@
 	],
 	"expect": {
 		"calls": {
-			"send": {
-				"min": 3
-			},
 			"read": {
 				"min": 12
 			}

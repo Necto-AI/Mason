@@ -4,7 +4,7 @@
  * A child is a conversation owned by the tool call's task, configured in the creating commit: the `subagent` role's model
  * and thinking level, a turn limit, a worker brief instead of the persona, and an explicit extension selection that
  * leaves out `delivery` — so the child cannot reach the person and its words arrive only as the tool result. These tests
- * script the faux provider through the whole shape: parent asks, child answers, parent sends.
+ * script the faux provider through the whole shape: parent asks, child answers, parent writes its message.
  *
  * The catalogue is the faux provider's, so the level has to be one it supports (`high` with `reasoning: true`); `max` is
  * unverifiable there and is proved against the real cached catalogue in `roles.test.ts`.
@@ -37,7 +37,6 @@ import { TargetDoc } from "../src/server/env.ts";
 import { SUBAGENT_TOOL, SUBAGENT_TURNS } from "../src/server/extensions/subagent.ts";
 import { acquireWriteLease } from "../src/server/lease.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import { SEND_TOOL } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -121,8 +120,9 @@ function said(text: string): FauxResponseStep {
 	return fauxAssistantMessage(fauxText(text));
 }
 
-function delivered(text: string, id = "sent"): FauxResponseStep {
-	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text }, { id })], { stopReason: "toolUse" });
+/** A parent turn that answers with a message: the text is what the reader gets. */
+function delivered(text: string): FauxResponseStep {
+	return fauxAssistantMessage(fauxText(text));
 }
 
 /** The child's record: the model, the level, the turn limit and the selection, read from `pi.agent` in one commit. */
@@ -237,12 +237,12 @@ test("one child, owned by the tool task, on the subagent role, with no delivery 
 		assert.match(record.instructions ?? "", /^You are a worker/, "a worker brief instead of the persona");
 		assert.equal(record.cwd, null, "a reader works where the agent works");
 
-		// The selection is the whole of what it can reach: no delivery, so no `send` and neither gate.
+		// The selection is the whole of what it can reach: no delivery extension, so neither gate, and no tool that would
+		// reach the person. Its words reach them only as the tool result.
 		const conversation = await runtime.harness.conversation(child, BACKGROUND_CONTEXT);
 		const agent = await conversation?.agent(BACKGROUND_CONTEXT);
 		const names = (agent?.tools ?? []).map((tool) => tool.name);
-		assert.deepEqual(names, ["read"], "a reader gets `read` alone");
-		assert.ok(!names.includes(SEND_TOOL), "and no way to speak to the person");
+		assert.deepEqual(names, ["read"], "a reader gets `read` alone, and nothing that speaks");
 		assert.deepEqual(
 			(agent?.extensions ?? []).map((extension) => extension.name),
 			["coding-tools"],
@@ -304,7 +304,7 @@ test("the child's transcript is its task and its answer, and the parent's contex
 		assert.equal(
 			serialized.split("the second line is: drain the trap").length - 1,
 			2,
-			"once in the send, once in the tool result the parent read",
+			"once in the parent's message, once in the tool result it read",
 		);
 		assert.doesNotMatch(
 			serialized,
@@ -467,7 +467,7 @@ test("closing the runtime mid-child and resuming keeps one child and one submiss
 	}
 
 	// The second boot over the same storage: the child's request is retried, the tool call is re-executed, and the turn
-	// finishes. The script is the child's answer, then the parent's send and its ending.
+	// finishes. The script is the child's answer, then the parent's message and its ending.
 	const second = await boot(directory, ["the manual is three pages long"]);
 	const runtime = second.runtime;
 	try {

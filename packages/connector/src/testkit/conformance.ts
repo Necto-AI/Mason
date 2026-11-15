@@ -168,6 +168,9 @@ export async function open(
 		fetch: mason.fetch,
 		readyTimeout: 2_000,
 		reconnect: { initialMs: 1, maxMs: 10, factor: 2 },
+		// The kit builds the combined connector, and the fixture's faces decide whether a conversation is held: the one
+		// with a `user` face reads it, the event and tools fixtures have none to read.
+		holdConversation: (fixture.faces.owner ?? "owner-1") !== "",
 	};
 	const connector = createConnector(config);
 	await connector.start();

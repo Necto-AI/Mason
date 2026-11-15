@@ -16,25 +16,23 @@
  * reply row out of the conversation state. Nothing is written outside the temporary root: no `agent/` or `service/` at
  * the root itself, no stray `~/.mason`.
  *
- * The client is Chord's, not the SDK's, because this is the proof of the wire: the state member is what a person's client
- * applies, and the assertion that outlives the delivery removal is the row it holds — one reply, under one id.
+ * The client is the SDK's user client, because that is the shape a person's app is: it submits, holds the conversation
+ * state, and the assertion that outlives the delivery removal is the row it holds — one message, under one id.
  */
 import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHost, type StateEvent } from "@earendil-works/chord";
-import { apply } from "@earendil-works/chord/delta";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { nodeWebSocketLink } from "mason-connector";
-import { type ConversationState, connectorHost, MasonPeer, type PeerRef } from "mason-protocol";
+import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { createUserClient, nodeWebSocketLink } from "mason-connector";
+import { MemoryStore } from "mason-connector/store/memory";
+import type { ConversationState } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../src/server/connectors.ts";
 import { startServer } from "../src/server/main.ts";
 import type { ResolvedModel } from "../src/server/runtime.ts";
-import { SEND_TOOL } from "../src/shared/contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -191,31 +189,33 @@ async function main(): Promise<void> {
 		onReport: () => {},
 	});
 	const issued = await mintConnectorCredential(join(directory, BOT), "console", { replace: true });
-	const client = createHost({ name: connectorHost("console"), self: { connector: "console" }, onError: () => {} });
-	const link = nodeWebSocketLink(WebSocket as never)(`ws://127.0.0.1:${chatPort}/api/connector`, {
+	const client = createUserClient({
+		name: "console",
+		version: "0.0.0-first-run",
+		url: `ws://127.0.0.1:${chatPort}/api/connector`,
 		credential: issued.credential,
+		store: new MemoryStore(),
+		link: nodeWebSocketLink(WebSocket as never),
+	});
+	let state: ConversationState | undefined;
+	client.onConversation((next) => {
+		state = next;
 	});
 	try {
-		client.connect(link, { principal: { connector: "console" } });
-		const peer = (await client.get(MasonPeer, {})) as unknown as PeerRef;
-		let state: ConversationState | undefined;
-		peer.conversation.events((frame: StateEvent<ConversationState>) => {
-			state = frame.type === "ops" ? (apply(structuredClone(state), frame.ops) as ConversationState) : frame.value;
-		});
-		const outcome = await peer.append({
-			type: "submission",
+		await client.start();
+		const outcome = await client.submit({
 			appendId: "first-run-1",
 			content: [{ type: "text", text: "Say the word ok." }],
 			origin: { ref: "first-run", actor: { id: "local", name: "you" } },
 		});
-		check(outcome.outcome === "accepted", "the client's submission was accepted", JSON.stringify(outcome));
+		check(outcome.status === "accepted", "the client's submission was accepted", JSON.stringify(outcome));
 		const answered = await waitFor(async () => replyRows(state).length >= 1);
-		check(answered, "the turn produced a reply row in the conversation", JSON.stringify(state?.transcript));
+		check(answered, "the turn produced a message row in the conversation", JSON.stringify(state?.transcript));
 		const rows = replyRows(state);
-		check(rows.length === 1, "exactly one reply row for the turn", JSON.stringify(rows));
-		check(rows[0]?.text === "ok", "and it carries the words the turn sent", JSON.stringify(rows));
+		check(rows.length === 1, "exactly one message row for the turn", JSON.stringify(rows));
+		check(rows[0]?.text === "ok", "and it carries the words the turn wrote", JSON.stringify(rows));
 	} finally {
-		await client.close().catch(() => {});
+		await client.stop().catch(() => {});
 		await served.close();
 	}
 
@@ -236,15 +236,12 @@ function replyRows(state: ConversationState | undefined): Array<{ id: string; te
 	);
 }
 
-/** The faux provider with one scripted turn: a `send` call, then the round that answers it. */
+/** The faux provider with one scripted turn: the text is the message. */
 function scripted(): ResolvedModel {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
-	faux.setResponses([
-		fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "ok" })], { stopReason: "toolUse" }),
-		fauxAssistantMessage(fauxText("sent")),
-	]);
+	faux.setResponses([fauxAssistantMessage(fauxText("ok"))]);
 	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };
 }
 

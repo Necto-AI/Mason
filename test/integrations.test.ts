@@ -306,7 +306,7 @@ describe("the integration list on disk", () => {
 		}
 
 		// The room list and the places a message may be sent to were carried in three spellings. Every one is the same
-		// removal, and every refusal names the rule that replaced them: a send goes back where the words came from.
+		// removal, and every refusal names the rule that replaced them: an answer goes back where the words came from.
 		for (const [connector, retiredPath] of [
 			[{ user: { owner: "8811" }, conversations: [] }, "connector.conversations"],
 			[{ user: { owner: "8811", conversations: [] } }, "connector.user.conversations"],
@@ -315,7 +315,7 @@ describe("the integration list on disk", () => {
 			await writeRaw(paths, JSON.stringify({ integrations: { telegram: { enabled: true, connector } } }));
 			const refused = await refusal(paths);
 			assert.match(refused, new RegExp(retiredPath.replaceAll(".", "\\.")), retiredPath);
-			assert.match(refused, /a send goes back to the connector that carried the words/, retiredPath);
+			assert.match(refused, /an answer goes back to the connector that carried the words/, retiredPath);
 			assert.match(refused, /by hand/, retiredPath);
 			// The user face's own list is refused by the face's reader; the block's list is refused here. A `connector.targets`
 			// that was a grant's only face would otherwise take two boots to repair — this key gone, then "grants nothing" —

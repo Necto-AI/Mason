@@ -111,7 +111,7 @@ export function readConnectorGrant(where: string, name: string, value: unknown):
 			refusal(
 				where,
 				name,
-				`has a retired "connector.${retiredFaces[0]}": a send goes back to the connector that carried the words, ` +
+				`has a retired "connector.${retiredFaces[0]}": an answer goes back to the connector that carried the words, ` +
 					"so a grant names its faces and its commands and no place to be sent to. Delete that key by hand; if it " +
 					"was the grant's only face, write the face that stays in the same edit (`connector.user` for a chat, " +
 					"`connector.events` for one that only reports), because a grant that grants nothing is refused too",
@@ -206,9 +206,9 @@ function readUser(where: string, name: string, value: unknown): ConnectorUserGra
 				where,
 				name,
 				`has a retired "connector.user.${retired[0]}": mason works for one person, so a user face names one ` +
-					'"owner" actor and no mapping, no unattributed switch, no approver and no list of rooms: a send goes ' +
-					"back to the connector that carried the words, so there is no list of places to send to either. Delete " +
-					"that key by hand",
+					'"owner" actor and no mapping, no unattributed switch, no approver and no list of rooms: an answer ' +
+					"goes back to the connector that carried the words, so there is no list of places to send to either. " +
+					"Delete that key by hand",
 			),
 		);
 	}

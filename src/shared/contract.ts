@@ -3,36 +3,27 @@
  * transcript, the queue, the agent's status, and the entry kinds it is made of.
  *
  * There is no wire contract here: an interface is a connector and speaks `packages/protocol`. This file holds what is
- * still shared in TypeScript: the entry kinds, the send tool's name, the two continuations a gate adds to a turn, and
- * the shapes the projection builds. The projection is a read-only transcript representation; nothing consumes it inside Mason today.
+ * still shared in TypeScript: the entry kinds, the two continuations a gate adds to a turn, and the shapes the
+ * projection builds. The projection is a read-only transcript representation; nothing consumes it inside Mason today.
  */
 
-/**
- * The names the server and the client have to spell the same way: the one tool whose call is a send, and the entry
- * kinds the transcript is made of. Spelled once here, so a rename cannot land on one side of the wire only.
- *
- * `send` is mason's own operation, not a vendor's: it commits the turn's words to the transcript, which is the one
- * surface a reader has, and records the origin of the turn's input beside them. No prompt names a vendor tool, and the
- * projection reads the entry the send commits rather than the call that made it.
- */
-export const SEND_TOOL = "send";
 /** A proactive hook trigger. */
 export const HOOK_ENTRY_KIND = "app.hook";
 /** A person's words that arrived through a connector, carrying the origin of the append they came from. */
 export const CONNECTOR_ENTRY_KIND = "app.connector";
-/** One committed send: what the reader sees as a delivered message. */
+/** One message an older build committed through the `send` tool. Read as an agent message; never written again. */
 export const REPLY_ENTRY_KIND = "app.reply";
 
 /**
- * What the delivery gate says to the model when a turn ends with nothing sent.
+ * What the delivery gate says to the model when a submission turn ends without a message.
  *
  * It is a `pi.user` entry because that is the only role a continuation can add, so the projection drops an entry that
- * reads as one: the reader never sees the reminder, only the answer it produces.
+ * reads as one: the reader never sees the reminder, only the message it produces.
  *
- * One reminder, because there is one operation: `send` writes the transcript a reader reads, and a turn nobody is
- * waiting on says so in its result rather than being answered in another tool's name.
+ * One reminder, because there is one operation: what the model writes is the message, and a turn that ends without one
+ * leaves the reader with silence.
  */
-export const DELIVERY_REMINDER = `[delivery] That turn ended without a \`${SEND_TOOL}\` call, so nothing reached the reader: not your answer, not your notes, nothing at all. Send the answer now with \`${SEND_TOOL}\`, in the words the reader should see.`;
+export const DELIVERY_REMINDER = `[delivery] That turn ended without a message, so nothing reached the reader: the words you wrote were working notes. Write the answer now, as the message itself, in the words the reader should see.`;
 
 /**
  * What the reflection gate asks when a turn of ten tool rounds or more ends: the work is kept, or it is gone.
@@ -63,8 +54,10 @@ export function isReflectionAsk(text: string): boolean {
 	return REFLECTION_ASK_OPENING.test(text.trim());
 }
 
+// The second branch is the reminder a build before #219 wrote. A home that upgraded still holds it as a `pi.user` entry,
+// and it is a gate's words there too: dropping the branch would show the old nudge to the reader as their own message.
 const DELIVERY_REMINDER_OPENING =
-	/^\[delivery\] That turn ended without a `[^`\n]+` call, so nothing reached the reader:/;
+	/^\[delivery\] That turn ended without (?:a message|a `[^`\n]+` call), so nothing reached the reader:/;
 
 const REFLECTION_ASK_OPENING = /^\[reflection\] That turn took ten tool rounds or more, so keep what it produced:/;
 
@@ -119,15 +112,19 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
 /**
  * One row of the reader's transcript.
  *
- * The reader sees the conversation, not the machine that wrote it: their own words, what the agent chose to send them
- * (`send`), an event that arrived and woke a turn, the medium talking about itself, and a coarse notice when a run
- * failed. A routine's timer leaves no row: a proactive turn is the message it sent. Reasoning, tool calls, tool
- * arguments and tool output never cross the wire — they are the model's working notes, and a trace endpoint can expose
- * them later, deliberately and separately.
+ * The reader sees the conversation, not the machine that wrote it: their own words, the agent's message for each
+ * generation (`delivered` on the wire), an event that arrived and woke a turn, the medium talking about itself, and a
+ * coarse notice when a run failed. A routine's timer leaves no row: a proactive turn is the message it wrote. Reasoning,
+ * tool calls, tool arguments and tool output never cross the wire — they are the model's working notes, and a trace
+ * endpoint can expose them later, deliberately and separately.
+ *
+ * `runId` names the run that produced a message — the turn-input entry the run started from — so a client can group a
+ * failed run's messages without knowing an entry id. `failed` marks them when that run died, and `streaming` marks the
+ * generation still being written. Nothing carries an origin: provenance stays on the submission entry, never on a row.
  */
 export type TranscriptItem =
 	| { kind: "user"; id: string; text: string; author?: string; at?: number }
-	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean }
+	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean; runId?: string }
 	| { kind: "event"; id: string; name: string }
 	| { kind: "notice"; id: string; text: string };
 

@@ -1,76 +1,33 @@
 /**
- * `send`: the one channel through which a turn's words reach a reader.
+ * The two gates over a turn's ending: did the reader hear anything, and did the work leave something behind.
  *
- * Routing is mason's, not the model's. A turn knows its origin from the transcript — the `app.connector` or `app.hook`
- * entry that started it — and records it beside the words. There is no vendor tool to name, no prompt that names one and
- * no address to choose: the conversation is the reader, and the entry the call commits *is* the delivery.
+ * A turn's text is the message. There is no tool to call and no entry to commit: every assistant generation's text is
+ * projected into the transcript as one row (`src/server/projection.ts`), so what the model writes reaches the reader
+ * because it was written, not because a call was made. That removes the failure #199 and #200 recorded — the answer was
+ * a tool call, and a missed or misrouted call dropped it — but it leaves
+ * one thing for code to hold: a submission turn must not end with silence.
  *
- * Two outcomes, and the result says which:
+ * So the delivery gate continues the run once with `DELIVERY_REMINDER` when a submission turn's final answer carries no
+ * text. It reads the turn's kind from `pi.live.run.first`, the run's first placed entry: a submission turn (`pi.user` or
+ * `app.connector`) owes the reader a message, and a hook or event turn may be silent. A run with no `first` is treated as
+ * local — a person's turn — and is not scanned for one. Once per turn, because the reminder is itself a `pi.user` entry
+ * the next generation can see; a second silent answer is left to the projection, which records one notice rather than
+ * nothing.
  *
- * - **delivered** — the entry the call commits is a row of the conversation, which is what a reader reads.
- * - **nobody reached** — an event with no origin. The work is recorded and the model is told that nothing was waiting on
- *   it, which is the truth rather than a claim about a destination.
- *
- * `replay` is explicit, though `"unsafe"` is pi's default: re-running an interrupted call after a restart would commit
- * the same message twice. An interrupted call is never re-executed — it settles as an `interrupted` error result, which
- * the client shows as a bubble that may not have reached the reader.
- *
- * The extension carries a second gate over the same lifecycle plumbing, because a turn has two endings and both are
- * about what it leaves behind: the delivery gate, and the reflection gate that asks a turn of ten tool rounds or more
- * what it kept. One continuation each, in the turn that did the work, and no second model.
- *
- * A **nested** call — `tools.send()` inside a code-mode script — is refused: its result goes back to the script instead
- * of into the transcript, so nothing reaches the reader while the script is told it did. The entry is the delivery, and
- * a script cannot write one that a reader sees; the refusal says what to do instead.
+ * The second gate is the reflection one: a turn of ten tool rounds or more is asked once what it kept. Both are
+ * `GenerationTask` `onYield` hooks, so the same generation answers them and no second model is spent.
  */
+
+import type { Context } from "@earendil-works/chord";
 import type { Message } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool, GenerationTask, hook } from "@earendil-works/pi-durable";
-import { Type } from "typebox";
+import { defineExtension, GenerationTask, type HookApi, hook, LiveDoc } from "@earendil-works/pi-durable";
 import {
 	DELIVERY_REMINDER,
+	HOOK_ENTRY_KIND,
 	isDeliveryReminder,
 	isReflectionAsk,
 	REFLECTION_ASK,
-	REPLY_ENTRY_KIND,
-	SEND_TOOL,
 } from "../../shared/contract.ts";
-import { type ReplyRecord, readTurnOrigin, type TurnOrigin } from "../replies.ts";
-import { nestedRefusal } from "./nested.ts";
-
-/**
- * What `send` takes. Closed on purpose: a prompt before #200 taught the model a `to` argument, and a model replaying one
- * must be told the argument does not exist — the framework's argument check refuses it as `invalid_arguments` — rather
- * than have the field quietly dropped. `test/delivery.test.ts` pins the schema beside the case that names an address.
- */
-const SendParams = Type.Object(
-	{
-		text: Type.String({
-			minLength: 1,
-			description: "What the reader sees, written in full — this text is the message, not a note about it",
-		}),
-	},
-	{ additionalProperties: false },
-);
-
-/**
- * What a script is told instead of a delivery nobody would see: what happened, and what to do about it. Code mode turns
- * an error result into a rejection (`vendor/pi/packages/durable/src/codemode/codemode.ts:280-291`), so the text has to
- * say the call rejects — a script that read it as advice would carry on believing the reader had been written to.
- */
-const SEND_NESTED_REFUSAL =
-	"send cannot deliver from inside a script: the call rejects, and a message sent by a nested call never reaches the reader. Catch it, return the text from the script, and call send from the turn.";
-
-/** What the model is told about a send a reader will see: the commit is the delivery, so there is nothing to wait for. */
-const DELIVERED_TO_READER = "delivered to the transcript";
-
-/** What the model is told when nothing that carries words started this turn. */
-const NOBODY_REACHED =
-	"recorded, but nobody was reached: this turn came from an event that named no conversation, so the message is in the transcript and no person was sent it. There is nowhere else to send it: no address exists to name, so do not call send again for it.";
-
-/** Whether anything was waiting on the turn: an event with no origin is recorded and reaches no one in particular. */
-interface ChosenOrigin {
-	readonly nobodyReached?: true;
-}
 
 /** The text of a message: a plain string, or its text blocks joined. Reasoning and calls are not text. */
 function textOf(message: Message): string {
@@ -85,93 +42,33 @@ function textOf(message: Message): string {
 		.join("");
 }
 
-export const sendTool = defineTool({
-	name: SEND_TOOL,
-	description: `Send the reader a message. This is the only way words reach a person: everything else written in a turn is working notes. A send goes back where the turn came from — the connector that carried the words, or the transcript itself — and there is no other address to name, so never try to reach a chat by another tool's name. When the turn came from an event that named no conversation, the message is recorded and nobody is reached: that is the truth, and nowhere else can be reached from this turn. Call this directly, never from inside a script. The turn continues after the call, so send a note when you have news and the result when you have it — never the same words twice.`,
-	parameters: SendParams,
-	replay: "unsafe",
-	execute: async ({ text }, api, context) => {
-		const nested = nestedRefusal(api, SEND_NESTED_REFUSAL);
-		if (nested !== undefined) return nested;
-		const origin = await readTurnOrigin(api, context);
-		const chosen = chooseOrigin(origin);
-		const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text }];
-		const record: ReplyRecord = {
-			deliveryId: `reply:${api.callId}`,
-			blocks,
-			...(origin.kind !== "local" && origin.origin !== undefined ? { origin: origin.origin } : {}),
-		};
-		// The commit is the delivery, and the commit is what makes it durable: the row a reader sees is read out of this
-		// entry, and the origin beside it says which append the row answers.
-		await api.commit(
-			(tx) =>
-				tx.appendEntry(api.conversationId, {
-					kind: REPLY_ENTRY_KIND,
-					// Plain JSON, field by field: a protocol interface has no index signature, and an entry's `data` is JSON.
-					data: {
-						deliveryId: record.deliveryId,
-						blocks,
-						...(record.origin === undefined
-							? {}
-							: {
-									origin: {
-										connector: record.origin.connector,
-										ref: record.origin.ref,
-										...(record.origin.messageId === undefined ? {} : { messageId: record.origin.messageId }),
-										...(record.origin.actor === undefined ? {} : { actor: record.origin.actor }),
-									},
-								}),
-					},
-				}),
-			context,
-		);
-		const outcome = chosen.nobodyReached === true ? NOBODY_REACHED : DELIVERED_TO_READER;
-		return { output: [{ type: "text", text: outcome }], details: { length: text.length } };
-	},
-});
-
-/**
- * Whether anything was waiting on the send.
- *
- * A turn a person started, or a fire that named one, is recorded beside its origin and the reader reads it. An event
- * that named no origin had nobody waiting: the words are still committed, and the result says so rather than claiming a
- * reader who was never there.
- */
-function chooseOrigin(origin: TurnOrigin): ChosenOrigin {
-	if (origin.kind === "local") return {};
-	return origin.origin === undefined ? { nobodyReached: true } : {};
+/** Whether the model wrote anything a reader would see: the same blank rule the projection applies to a row. */
+function saysSomething(message: Message): boolean {
+	return textOf(message).replace(/[\s\u200b-\u200d\ufeff]/g, "") !== "";
 }
 
-const DELIVERED = "delivery.delivered";
+/** Whether a turn owes its reader a message: a person's words do, a hook's or an event's may stay silent. */
+type TurnKind = "submission" | "event";
+
+/**
+ * The turn's kind, read from the run's first entry.
+ *
+ * `pi.live.run.first` is the boundary that started the run: the input entry the submit placed, a continue's the failed
+ * run's it continues, and otherwise the run's first tool-calling answer. No entry kinds are scanned and no text is
+ * searched, so a compaction cannot be mistaken for the input (#199). A run that recorded no `first` is treated as a
+ * local turn: a person is waiting, and the safe answer is to ask for the message rather than to assume nobody is.
+ */
+async function turnKind(api: HookApi, context: Context): Promise<TurnKind> {
+	const live = await api.snapshot(LiveDoc, api.conversationId, context);
+	const first = live?.run?.first;
+	if (first === undefined) return "submission";
+	const entry = await api.entry(first, context);
+	return entry?.kind === HOOK_ENTRY_KIND ? "event" : "submission";
+}
+
 const REMINDED = "delivery.reminded";
 
-/**
- * The reader never gets silence for an answer.
- *
- * `send` is a tool, so calling it is the model's choice, and the prompt that asks for it is advice. This gate is what
- * makes it happen: when a turn is about to end with nothing delivered, the run continues with one reminder, and the
- * model gets one more chance to say what it meant to say. Once per turn, because the reminder is itself a `pi.user`
- * entry and the next generation can see it; a second silent answer is left to the projection, which shows a notice
- * rather than nothing.
- *
- * "Delivered" is the same call `send` makes: one operation, so the gate and the tool cannot disagree about what
- * reaching the reader means.
- */
-function turnDelivered(messages: readonly Message[]): boolean {
-	const delivering = new Set([SEND_TOOL]);
-	for (const message of messages) {
-		if (message.role !== "assistant") continue;
-		const content = (message as { content?: unknown }).content;
-		if (!Array.isArray(content)) continue;
-		for (const part of content) {
-			const call = part as { type?: unknown; name?: unknown };
-			if (call.type === "toolCall" && typeof call.name === "string" && delivering.has(call.name)) return true;
-		}
-	}
-	return false;
-}
-
-/** Whether this turn has already been reminded: the nudge is the newest user message, and nothing delivered followed. */
+/** Whether this turn has already been reminded: the nudge is the newest user message, and no message followed it. */
 function remindedAlready(messages: readonly Message[]): boolean {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const message = messages[index] as Message;
@@ -181,15 +78,23 @@ function remindedAlready(messages: readonly Message[]): boolean {
 	return false;
 }
 
+/**
+ * The reader never gets silence for a submission.
+ *
+ * What counts as reaching the reader is the answer's own text, because that is what the projection turns into a row. A
+ * generation that carried tool calls does not yield, so the only answer this sees is the turn's final one. The memo keeps
+ * the reminder once per turn: a generation whose context already holds it does not ask again, and a second silent answer
+ * becomes the projection's notice.
+ */
 export const deliveryGate = hook(GenerationTask, {
 	beforeRequest: async ({ messages }, api, context) => {
-		if (turnDelivered(messages)) await api.memo(DELIVERED, true, context);
 		if (remindedAlready(messages)) await api.memo(REMINDED, true, context);
 		return undefined;
 	},
-	onYield: async (_answer, api, context) => {
-		if ((await api.memo(DELIVERED, context)) === true) return undefined;
+	onYield: async (answer, api, context) => {
+		if (saysSomething(answer)) return undefined;
 		if ((await api.memo(REMINDED, context)) === true) return undefined;
+		if ((await turnKind(api, context)) === "event") return undefined;
 		return { continue: DELIVERY_REMINDER };
 	},
 });
@@ -260,6 +165,5 @@ export const reflectionGate = hook(GenerationTask, {
 
 export const Delivery = defineExtension({
 	name: "delivery",
-	tools: [sendTool],
 	hooks: [deliveryGate, reflectionGate],
 });

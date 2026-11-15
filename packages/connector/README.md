@@ -1,11 +1,12 @@
 # `mason-connector`
 
 The TypeScript SDK for one external mason connector. It owns the parts that are the same for every connector and wrong
-in the same way when each one writes them itself: the Chord host, the link, the durable journal, the conversation it
-holds, attachments, and the approval marker. It does not own vendor behaviour.
+in the same way when each one writes them itself: the Chord host, the link, the durable journal, the conversation a
+user client holds, attachments, and the approval marker. It does not own vendor behaviour. Two factories, one per
+surface: `createUserClient` reads the conversation and may submit; `createEventClient` only appends events.
 
 ```ts
-import { createConnector, nodeWebSocketLink, type WebSocketConstructor } from "mason-connector";
+import { createUserClient, nodeWebSocketLink, type WebSocketConstructor } from "mason-connector";
 import { openSqliteStore } from "mason-connector/store/sqlite";
 import WebSocket from "ws";
 
@@ -13,7 +14,7 @@ import WebSocket from "ws";
 // typed as the constructor the SDK takes. Otherwise the class is the whole transport: it is what sets the header.
 const socket = WebSocket as WebSocketConstructor;
 
-const connector = createConnector({
+const client = createUserClient({
 	name: "telegram",
 	version: "0.3.0",
 	url: "wss://mason.local/api/connector",
@@ -24,29 +25,38 @@ const connector = createConnector({
 	// Optional: the same manifest an MCP server declares, sent in the handshake. Mason seeds its events disabled.
 	integration: { about: "The team chat", events: [{ kind: "chat.message", description: "a message", prompt: "Answer it." }] },
 	store: await openSqliteStore({ path: "/var/lib/mason-telegram/state.db" }),
-	handlers: {
-		async onConversation(state) {
-			// What a reader sees, as mason publishes it: the snapshot when the link opens, then each diff's value.
-			for (const row of state.transcript) console.log(row.id, row.kind);
-		},
-		async onSession(session) {
-			// The handshake: the controls this socket may spend, the kinds it may raise, and its budgets.
-			console.log(session.commands, session.kinds, session.limits);
-		},
-	},
 });
 
-await connector.start();
+// What a reader sees, as mason publishes it: the snapshot when the link opens, then each diff's value.
+client.onConversation((state) => {
+	for (const row of state.transcript) console.log(row.id, row.kind);
+});
+// The handshake: the controls this socket may spend, the kinds it may raise, and its budgets.
+client.onSession((session) => console.log(session.commands, session.kinds, session.limits));
+
+await client.start();
 
 /** Your vendor's webhook: one message, and the append that carries it to mason. */
 async function onMessage(message: { id: number; chat: number; text: string }): Promise<void> {
-	const outcome = await connector.event({
+	const outcome = await client.submit({
 		appendId: `tg-${message.id}`,
-		kind: "chat.message",
-		payload: { chat: message.chat, text: message.text },
+		content: [{ type: "text", text: message.text }],
+		origin: { ref: String(message.chat), messageId: String(message.id) },
 	});
 	if (outcome.status === "refused") console.log(outcome.code, outcome.reason);
 }
+```
+
+An **event client** — a service that reports and reads nothing — is the narrower factory. It has no conversation, no
+control, no submission and no attachments, and mason serves it an empty `conversation` cell:
+
+```ts
+import { createEventClient, nodeWebSocketLink } from "mason-connector";
+
+const client = createEventClient({ name: "alarm", version: "1.0.0", url, credential, link, store });
+client.onSession((session) => console.log(session.kinds));
+await client.start();
+await client.event({ kind: "alarm.ringing", payload: { host: "db-1" } });
 ```
 
 ## What the SDK guarantees, and what it does not

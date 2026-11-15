@@ -13,7 +13,7 @@ import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND } from "../shared/contract.ts";
 
 /**
  * Where an input came from. `user` is a message mason wrote itself; `external` is a person whose words
- * arrived through a connector, carrying the origin a reply goes back to; `hook` is an event hook firing.
+ * arrived through a connector, carrying the origin a turn's answer came from; `hook` is an event hook firing.
  */
 export type Origin = "user" | "external" | "hook";
 

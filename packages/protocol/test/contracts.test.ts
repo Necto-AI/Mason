@@ -135,6 +135,36 @@ test("the shape the type says and the shape the schema validates are one shape",
  * The Appiary client reads exactly these fields and no others; a field added here without the client reading it is a
  * field the wire pays for and nobody uses, and a field the client reads that is not here is a frame it cannot get.
  */
+test("a message row may carry runId, and a consumer that never names it still validates", () => {
+	// The field is additive inside major 1. The row a client built before it existed is still a row: the schema validates
+	// both spellings, and an open object ignores a field it was not told about.
+	const state = (row: Record<string, unknown>) => ({
+		revision: 1,
+		transcript: [row],
+		queue: [],
+		run: "idle",
+		busy: false,
+		transitions: [],
+	});
+	assert.equal(
+		compile(ConversationStateSchema).check(state({ kind: "delivered", id: "message:1", text: "hi", runId: "7" })),
+		true,
+		"runId is accepted when it is there",
+	);
+	assert.equal(
+		compile(ConversationStateSchema).check(state({ kind: "delivered", id: "message:1", text: "hi" })),
+		true,
+		"and the row without it is the same row it always was",
+	);
+	assert.equal(
+		compile(ConversationStateSchema).check(
+			state({ kind: "delivered", id: "message:1", text: "hi", failed: true, streaming: true, runId: "7" }),
+		),
+		true,
+		"the three marks travel together",
+	);
+});
+
 test("the conversation member carries the read model and nothing else", () => {
 	type JsonSchema = {
 		readonly properties?: Record<string, any>;
@@ -166,6 +196,6 @@ test("the conversation member carries the read model and nothing else", () => {
 	// A streamed message has to be the row it settles into: same id, plus the two marks a client renders.
 	const delivered = rows[1];
 	assert.deepEqual(delivered?.required, ["kind", "id", "text"]);
-	assert.deepEqual(Object.keys(delivered?.properties ?? {}), ["kind", "id", "text", "failed", "streaming"]);
+	assert.deepEqual(Object.keys(delivered?.properties ?? {}), ["kind", "id", "text", "failed", "streaming", "runId"]);
 	assert.deepEqual(member.schema.properties?.transitions.items?.properties?.kind.enum, [...CONVERSATION_TRANSITIONS]);
 });

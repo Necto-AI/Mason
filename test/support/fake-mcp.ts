@@ -32,7 +32,6 @@ import { housePaths } from "../../src/server/house.ts";
 import type { Integration } from "../../src/server/integrations.ts";
 import type { McpTransportFactory } from "../../src/server/mcp.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../../src/server/runtime.ts";
-import { SEND_TOOL } from "../../src/shared/contract.ts";
 
 /** The four tools a script uses to reach a server: the whole of what the registry carries about MCP. */
 export { MCP_TOOL as MCP } from "../../src/server/mcp.ts";
@@ -323,13 +322,10 @@ export function resultFor(results: { name: string; isError: boolean; text: strin
 	return found[0]!.text;
 }
 
-/** The three steps a scripted turn ends with: the model asks for the tool, listens to the script, then speaks. */
+/** The two steps a scripted turn ends with: the model asks for the tool, listens to the script, then writes its message. */
 export function scriptThenSpeak(code: string): FauxResponseStep[] {
 	return [
 		fauxAssistantMessage([fauxToolCall("codemode", { code }, { id: "script" })], { stopReason: "toolUse" }),
-		fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: "Done." }, { id: "sent" })], {
-			stopReason: "toolUse",
-		}),
 		fauxAssistantMessage(fauxText("Nothing else to report.")),
 	];
 }

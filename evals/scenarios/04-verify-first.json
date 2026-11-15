@@ -19,20 +19,10 @@
 	],
 	"expect": {
 		"calls": {
-			"send": {
-				"min": 1,
-				"max": 1
-			},
 			"read": {
 				"min": 1
 			}
 		},
-		"before": [
-			{
-				"tool": "read",
-				"then": "send"
-			}
-		],
 		"text": ["3"],
 		"maxInputTokens": 10000
 	}

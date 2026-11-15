@@ -21,27 +21,18 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import {
-	type FauxResponseStep,
-	fauxAssistantMessage,
-	fauxText,
-	fauxToolCall,
-} from "@earendil-works/pi-ai/providers/faux";
+import { type FauxResponseStep, fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { housePaths } from "../src/server/house.ts";
 import { assertOneUserGrant, readIntegrations, userGrantNames, writeIntegration } from "../src/server/integrations.ts";
-import { SEND_TOOL } from "../src/shared/contract.ts";
 import { household } from "./support/chat.ts";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "scripts", "chat.ts");
 
-/** A turn that answers with `reply`, and nothing else: the delivery comes from the tool call, not from the text. */
+/** A turn that answers with `message`, and nothing else: the text is the message the client reads. */
 function replyTurn(message: string): FauxResponseStep[] {
-	return [
-		fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: message })], { stopReason: "toolUse" }),
-		fauxAssistantMessage(fauxText("sent")),
-	];
+	return [fauxAssistantMessage(fauxText(message))];
 }
 
 /** A turn whose model takes `delayMs` to produce anything, so a `/stop` has somewhere to land. */
@@ -49,9 +40,8 @@ function slowReplyTurn(message: string, delayMs: number): FauxResponseStep[] {
 	return [
 		async () => {
 			await new Promise((resolve) => setTimeout(resolve, delayMs));
-			return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: message })], { stopReason: "toolUse" });
+			return fauxAssistantMessage(fauxText(message));
 		},
-		fauxAssistantMessage(fauxText("sent")),
 	];
 }
 

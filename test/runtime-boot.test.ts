@@ -49,12 +49,15 @@ function grant(options: { readonly user?: boolean } = {}): Record<string, unknow
 }
 
 /** Open a home's runtime, answering with the failure instead of throwing: a boot that did not refuse must be closed. */
-async function boot(home: string): Promise<AgentRuntime | Error> {
+async function boot(
+	home: string,
+	options: { readonly storage?: "sqlite" | "memory"; readonly dataDir?: string } = {},
+): Promise<AgentRuntime | Error> {
 	return openAgentRuntime(BACKGROUND_CONTEXT, {
-		dataDir: join(dirname(home), "data"),
+		dataDir: options.dataDir ?? join(dirname(home), "data"),
 		workspaceDir: join(dirname(home), "workspace"),
 		houseHome: home,
-		storage: "memory",
+		storage: options.storage ?? "memory",
 		modelAccess: fauxAccess(),
 		onReport: () => {},
 	}).then(
@@ -129,4 +132,18 @@ test("a retired agent/routines.json is named once at boot, and none of its entri
 	} finally {
 		await runtime.close();
 	}
+});
+
+test("a corrupt agent.sqlite refuses the boot with the path and the move that repairs it", async () => {
+	const home = await homeWith({ telegram: { enabled: true, connector: grant() } });
+	const dataDir = join(dirname(home), "data");
+	const database = join(dataDir, "agent.sqlite");
+	await mkdir(dataDir, { recursive: true, mode: 0o700 });
+	// A file with the right name and the wrong bytes: what a truncated copy, a half-restored backup or a stray redirect
+	// leaves behind. Opening it must say so rather than dying inside the first query with no path in the sentence.
+	await writeFile(database, "this is not a database\n", { mode: 0o600 });
+	const refused = await boot(home, { storage: "sqlite" });
+	assert.ok(refused instanceof Error, "the boot refused the database");
+	assert.match(refused.message, new RegExp(database.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "names the file");
+	assert.match(refused.message, /mv .*agent\.sqlite .*agent\.sqlite\.corrupt/, "names the repair");
 });

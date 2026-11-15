@@ -27,7 +27,7 @@ export interface RunOptions {
 	readonly onProgress?: (line: string) => void;
 }
 
-/** The extensions a scenario runs with: the prompt, the delivery tool, and stubs for the four coding tools. */
+/** The extensions a scenario runs with: the prompt, the delivery gates, and stubs for the four coding tools. */
 const CONTEXT: Context = BACKGROUND_CONTEXT;
 
 export async function runScenario(
@@ -166,8 +166,8 @@ function collect(
 		if (item.kind === "delivered") delivered.push(item.text);
 		else if (item.kind === "notice") notices.push(item.text);
 	}
-	// Every call the model made, in order, including the real tools a stub did not replace: `reply` and `remember`
-	// are the same delivery path the reader sees, so an eval must count what the harness committed.
+	// Every call the model made, in order, including the real tools a stub did not replace. The message is not a call:
+	// it is the assistant text the projection turns into a row, so the trace's delivered list is where it shows up.
 	const calls = toolCallsOf(view);
 	const usage = view.docs["pi.usage"] as { models?: Record<string, { input?: number; output?: number }> } | undefined;
 	let input = 0;
@@ -190,7 +190,7 @@ function collect(
 	};
 }
 
-/** How often the delivery gate had to intervene: one reminder entry per rescued turn. */
+/** How often the delivery gate had to intervene: one reminder entry per silent submission. */
 function remindersOf(view: ConversationView): number {
 	let count = 0;
 	for (const entry of view.entries) {

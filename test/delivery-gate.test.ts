@@ -1,12 +1,14 @@
 /**
- * The reader never gets silence for an answer.
+ * The reader never gets silence for a submission.
  *
- * `send` is a tool, so calling it is the model's choice and the prompt is only advice. These tests pin the
- * guarantee behind the advice: a turn that ends with nothing delivered continues once with a reminder, and a second
- * silent answer shows the reader a notice instead of nothing. The reminder itself is never part of the transcript.
+ * What the model writes is the message, so there is no call whose success the gate could count. The gate asks a
+ * different question: did the turn's final answer carry text? A submission turn that ends without any continues once
+ * with a reminder; a second silent answer shows the reader a notice instead of nothing; a hook or event turn may stay
+ * silent and records no notice. The reminder itself is never part of the transcript.
  *
- * Two of these tests drive a delivery from inside another tool, the way a code-mode script does: the attempt is
- * refused, the turn is reminded as if it had never spoken, and the model's own call is the only thing the reader sees.
+ * The turn's kind comes from `pi.live.run.first`, the run's first placed entry, and never from a scan for the newest
+ * input: #199 made a compaction the newest "input" and lost a turn's origin, and the pointer cannot do that. The
+ * working-note cases below are that failure's deterministic repro.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -32,15 +34,9 @@ import {
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { projectTranscript } from "../src/server/projection.ts";
-import { isInputEntry, turnOriginOf } from "../src/server/replies.ts";
+import { isInputEntry, turnOriginOfEntry } from "../src/server/replies.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
-import {
-	DELIVERY_REMINDER,
-	isDeliveryReminder,
-	isReflectionAsk,
-	REFLECTION_ASK,
-	SEND_TOOL,
-} from "../src/shared/contract.ts";
+import { DELIVERY_REMINDER, isDeliveryReminder, isReflectionAsk, REFLECTION_ASK } from "../src/shared/contract.ts";
 
 const directories = new Set<string>();
 after(async () => {
@@ -60,13 +56,15 @@ async function seedRoutine(directory: string): Promise<void> {
 				source: "telegram",
 				kind: "chat.message",
 				enabled: true,
-				prompt: "A message arrived in the chat: the person you work for asked. Answer it with send.\n{{payload}}",
+				prompt:
+					"A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
 			},
 			{
 				source: "routine",
 				name: "team-chat",
 				enabled: true,
-				prompt: "A message arrived in the chat: the person you work for asked. Answer it with send.\n{{payload}}",
+				prompt:
+					"A message arrived in the chat: the person you work for asked. Answer it in the message.\n{{payload}}",
 				schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 			},
 		]),
@@ -80,14 +78,14 @@ function fauxAccess(): { access: ResolvedModel; faux: ReturnType<typeof fauxProv
 	return { access: { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true }, faux };
 }
 
-/** Nothing delivered: the answer the model wrote is working notes. */
+/** The answer the model wrote: the text is the message, so this turn speaks. */
 function said(text: string): FauxResponseStep {
 	return fauxAssistantMessage(fauxText(text));
 }
 
-/** A message the reader sees. */
-function deliver(message: string, id = "sent"): FauxResponseStep {
-	return fauxAssistantMessage([fauxToolCall(SEND_TOOL, { text: message }, { id })], { stopReason: "toolUse" });
+/** A final answer with no text at all: the turn ends and nothing was written. */
+function silent(): FauxResponseStep {
+	return fauxAssistantMessage([{ type: "thinking", thinking: "nothing worth writing" }], { stopReason: "stop" });
 }
 
 function call(name: string, arguments_: JsonObject, id: string): FauxResponseStep {
@@ -116,12 +114,7 @@ function recorder(steps: readonly FauxResponseStep[]): {
 	return { steps: queue, requests };
 }
 
-/**
- * A turn, scripted: how it started, and everything it left behind.
- *
- * The evidence is deliberately more than the reader's transcript: a refusal or a "delivered" is a tool result, and the
- * transcript is the one place it does not appear, so the raw entries come back too.
- */
+/** A turn, scripted: how it started, and everything it left behind. */
 async function runTurn(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -138,7 +131,6 @@ async function runTurn(
 		houseHome: join(directory, "house"),
 		storage: "memory",
 		modelAccess: access,
-		// Extra tools, for the tests that need a tool which delivers from inside its own execution.
 		extensions,
 		onReport: () => {},
 	});
@@ -156,7 +148,7 @@ async function runTurn(
 	}
 }
 
-/** A turn nothing outside mason started: the only case where the transcript is the reader. */
+/** A turn nothing outside mason started: the transcript is its reader, and it owes one message. */
 function runScripted(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -172,10 +164,7 @@ function runScripted(
 /** One fire, one turn: the id is the sender's, so it has to be one only this test uses. */
 let fires = 0;
 
-/**
- * A turn an event hook started, through a fired hook the home's routine file names: the chat door firing `team-chat`,
- * which is how the person in the chat reaches the agent.
- */
+/** A turn an event hook started, through a fired hook the home's routine file names. */
 function runFired(
 	directory: string,
 	script: ReturnType<typeof recorder>,
@@ -188,72 +177,43 @@ function runFired(
 	});
 }
 
-/** What a call answered: the text the model read, and whether it was refused (which code mode turns into a rejection). */
-function answerTo(entries: readonly EntryRecord[], callId: string): { isError: boolean; text: string } {
-	for (const entry of entries) {
-		if (entry.kind !== "pi.tool-result") continue;
-		const message = entry.model?.[0] as { toolCallId?: unknown; isError?: unknown; content?: unknown } | undefined;
-		if (message?.toolCallId !== callId) continue;
-		const content = message.content;
-		const text =
-			typeof content === "string"
-				? content
-				: Array.isArray(content)
-					? content
-							.map((part) => {
-								const block = part as { type?: unknown; text?: unknown };
-								return block.type === "text" && typeof block.text === "string" ? block.text : "";
-							})
-							.join("")
-					: "";
-		return { isError: message.isError === true, text };
-	}
-	return { isError: false, text: "" };
-}
-
-/** Whether the gate ever nudged the model: a reminder is only ever a user input the gate added, in either shape. */
+/** Whether the gate ever nudged the model: a reminder is a user input the gate added, in the one shape it has. */
 function reminded(requests: readonly (readonly Message[])[]): boolean {
 	return requests.some((messages) =>
 		messages.some((message) => typeof message.content === "string" && isDeliveryReminder(message.content)),
 	);
 }
 
-/** What a nested call answered the script: whether it failed, and the text a program reads out of it. */
-type NestedAnswer = { isError: boolean; text: string };
+/** The delivered rows of a transcript, as text. */
+function messages(transcript: ReturnType<typeof projectTranscript>): string[] {
+	return transcript.flatMap((item) => (item.kind === "delivered" ? [item.text] : []));
+}
 
 /**
- * A tool that delivers inside its own execution, the way a code-mode script does: what the script calls becomes a
- * nested `pi.tool` task, whose result goes back to the caller instead of into the transcript. The answers are handed
- * back so a test can read what the model would have been told.
+ * A turn that writes one of mason's own working notes before it answers: a compaction's summary, or the prompt a turn
+ * was planned with. Both carry a `user`-role message, which is what made the newest-input read take one for the person's
+ * own words (#199). A tool writes it because a test cannot reach into a running turn any other way.
  */
-function scriptedDelivery(answers: NestedAnswer[]): Extension {
+function workingNote(kind: "pi.compaction" | "pi.system", text: string): Extension {
 	const tool = defineTool({
-		name: "deliverFromScript",
-		description: "Send a message from inside a script.",
-		parameters: Type.Object({
-			message: Type.Optional(Type.String()),
-		}),
-		execute: async ({ message }, api, context) => {
-			const nested = await api.executeTool(SEND_TOOL, { text: message ?? "" }, context);
-			answers.push({
-				isError: nested.isError,
-				// A nested result carries the tool's value for programs, never the output written for the model: an error
-				// the harness wrote itself has no value at all, and the diagnostics are what says why.
-				text:
-					typeof nested.structuredOutput === "string"
-						? nested.structuredOutput
-						: nested.diagnostics.map((diagnostic) => diagnostic.message ?? "").join("\n"),
-			});
-			return { output: [{ type: "text", text: "script ran" }], details: {} };
+		name: "writeWorkingNote",
+		description: "Write mason's own working note into the transcript, the way a compaction does.",
+		parameters: Type.Object({}),
+		execute: async (_arguments, api, context) => {
+			await api.commit(
+				(tx) =>
+					tx.appendEntry(api.conversationId, { kind, model: [{ role: "user", content: text, timestamp: 0 }] }),
+				context,
+			);
+			return { output: [{ type: "text", text: `${kind} written` }], details: {} };
 		},
 	});
-	return defineExtension({ name: "scripted-delivery", tools: [tool] });
+	return defineExtension({ name: "working-note", tools: [tool] });
 }
 
 /**
  * The two tools a long turn needs here: a probe, because a round of work is what the counter counts, and a write, so the
- * extraction leaves the file a test can read back. The workspace is a real machine in production; the point here is the
- * ask and the file it leaves behind.
+ * extraction leaves the file a test can read back.
  */
 function keeper(kept: string[]): Extension {
 	const keep = defineTool({
@@ -272,29 +232,6 @@ function keeper(kept: string[]): Extension {
 		execute: async ({ what }) => ({ output: [{ type: "text", text: `${what}: fine` }], details: {} }),
 	});
 	return defineExtension({ name: "keeper", tools: [keep, check] });
-}
-
-/**
- * A turn that writes one of mason's own working notes before it answers: a compaction's summary, or the prompt a turn
- * was planned with. Both carry a `user`-role message, which is what made the newest-input read take one for the person's
- * own words (#199). A tool writes it because a test cannot reach into a running turn any other way, and `EntryDraft`
- * carries the messages, so the entry is the one a real compaction commits.
- */
-function workingNote(kind: "pi.compaction" | "pi.system", text: string): Extension {
-	const tool = defineTool({
-		name: "writeWorkingNote",
-		description: "Write mason's own working note into the transcript, the way a compaction does.",
-		parameters: Type.Object({}),
-		execute: async (_arguments, api, context) => {
-			await api.commit(
-				(tx) =>
-					tx.appendEntry(api.conversationId, { kind, model: [{ role: "user", content: text, timestamp: 0 }] }),
-				context,
-			);
-			return { output: [{ type: "text", text: `${kind} written` }], details: {} };
-		},
-	});
-	return defineExtension({ name: "working-note", tools: [tool] });
 }
 
 /** One round of work that changes nothing: the count is the point, not the output. */
@@ -322,20 +259,33 @@ function temporary(): Promise<string> {
 	});
 }
 
-test("a turn that answers in prose is reminded, and the reminder never reaches the reader", async () => {
+test("a submission answered in prose produces its message and is not reminded", async () => {
 	const directory = await temporary();
-	const script = recorder([said("The standup moved to nine."), deliver("Standup moved to nine."), said("Done.")]);
+	const script = recorder([said("Standup moved to nine.")]);
 	const { settled, transcript, requests } = await runScripted(directory, script);
 
 	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 3, "one reminder, one follow-up answer, no more");
-	const reminded = requests[1]?.at(-1) as { role?: string; content?: unknown } | undefined;
-	assert.equal(reminded?.role, "user");
-	assert.equal(reminded?.content, DELIVERY_REMINDER, "the reminder is the turn's last input");
+	assert.equal(requests.length, 1, "the model's own turn, and nothing added to it");
+	assert.equal(reminded(requests), false, "the text is the message, so there was nothing to ask for");
+	assert.deepEqual(messages(transcript), ["Standup moved to nine."], "the reader sees the answer, once");
+});
+
+test("a submission that ends silent is reminded once, and the reminder never reaches the reader", async () => {
+	const directory = await temporary();
+	const script = recorder([silent(), said("Standup moved to nine.")]);
+	const { settled, transcript, requests } = await runScripted(directory, script);
+
+	assert.equal(settled.status, "done");
+	assert.equal(requests.length, 2, "one reminder, one follow-up answer, no more");
+	const reminder = requests[1]?.at(-1) as { role?: string; content?: unknown } | undefined;
+	assert.equal(reminder?.role, "user");
+	assert.equal(reminder?.content, DELIVERY_REMINDER, "the reminder is the turn's last input");
+	assert.match(String(reminder?.content), /without a message/, "it says what was missing");
+	assert.equal(String(reminder?.content).includes("`send`"), false, "and names no tool, because there is none");
 	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
+		messages(transcript),
 		["Standup moved to nine."],
-		"the reader sees the answer, once",
+		"the reader sees the answer the reminder produced",
 	);
 	assert.ok(
 		transcript.every((item) => (item as { text?: string }).text !== DELIVERY_REMINDER),
@@ -343,57 +293,9 @@ test("a turn that answers in prose is reminded, and the reminder never reaches t
 	);
 });
 
-test("a turn that delivers is not reminded", async () => {
-	const directory = await temporary();
-	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
-	const { settled, transcript, requests } = await runScripted(directory, script);
-
-	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 2, "the model's own turn, and nothing added to it");
-	assert.ok(
-		requests.every((messages) => !messages.some((message) => message.content === DELIVERY_REMINDER)),
-		"no reminder was offered",
-	);
-	assert.equal(transcript.filter((item) => item.kind === "delivered").length, 1);
-});
-
-test("a delivery earlier in the turn counts, even across rounds", async () => {
-	const directory = await temporary();
-	// Two generations: the delivery's round, then a round that only remembers something, then the answer.
-	const script = recorder([
-		deliver("Standup moved to nine."),
-		call("remember", { fact: "Denis moves standups to nine." }, "mem"),
-		said("Done."),
-	]);
-	const { settled, transcript, requests } = await runScripted(directory, script);
-
-	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 3, "no reminder after a turn that already delivered");
-	assert.equal(transcript.filter((item) => item.kind === "delivered").length, 1);
-});
-
-test("a turn that works and then stays silent is still a notice", async () => {
-	const directory = await temporary();
-	// A round of real work counts for nothing with the reader: the answer after it is what they were waiting for.
-	const script = recorder([
-		call("remember", { fact: "Denis moves standups to nine." }, "mem"),
-		said("I will look into it."),
-		said("Still looking into it."),
-	]);
-	const { settled, transcript, requests } = await runScripted(directory, script);
-
-	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 3, "one reminder after the silent answer to the work");
-	assert.deepEqual(
-		transcript.map((item) => item.kind),
-		["user", "notice"],
-		"the work the reader never saw does not count as an answer",
-	);
-});
-
 test("a second silent answer is a notice, not another reminder", async () => {
 	const directory = await temporary();
-	const script = recorder([said("I will look into it."), said("Still looking into it.")]);
+	const script = recorder([silent(), silent()]);
 	const { settled, transcript, requests } = await runScripted(directory, script);
 
 	assert.equal(settled.status, "done");
@@ -405,135 +307,41 @@ test("a second silent answer is a notice, not another reminder", async () => {
 	);
 });
 
-test("a message sent from inside a script is refused, and the gate still asks for one", async () => {
+test("a hook turn that says nothing is silent with no reminder and no notice", async () => {
 	const directory = await temporary();
-	const answers: NestedAnswer[] = [];
-	// The script tries to deliver and is told not to; the model then says it in prose, is reminded, and sends it itself.
-	const script = recorder([
-		call("deliverFromScript", { message: "Standup moved to nine." }, "run"),
-		said("Standup moved to nine."),
-		deliver("Standup moved to nine."),
-		said("Done."),
-	]);
-	const { settled, transcript, requests } = await runScripted(directory, script, "Anything new?", [
-		scriptedDelivery(answers),
-	]);
+	const script = recorder([silent()]);
+	await seedRoutine(directory);
+	const { settled, transcript, requests } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");
-	assert.equal(answers.length, 1, "the script made one nested call");
-	assert.equal(answers[0]?.isError, true, "the nested delivery was refused, not delivered");
-	assert.match(answers[0]?.text ?? "", /cannot deliver from inside a script/, "the refusal says what went wrong");
-	assert.match(answers[0]?.text ?? "", /call send from the turn/, "and what to do instead");
-	assert.equal(reminded(requests), true, "the refusal is not a delivery, so the turn is still silent to the gate");
-	assert.equal(requests.length, 4, "the reminder added one round, and no more");
+	assert.equal(requests.length, 1, "a hook turn may end without a message: nothing asks it for one");
+	assert.equal(reminded(requests), false, "no reminder");
+	// The event row is the fire's own; the turn wrote nothing, and that is allowed.
 	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["Standup moved to nine."],
-		"the reader sees the message once, from the model's own call",
+		transcript.map((item) => item.kind),
+		[],
+		"a routine's timer leaves no row, and a silent hook turn leaves no notice",
 	);
 });
 
-/**
- * The other reader: a turn an event hook started.
- *
- * A fire carries an origin when the sender could name a conversation, and the reply records it: the person is in a chat,
- * and the model never names the chat's own tool. A fire with no origin — a schedule, a retry — records the reply and
- * says nobody was reached. Either way the gate counts the same call, because there is one operation and not two.
- */
-test("a hooked turn answers with send, and the gate counts the call", async () => {
+test("a hook turn that writes a message is not reminded either", async () => {
 	const directory = await temporary();
-	const script = recorder([deliver("Привет!"), said("Done.")]);
+	const script = recorder([said("Привет!")]);
 	await seedRoutine(directory);
-	const { settled, requests, entries, transcript } = await runFired(directory, script);
+	const { settled, transcript, requests } = await runFired(directory, script);
 
 	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 2, "the model's own turn, and nothing added to it");
-	assert.equal(reminded(requests), false, "the reply is the delivery, in a hooked turn as anywhere else");
-	assert.equal(answerTo(entries, "sent").isError, false, "the call was not refused");
-	assert.match(answerTo(entries, "sent").text, /nobody was reached/, "a fire with no conversation says so");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["Привет!"],
-		"the transcript still holds what the turn recorded",
-	);
-});
-
-test("a fire that named its address records the origin, and the reply is the row", async () => {
-	const directory = await temporary();
-	const script = recorder([deliver("Привет!"), said("Done.")]);
-	const telegram = {
-		enabled: true,
-		connector: {
-			user: { owner: "8811" },
-		},
-	};
-	const { setIntegrations } = await import("../src/server/integrations.ts");
-	await seedRoutine(directory);
-	const { settled, entries } = await runTurn(directory, script, [], async (runtime) => {
-		// The operator's configuration, as the boot would have it: the reply can only name a connector that exists.
-		setIntegrations({ telegram: telegram as never });
-		fires += 1;
-		return runtime.hooks.fire("team-chat", {
-			payload: "Привет",
-			requestId: `delivery-gate:routed:${fires}`,
-			origin: { connector: "telegram", ref: "team", messageId: "m1" },
-		});
-	});
-	try {
-		assert.equal(settled.status, "done");
-		const reply = entries.find((entry) => entry.kind === "app.reply");
-		assert.deepEqual((reply?.data as { origin?: unknown }).origin, {
-			connector: "telegram",
-			ref: "team",
-			messageId: "m1",
-		});
-		const hook = entries.find((entry) => entry.kind === "app.hook");
-		assert.deepEqual((hook?.data as { origin?: unknown }).origin, {
-			connector: "telegram",
-			ref: "team",
-			messageId: "m1",
-		});
-	} finally {
-		setIntegrations({});
-	}
-});
-
-test("a hooked turn that says nothing is reminded, and the reminder names send", async () => {
-	const directory = await temporary();
-	const script = recorder([said("I will look into it."), deliver("Привет!"), said("Done.")]);
-	await seedRoutine(directory);
-	const { settled, requests } = await runFired(directory, script);
-
-	assert.equal(settled.status, "done");
-	assert.equal(requests.length, 3, "one reminder, one answer, no more");
-	const reminder = requests[1]?.at(-1) as { role?: string; content?: unknown } | undefined;
-	assert.equal(reminder?.role, "user");
-	assert.equal(reminder?.content, DELIVERY_REMINDER, "the same reminder, because there is the same one tool");
-	assert.match(String(reminder?.content), /`send`/);
-});
-
-test("a local turn still delivers with send while a chat-facing routine exists", async () => {
-	const directory = await temporary();
-	const script = recorder([deliver("Standup moved to nine."), said("Done.")]);
-	const { settled, requests, entries, transcript } = await runScripted(directory, script, "Anything new?");
-
-	assert.equal(settled.status, "done");
-	assert.equal(answerTo(entries, "sent").isError, false, "the local turn's delivery is not refused");
-	assert.equal(answerTo(entries, "sent").text, "delivered to the transcript");
-	assert.equal(requests.length, 2, "no reminder: the transcript is this turn's reader");
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["Standup moved to nine."],
-	);
+	assert.equal(requests.length, 1, "the text is the message, in a fired turn as anywhere else");
+	assert.equal(reminded(requests), false);
+	assert.deepEqual(messages(transcript), ["Привет!"]);
 });
 
 /**
  * The second gate on the same plumbing: a turn of real work ends by keeping what it learned.
  *
  * `beforeRequest` counts the turn's tool rounds and memoizes it, `onYield` continues the run once with the ask. The ask
- * is a `pi.user` entry like the reminder, so the projection drops it and the reader sees only the reply that says what
- * was kept. The guards are the ask's words: this is where the wording is pinned, because wording is what an instruction
- * has, and what code can enforce of it is the tool machine's mount of `agent/` alone (ADR 0013: no gateway, no approval).
+ * is a `pi.user` entry like the reminder, so the projection drops it and the reader sees only the message that says what
+ * was kept.
  */
 test("a turn of ten tool rounds is asked once what to keep, and the reader never sees the question", async () => {
 	const directory = await temporary();
@@ -548,12 +356,11 @@ test("a turn of ten tool rounds is asked once what to keep, and the reader never
 		probed("r7", "the slow step"),
 		probed("r8", "the routine behind it"),
 		probed("r9", "the fix"),
-		deliver("The migration is done, and the release notes are updated."),
-		said("Done."),
-		// The continuation's own turn: the extraction, then the reply that reports it.
+		probed("r10", "the release notes one last time"),
+		said("The migration is done, and the release notes are updated."),
+		// The continuation's own turn: the extraction, then the message that reports it.
 		worked("r11", "Denis moves standups to nine."),
-		deliver("Kept one line about the standup."),
-		said("Done."),
+		said("Kept one line about the standup."),
 	]);
 	const { settled, requests, transcript, entries } = await runScripted(
 		directory,
@@ -572,13 +379,15 @@ test("a turn of ten tool rounds is asked once what to keep, and the reader never
 		transcript.every((item) => (item as { text?: string }).text !== REFLECTION_ASK),
 		"the question is the model's, not the reader's",
 	);
-	// The done-when: the turn ended with a change, and the change is a line in the agent's own file.
 	assert.deepEqual(kept, ["agent/log/2026-11-05.md: Denis moves standups to nine."]);
-	assert.deepEqual(
-		transcript.filter((item) => item.kind === "delivered").map((item) => (item as { text: string }).text),
-		["The migration is done, and the release notes are updated.", "Kept one line about the standup."],
+	assert.deepEqual(messages(transcript), [
+		"The migration is done, and the release notes are updated.",
+		"Kept one line about the standup.",
+	]);
+	assert.ok(
+		entries.some((entry) => entry.kind === "pi.assistant"),
+		"the extraction ran in the turn that did the work",
 	);
-	assert.equal(answerTo(entries, "r11").isError, false, "the extraction ran in the turn that did the work");
 });
 
 test("a turn that fits in three tool rounds is never asked what to keep", async () => {
@@ -588,8 +397,7 @@ test("a turn that fits in three tool rounds is never asked what to keep", async 
 		probed("r1", "the file"),
 		probed("r2", "the count"),
 		probed("r3", "the count again"),
-		deliver("Three items in notes.md."),
-		said("Done."),
+		said("Three items in notes.md."),
 	]);
 	const { settled, requests, transcript } = await runScripted(directory, script, "How many items are in notes.md?", [
 		keeper(kept),
@@ -597,9 +405,9 @@ test("a turn that fits in three tool rounds is never asked what to keep", async 
 
 	assert.equal(settled.status, "done");
 	assert.deepEqual(askRequests(requests), [], "short work is not a turn to look back on");
-	assert.equal(requests.length, 5, "nothing was added to the model's own turn");
+	assert.equal(requests.length, 4, "nothing was added to the model's own turn");
 	assert.deepEqual(kept, [], "and nothing was written for the sake of writing");
-	assert.equal(transcript.filter((item) => item.kind === "delivered").length, 1);
+	assert.deepEqual(messages(transcript), ["Three items in notes.md."]);
 });
 
 /**
@@ -621,12 +429,10 @@ test("a long turn that ends silently is reminded, answers, and is then asked wha
 		probed("r8", "the fix"),
 		probed("r9", "the plan again"),
 		probed("r10", "the copy"),
-		said("The migration is done."),
-		// Reminded, the model says what it meant to say; then the ask arrives, and the extraction ends with a reply.
-		deliver("The migration is done, and the release notes are updated."),
-		said("Done."),
-		deliver("Nothing worth keeping."),
-		said("Done."),
+		silent(),
+		// Reminded, the model says what it meant to say; then the ask arrives, and the extraction ends with a message.
+		said("The migration is done, and the release notes are updated."),
+		said("Nothing worth keeping."),
 	]);
 	const { settled, requests } = await runScripted(directory, script, "Migrate the notes while I am out.", [
 		keeper(kept),
@@ -637,7 +443,7 @@ test("a long turn that ends silently is reminded, answers, and is then asked wha
 	const asked = requests.findIndex((messages) =>
 		messages.some((message) => typeof message.content === "string" && isReflectionAsk(message.content)),
 	);
-	assert.ok(reminded !== -1, "the turn ended once with nothing delivered, so it was reminded");
+	assert.ok(reminded !== -1, "the turn ended once with no message, so it was reminded");
 	assert.ok(asked > reminded, "the ask comes after the answer the reminder produced");
 	assert.equal(askRequests(requests).length, 1, "and the turn is asked once, however many times it ends");
 	assert.deepEqual(kept, [], "the extraction happened, and its honest answer was that there was nothing to write");
@@ -669,32 +475,23 @@ test("the reflection ask carries the guards, and says what to do when nothing wa
 test("a fire that named its conversation keeps its origin through the reflection ask", async () => {
 	const directory = await temporary();
 	const kept: string[] = [];
-	const script = recorder([
-		probed("r1", "the deploy order"),
-		probed("r2", "the release notes"),
-		probed("r3", "the two schemas"),
-		probed("r4", "the rollback path"),
-		probed("r5", "the migration plan"),
-		probed("r6", "the plan on a copy"),
-		probed("r7", "the slow step"),
-		probed("r8", "the routine behind it"),
-		probed("r9", "the fix"),
-		deliver("The migration is done, and the release notes are updated."),
-		said("Done."),
-		// The continuation's own turn: the extraction, then the reply that reports it.
-		worked("r10", "Denis moves standups to nine."),
-		deliver("Kept one line about the standup."),
-		said("Done."),
-	]);
-	const telegram = {
-		enabled: true,
-		connector: {
-			user: { owner: "8811" },
-		},
-	};
+	const probes = (tag: string) => [
+		probed(`${tag}1`, "the deploy order"),
+		probed(`${tag}2`, "the release notes"),
+		probed(`${tag}3`, "the two schemas"),
+		probed(`${tag}4`, "the rollback path"),
+		probed(`${tag}5`, "the migration plan"),
+		probed(`${tag}6`, "the plan on a copy"),
+		probed(`${tag}7`, "the slow step"),
+		probed(`${tag}8`, "the routine behind it"),
+		probed(`${tag}9`, "the fix"),
+		probed(`${tag}10`, "the fix twice"),
+	];
+	const script = recorder([...probes("a"), said("The migration is done."), said("Kept one line about the standup.")]);
+	const telegram = { enabled: true, connector: { user: { owner: "8811" } } };
 	const { setIntegrations } = await import("../src/server/integrations.ts");
 	await seedRoutine(directory);
-	const { settled, entries } = await runTurn(directory, script, [keeper(kept)], async (runtime) => {
+	const { settled, entries, transcript } = await runTurn(directory, script, [keeper(kept)], async (runtime) => {
 		setIntegrations({ telegram: telegram as never });
 		fires += 1;
 		return runtime.hooks.fire("team-chat", {
@@ -706,15 +503,15 @@ test("a fire that named its conversation keeps its origin through the reflection
 	try {
 		assert.equal(settled.status, "done");
 		assert.equal(askRequests(script.requests).length, 1, "the ask landed, so this test sees the real misread");
-		const replies = entries.filter((entry) => entry.kind === "app.reply");
-		assert.ok(replies.length >= 1, "the turn spoke once");
-		// The newest input after the ask is the ask itself, the misread; the reply must still carry its origin.
-		for (const reply of replies) {
-			assert.deepEqual((reply.data as { origin?: unknown }).origin, {
-				connector: "telegram",
-				ref: "team",
-				messageId: "m9",
-			});
+		const hook = entries.find((entry) => entry.kind === "app.hook");
+		assert.deepEqual(
+			(hook?.data as { origin?: unknown }).origin,
+			{ connector: "telegram", ref: "team", messageId: "m9" },
+			"the fire's origin stays on the entry the run started from",
+		);
+		// Every message of the turn names the fire as its run: the ask is a continuation, not a new destination.
+		for (const row of transcript.filter((item) => item.kind === "delivered")) {
+			assert.equal((row as { runId?: string }).runId, String(hook?.id), "the message belongs to the fire's run");
 		}
 	} finally {
 		setIntegrations({});
@@ -722,25 +519,19 @@ test("a fire that named its conversation keeps its origin through the reflection
 });
 
 /**
- * #199's deterministic repro, in two halves of the same rule: a working note written after the person's words and before
- * the answer.
+ * #199's deterministic repro: a working note written after the person's words and before the answer.
  *
- * The newest input is what a turn's origin is read from, and both of these entries carry a `user`-role message, so a read
- * that finds the newest input by its text takes the summary for the person and the send commits unaddressed — the answer
- * is lost with nothing recording it as failed. The predicate refuses the kind instead, and the reply comes back with the
- * origin of the submission it answers.
- *
- * From Step 2 the same turn has a second, client-visible half: the state a client applies carries one reply row for it,
- * under one id. That is the assertion that outlives the delivery removal — the recorded origin says where the answer
- * went, and the row says the reader got it.
+ * Both of these entries carry a `user`-role message, so a read that finds the newest input by its text takes the summary
+ * for the person. The turn's input is `pi.live.run.first` instead — the fire's own entry — and every message the turn
+ * writes names that entry as its run. Neither a compaction nor a system note can become it.
  */
 for (const note of [
 	{ kind: "pi.compaction", text: "Summary so far: the person asked about the migration." },
 	{ kind: "pi.system", text: "The plan this turn was given: migrate the notes." },
 ] as const) {
-	test(`a ${note.kind} entry written before the send keeps the turn's origin`, async () => {
+	test(`a ${note.kind} entry written before the answer cannot become the run's input`, async () => {
 		const directory = await temporary();
-		const script = recorder([call("writeWorkingNote", {}, "note"), deliver("The migration is done."), said("Done.")]);
+		const script = recorder([call("writeWorkingNote", {}, "note"), said("The migration is done.")]);
 		const telegram = { enabled: true, connector: { user: { owner: "8811" } } };
 		const { setIntegrations } = await import("../src/server/integrations.ts");
 		await seedRoutine(directory);
@@ -760,21 +551,27 @@ for (const note of [
 		);
 		try {
 			assert.equal(settled.status, "done");
-			assert.ok(
-				entries.some((entry) => entry.kind === note.kind),
-				"the working note is in the transcript the send reads",
+			const written = entries.find((entry) => entry.kind === note.kind);
+			assert.ok(written !== undefined, "the working note is in the transcript");
+			const hook = entries.find((entry) => entry.kind === "app.hook");
+			assert.equal(
+				isInputEntry(written as EntryRecord),
+				false,
+				"a working note is never an input, whatever its message role says",
 			);
-			const reply = entries.find((entry) => entry.kind === "app.reply");
 			assert.deepEqual(
-				(reply?.data as { origin?: unknown }).origin,
-				{ connector: "telegram", ref: "team", messageId: "m7" },
-				"the answer records the origin of the turn's input, not of the working note written after it",
+				turnOriginOfEntry(hook as EntryRecord),
+				{ kind: "hook", origin: { connector: "telegram", ref: "team", messageId: "m7" } },
+				"the turn's origin is the fire's",
 			);
-			// One message, one row: the id is the one the streaming row carried, so a client that watched the answer
-			// arrive does not get a second row when it commits.
 			const delivered = transcript.filter((row) => row.kind === "delivered");
-			assert.equal(delivered.length, 1, "the reader's state carries exactly one reply row for the turn");
-			assert.deepEqual(delivered[0], { kind: "delivered", id: "reply:sent", text: "The migration is done." });
+			assert.equal(delivered.length, 1, "the reader's state carries exactly one row for the turn");
+			assert.deepEqual(delivered[0], {
+				kind: "delivered",
+				id: "message:1",
+				text: "The migration is done.",
+				runId: String(hook?.id),
+			});
 		} finally {
 			setIntegrations({});
 		}
@@ -792,8 +589,8 @@ test("nine tool rounds is under the ask, in the same turn shape that asks at ten
 		probed("r6", "the plan on a copy"),
 		probed("r7", "the slow step"),
 		probed("r8", "the routine behind it"),
-		deliver("Eight finds, one answer."),
-		said("Done."),
+		probed("r9", "the fix"),
+		said("Nine finds, one answer."),
 	]);
 	const { requests } = await runScripted(directory, script, "Migrate the notes while I am out.");
 	assert.equal(askRequests(requests).length, 0, "nine carried calls is one short of the gate");
@@ -812,20 +609,17 @@ test("a second long turn is asked once more than its first", async () => {
 		probed(`${tag}7`, "the slow step"),
 		probed(`${tag}8`, "the routine behind it"),
 		probed(`${tag}9`, "the fix"),
+		probed(`${tag}10`, "the fix twice"),
 	];
 	const script = recorder([
 		...probes("a"),
-		deliver("The first migration is done."),
-		said("Done."),
+		said("The first migration is done."),
 		// The first ask's continuation, then a new turn the person starts once it landed, with its own ten carried calls.
-		deliver("Kept one line about the first run."),
-		said("Done."),
+		said("Kept one line about the first run."),
 		...probes("b"),
-		deliver("The second migration is done."),
-		said("Done."),
+		said("The second migration is done."),
 		// The second ask's continuation ends the conversation on a settle.
-		deliver("Kept one line about the second run."),
-		said("Done."),
+		said("Kept one line about the second run."),
 	]);
 	// Two separate submits: a single submit's continuation is the same turn and gets no second ask.
 	const { settled, requests } = await runTurn(directory, script, [keeper(kept)], async (runtime) => {
@@ -852,7 +646,7 @@ test("a connector entry is the sender's words, even when they quote a gate's ope
 		model: [{ role: "user" as const, content: REFLECTION_ASK }],
 	} as unknown as EntryRecord;
 	assert.equal(isInputEntry(askViaConnector), true, "their own quoting stays an input");
-	assert.deepEqual(turnOriginOf([askViaConnector]), {
+	assert.deepEqual(turnOriginOfEntry(askViaConnector), {
 		kind: "connector",
 		origin: { connector: "telegram", ref: "team" },
 	});

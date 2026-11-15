@@ -28,7 +28,7 @@ after(async () => {
 
 /** Decision 8's pair: the main turn thinks hard on one model, the child thinks hardest on another. */
 const DECISION: RoleMap = {
-	main: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "high" },
+	main: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "high" },
 	subagent: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" },
 };
 
@@ -99,7 +99,7 @@ test("the boot records both roles, model and thinking together", async () => {
 		assert.deepEqual(runtime.roles, DECISION, "the boot resolved the store's pair, not its own defaults");
 		assert.deepEqual(
 			await recordOf(runtime),
-			{ model: { provider: "opencode-go", modelId: "glm-5.3-flash" }, thinking: "high" },
+			{ model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" }, thinking: "high" },
 			"the person's conversation runs the main role: the model and the level in one record",
 		);
 	} finally {
@@ -112,7 +112,7 @@ test("a level the catalog does not offer is refused, in a sentence naming the on
 	await assert.rejects(
 		() => boot(home),
 		(error: Error) =>
-			/role "main" runs opencode-go\/glm-5\.3-flash at thinking "medium"/.test(error.message) &&
+			/role "main" runs opencode-go\/deepseek-v4\.1-flash at thinking "medium"/.test(error.message) &&
 			/it offers low, high, max/.test(error.message),
 	);
 });
@@ -159,7 +159,7 @@ test("the status line the client receives names both roles, with model and level
 	const runtime = await boot(home);
 	try {
 		const line = statusLine(await runtime.viewSnapshot(BACKGROUND_CONTEXT), [], runtime.roles);
-		assert.match(line, /main opencode-go\/glm-5\.3-flash at high/);
+		assert.match(line, /main opencode-go\/deepseek-v4\.1-flash at high/);
 		assert.match(line, /subagent opencode-go\/deepseek-v4\.1-flash at max/);
 		assert.equal(
 			line,
@@ -187,7 +187,17 @@ test("an install that names no roles runs Decision 8's pair", async () => {
 	);
 	const runtime = await boot({ directory, home });
 	try {
-		assert.deepEqual(runtime.roles, DECISION, "the pair is the default, not a test fixture");
+		assert.deepEqual(
+			runtime.roles,
+			{
+				// The main role is the model the boot resolved — the common default, here — at Decision 8's level; the
+				// child is Decision 8's model at `max`. Naming the main model in the map would run one model while the
+				// boot line named another.
+				main: { provider: "opencode-go", modelId: "glm-5.3-flash", thinking: "high" },
+				subagent: { provider: "opencode-go", modelId: "deepseek-v4.1-flash", thinking: "max" },
+			},
+			"the pair is the default, not a test fixture",
+		);
 		assert.deepEqual(
 			await recordOf(runtime),
 			{

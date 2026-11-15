@@ -71,7 +71,9 @@ const AppendBeforeNoticeCut = union([
 /** The contract a connector deployed before `conversation` existed holds, member for member. */
 function peerBeforeConversation(): RemoteContract {
 	return remote(CONTRACT.peer, {
-		version: PROTOCOL_MAJOR,
+		// The literal, not the constant: this is a consumer frozen at the major it was built against, so bumping
+		// `PROTOCOL_MAJOR` must fail this suite instead of moving the frozen client with the served contract.
+		version: 1,
 		input: MasonPeer.input,
 		host: hostNamed("mason"),
 		variants: {
@@ -101,9 +103,37 @@ test("a connector deployed before the conversation member existed still binds", 
 	assert.doesNotThrow(() => bind(MasonPeer, undefined, deployed));
 });
 
+test("a major bump would refuse the v1 client this contract still serves", () => {
+	// Two halves, and either one fails on a bump. The served major is still 1, which is the number the frozen consumer
+	// above names; and binding is sensitive to it, so a served contract at another major refuses that client rather than
+	// degrading into a link that serves it half a contract.
+	assert.equal(PROTOCOL_MAJOR, 1);
+	const nextMajor = remote(CONTRACT.peer, {
+		version: PROTOCOL_MAJOR + 1,
+		input: MasonPeer.input,
+		host: hostNamed("mason"),
+		variants: {
+			default: {
+				state: { session: SessionSchema },
+				methods: {
+					append: method(AppendSchema, AppendResultSchema),
+					control: method(ControlSchema, ControlResultSchema),
+				},
+			},
+		},
+	});
+	assert.throws(
+		() => bind(nextMajor, undefined, peerBeforeConversation()),
+		(error: unknown) => isChordError(error, "contract_mismatch"),
+		"a client frozen at major 1 does not bind to a served contract at another major",
+	);
+});
+
 test("the retired notice append is refused to a deployed consumer, not silently accepted", () => {
 	const deployed = remote(CONTRACT.peer, {
-		version: PROTOCOL_MAJOR,
+		// The literal, not the constant: this is a consumer frozen at the major it was built against, so bumping
+		// `PROTOCOL_MAJOR` must fail this suite instead of moving the frozen client with the served contract.
+		version: 1,
 		input: MasonPeer.input,
 		host: hostNamed("mason"),
 		variants: {
@@ -143,7 +173,9 @@ test("a member the provider does not offer is refused, not silently accepted", (
 	// The other direction is what makes the test above worth having: a consumer naming something mason does not serve
 	// fails to bind, so a member cannot quietly disappear — or be assumed — behind a green suite.
 	const consumer = remote(CONTRACT.peer, {
-		version: PROTOCOL_MAJOR,
+		// The literal, not the constant: this is a consumer frozen at the major it was built against, so bumping
+		// `PROTOCOL_MAJOR` must fail this suite instead of moving the frozen client with the served contract.
+		version: 1,
 		input: MasonPeer.input,
 		host: hostNamed("mason"),
 		variants: {

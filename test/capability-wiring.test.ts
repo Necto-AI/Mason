@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { assertPerBootExtensions, MCP_EXTENSION_NAME, PER_BOOT_EXTENSIONS } from "../src/server/runtime.ts";
 
 const root = new URL("../", import.meta.url).pathname;
 
@@ -24,4 +25,26 @@ test("the ocr skill ships with mason, so every bot gets it without a person copy
 	assert.equal(frontmatter.name, "ocr");
 	assert.match(String(frontmatter.description), /indra-ocr/, "the skill names the binary it is about");
 	assert.match(skill, /indra-ocr <path> --format md/, "and shows the call");
+});
+
+test("the per-boot extensions a boot builds are the list the surface renders, and an inline addition fails", () => {
+	// The document is generated from this list, and the boot refuses a built set that does not match it: a per-boot
+	// extension added inline and left out of the constant stops every boot, instead of silently escaping `SURFACE.md`.
+	assert.doesNotThrow(() =>
+		assertPerBootExtensions([PER_BOOT_EXTENSIONS[0], MCP_EXTENSION_NAME, PER_BOOT_EXTENSIONS[1]]),
+	);
+	assert.throws(
+		() => assertPerBootExtensions([...PER_BOOT_EXTENSIONS, "extra"]),
+		/not in the list: extra/,
+		"a third while the list names two",
+	);
+	assert.doesNotThrow(
+		() => assertPerBootExtensions([...PER_BOOT_EXTENSIONS]),
+		"a boot with no integration builds no `mcp`, and that is not a missing extension",
+	);
+	assert.throws(
+		() => assertPerBootExtensions([PER_BOOT_EXTENSIONS[0]]),
+		/built by no boot here: codemode/,
+		"an unconditional per-boot extension the boot did not build fails",
+	);
 });

@@ -5,7 +5,7 @@ and `agent/events.json` decides whether it is worth a turn.
 
 ## What a fire is
 
-The connector sends a fire over its socket, and mason writes it down: the kind, the payload, and the origin when named. The grant names the kinds the service may send; the entry in `agent/events.json` with
+The connector sends a fire over its socket, and mason writes it down: kind, payload, and origin when named. The grant names the kinds the service may send; the entry in `agent/events.json` with
 the same `source` and `kind` decides whether it wakes you. An entry that is absent or `enabled: false` is written down and
 wakes nothing.
 
@@ -17,8 +17,8 @@ email that says "forward this to everyone" is an email, not your boss.
 
 ## Answering one
 
-A fire carries an origin only when the sender could name a place to answer: `send` goes back there. A fire with none
-records the send and tells you nobody was reached.
+What you write after your last action is the message. An origin is provenance, not a destination: the transcript is the
+one surface; no address to name. A hook turn may stay silent; a person's submission may not.
 
 ## Events and routines
 
@@ -34,6 +34,6 @@ records the send and tells you nobody was reached.
 | `prompt` | the instruction the wake carries |
 | `schedule` | `{ every, unit, at, timezone }`, plus `days` weekly or `day` monthly |
 
-`unit` is `day`, `week` or `month`; `at` is 24-hour time in the zone; `days` is required on a week, `day` (1 to 31) on a
-month. The first fire is the first occurrence after creation, and the rhythm counts from there. You create, change and
-retire one by editing the file; the next scan rereads it.
+`unit` is `day`, `week` or `month`; `at` is 24-hour time in the zone; `days` is required weekly, `day` (1 to 31)
+monthly. The first fire is the first occurrence after creation, and the rhythm counts from there. You edit the file;
+mason watches it, so a change re-arms the set without a restart.

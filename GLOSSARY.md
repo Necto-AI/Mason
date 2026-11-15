@@ -16,7 +16,7 @@ _Avoid_: agent, instance, assistant (an *agent* in pi's sense is a conversation'
 
 **client**:
 Any app that talks to mason. It opens the one socket at `/api/connector` with the credential minted for its
-integration. Two kinds: user and event clients.
+integration. Two kinds: user and event.
 _Avoid_: connector (that is a code class), peer, integration
 
 **user client**:
@@ -120,7 +120,8 @@ A person's words in a submission.
 _Avoid_: prompt, input
 
 **agent message**:
-The agent's text that a user client renders. At most one per generation. A message from a failed run is marked failed.
+The agent's text that a user client renders, at most one per generation; wire kind `delivered`. A message from a failed
+run is marked failed.
 _Avoid_: reply, response, delivery
 
 **routine**:
@@ -211,7 +212,7 @@ the entry grants.
 _Avoid_: approver, admin, primary user
 
 **origin**:
-Where a submission came from: the client, the source id it minted, and the actor when it named one. Provenance, never a
+Where a submission came from: the client, the source id it minted, and the actor when named. Provenance, never a
 destination.
 _Avoid_: source, channel, session
 

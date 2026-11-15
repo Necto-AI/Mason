@@ -18,6 +18,15 @@ import { deriveRunStatus, isBusy, liveOf } from "./status.ts";
 /** The empty conversation: revision zero, nothing to read, nothing to report. */
 const EMPTY: ConversationState = { revision: 0, transcript: [], queue: [], run: "idle", busy: false, transitions: [] };
 
+/**
+ * The conversation a peer that is not served one starts from.
+ *
+ * An event client is given this and no feed: its `conversation` cell exists because the contract has the member, and it
+ * stays empty because an entry with no `user` grant is not a reader. It is exported rather than rebuilt per boot so the
+ * cell and the read model agree on what "nothing" is.
+ */
+export const EMPTY_CONVERSATION: ConversationState = EMPTY;
+
 export interface ReadModel {
 	/** The last published value: what a peer's state member starts from. */
 	readonly value: ConversationState;

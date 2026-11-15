@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import type { ExecutionTargetManager, ExecutionTargetState } from "../src/server/env.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../src/server/runtime.ts";
 
@@ -94,12 +94,8 @@ describe("execution targets", () => {
 		const directory = await tempDir("target-fork-");
 		const { access, faux } = fauxAccess();
 		faux.setResponses([
-			// The turn answers through `reply`, so it settles `done` instead of ending undelivered.
-			fauxAssistantMessage(
-				[fauxText("Nothing to report."), fauxToolCall("send", { text: "Nothing to report." }, { id: "r" })],
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage(fauxText("Nothing else to report.")),
+			// The answer's text is the message, so the turn settles `done` instead of ending undelivered.
+			fauxAssistantMessage(fauxText("Nothing to report.")),
 		]);
 
 		const runtime = await openFor(directory, access);

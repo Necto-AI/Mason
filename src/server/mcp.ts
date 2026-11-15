@@ -145,6 +145,9 @@ const CLIENT_VERSION = "0.1.0";
  */
 export type McpTransportFactory = (url: string, credential?: string) => McpTransport;
 
+/** The extension's name: the catalog a script reaches, and a per-boot name `docs/SURFACE.md` renders. */
+export const MCP_EXTENSION = "mcp";
+
 /** The four tools the catalog installs, by the names a script calls: the whole of what MCP puts in a registry. */
 export const MCP_TOOL = {
 	search: "mcp_search",
@@ -394,7 +397,10 @@ export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<Mc
 
 	// The four tools carry the catalog, so they are built from the functions above rather than from the object below:
 	// an object that held itself would have to be read before it exists.
-	const extension = defineExtension({ name: "mcp", tools: catalogTools({ search, describe, call, readResource }) });
+	const extension = defineExtension({
+		name: MCP_EXTENSION,
+		tools: catalogTools({ search, describe, call, readResource }),
+	});
 	const surface: Record<string, IntegrationSurface> = {};
 	for (const server of servers.values()) surface[server.name] = server.surface();
 	return {

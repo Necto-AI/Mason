@@ -103,7 +103,7 @@ async function main(): Promise<void> {
 
 		await step("the normative document travels with the protocol package", async () => {
 			const prose = await readFile(join(project, "node_modules", "mason-protocol", "PROTOCOL.md"), "utf8");
-			if (!prose.includes("# The connector contract, v1")) {
+			if (!prose.includes("# The connector contract, major 1")) {
 				throw new Error("the published package does not carry the protocol's prose");
 			}
 		});
