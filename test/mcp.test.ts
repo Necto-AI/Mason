@@ -73,11 +73,11 @@ describe("the registry does not move when a server does", () => {
 			assert.deepEqual(await declared(connected), await declared(bare), "a connected server costs no prefix");
 			assert.deepEqual(await deferred(connected), await deferred(bare), "and nothing to load with tool_search");
 			assert.ok(!(await deferred(connected)).some((name) => name.startsWith("mcp")), "nothing of MCP's to promote");
-			// A script's catalog, though, is the server's: the three tools are callable and never offered.
+			// A script's catalog, though, is the server's: the four tools are callable and never offered.
 			assert.deepEqual(
 				(await callable(connected)).filter((name) => name.startsWith("mcp_")).sort(),
-				[MCP.call, MCP.describe, MCP.search],
-				"the script's whole MCP surface is three stable tools",
+				[MCP.call, MCP.describe, MCP.read, MCP.search],
+				"the script's whole MCP surface is four stable tools",
 			);
 			assert.ok(!(await callable(bare)).some((name) => name.startsWith("mcp")), "no server, no catalog");
 			assert.deepEqual(await catalogNames(connected), ["github/issues.create", "github/issues.search"]);
@@ -160,14 +160,108 @@ describe("a script asks the catalog", () => {
 		}
 	});
 
-	it("reads a tool that said nothing, or said a word mason does not know, as one that needs approval", async () => {
-		const server = await fakeServer([SILENT_TOOL, UNKNOWN_MARKER_TOOL], () => ({ content: [] }));
+	it("refuses an integration whose tools did not declare their effect", async () => {
+		for (const [tool, expected] of [
+			[SILENT_TOOL, /no dev\.mason\/approval marker/],
+			[UNKNOWN_MARKER_TOOL, /unknown "maybe" dev\.mason\/approval marker/],
+		] as const) {
+			const server = await fakeServer([tool], () => ({ content: [] }));
+			const directory = await temporaryDirectory();
+			const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
+			try {
+				assert.equal(await runtime.mcp.describe("github", tool.name), undefined, "the integration lends nothing");
+				assert.deepEqual(await runtime.mcp.search(""), [], "and its catalog is empty");
+				assert.match(integrationStatus().get("github")?.error ?? "", expected);
+			} finally {
+				await runtime.close();
+			}
+		}
+	});
+
+	it("refuses a tool with no description, because a script cannot choose what it cannot read", async () => {
+		const server = await fakeServer([{ ...SEARCH_TOOL, description: "  " }], () => ({ content: [] }));
 		const directory = await temporaryDirectory();
 		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
 		try {
-			// The catalog's answer is the only source of a marker, so the default lives here rather than in a decision table.
-			assert.equal((await runtime.mcp.describe("github", "issues.close"))?.approval, "required", "no marker at all");
-			assert.equal((await runtime.mcp.describe("github", "issues.lock"))?.approval, "required", "an unknown word");
+			assert.deepEqual(await runtime.mcp.search(""), []);
+			assert.match(integrationStatus().get("github")?.error ?? "", /"issues.search" with no description/);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("reads the manifest, the tool count and the markdown docs a server declared", async () => {
+		const manifest = {
+			about: "Issues and pull requests",
+			events: [{ kind: "issue.opened", description: "an issue opened", prompt: "Read the issue." }],
+			docs: ["guide"],
+		};
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [] }), {
+			manifest,
+			resources: [
+				{
+					uri: "mason://docs/guide",
+					name: "guide",
+					title: "The guide",
+					mimeType: "text/markdown",
+					text: "# The guide\nRead this first.",
+				},
+				{
+					uri: "mason://docs/spec",
+					name: "spec",
+					mimeType: "application/pdf",
+				},
+			],
+		});
+		const catalog = await openMcpCatalog({
+			integrations: { github: GITHUB },
+			openTransport: () => server.transport,
+			log: () => {},
+		});
+		try {
+			assert.equal(catalog.surface.github?.toolCount, 1);
+			assert.equal(catalog.surface.github?.manifest?.about, manifest.about);
+			assert.deepEqual(catalog.surface.github?.docs, [
+				{ name: "guide", uri: "mason://docs/guide", title: "The guide" },
+			]);
+			assert.deepEqual(
+				catalog.resources("github").map((doc) => doc.name),
+				["guide"],
+			);
+			const read = await catalog.readResource("github", "guide");
+			assert.equal(read.ok, true);
+			assert.match(read.ok ? read.text : "", /Read this first/);
+			const missing = await catalog.readResource("github", "mason://docs/spec");
+			assert.equal(missing.ok, false, "a resource that is not markdown is not a docs page");
+		} finally {
+			await catalog.close();
+		}
+	});
+
+	it("refuses an invalid manifest, naming the field", async () => {
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [] }), {
+			manifest: { events: [] },
+		});
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
+		try {
+			assert.deepEqual(await runtime.mcp.search(""), [], "the integration lends nothing");
+			assert.match(integrationStatus().get("github")?.error ?? "", /about/);
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it("refuses a manifest whose docs name a page the server does not list", async () => {
+		const server = await fakeServer([SEARCH_TOOL], () => ({ content: [] }), {
+			manifest: { about: "Issues", events: [], docs: ["missing"] },
+			resources: [{ uri: "mason://docs/other", name: "other", mimeType: "text/markdown" }],
+		});
+		const directory = await temporaryDirectory();
+		const runtime = await boot(directory, { integrations: { github: GITHUB }, transport: () => server.transport });
+		try {
+			assert.deepEqual(await runtime.mcp.search(""), []);
+			assert.match(integrationStatus().get("github")?.error ?? "", /names docs "missing"/);
 		} finally {
 			await runtime.close();
 		}
@@ -429,8 +523,8 @@ describe("the boot", () => {
 		});
 		assert.deepEqual(
 			catalog.tools.map((tool) => tool.name),
-			[MCP.search, MCP.describe, MCP.call],
-			"the three tools are registered whatever answered: the surface does not depend on a container",
+			[MCP.search, MCP.describe, MCP.call, MCP.read],
+			"the four tools are registered whatever answered: the surface does not depend on a container",
 		);
 		assert.equal(lines.length, 1, "one line per integration, whatever it took to give up on it");
 		assert.match(lines[0] ?? "", /github/);

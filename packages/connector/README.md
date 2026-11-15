@@ -21,6 +21,8 @@ const connector = createConnector({
 	// The credential travels as `Authorization: Bearer` on the upgrade request. A browser's `WebSocket` cannot set a
 	// header and Node's built-in one cannot either, so a Node connector passes `ws`.
 	link: nodeWebSocketLink(socket),
+	// Optional: the same manifest an MCP server declares, sent in the handshake. Mason seeds its events disabled.
+	integration: { about: "The team chat", events: [{ kind: "chat.message", description: "a message", prompt: "Answer it." }] },
 	store: await openSqliteStore({ path: "/var/lib/mason-telegram/state.db" }),
 	handlers: {
 		async onConversation(state) {

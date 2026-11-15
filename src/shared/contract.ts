@@ -70,10 +70,20 @@ const REFLECTION_ASK_OPENING = /^\[reflection\] That turn took ten tool rounds o
 
 export type HookSummary = {
 	id: string;
+	source: string;
+	kind?: string;
 	name: string;
 	description: string;
 	enabled: boolean;
 	intervalMs?: number;
+	schedule?: {
+		every: number;
+		unit: "day" | "week" | "month";
+		at: string;
+		timezone: string;
+		days?: readonly string[];
+		day?: number;
+	};
 	lastFiredAt?: string;
 	fireCount: number;
 };

@@ -1,143 +1,220 @@
 /**
- * What wakes the bot without a person's input: a routine, an event, and the controls that make the agent speak first.
+ * What wakes the bot without a person's input: a routine, an integration's event, and the controls that make the agent
+ * speak first.
  *
- * A routine is a timer the agent owns, configured in `agent/routines.json` — the agent edits the file with `write`, and
- * a deployment ships none. An event is a connector fire the operator granted, of a kind its grant names; the kind map
- * points at a hook id, so the id a grant names must exist in the file (or be defined in code, the way the run
- * supervisor's retry lifecycle hook is). Runtime state (`lastFiredAt`, `fireCount`, `nextFireAt`) stays in `service/data/`, so
- * the agent's git diff shows only what it chose.
+ * The file is `agent/events.json`, and the agent owns it. One array holds both kinds of wake: an integration event names
+ * the `source` it came from and a `kind`; a routine uses `source: "routine"`, a `name`, and a `schedule`. `enabled`
+ * decides whether a wake happens, and the connector's grant only decides what it may send. That is the split this file
+ * exists for: the operator wires the service in `service/integrations.json`, and the agent decides which of its events
+ * and timers wake it.
  *
- * A fire submits an input whose entry kind is `app.hook`, so clients can tell a proactive trigger from a human message,
- * and the durable run that answers it starts immediately.
+ * A new event a connection declares is appended disabled, with the connector's own prompt and `whenBusy`; an existing
+ * entry is never overwritten. A malformed file is one notice and the last good set stays armed. Runtime state
+ * (`lastFiredAt`, `fireCount`, `nextFireAt`, the schedule's anchor) stays in `service/data/`, so the agent's git diff
+ * shows only what it chose.
  */
 import { randomUUID } from "node:crypto";
-import { type FSWatcher, readFileSync, watch, writeFileSync } from "node:fs";
+import { type FSWatcher, readFileSync, renameSync, watch, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation, Submission } from "@earendil-works/pi-durable";
 import type { Origin } from "mason-protocol";
 import type { HookSummary } from "../shared/contract.ts";
 import { entryFor, whenBusyFor } from "./admission.ts";
+import { nextFireAt, parseSchedule, type Schedule } from "./schedule.ts";
 import { fenceUntrusted } from "./untrusted.ts";
 
 export interface EventHookConfig {
 	id: string;
+	/** The integration name, or `"routine"` for the agent's own timer; `code` for a lifecycle hook. */
+	source?: string;
+	/** An integration event's kind; absent on a routine. */
+	kind?: string;
 	name: string;
 	description: string;
 	enabled: boolean;
-	/**
-	 * When set, the definition fires on a schedule, one fire per interval slot (`scheduledRequestId()`): a one-minute
-	 * interval has a slot that long, and re-arming cannot double-fire inside it.
-	 */
+	/** A code-defined lifecycle hook's interval. File-owned wakes use `schedule` instead. */
 	intervalMs?: number;
-	/**
-	 * What an event does to a turn already running: `steer` interrupts it, `followUp` queues behind it. It is the
-	 * routine's own choice, read from `agent/routines.json`, because it decides how a particular wake treats a
-	 * particular turn — a page that must be seen now, a log summary that can wait.
-	 */
+	/** A routine's wall clock. */
+	schedule?: Schedule;
+	/** What an event does to a turn already running: `steer` interrupts it, `followUp` queues behind it. */
 	whenBusy?: "steer" | "followUp";
 	promptTemplate: string;
 	lastFiredAt?: string;
 	fireCount: number;
 }
 
-/**
- * One routine as `agent/routines.json` carries it: a name, the prompt a wake sends, and how it behaves.
- *
- * `intervalSeconds` is optional on purpose. A routine with one is a timer; a routine without one is only ever woken by
- * an event whose kind the operator's grant maps to it, and a timer nothing asked for is not a default worth making.
- */
-export interface RoutineConfig {
-	name: string;
-	intervalSeconds?: number;
-	prompt: string;
-	/** `steer` or `followUp` against a running turn. Absent is `followUp`: a wake waits its turn unless it says otherwise. */
-	whenBusy?: "steer" | "followUp";
-	/** Absent is `true`. A switched-off routine keeps its grant mapping and stops waking the bot. */
-	enabled?: boolean;
+/** One entry of `agent/events.json`, before it is armed. */
+export interface EventConfig {
+	readonly source: string;
+	readonly kind?: string;
+	readonly name?: string;
+	readonly enabled: boolean;
+	readonly whenBusy: "steer" | "followUp";
+	readonly prompt: string;
+	readonly schedule?: Schedule;
 }
 
-/** The id the run supervisor's retry lifecycle hook occupies (`RETRY_HOOK_ID` in `run-retry.ts`); the file cannot take it. */
+/** The id a routine and an integration event each occupy: a routine's name, or `source:kind`. */
+export function eventHookId(source: string, kind: string): string {
+	return `${source}:${kind}`;
+}
+
+/** The id a file entry occupies, whichever half of the file it is. */
+export function hookIdOf(event: EventConfig): string {
+	return event.source === "routine" ? (event.name as string) : eventHookId(event.source, event.kind as string);
+}
+
+/** The id the run supervisor's retry lifecycle hook occupies (`RETRY_HOOK_ID` in `run-retry.ts`). */
 export const RESERVED_ROUTINE_ID: ReadonlySet<string> = new Set(["retry-failed-run"]);
 
 /**
- * Validate one routines file before a word of it arms anything. Names must be the ids a connector's kind map names,
- * so the file and an integration's grant cannot drift apart by an uppercase letter.
+ * Validate the whole file before a word of it arms anything. A source is an integration name or `routine`; a routine
+ * names itself and carries a schedule, an integration event names a kind and never carries one.
  */
-export function parseRoutines(text: string): RoutineConfig[] {
+export function parseEvents(text: string): EventConfig[] {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
 	} catch (error: unknown) {
 		throw new Error(`is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
 	}
-	if (!Array.isArray(parsed)) throw new Error("is not an array of routines");
+	if (!Array.isArray(parsed)) throw new Error("is not an array of events and routines");
 	const seen = new Set<string>();
 	return parsed.map((entry) => {
 		if (typeof entry !== "object" || entry === null) throw new Error("has an entry that is not an object");
-		const routine = entry as Record<string, unknown>;
-		if (typeof routine.name !== "string" || /^[a-z0-9-]+$/.test(routine.name) === false) {
-			throw new Error(`has a name that is not [a-z0-9-]: ${JSON.stringify(routine.name)}`);
+		const event = entry as Record<string, unknown>;
+		if (typeof event.source !== "string" || event.source === "") {
+			throw new Error('has an entry with no "source": an integration name, or "routine"');
 		}
-		if (seen.has(routine.name)) throw new Error(`names "${routine.name}" twice`);
-		if (RESERVED_ROUTINE_ID.has(routine.name)) {
-			throw new Error(`"${routine.name}" is kept for the run supervisor's retry lifecycle hook`);
+		if (event.source !== "routine" && /^[a-z0-9][a-z0-9-]*$/.test(event.source) === false) {
+			throw new Error(`has a source that is not an integration name: ${JSON.stringify(event.source)}`);
 		}
-		seen.add(routine.name);
-		// A routine without an interval is woken by an event and only by an event: no timer, and nothing to validate.
-		if (
-			routine.intervalSeconds !== undefined &&
-			(typeof routine.intervalSeconds !== "number" ||
-				!Number.isInteger(routine.intervalSeconds) ||
-				routine.intervalSeconds < 30)
-		) {
-			throw new Error(`"${routine.name}" has an intervalSeconds that is not an integer of at least 30`);
+		if (typeof event.prompt !== "string" || event.prompt.trim() === "") {
+			throw new Error(`"${event.source}" has an empty prompt`);
 		}
-		if (typeof routine.prompt !== "string" || routine.prompt === "") {
-			throw new Error(`"${routine.name}" has an empty prompt`);
-		}
-		const whenBusy = routine.whenBusy;
+		const whenBusy = event.whenBusy;
 		if (whenBusy !== undefined && whenBusy !== "steer" && whenBusy !== "followUp") {
-			throw new Error(`"${routine.name}" has a whenBusy that is not "steer" or "followUp"`);
+			throw new Error(`"${event.source}" has a whenBusy that is not "steer" or "followUp"`);
 		}
-		if (routine.enabled !== undefined && typeof routine.enabled !== "boolean") {
-			throw new Error(`"${routine.name}" has an "enabled" that is not true or false`);
+		if (event.enabled !== undefined && typeof event.enabled !== "boolean") {
+			throw new Error(`"${event.source}" has an "enabled" that is not true or false`);
 		}
+		if (event.source === "routine") {
+			if (typeof event.name !== "string" || /^[a-z0-9-]+$/.test(event.name) === false) {
+				throw new Error(`has a routine name that is not [a-z0-9-]: ${JSON.stringify(event.name)}`);
+			}
+			if (seen.has(event.name)) throw new Error(`names "${event.name}" twice`);
+			if (RESERVED_ROUTINE_ID.has(event.name)) {
+				throw new Error(`"${event.name}" is kept for the run supervisor's retry lifecycle hook`);
+			}
+			seen.add(event.name);
+			if (event.kind !== undefined) throw new Error(`"${event.name}" is a routine and cannot carry a kind`);
+			if (event.schedule === undefined) throw new Error(`"${event.name}" is a routine with no schedule`);
+			const schedule = parseSchedule(event.schedule, `"${event.name}"`);
+			return {
+				source: "routine",
+				name: event.name,
+				enabled: event.enabled === true,
+				whenBusy: whenBusy ?? "followUp",
+				prompt: event.prompt,
+				schedule,
+			};
+		}
+		if (typeof event.kind !== "string" || event.kind.trim() === "") {
+			throw new Error(`"${event.source}" has an event with no kind`);
+		}
+		if (event.name !== undefined)
+			throw new Error(`"${event.source}:${event.kind}" is an event and cannot carry a name`);
+		if (event.schedule !== undefined) {
+			throw new Error(`"${event.source}:${event.kind}" is an integration event; a schedule belongs on a routine`);
+		}
+		const id = eventHookId(event.source, event.kind);
+		if (seen.has(id)) throw new Error(`names "${id}" twice`);
+		seen.add(id);
 		return {
-			name: routine.name,
-			...(routine.intervalSeconds === undefined ? {} : { intervalSeconds: routine.intervalSeconds }),
-			prompt: routine.prompt,
-			...(whenBusy === undefined ? {} : { whenBusy }),
-			...(routine.enabled === undefined ? {} : { enabled: routine.enabled }),
+			source: event.source,
+			kind: event.kind.trim(),
+			enabled: event.enabled === true,
+			whenBusy: whenBusy ?? "followUp",
+			prompt: event.prompt,
 		};
 	});
 }
 
+/** What a connector declares for one event: enough to append a disabled entry an agent can turn on. */
+export interface EventDefault {
+	readonly source: string;
+	readonly kind: string;
+	readonly description?: string;
+	readonly prompt: string;
+	readonly whenBusy?: "steer" | "followUp";
+}
+
 /**
- * Apply one file's routines. An absent file is the shipped default: a deployment starts with none. Any other read
- * problem (bad JSON, a validation failure, an unreadable file) comes back as `problem` with the caller's path absent
- * from it, and the manager keeps the last good set armed and reports it once.
+ * Append every default the file does not already hold, disabled. Existing entries win, so an agent that changed a prompt
+ * or switched an event on keeps that choice across a connector's redeploy and across a restart.
+ *
+ * Returns whether anything changed. A malformed file is left exactly as it is and reported by the caller: seeding it
+ * would overwrite the agent's edit with a guess.
  */
-function readRoutinesFile(path: string): { routines: RoutineConfig[]; problem: Error | undefined } {
+export function seedEventsFile(path: string, defaults: readonly EventDefault[]): boolean {
+	const read = readEventsFile(path);
+	if (read.problem !== undefined) return false;
+	const events = [...read.events];
+	const held = new Set(events.map((event) => hookIdOf(event)));
+	let changed = false;
+	for (const entry of [...defaults].sort((left, right) =>
+		eventHookId(left.source, left.kind).localeCompare(eventHookId(right.source, right.kind)),
+	)) {
+		const id = eventHookId(entry.source, entry.kind);
+		if (held.has(id)) continue;
+		events.push({
+			source: entry.source,
+			kind: entry.kind,
+			enabled: false,
+			whenBusy: entry.whenBusy ?? "followUp",
+			prompt: entry.prompt,
+		});
+		held.add(id);
+		changed = true;
+	}
+	if (changed) writeEventsFile(path, events);
+	return changed;
+}
+
+/** Replace the file atomically, private, through a rename: a half-written event list is a boot that loses a wake. */
+export function writeEventsFile(path: string, events: readonly EventConfig[]): void {
+	const text = `${JSON.stringify(events, null, "\t")}\n`;
+	const temporary = `${path}.tmp`;
+	writeFileSync(temporary, text, { encoding: "utf8", mode: 0o600 });
+	renameSync(temporary, path);
+}
+
+/**
+ * Apply one file's events. An absent file is the shipped default: a deployment starts with none. Any other read problem
+ * comes back as `problem` with the caller's path absent from it, and the manager keeps the last good set armed.
+ */
+function readEventsFile(path: string): { events: EventConfig[]; problem: Error | undefined } {
 	let text: string;
 	try {
 		text = readFileSync(path, "utf8");
 	} catch (error: unknown) {
-		if ((error as { code?: string }).code === "ENOENT") return { routines: [], problem: undefined };
-		return { routines: [], problem: new Error(`cannot be read (${error instanceof Error ? error.message : error})`) };
+		if ((error as { code?: string }).code === "ENOENT") return { events: [], problem: undefined };
+		return { events: [], problem: new Error(`cannot be read (${error instanceof Error ? error.message : error})`) };
 	}
 	try {
-		return { routines: parseRoutines(text), problem: undefined };
+		return { events: parseEvents(text), problem: undefined };
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { routines: [], problem: new Error(`is malformed: ${message}`) };
+		return { events: [], problem: new Error(`is malformed: ${message}`) };
 	}
 }
 
 /** What is persisted between restarts, in `service/data/`; the rest of a hook's definition lives in the file or code. */
 type PersistedHookState = Record<
 	string,
-	{ enabled?: boolean; lastFiredAt?: string; fireCount?: number; nextFireAt?: string }
+	{ enabled?: boolean; lastFiredAt?: string; fireCount?: number; nextFireAt?: string; anchor?: string }
 >;
 
 /**
@@ -146,36 +223,24 @@ type PersistedHookState = Record<
  *
  * The key belongs to the caller, because only the caller knows what "the same event" means:
  * - a sender that names its delivery, through `explicitRequestId()`: exact, and permanent;
- * - a schedule, through `scheduledRequestId()`: one fire per interval slot, so re-arming cannot double-fire;
+ * - a schedule, through `scheduledRequestId()`: one fire per wall-clock slot, so re-arming cannot double-fire;
  * - a gesture — the run supervisor, or a caller naming no delivery — passes none: an act is an intent, so two
  *   clicks are two fires, and `fire()` gives each one via `gestureRequestId()`.
- *
- * A fire that names its delivery collapses on the first tier, however late it repeats; a gesture is never collapsed,
- * because two presses are two intents. There is no body-identified tier: a sender that cannot name what it sent has no
- * way in.
  */
 export interface FireOptions {
 	readonly payload?: string;
 	readonly requestId?: string;
 	/**
 	 * What happened, as the sender named it (`issue.opened`, `push`): a label for the log and the prompt, never a dispatch
-	 * key — one trigger fires one definition, and nothing here decides anything from it. When it is present the wake is an
-	 * event and the marker says so; its absence is the routine's own timer, and the marker says that instead.
+	 * key. When it is present the wake is an event and the marker says so; its absence is the routine's own timer.
 	 */
 	readonly kind?: string;
-	/**
-	 * Where the event came from, when the sender could name an address. It is what a send targets: an event that carries
-	 * an origin is one whose answer has a reader, and one that does not is recorded with nobody reached.
-	 */
+	/** Where the event came from, when the sender could name an address. */
 	readonly origin?: Origin;
 }
 
 /**
  * What every fired hook's input opens with, so the turn it starts is recognisable from the text alone.
- *
- * The model sees it — a proactive turn has to read as one — and so does a reader with only the conversation's messages
- * to go on. Routing is not this text's: `send` reads the input's kind and origin, and an `app.hook` without one is a
- * hook's turn.
  */
 export function routineMarker(name: string): string {
 	return `[ROUTINE: ${name}]`;
@@ -190,12 +255,12 @@ export interface HooksManagerOptions {
 	/** Resolves the root conversation a hook submits to. */
 	conversation(): Promise<Conversation>;
 	/**
-	 * Where `enabled` / `lastFiredAt` / `fireCount` / `nextFireAt` survive a restart
+	 * Where `enabled` / `lastFiredAt` / `fireCount` / `nextFireAt` / `anchor` survive a restart
 	 * (`service/data/routines-state.json`). Absent in tests that keep everything in memory.
 	 */
 	statePath?: string;
-	/** The file the agent owns: `agent/routines.json`. Read at boot, re-read when it changes. */
-	routinesPath?: string;
+	/** The file the agent owns: `agent/events.json`. Read at boot, re-read when it changes. */
+	eventsPath?: string;
 	now?(): Date;
 	onReport?(error: unknown): void;
 }
@@ -209,8 +274,8 @@ export class UnknownHookError extends Error {
 
 export class HooksManager {
 	readonly #hooks = new Map<string, EventHookConfig>();
-	/** Ids that came from the agent's routines file; a re-read may remove only these. */
-	readonly #routines = new Set<string>();
+	/** Ids that came from the agent's events file; a re-read may remove only these. */
+	readonly #fileHooks = new Set<string>();
 	readonly #timers = new Map<string, NodeJS.Timeout>();
 	readonly #options: HooksManagerOptions;
 	readonly #now: () => Date;
@@ -224,81 +289,101 @@ export class HooksManager {
 		this.#options = options;
 		this.#now = options.now ?? (() => new Date());
 		this.#state = this.#readState();
-		this.#loadRoutines();
+		this.#loadEvents();
 	}
 
 	/**
-	 * Read `agent/routines.json` once: the routines it holds become armed hooks, a malformed file reports one notice and
-	 * leaves whatever is armed armed, and an absent file means none. Boot must know the routines before the connector
-	 * grants are checked, because a grant names a hook id that has to exist.
+	 * Read `agent/events.json` once: the events it holds become armed hooks, a malformed file reports one notice and
+	 * leaves whatever is armed armed, and an absent file means none.
 	 */
-	#loadRoutines(): void {
-		const path = this.#options.routinesPath;
+	#loadEvents(): void {
+		const path = this.#options.eventsPath;
 		if (path === undefined) return;
-		const read = readRoutinesFile(path);
+		const read = readEventsFile(path);
 		if (read.problem !== undefined) {
 			this.#reportProblem(new Error(`${path} ${read.problem.message}`));
 			return;
 		}
-		this.setRoutines(read.routines);
+		this.setEvents(read.events);
 	}
 
 	/**
-	 * Replace the file's routines with this set: removed names are disarmed, new ones fire after their interval, and a
-	 * changed interval or prompt resets the timer — its persisted slot belonged to the routine it fired. Anything the
-	 * re-read did not touch keeps its arm and its persisted `nextFireAt`.
+	 * Replace the file's events with this set: removed ids are disarmed, new ones arm, and a changed prompt, kind,
+	 * whenBusy or schedule resets the timer — its persisted slot belonged to the definition it fired.
 	 */
-	setRoutines(routines: readonly RoutineConfig[]): void {
-		const next = new Map(routines.map((routine) => [routine.name, routine]));
-		for (const id of this.#routines) {
+	setEvents(events: readonly EventConfig[]): void {
+		const next = new Map(events.map((event) => [hookIdOf(event), event]));
+		for (const id of this.#fileHooks) {
 			if (next.has(id)) continue;
-			this.#routines.delete(id);
+			this.#fileHooks.delete(id);
 			this.#disarm(id);
 			this.#hooks.delete(id);
 		}
-		for (const routine of routines) {
-			const intervalMs = routine.intervalSeconds === undefined ? undefined : routine.intervalSeconds * 1_000;
-			const current = this.#hooks.get(routine.name);
-			// A definition this manager already held is the only one a re-read can reset: on the first load the persisted
-			// slot came from the previous process's schedule, and there is nothing to compare it against — the boot scan
-			// inherits it as the schedule was written.
+		for (const event of events) {
+			const id = hookIdOf(event);
+			const current = this.#hooks.get(id);
 			const changed =
-				current !== undefined && (current.intervalMs !== intervalMs || current.promptTemplate !== routine.prompt);
-			let state = this.#state[routine.name];
+				current !== undefined &&
+				(current.promptTemplate !== event.prompt ||
+					current.whenBusy !== event.whenBusy ||
+					!sameSchedule(current.schedule, event.schedule));
+			let state = this.#state[id];
 			if (state === undefined) {
 				state = {};
-				this.#state[routine.name] = state;
+				this.#state[id] = state;
 			}
 			if (changed) delete state.nextFireAt;
-			this.#hooks.set(routine.name, {
-				id: routine.name,
-				name: routine.name,
+			if (event.schedule !== undefined && event.enabled && state.anchor === undefined) {
+				state.anchor = this.#now().toISOString();
+			}
+			this.#hooks.set(id, {
+				id,
+				source: event.source,
+				...(event.kind === undefined ? {} : { kind: event.kind }),
+				name: event.source === "routine" ? (event.name as string) : (event.kind as string),
 				description: "",
-				// `enabled` and `whenBusy` are the file's, not the persisted state's: the agent edits one file and every
-				// part of a routine's behaviour is in it.
-				enabled: routine.enabled ?? true,
-				...(intervalMs === undefined ? {} : { intervalMs }),
-				...(routine.whenBusy === undefined ? {} : { whenBusy: routine.whenBusy }),
-				promptTemplate: routine.prompt,
+				enabled: event.enabled,
+				...(event.schedule === undefined ? {} : { schedule: event.schedule }),
+				whenBusy: event.whenBusy,
+				promptTemplate: event.prompt,
 				...(state.lastFiredAt === undefined ? {} : { lastFiredAt: state.lastFiredAt }),
 				fireCount: state.fireCount ?? current?.fireCount ?? 0,
 			});
-			this.#routines.add(routine.name);
+			this.#fileHooks.add(id);
 		}
-		for (const routine of routines) this.#arm(routine.name);
+		for (const event of events) this.#arm(hookIdOf(event));
 		this.#writeState();
 	}
 
+	/**
+	 * Append one connection's declared defaults, disabled, and re-read the file. Called at boot for an MCP manifest and
+	 * when a connector hands its own manifest over the handshake.
+	 */
+	seed(source: string, defaults: readonly Omit<EventDefault, "source">[]): void {
+		const path = this.#options.eventsPath;
+		if (path === undefined) return;
+		seedEventsFile(
+			path,
+			defaults.map((entry) => ({ source, ...entry })),
+		);
+		this.#loadEvents();
+	}
+
 	/** Registers (or replaces) a lifecycle hook definition from code; persisted runtime state is kept. */
-	define(config: Omit<EventHookConfig, "fireCount"> & { fireCount?: number }): EventHookConfig {
+	define(
+		config: Omit<EventHookConfig, "fireCount" | "source" | "whenBusy"> & {
+			readonly source?: string;
+			readonly whenBusy?: "steer" | "followUp";
+			readonly fireCount?: number;
+		},
+	): EventHookConfig {
 		const previous = this.#hooks.get(config.id);
 		const state = this.#state[config.id];
-		// `enabled` is never taken from the file: the routines file names only routines, and a hook defined where it
-		// fires describes itself.
-		const existing = this.#routines.has(config.id);
-		if (existing) throw new Error(`"${config.id}" is a routine the agent owns: code does not define it again`);
+		const existing = this.#fileHooks.has(config.id);
+		if (existing) throw new Error(`"${config.id}" is an event the agent owns: code does not define it again`);
 		const hook: EventHookConfig = {
 			...config,
+			source: config.source ?? "code",
 			enabled: state?.enabled ?? config.enabled,
 			fireCount: config.fireCount ?? state?.fireCount ?? previous?.fireCount ?? 0,
 			...((config.lastFiredAt ?? state?.lastFiredAt ?? previous?.lastFiredAt) === undefined
@@ -314,31 +399,30 @@ export class HooksManager {
 		return this.#hooks.get(id);
 	}
 
+	/** The event a connector named, when this home has an entry for it, enabled or not. */
+	event(source: string, kind: string): EventHookConfig | undefined {
+		return this.#hooks.get(eventHookId(source, kind));
+	}
+
 	list(): HookSummary[] {
 		return [...this.#hooks.values()].map((hook) => ({
 			id: hook.id,
+			source: hook.source ?? "code",
+			...(hook.kind === undefined ? {} : { kind: hook.kind }),
 			name: hook.name,
 			description: hook.description,
 			enabled: hook.enabled,
 			fireCount: hook.fireCount,
 			...(hook.intervalMs === undefined ? {} : { intervalMs: hook.intervalMs }),
+			...(hook.schedule === undefined ? {} : { schedule: hook.schedule }),
 			...(hook.lastFiredAt === undefined ? {} : { lastFiredAt: hook.lastFiredAt }),
 		}));
 	}
 
-	/** Arms every hook it knows and starts watching the routines file; safe to call once at startup. */
+	/** Arms every hook it knows and starts watching the events file; safe to call once at startup. */
 	start(): void {
-		for (const id of this.#routines) this.#arm(id);
-		this.#watchRoutinesFile();
-	}
-
-	setEnabled(id: string, enabled: boolean): EventHookConfig {
-		const hook = this.#require(id);
-		hook.enabled = enabled;
-		if (enabled) this.#arm(id);
-		else this.#disarm(id);
-		this.#writeState();
-		return hook;
+		for (const id of this.#fileHooks) this.#arm(id);
+		this.#watchEventsFile();
 	}
 
 	has(id: string): boolean {
@@ -347,8 +431,6 @@ export class HooksManager {
 
 	/**
 	 * Fires a hook now: the promise settles once the submission is durably admitted, not when the answer arrives.
-	 * `options.requestId` is the fire's identity (see `FireOptions`); without one this is a gesture and every call is
-	 * a fire of its own. A fire that a known key collapses still counts in `fireCount`: the hook was asked to fire.
 	 */
 	async fire(id: string, options: FireOptions = {}): Promise<Submission> {
 		if (this.#closed) throw new Error("Hooks manager is closed");
@@ -407,17 +489,35 @@ export class HooksManager {
 
 	#arm(id: string): void {
 		const hook = this.#hooks.get(id);
-		const intervalMs = hook?.intervalMs;
-		// `enabled` is the single gate: a disabled hook is never armed, whatever calls this.
-		if (hook === undefined || intervalMs === undefined || !hook.enabled || this.#closed) return;
+		if (hook === undefined || !hook.enabled || this.#closed) return;
 		this.#disarm(id);
 		let state = this.#state[id];
 		if (state === undefined) {
 			state = {};
 			this.#state[id] = state;
 		}
-		// The boot scan: the schedule was written when the slot was, so a restart waits the remainder instead of arming a
-		// fresh full interval, and a slot already past due fires once from its own slot key — never once per missed slot.
+		if (hook.schedule !== undefined) {
+			const anchor = state.anchor === undefined ? this.#now() : new Date(state.anchor);
+			state.anchor = anchor.toISOString();
+			if (state.nextFireAt === undefined) {
+				state.nextFireAt = nextFireAt(hook.schedule, this.#now(), anchor).toISOString();
+				this.#writeState();
+			}
+			const dueMs = Date.parse(state.nextFireAt);
+			const waitMs = dueMs - this.#now().getTime();
+			if (waitMs <= 0) {
+				void this.#catchUp(hook, dueMs);
+				return;
+			}
+			const timer = setTimeout(() => void this.#due(hook, dueMs), waitMs);
+			timer.unref();
+			this.#timers.set(id, timer);
+			return;
+		}
+		const intervalMs = hook.intervalMs;
+		if (intervalMs === undefined) return;
+		// A code-defined interval hook keeps the wall-clock slot it was written with: a restart waits the remainder instead
+		// of arming a fresh full interval, and a slot already past due fires once from its own slot key.
 		if (state.nextFireAt === undefined) {
 			state.nextFireAt = new Date(this.#now().getTime() + intervalMs).toISOString();
 			this.#writeState();
@@ -425,56 +525,56 @@ export class HooksManager {
 		const dueMs = Date.parse(state.nextFireAt);
 		const waitMs = dueMs - this.#now().getTime();
 		if (waitMs <= 0) {
-			void this.#catchUp(hook, intervalMs, dueMs);
+			void this.#catchUp(hook, dueMs);
 			return;
 		}
-		const timer = setTimeout(() => void this.#due(hook, intervalMs, dueMs), waitMs);
-		// A pending timer never keeps the process alive; a durable agent is stopped explicitly.
+		const timer = setTimeout(() => void this.#due(hook, dueMs), waitMs);
 		timer.unref();
 		this.#timers.set(id, timer);
 	}
 
 	/** The slot is due now: one fire, then the next slot is written at once, so a timeout never stacks. */
-	async #due(hook: EventHookConfig, intervalMs: number, dueMs: number): Promise<void> {
-		// The slot is written before it is submitted: a fire that cannot be admitted was still scheduled, and the
-		// rhythm survives the next restart instead of an error silencing the routine for good. The identity is the
-		// slot that fired, not the moment the fire went out, so a slow hand of the clock cannot rename it.
-		this.#advance(hook.id, intervalMs, dueMs);
+	async #due(hook: EventHookConfig, dueMs: number): Promise<void> {
+		this.#advance(hook, dueMs);
 		try {
-			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs) });
+			await this.fire(hook.id, { requestId: scheduledRequestId(hook.id, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
 	}
 
 	/** A slot the process did not keep: one catch-up fire from the missed slot's own key, then skip the rest. */
-	async #catchUp(hook: EventHookConfig, intervalMs: number, dueMs: number): Promise<void> {
-		// Skipped through before the submission, the same order `#due` keeps: a re-arm that walks in while the catch-up
-		// awaits then finds the schedule resumed in the future, so the delayed fire is the only one the slot gets.
-		this.#advance(hook.id, intervalMs, dueMs);
+	async #catchUp(hook: EventHookConfig, dueMs: number): Promise<void> {
+		this.#advance(hook, dueMs);
 		try {
-			// The slot the key names is the one `#advance` just wrote (`dueMs`), which a second catch-up of the same
-			// delayed slot then deduplicates by: the advance precedes every fire, so `dueMs` is always fresh, while
-			// `dueMs - 1` aliaes the previous slot's already-consumed key when the schedule sits on a slot boundary.
-			await this.fire(hook.id, { requestId: scheduledRequestId({ id: hook.id, intervalMs }, dueMs) });
+			await this.fire(hook.id, { requestId: scheduledRequestId(hook.id, dueMs) });
 		} catch (error: unknown) {
 			this.#report(error);
 		}
 	}
 
-	/** Writes the next due slot and arms the timer for it: the rhythm is `dueMs + interval`, skipped past the present. */
-	#advance(id: string, intervalMs: number, dueMs: number): void {
+	/** Writes the next due slot and arms the timer for it: a schedule counts from its anchor, an interval from its slot. */
+	#advance(hook: EventHookConfig, dueMs: number): void {
 		if (this.#closed) return;
-		const state = this.#state[id];
+		const state = this.#state[hook.id];
 		if (state === undefined) return;
-		// The slot that fired is spent; the next one is the first slot boundary strictly beyond the present. When the
-		// present sits exactly on a boundary the downtime of a downtime cannot fire twice from it, so the arithmetic
-		// counts it as spent and recovers beyond it — a restart's gap is skipped, never queued as a stampede.
-		const elapsedSlots = Math.max(Math.floor((this.#now().getTime() - dueMs) / intervalMs), 0);
-		const nextMs = dueMs + (elapsedSlots + 1) * intervalMs;
-		state.nextFireAt = new Date(nextMs).toISOString();
+		if (hook.schedule !== undefined) {
+			const anchor = state.anchor === undefined ? new Date(dueMs) : new Date(state.anchor);
+			// The slot that fired is spent. Starting the search at the present skips a downtime's missed slots instead of
+			// queueing them as a stampede.
+			state.nextFireAt = nextFireAt(
+				hook.schedule,
+				new Date(Math.max(dueMs, this.#now().getTime())),
+				anchor,
+			).toISOString();
+		} else {
+			const intervalMs = hook.intervalMs;
+			if (intervalMs === undefined) return;
+			const elapsedSlots = Math.max(Math.floor((this.#now().getTime() - dueMs) / intervalMs), 0);
+			state.nextFireAt = new Date(dueMs + (elapsedSlots + 1) * intervalMs).toISOString();
+		}
 		this.#writeState();
-		this.#arm(id);
+		this.#arm(hook.id);
 	}
 
 	#disarm(id: string): void {
@@ -498,30 +598,28 @@ export class HooksManager {
 	}
 
 	/** Watch the directory the file lives in (an edit may replace it), and re-read it debounced. */
-	#watchRoutinesFile(): void {
-		if (this.#closed || this.#options.routinesPath === undefined || this.#watcher !== undefined) return;
-		const directory = dirname(this.#options.routinesPath);
+	#watchEventsFile(): void {
+		if (this.#closed || this.#options.eventsPath === undefined || this.#watcher !== undefined) return;
+		const directory = dirname(this.#options.eventsPath);
 		try {
 			this.#watcher = watch(directory, { persistent: false }, () => {
 				if (this.#closed) return;
-				// Any write to the agent's root may leave the file replaced; the re-read decides. Other writes (the
-				// profile, the log) are an idempotent no-op this pass.
 				if (this.#watchDebounce !== undefined) clearTimeout(this.#watchDebounce);
 				this.#watchDebounce = setTimeout(() => {
 					this.#watchDebounce = undefined;
 					if (this.#closed) return;
-					const read = readRoutinesFile(this.#options.routinesPath as string);
+					const read = readEventsFile(this.#options.eventsPath as string);
 					if (read.problem !== undefined) {
-						this.#reportProblem(new Error(`${this.#options.routinesPath} ${read.problem.message}`));
+						this.#reportProblem(new Error(`${this.#options.eventsPath} ${read.problem.message}`));
 						return;
 					}
 					this.#reportedProblem = undefined;
-					this.setRoutines(read.routines);
+					this.setEvents(read.events);
 				}, 100);
 			});
 		} catch (error: unknown) {
 			this.#report(
-				new Error(`agent/routines.json cannot be watched (${error instanceof Error ? error.message : error})`),
+				new Error(`agent/events.json cannot be watched (${error instanceof Error ? error.message : error})`),
 			);
 		}
 	}
@@ -547,8 +645,8 @@ export class HooksManager {
 			for (const hook of this.#hooks.values()) {
 				const persisted = this.#state[hook.id] ?? {};
 				state[hook.id] = {
-					// A routine's switch is `agent/routines.json`'s; only a hook defined in code has its state persisted.
-					...(this.#routines.has(hook.id) ? {} : { enabled: hook.enabled }),
+					// A file-owned wake's switch is `agent/events.json`'s; only a hook defined in code has its state persisted.
+					...(this.#fileHooks.has(hook.id) ? {} : { enabled: hook.enabled }),
 					fireCount: hook.fireCount,
 					...(hook.lastFiredAt === undefined
 						? persisted.lastFiredAt === undefined
@@ -556,6 +654,7 @@ export class HooksManager {
 							: { lastFiredAt: persisted.lastFiredAt }
 						: { lastFiredAt: hook.lastFiredAt }),
 					...(persisted.nextFireAt === undefined ? {} : { nextFireAt: persisted.nextFireAt }),
+					...(persisted.anchor === undefined ? {} : { anchor: persisted.anchor }),
 				};
 			}
 			writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -566,39 +665,33 @@ export class HooksManager {
 	}
 }
 
+function sameSchedule(left: Schedule | undefined, right: Schedule | undefined): boolean {
+	if (left === undefined || right === undefined) return left === right;
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 /**
- * A sender that names its delivery: the same id is the same event, however much later it arrives. Namespaced by hook,
- * so one sender's counter cannot collide with another hook's.
+ * A sender that names its delivery: the same id is the same event, however much later it arrives.
  */
 export function explicitRequestId(hookId: string, senderId: string): string {
 	return `hook:${hookId}:request:${senderId}`;
 }
 
-/**
- * A gesture: a click, a retry, a control the reader pressed, with no identity but its own intent. Two gestures must be
- * two fires, and the key must stay unique across a restart — a per-process counter is not, since the request ids
- * pi-durable holds are permanent — so every gesture draws a fresh random id.
- */
+/** A gesture: a click, a retry, a control the reader pressed, with no identity but its own intent. */
 export function gestureRequestId(hookId: string, gestureId: string = randomUUID()): string {
 	return `hook:${hookId}:gesture:${gestureId}`;
 }
 
 /**
- * The scheduler's identity: one fire per interval slot, so a re-arm cannot double-fire and a daily routine is
- * deduplicated into a single fire for good. `nextFireAt` holds the slot's start, so the boot scan inherits its identity
- * from the same key a live timer would have used.
+ * The scheduler's identity: one fire per wall-clock slot. The slot is the instant the fire was due, so a calendar
+ * schedule whose slot length changed (DST, a month's length) still has one key.
  */
-export function scheduledRequestId(hook: { readonly id: string; readonly intervalMs: number }, nowMs: number): string {
-	const slotMs = Math.max(hook.intervalMs, 1_000);
-	return `hook:${hook.id}:slot:${Math.floor(nowMs / slotMs)}`;
+export function scheduledRequestId(hookId: string, slotMs: number): string {
+	return `hook:${hookId}:slot:${slotMs}`;
 }
 
 /**
  * `{{payload}}`, `{{date}}`, `{{hook}}` are substituted; an unused payload is appended, fenced as untrusted data.
- *
- * The wake's marker (routine or event) is the input's first line and is written by the fire path, not by this
- * function: a template never decides whether it is shown, and a prompt that mentioned a kind the sender did not send
- * would be a lie about the event.
  */
 export function formatPrompt(hook: EventHookConfig, payload: string | undefined, firedAt: string): string {
 	const fenced = payload === undefined ? undefined : fenceUntrusted(payload);
@@ -606,7 +699,6 @@ export function formatPrompt(hook: EventHookConfig, payload: string | undefined,
 		.replaceAll("{{hook}}", hook.name)
 		.replaceAll("{{date}}", firedAt)
 		.replaceAll("{{payload}}", fenced ?? "(none)");
-	// The payload arrives under its label when the template has no placeholder, so what quotes it is always visible.
 	if (hook.promptTemplate.includes("{{payload}}") === false && fenced !== undefined) {
 		text = `${text}\n\nPayload:\n${fenced}`;
 	}

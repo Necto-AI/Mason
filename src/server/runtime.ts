@@ -51,6 +51,7 @@ import {
 	currentIntegrations,
 	readIntegrations,
 	recordIntegrationBoot,
+	setIntegrationSurface,
 	setIntegrations,
 } from "./integrations.ts";
 import { leaseDirOf } from "./lease.ts";
@@ -394,13 +395,15 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 	// directory still serves, it just cannot answer "restart to apply".
 	await recordIntegrationBoot(house);
 	// The MCP server of every enabled integration, reached here and nowhere else. What the servers offer is a catalog, not
-	// a tool list: `mcp` registers three stable tools that ask the servers what they have now, so a container that
+	// a tool list: `mcp` registers four stable tools that ask the servers what they have now, so a container that
 	// restarts, redeploys or redefines a tool mid-conversation moves nothing the prompt is built from. A boot with no
 	// server connects nothing and installs nothing.
 	const mcp = await openMcpCatalog({
 		integrations: currentIntegrations(),
 		...(options.mcpTransport === undefined ? {} : { openTransport: options.mcpTransport }),
 	});
+	// What the servers declared at boot: the prompt's one line per integration, and the events agent/events.json seeds.
+	setIntegrationSurface(mcp.surface);
 	// Code mode, per boot rather than in BASE_EXTENSIONS: its sandbox is permanent once closed, so one instance shared
 	// across boots would refuse the next runtime in the same process. It is the way the model reaches a tool it was not
 	// offered, and the one that can read a whole result.
@@ -420,17 +423,18 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 		const workspaceDir = options.workspaceDir ?? house.workspaceDir;
 		const dataDir = options.dataDir ?? process.env.MASON_DATA ?? house.dataDir;
 
-		// The hooks manager exists before the harness opens, because a connector's `kind` that names a hook no build
-		// defines has to refuse the boot before anything can run: a fire naming it would be accepted and dropped. This is
-		// config, not health — a missing hook is fatal whatever the container's own `required` says. The routines are
-		// read from the agent's half of the home, and their state lives in the server's half.
+		// The events and routines are read from the agent's half of the home, and their state lives in the server's half.
 		const hooks = new HooksManager({
 			conversation: () => harness.root(BACKGROUND_CONTEXT),
 			statePath: options.storage === "memory" ? undefined : join(dataDir, "routines-state.json"),
-			routinesPath: join(house.agentDir, "routines.json"),
+			eventsPath: house.events,
 			...(options.onReport === undefined ? {} : { onReport: options.onReport }),
 		});
 		opened.push(() => hooks.close());
+		// A service's declared events are appended disabled, with its prompt; an entry the agent already wrote wins.
+		for (const [name, surface] of Object.entries(mcp.surface)) {
+			if (surface.manifest !== undefined) hooks.seed(name, surface.manifest.events);
+		}
 		// The supervisor's retry is code, not a routine: the agent does not edit it, and nothing schedules it.
 		hooks.define(RETRY_HOOK);
 		// The events that wake nothing are written down here, in the home's data half. It is mason's state, not the

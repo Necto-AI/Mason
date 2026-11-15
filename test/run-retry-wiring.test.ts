@@ -45,12 +45,24 @@ after(async () => {
 const integrations = { integrations: {} };
 
 /**
- * A routine file a test home starts with: the boot ships none, but these tests fire the chat hook through a runtime
- * whose definitions come from this file. The interval is far past every test's lifetime, so only the test's own fires
+ * An events file a test home starts with: the boot ships none, but these tests fire the chat hook through a runtime
+ * whose definitions come from this file. The schedule is far past every test's lifetime, so only the test's own fires
  * become turns.
  */
 const ROUTINES = JSON.stringify([
-	{ name: "team-chat", intervalSeconds: 3_600, prompt: "A message arrived in the chat. Answer it with reply." },
+	{
+		source: "telegram",
+		kind: "chat.message",
+		enabled: true,
+		prompt: "A message arrived in the chat. Answer it with send.",
+	},
+	{
+		source: "routine",
+		name: "team-chat",
+		enabled: true,
+		prompt: "A message arrived in the chat. Answer it with send.",
+		schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
+	},
 ]);
 
 /** The one chat the reply of the second test has to land in: a user face, and the room the words arrived in. */
@@ -72,7 +84,7 @@ async function temporaryHome(file: unknown = integrations): Promise<HousePaths> 
 	await mkdir(dirname(paths.integrations), { recursive: true, mode: 0o700 });
 	await writeFile(paths.integrations, JSON.stringify(file), { encoding: "utf8", mode: 0o600 });
 	await mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
-	await writeFile(join(paths.agentDir, "routines.json"), ROUTINES, { encoding: "utf8" });
+	await writeFile(join(paths.agentDir, "events.json"), ROUTINES, { encoding: "utf8" });
 	return paths;
 }
 

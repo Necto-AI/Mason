@@ -4,10 +4,10 @@
  * A connector is one external process that carries a person's words, reports events, or both, and it is the same entry
  * in `service/integrations.json` that owns the MCP server mason calls. The socket carries those two; tools are not on it.
  * They are the entry's `mcp`, reached by mason in the other direction. The `connector` block is what the operator grants:
- * which external actor is the owner's, which event kinds fire which routine, and which controls it may spend.
+ * which external actor is the owner's, which event kinds it may send, and which controls it may spend.
  *
  * Everything here is a **ceiling**, never a wish. The session the connector reads at the handshake is this file and
- * nothing else: an actor that is not the owner is refused, a kind that maps to no routine is refused, a control outside
+ * nothing else: an actor that is not the owner is refused, a kind outside the grant is refused, a control outside
  * the protocol's set is refused.
  *
  * The file is validated where every integration is validated (`integrations.ts`), so a grant that cannot work refuses
@@ -43,9 +43,9 @@ export interface ConnectorUserGrant {
 	readonly capabilities?: readonly Capability[];
 }
 
-/** The events face: the operator's `kind` → hook map. A kind absent from it is refused. */
+/** The events face: the kinds this connector may send. A kind absent from it is refused. */
 export interface ConnectorEventGrant {
-	readonly hooks: Readonly<Record<string, string>>;
+	readonly kinds: readonly string[];
 }
 
 /** One connector's grants, as `integrations.json` holds them. */
@@ -261,22 +261,33 @@ function readEvents(where: string, name: string, value: unknown): ConnectorEvent
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error(refusal(where, name, 'has a "connector.events" that is not an object'));
 	}
-	const raw = (value as Record<string, unknown>).hooks;
-	if (raw === undefined) return { hooks: {} };
-	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+	const block = value as Record<string, unknown>;
+	if (block.hooks !== undefined) {
 		throw new Error(
-			refusal(where, name, 'has a "connector.events.hooks" that is not an object mapping kinds to hook ids'),
+			refusal(
+				where,
+				name,
+				'has a retired "connector.events.hooks": a grant names the kinds it may send (`connector.events.kinds`), ' +
+					"and which of them wakes the bot lives in the agent's `agent/events.json`. Delete the key by hand and list " +
+					"the kinds under `kinds`",
+			),
 		);
 	}
-	const hooks: Record<string, string> = {};
-	for (const [kind, hook] of Object.entries(raw)) {
-		if (kind.trim() === "") throw new Error(refusal(where, name, "maps an empty event kind to a hook"));
-		if (typeof hook !== "string" || hook.trim() === "") {
-			throw new Error(refusal(where, name, `maps the kind "${kind}" to no hook`));
-		}
-		hooks[kind] = hook.trim();
+	const raw = block.kinds;
+	if (raw === undefined) return { kinds: [] };
+	if (!Array.isArray(raw)) {
+		throw new Error(refusal(where, name, 'has a "connector.events.kinds" that is not a list of event kinds'));
 	}
-	return { hooks };
+	const kinds: string[] = [];
+	for (const kind of raw) {
+		if (typeof kind !== "string" || kind.trim() === "") {
+			throw new Error(
+				refusal(where, name, `has a "connector.events.kinds" entry that is empty: ${JSON.stringify(kind)}`),
+			);
+		}
+		if (!kinds.includes(kind.trim())) kinds.push(kind.trim());
+	}
+	return { kinds };
 }
 
 /** The enabled entry's grant, or `undefined` when the entry is absent, switched off or declares no connector. */

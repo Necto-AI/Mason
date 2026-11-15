@@ -14,7 +14,7 @@
  * │   ├── log/2026-10-20.md   # dated facts, one per line, appended through the execution environment
  * │   ├── journal/            # where the daily journal will be written
  * │   ├── skills/<name>/SKILL.md
- * │   ├── routines.json       # the timers the agent owns (hooks.ts reads it)
+ * │   ├── events.json        # every event and routine the agent lets wake it (hooks.ts reads it)
  * │   ├── agents/             # worker definitions; they sit beside skills so `write` can edit them
  * │   └── workspace/          # the directory the agent works in, separate from the code that runs it
  * └── service/                # everything the server owns: never a path inside the tool machine
@@ -82,6 +82,8 @@ export interface HousePaths {
 	/** Where worker definitions live, beside skills: a file the agent may edit with `write`. */
 	readonly agentsDir: string;
 	readonly workspaceDir: string;
+	/** The events and routines the agent owns: what wakes it, and when. */
+	readonly events: string;
 	/**
 	 * `agent.sqlite`, `routines-state.json` and the record of seeded skills: state the server keeps, in the half the agent cannot
 	 * see.
@@ -170,6 +172,7 @@ function layout(path: string): HousePaths {
 		skillsDir: join(agentDir, "skills"),
 		agentsDir: join(agentDir, "agents"),
 		workspaceDir: join(agentDir, "workspace"),
+		events: join(agentDir, "events.json"),
 		dataDir: join(serviceDir, "data"),
 		config: join(serviceDir, "config.json"),
 		integrations: join(serviceDir, "integrations.json"),

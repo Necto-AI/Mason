@@ -23,6 +23,7 @@ import {
 	type JsonRpcRequest,
 	LATEST_PROTOCOL_VERSION,
 	McpError,
+	type Resource as McpResource,
 	type Tool as McpTool,
 	type McpTransport,
 } from "@earendil-works/pi-mcp";
@@ -33,11 +34,13 @@ import type { McpTransportFactory } from "../../src/server/mcp.ts";
 import { type AgentRuntime, openAgentRuntime, type ResolvedModel } from "../../src/server/runtime.ts";
 import { SEND_TOOL } from "../../src/shared/contract.ts";
 
-/** The three tools a script uses to reach a server: the whole of what the registry carries about MCP. */
+/** The four tools a script uses to reach a server: the whole of what the registry carries about MCP. */
 export { MCP_TOOL as MCP } from "../../src/server/mcp.ts";
 
 /** The key and the two words of the marker a tool declares its effect with. */
 export const APPROVAL_META_KEY = "dev.mason/approval";
+/** The key an integration's manifest rides under in an MCP initialize result. */
+export const INTEGRATION_META_KEY = "dev.mason/integration";
 
 /**
  * An integration with an MCP server, whose markers the operator trusts.
@@ -76,15 +79,25 @@ export const ISSUE_TOOL: McpTool = {
 /** The same effect, declared as one that always needs approval. */
 export const GUARDED_TOOL: McpTool = { ...ISSUE_TOOL, _meta: { [APPROVAL_META_KEY]: "required" } };
 
-/** A tool that said nothing about its effect: whatever the connector's markers are worth, this one is `required`. */
+/** A tool that said nothing about its effect: the integration is refused, because nobody declared the effect. */
 export const SILENT_TOOL: McpTool = { ...ISSUE_TOOL, name: "issues.close", _meta: undefined };
 
-/** A tool that declared a word the protocol does not have: the same answer, for the same reason. */
+/** A tool that declared a word the protocol does not have: the same refusal, for the same reason. */
 export const UNKNOWN_MARKER_TOOL: McpTool = {
 	...ISSUE_TOOL,
 	name: "issues.lock",
 	_meta: { [APPROVAL_META_KEY]: "maybe" },
 };
+
+/** A docs page the fake server lists, and the text `resources/read` answers with. */
+export type FakeResource = McpResource & { readonly text?: string };
+
+export interface FakeServerOptions {
+	/** The `dev.mason/integration` manifest the initialize result carries. */
+	readonly manifest?: unknown;
+	/** The resources `resources/list` answers with. */
+	readonly resources?: readonly FakeResource[];
+}
 
 export interface FakeServer {
 	/** The client end of the pair: what the boot's transport factory hands back. */
@@ -116,10 +129,12 @@ function callOf(params: unknown): { name: string; args: Record<string, unknown> 
 export async function fakeServer(
 	tools: readonly McpTool[],
 	answer: (name: string, args: Record<string, unknown>) => CallToolResult,
+	options: FakeServerOptions = {},
 ): Promise<FakeServer> {
 	const pair = createInMemoryTransportPair();
 	const calls: FakeServer["calls"] = [];
 	let listed = [...tools];
+	const resources = options.resources ?? [];
 	pair.server.onMessage((message: JsonRpcMessage) => {
 		if (!("id" in message) || !("method" in message)) return;
 		const request: JsonRpcRequest = message;
@@ -157,11 +172,29 @@ export async function fakeServer(
 			case "initialize":
 				return {
 					protocolVersion: LATEST_PROTOCOL_VERSION,
-					capabilities: { tools: { listChanged: true } },
+					capabilities: {
+						tools: { listChanged: true },
+						...(resources.length === 0 ? {} : { resources: {} }),
+					},
 					serverInfo: { name: "fake", version: "1.0.0" },
+					...(options.manifest === undefined ? {} : { _meta: { [INTEGRATION_META_KEY]: options.manifest } }),
 				};
 			case "tools/list":
 				return { tools: listed };
+			case "resources/list":
+				return { resources: resources.map(({ text: _text, ...resource }) => resource) };
+			case "resources/read": {
+				const params = request.params as { readonly uri?: unknown } | undefined;
+				const resource = resources.find((entry) => entry.uri === params?.uri);
+				if (resource === undefined) {
+					throw new McpError(JSON_RPC_ERROR_CODES.invalidParams, `No resource ${String(params?.uri)}`);
+				}
+				return {
+					contents: [
+						{ uri: resource.uri, mimeType: resource.mimeType, text: resource.text ?? `# ${resource.name}` },
+					],
+				};
+			}
 			case "tools/call": {
 				const { name, args } = callOf(request.params);
 				calls.push({ name, args });

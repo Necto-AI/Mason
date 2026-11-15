@@ -40,6 +40,7 @@ import {
 	ConversationStateSchema,
 	connectorHost,
 	ERROR_CODE,
+	type IntegrationManifest,
 	MASON_HOST,
 	MasonPeer,
 	masonError,
@@ -61,6 +62,7 @@ import {
 	CONNECTOR_SUBMISSION_LIMIT,
 	type FireLimiter,
 } from "./limits.ts";
+import { validateIntegrationManifest } from "./mcp.ts";
 import { createReadModel } from "./read-model.ts";
 import type { AgentRuntime } from "./runtime.ts";
 import { deriveRunStatus, isBusy, queuedSubmissions } from "./status.ts";
@@ -113,6 +115,8 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	// The read model the `conversation` member publishes. One per door, because there is one conversation: the watch
 	// below advances it and hands the same value to every peer object's cell.
 	const model = createReadModel();
+	/** The manifest each connector handed over at its last handshake, echoed in its session. */
+	const metadata = new Map<string, IntegrationManifest>();
 	let state = model.value;
 	/** What each live peer object listens with: a set, so a connector that goes removes only its own subscription. */
 	const watchers = new Set<(value: ConversationState) => void>();
@@ -120,8 +124,17 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	// The peer object is per connector: its principal is the credential's, so the state it exposes is that connector's
 	// grant and nobody else's.
 	host.serve(MasonPeer, (input, principal, self) => {
-		void input;
 		const name = principal.connector;
+		const declared = (input as { readonly metadata?: unknown }).metadata;
+		if (declared === undefined) {
+			metadata.delete(name);
+		} else {
+			const manifest = validateIntegrationManifest(name, declared);
+			if (manifest !== undefined) {
+				metadata.set(name, manifest);
+				options.runtime.hooks.seed(name, manifest.events);
+			}
+		}
 		const conversation = self.state("conversation", ConversationStateSchema, { init: () => state });
 		// The door's one watch, opened and closed with this object: a socket that goes takes its subscription with it,
 		// and the door keeps one watch for the process rather than one per socket.
@@ -235,7 +248,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		return {
 			protocol: PROTOCOL_MAJOR,
 			commands: [...(grant.commands ?? [])],
-			kinds: Object.keys(grant.events?.hooks ?? {}).sort(),
+			kinds: [...(grant.events?.kinds ?? [])].sort(),
 			limits: {
 				submissionsPerMinute: CONNECTOR_SUBMISSION_LIMIT,
 				firesPerMinute: CONNECTOR_FIRE_LIMIT,
@@ -245,6 +258,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 				attachmentBytes: options.attachments.maxBytes,
 				attachmentTtlMs: options.attachments.ttlMs,
 			},
+			...(metadata.get(name) === undefined ? {} : { metadata: metadata.get(name) as IntegrationManifest }),
 		};
 	}
 
@@ -376,25 +390,26 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	/**
 	 * One event: written to the log always, and it wakes the bot only when the routine its kind names is live.
 	 *
-	 * Three lines decide everything. A kind the grant does not name is refused. A kind the grant names whose routine is
-	 * absent, or switched off in `agent/routines.json`, is written to the log and wakes nothing — the log is the default
-	 * sink, so no wildcard grant and no separate append type is needed. A kind with a live routine starts a turn.
+	 * Three lines decide everything. A kind the grant does not name is refused. A granted kind with no enabled entry in
+	 * `agent/events.json` is written to the log and wakes nothing — the log is the default sink, so no wildcard grant and
+	 * no separate append type is needed. A kind with an enabled entry starts a turn.
 	 */
 	async function event(
 		name: string,
 		grant: ConnectorGrant,
 		args: Extract<AppendArgs, { type: "event" }>,
 	): Promise<AppendResult> {
-		const hook = grant.events?.hooks[args.kind];
-		if (hook === undefined) {
+		if (grant.events?.kinds.includes(args.kind) !== true) {
 			throw masonError(ERROR_CODE.kindNotPermitted, `"${args.kind}" is not a kind this entry's grant names`);
 		}
-		// The log is the record, so it is the dedupe: an event whose routine is absent never becomes an entry, and a resend
-		// after a lost acknowledgement would otherwise be written twice.
+		// The log is the record, so it is the dedupe: an event whose entry is absent or disabled never becomes a turn, and a
+		// resend after a lost acknowledgement would otherwise be written twice.
 		if (options.runtime.events.seen(name, args.appendId)) return { outcome: "duplicate" };
 		const requestId = connectorRequestId(name, "fire", args.appendId);
 		spend(name, "fire", CONNECTOR_FIRE_LIMIT);
 		const origin = originOf(name, args.origin);
+		const live = options.runtime.hooks.event(name, args.kind);
+		const hook = live?.id ?? `${name}:${args.kind}`;
 		options.runtime.events.append({
 			at: new Date(options.now?.() ?? Date.now()).toISOString(),
 			connector: name,
@@ -405,19 +420,21 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			payload: args.payload ?? null,
 			...(origin === undefined ? {} : { ref: origin.ref }),
 		});
-		const live = options.runtime.hooks.get(hook);
 		if (live === undefined || !live.enabled) {
-			log(`[connector] ${name}: event ${args.kind} written down; no live routine is called ${hook}`);
+			log(
+				`[connector] ${name}: event ${args.kind} written down; ` +
+					`${live === undefined ? "no entry in agent/events.json" : "the entry is disabled"} wakes nothing`,
+			);
 			return { outcome: "accepted" };
 		}
-		const placed = await options.runtime.hooks.fire(hook, {
+		const placed = await options.runtime.hooks.fire(live.id, {
 			payload: payloadText(args.payload, args.summary),
 			kind: args.kind,
 			requestId,
 			...(origin === undefined ? {} : { origin }),
 		});
 		const record = await placed.status(BACKGROUND_CONTEXT);
-		log(`[connector] ${name}: event ${args.appendId} (${args.kind}) -> ${hook}`);
+		log(`[connector] ${name}: event ${args.appendId} (${args.kind}) -> ${live.id}`);
 		return { outcome: "accepted", ...entryOf(record.entry) };
 	}
 

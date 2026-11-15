@@ -6,10 +6,10 @@
  * The key builders are pinned here as pure functions, and the durable consequence — a second fire with a known key adds
  * no submission — is pinned against the real conversation, whose `requestId` dedupe is what makes any of it true.
  *
- * Routines are the other half. They come from `agent/routines.json`, the agent edits it, and a deployment ships none:
- * an absent file is zero routines, a malformed file keeps the last good set and is reported once, and the boot scan
- * waits the remainder of a persisted `nextFireAt` instead of arming a fresh full interval. A slot the process missed
- * while it was down fires once, however long the downtime was.
+ * Events and routines are the other half. They come from `agent/events.json`, the agent edits it, and a deployment ships
+ * none: an absent file is zero wakes, a malformed file keeps the last good set and is reported once, and the boot scan
+ * waits the remainder of a persisted `nextFireAt` instead of arming a fresh slot. A slot the process missed while it
+ * was down fires once, however long the downtime was.
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -26,8 +26,7 @@ import {
 	formatPrompt,
 	gestureRequestId,
 	HooksManager,
-	parseRoutines,
-	type RoutineConfig,
+	parseEvents,
 	routineMarker,
 	scheduledRequestId,
 } from "../src/server/hooks.ts";
@@ -73,12 +72,6 @@ const digest = {
 
 /** The same hook on an hourly schedule, for the slot key. */
 const hourlyDigest = { ...digest, intervalMs: 60 * 60 * 1_000 };
-
-const routine = (name: string, intervalSeconds = 30, prompt = `what ${name} asks for`): RoutineConfig => ({
-	name,
-	intervalSeconds,
-	prompt,
-});
 
 /**
  * A hooks manager over a real conversation, on a clock the test drives. pi-durable's admission is the dedupe: a known
@@ -176,20 +169,20 @@ describe("a fire's identity", () => {
 		const clock = testClock(ALIGNED_START);
 		const slotStart = clock.at();
 		assert.equal(
-			scheduledRequestId(hourlyDigest, slotStart),
-			scheduledRequestId(hourlyDigest, slotStart + 59 * 60 * 1_000),
-			"every fire inside the slot is the same fire",
+			scheduledRequestId(hourlyDigest.id, slotStart),
+			scheduledRequestId(hourlyDigest.id, slotStart),
+			"one slot has one key",
 		);
 		assert.notEqual(
-			scheduledRequestId(hourlyDigest, slotStart + 59 * 60 * 1_000),
-			scheduledRequestId(hourlyDigest, slotStart + 60 * 60 * 1_000),
+			scheduledRequestId(hourlyDigest.id, slotStart),
+			scheduledRequestId(hourlyDigest.id, slotStart + 60 * 60 * 1_000),
 			"the next slot fires again",
 		);
 		await withFiringManager(async (hooks, runtime, window) => {
-			const first = await hooks.fire("digest", { requestId: scheduledRequestId(hourlyDigest, window.at()) });
+			const first = await hooks.fire("digest", { requestId: scheduledRequestId(hourlyDigest.id, window.at()) });
 			await first.wait(BACKGROUND_CONTEXT);
 			// A second arm of the same timer, inside the slot: the slot is already spent.
-			const rearm = await hooks.fire("digest", { requestId: scheduledRequestId(hourlyDigest, window.at()) });
+			const rearm = await hooks.fire("digest", { requestId: scheduledRequestId(hourlyDigest.id, window.at()) });
 			assert.equal(rearm.id, first.id);
 			assert.equal(await hookEntryCount(runtime), 1);
 		});
@@ -281,16 +274,23 @@ describe("a disabled hook", () => {
 				intervalMs: 1_000,
 				promptTemplate: "tick",
 			});
-			runtime.hooks.setEnabled("tick", true);
+			runtime.hooks.define({
+				id: "tick",
+				name: "Tick",
+				description: "A one-second hook that is enabled later.",
+				enabled: true,
+				intervalMs: 1_000,
+				promptTemplate: "tick",
+			});
 			await new Promise((resolve) => setTimeout(resolve, 1_200));
 			assert.ok((runtime.hooks.get("tick")?.fireCount ?? 0) >= 1);
 		});
 	});
 });
 
-describe("agent/routines.json", () => {
+describe("agent/events.json", () => {
 	/** A directory holding the agent half (the file) and the data half (the persisted state). */
-	async function routineHome(): Promise<{
+	async function eventHome(): Promise<{
 		readonly agent: string;
 		readonly data: string;
 		readonly file: string;
@@ -304,7 +304,7 @@ describe("agent/routines.json", () => {
 		return {
 			agent,
 			data,
-			file: join(agent, "routines.json"),
+			file: join(agent, "events.json"),
 			state: join(data, "routines-state.json"),
 		};
 	}
@@ -324,10 +324,6 @@ describe("agent/routines.json", () => {
 		assert.ok(expect(), `timed out waiting for ${what}`);
 	}
 
-	/**
-	 * The manager these tests share: a real conversation to fire into (the manager's policy must not fork from the one
-	 * that submits), a test clock, the file, and the state file behind it.
-	 */
 	function manager(
 		runtime: AgentRuntime,
 		paths: { readonly file: string; readonly state: string },
@@ -337,13 +333,12 @@ describe("agent/routines.json", () => {
 		return new HooksManager({
 			conversation: () => runtime.conversation(),
 			statePath: paths.state,
-			routinesPath: paths.file,
+			eventsPath: paths.file,
 			now: clock.now,
 			onReport: (error: unknown) => problems.push(error instanceof Error ? error : new Error(String(error))),
 		});
 	}
 
-	/** A real runtime for the fire path: a faux model, memory storage, a throwaway home. */
 	async function withFauxConversation(run: (runtime: AgentRuntime) => Promise<void>): Promise<void> {
 		const faux = fauxProvider();
 		const models = createModels();
@@ -362,96 +357,105 @@ describe("agent/routines.json", () => {
 		}
 	}
 
-	it("an absent file is zero routines, which is what a deployment ships", async () => {
+	it("an absent file is zero events, which is what a deployment ships", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
 			try {
-				assert.deepEqual(
-					hooks.list().map((entry) => [entry.id, entry.intervalMs]),
-					[],
-				);
+				assert.deepEqual(hooks.list(), []);
 			} finally {
 				await hooks.close();
 			}
 		});
 	});
 
-	it("a valid file arms its routines: enabled, on an interval of its own", async () => {
+	it("seeds a connector default disabled, keeps an existing entry, and never overwrites the agent's prompt", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
-			await writeFile(paths.file, JSON.stringify([routine("digest"), routine("hourly-check", 3_600)]));
-			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
-			try {
-				assert.deepEqual(
-					hooks.list().map((entry) => [entry.id, entry.enabled, entry.intervalMs]),
-					[
-						["digest", true, 30_000],
-						["hourly-check", true, 3_600_000],
-					],
-				);
-			} finally {
-				await hooks.close();
-			}
-		});
-	});
-
-	it("a routine with no intervalSeconds is armed without a timer: it is only ever woken by an event", async () => {
-		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			await writeFile(
 				paths.file,
-				JSON.stringify([{ name: "check-mail", prompt: "Read the mail." }, routine("digest")]),
+				JSON.stringify([
+					{ source: "github", kind: "issue.opened", enabled: true, prompt: "the agent's own words" },
+				]),
+			);
+			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
+			try {
+				hooks.seed("github", [
+					{ kind: "issue.opened", description: "an issue opened", prompt: "the connector's words" },
+					{ kind: "issue.closed", description: "an issue closed", prompt: "report the close", whenBusy: "steer" },
+				]);
+				const stored = JSON.parse(await readFile(paths.file, "utf8")) as Array<Record<string, unknown>>;
+				assert.equal(stored.length, 2, "one existing entry and one new default");
+				assert.equal(stored[0]?.prompt, "the agent's own words", "an existing entry is never overwritten");
+				assert.equal(stored[0]?.enabled, true, "and its switch is the agent's too");
+				assert.deepEqual(stored[1], {
+					source: "github",
+					kind: "issue.closed",
+					enabled: false,
+					whenBusy: "steer",
+					prompt: "report the close",
+				});
+				assert.equal(hooks.event("github", "issue.closed")?.enabled, false, "the new event is read, and off");
+			} finally {
+				await hooks.close();
+			}
+		});
+	});
+
+	it("arms a routine on its schedule, with the file's whenBusy and enabled", async () => {
+		await withFauxConversation(async (testRuntime) => {
+			const paths = await eventHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([
+					{
+						source: "routine",
+						name: "digest",
+						enabled: true,
+						whenBusy: "steer",
+						prompt: "Read the digest.",
+						schedule: { every: 1, unit: "day", at: "09:00", timezone: "UTC" },
+					},
+				]),
 			);
 			const clock = testClock(ALIGNED_START);
 			const hooks = manager(testRuntime, paths, clock);
 			try {
 				hooks.start();
-				assert.equal(hooks.get("check-mail")?.intervalMs, undefined, "no interval, no timer");
-				assert.equal(hooks.get("check-mail")?.enabled, true, "a routine without an interval is still armed");
-				// Nothing is written for it: a slot is what a timer has, and this routine has no timer to have one.
-				assert.equal((await stateOf(paths.state))["check-mail"]?.nextFireAt, undefined);
-				assert.equal((await stateOf(paths.state)).digest?.nextFireAt !== undefined, true);
+				assert.equal(hooks.get("digest")?.enabled, true);
+				assert.equal(hooks.get("digest")?.whenBusy, "steer");
+				assert.equal(hooks.get("digest")?.schedule?.unit, "day");
+				assert.equal(
+					(await stateOf(paths.state)).digest?.nextFireAt,
+					"2026-10-20T09:00:00.000Z",
+					"the first slot is the next wall-clock occurrence after the anchor",
+				);
 			} finally {
 				await hooks.close();
 			}
 		});
 	});
 
-	it("enabled: false in the file switches a routine off, and the grant mapping around it still resolves", async () => {
+	it("enabled: false in the file leaves a definition that can still be described, and arms no timer", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			await writeFile(
 				paths.file,
-				JSON.stringify([{ name: "check-mail", prompt: "Read the mail.", enabled: false, intervalSeconds: 3_600 }]),
+				JSON.stringify([
+					{
+						source: "github",
+						kind: "issue.opened",
+						enabled: false,
+						prompt: "Report it.",
+					},
+				]),
 			);
 			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
 			try {
 				hooks.start();
-				assert.equal(hooks.has("check-mail"), true, "the definition is read");
-				assert.equal(hooks.get("check-mail")?.enabled, false, "and it is switched off");
-				// A switched-off routine is never armed, so the boot scan writes no slot for it — and an event that maps to
-				// it reaches a hook whose `enabled` is false, which is the branch the connector answers "written down, wakes
-				// nothing" from (`test/connector.test.ts`).
-				assert.equal(hooks.get("check-mail")?.intervalMs, 3_600_000, "the file's interval is still its own");
-				assert.equal((await stateOf(paths.state))["check-mail"]?.nextFireAt, undefined, "nothing armed a slot");
-			} finally {
-				await hooks.close();
-			}
-		});
-	});
-
-	it("whenBusy in the file decides how a wake meets a turn already running", async () => {
-		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
-			await writeFile(
-				paths.file,
-				JSON.stringify([{ name: "check-mail", prompt: "Read the mail.", whenBusy: "steer" }]),
-			);
-			const hooks = manager(testRuntime, paths, testClock(ALIGNED_START));
-			try {
-				hooks.start();
-				assert.equal(hooks.get("check-mail")?.whenBusy, "steer", "the file's word is the hook's behaviour");
+				assert.equal(hooks.has("github:issue.opened"), true);
+				assert.equal(hooks.event("github", "issue.opened")?.enabled, false);
+				assert.equal(hooks.get("github:issue.opened")?.schedule, undefined, "an event has no timer of its own");
 			} finally {
 				await hooks.close();
 			}
@@ -460,17 +464,27 @@ describe("agent/routines.json", () => {
 
 	it("a malformed file keeps the last good set armed and is reported once, naming the file and the problem", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
-			await writeFile(paths.file, JSON.stringify([routine("digest")]));
+			const paths = await eventHome();
+			await writeFile(
+				paths.file,
+				JSON.stringify([
+					{
+						source: "routine",
+						name: "digest",
+						enabled: true,
+						prompt: "Read the digest.",
+						schedule: { every: 1, unit: "day", at: "09:00", timezone: "UTC" },
+					},
+				]),
+			);
 			const clock = testClock(ALIGNED_START);
 			const problems: Error[] = [];
 			const hooks = manager(testRuntime, paths, clock, problems);
 			try {
 				hooks.start();
-				// A file the agent half-wrote: the set it already knows stays armed exactly as it was.
 				await writeFile(
 					paths.file,
-					JSON.stringify([{ name: "digest", intervalSeconds: 5, prompt: "too fast" }], undefined, 2),
+					JSON.stringify([{ source: "routine", name: "digest", prompt: "x" }], undefined, 2),
 				);
 				await waitUntil("the notice to arrive", () => problems.length > 0);
 				assert.deepEqual(
@@ -478,45 +492,44 @@ describe("agent/routines.json", () => {
 					["digest"],
 					"the last good set is unchanged",
 				);
-				assert.deepEqual(
-					problems.map((problem) => problem.message),
-					[`${paths.file} is malformed: "digest" has an intervalSeconds that is not an integer of at least 30`],
-					"the notice names the file and the problem",
-				);
+				assert.match(problems[0]?.message ?? "", /is malformed: "digest" is a routine with no schedule/);
 			} finally {
 				await hooks.close();
 			}
 		});
 	});
 
-	it("an edit re-arms the set: a new name arms, an untouched one keeps its slot, a removed one stops", async () => {
+	it("an edit re-arms the set: a new routine arms, an untouched one keeps its slot, a removed one stops", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
-			await writeFile(paths.file, JSON.stringify([routine("daily-brief", 3_600)]));
+			const paths = await eventHome();
+			const routine = (name: string, at: string): Record<string, unknown> => ({
+				source: "routine",
+				name,
+				enabled: true,
+				prompt: `what ${name} asks for`,
+				schedule: { every: 1, unit: "day", at, timezone: "UTC" },
+			});
+			await writeFile(paths.file, JSON.stringify([routine("daily-brief", "09:30")]));
 			const clock = testClock(ALIGNED_START);
 			const hooks = manager(testRuntime, paths, clock);
 			try {
 				hooks.start();
-				// The untouched routine armed against its interval: what the file held when it loaded.
 				const before = (await stateOf(paths.state))["daily-brief"]?.nextFireAt;
 				assert.ok(before !== undefined, "the first load wrote the routine's slot");
 
-				// An edit that adds a routine beside an untouched one: only the addition is propped back up.
 				await writeFile(
 					paths.file,
-					JSON.stringify([routine("daily-brief", 3_600), routine("weekly-sweep", 100_800)]),
+					JSON.stringify([routine("daily-brief", "09:30"), routine("weekly-sweep", "10:00")]),
 				);
 				await waitUntil("the new routine to arm", () => hooks.has("weekly-sweep"));
 				assert.ok(hooks.has("daily-brief"), "the untouched routine stays");
-				assert.equal(hooks.get("weekly-sweep")?.intervalMs, 100_800_000);
 				assert.equal(
 					(await stateOf(paths.state))["daily-brief"]?.nextFireAt,
 					before,
 					"an edit that does not touch a routine does not touch its timer",
 				);
 
-				// A removal disarms, and leaves no definition behind in the state.
-				await writeFile(paths.file, JSON.stringify([routine("daily-brief", 3_600)]));
+				await writeFile(paths.file, JSON.stringify([routine("daily-brief", "09:30")]));
 				await waitUntil("the removed routine to stop", () => hooks.has("weekly-sweep") === false);
 				assert.equal((await stateOf(paths.state))["weekly-sweep"], undefined);
 			} finally {
@@ -525,35 +538,29 @@ describe("agent/routines.json", () => {
 		});
 	});
 
-	it("a rename and an interval change reset the slot they changed", async () => {
+	it("a changed schedule resets the slot it changed", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			const clock = testClock(ALIGNED_START);
 			const hooks = manager(testRuntime, paths, clock);
+			const routine = (at: string): Record<string, unknown> => ({
+				source: "routine",
+				name: "digest",
+				enabled: true,
+				prompt: "Read the digest.",
+				schedule: { every: 1, unit: "day", at, timezone: "UTC" },
+			});
 			try {
 				hooks.start();
-				await writeFile(paths.file, JSON.stringify([routine("brief", 3_600)]));
-				await waitUntil("the file's routine to arm", () => hooks.has("brief"));
-				assert.ok(hooks.has("brief"));
-
-				// Renaming is a removal plus a new routine: the old name is gone, and the new one is due after its
-				// interval, not immediately.
-				await writeFile(paths.file, JSON.stringify([routine("digest", 3_600)]));
-				await waitUntil("the rename to land", () => hooks.has("digest") && hooks.has("brief") === false);
-				const state = await stateOf(paths.state);
-				assert.equal(state.brief, undefined, "a removed routine leaves no definition behind");
-				assert.ok(
-					Date.parse(String(state.digest?.nextFireAt)) > clock.at(),
-					"the renamed routine is scheduled after its interval, not immediately",
-				);
-
-				// And a changed interval resets the slot: it belonged to the routine at its old cadence.
-				await writeFile(paths.file, JSON.stringify([routine("digest", 60)]));
-				await waitUntil("the interval change to land", () => hooks.get("digest")?.intervalMs === 60_000);
-				assert.equal(
+				await writeFile(paths.file, JSON.stringify([routine("09:00")]));
+				await waitUntil("the file's routine to arm", () => hooks.has("digest"));
+				const first = (await stateOf(paths.state)).digest?.nextFireAt;
+				await writeFile(paths.file, JSON.stringify([routine("10:00")]));
+				await waitUntil("the schedule change to land", () => hooks.get("digest")?.schedule?.at === "10:00");
+				assert.notEqual(
 					(await stateOf(paths.state)).digest?.nextFireAt,
-					new Date(clock.at() + 60_000).toISOString(),
-					"the changed routine fires after its new interval from now",
+					first,
+					"the old slot belonged to the old clock",
 				);
 			} finally {
 				await hooks.close();
@@ -561,15 +568,28 @@ describe("agent/routines.json", () => {
 		});
 	});
 
-	it("the boot scan inherits a persisted nextFireAt instead of arming a fresh interval", async () => {
+	it("the boot scan inherits a persisted nextFireAt instead of arming a fresh slot", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			const clock = testClock(ALIGNED_START);
-			const dueMs = clock.at() + 2_000; // A slot the previous process armed; the wake pending over the restart.
-			await writeFile(paths.file, JSON.stringify([routine("digest")]));
+			const dueMs = clock.at() + 2_000;
+			await writeFile(
+				paths.file,
+				JSON.stringify([
+					{
+						source: "routine",
+						name: "digest",
+						enabled: true,
+						prompt: "Read the digest.",
+						schedule: { every: 1, unit: "day", at: "09:00", timezone: "UTC" },
+					},
+				]),
+			);
 			await writeFile(
 				paths.state,
-				JSON.stringify({ digest: { enabled: true, fireCount: 3, nextFireAt: new Date(dueMs).toISOString() } }),
+				JSON.stringify({
+					digest: { fireCount: 3, nextFireAt: new Date(dueMs).toISOString(), anchor: ALIGNED_START },
+				}),
 			);
 			const hooks = manager(testRuntime, paths, clock);
 			try {
@@ -579,15 +599,14 @@ describe("agent/routines.json", () => {
 					new Date(dueMs).toISOString(),
 					"the boot waits the remainder instead of resetting the schedule",
 				);
-				// And the pending wake is kept: the timer holds until the slot arrives.
 				const deadline = Date.now() + 10_000;
 				while (hooks.get("digest")?.fireCount !== 4 && Date.now() < deadline) {
 					await new Promise((resolve) => setTimeout(resolve, 50));
 				}
 				assert.equal(hooks.get("digest")?.fireCount, 4, "the pending wake fired once the slot came due");
 				assert.ok(
-					Date.parse(String((await stateOf(paths.state)).digest?.nextFireAt)) >= dueMs + 30_000 - 1,
-					"the next slot was written from the slot that fired, not from now",
+					Date.parse(String((await stateOf(paths.state)).digest?.nextFireAt)) > dueMs,
+					"the next slot was written from the schedule's anchor, not from now",
 				);
 			} finally {
 				await hooks.close();
@@ -597,15 +616,30 @@ describe("agent/routines.json", () => {
 
 	it("a slot past due at boot fires once, however many slots the downtime skipped", async () => {
 		await withFauxConversation(async (testRuntime) => {
-			const paths = await routineHome();
+			const paths = await eventHome();
 			const clock = testClock(ALIGNED_START);
-			const missed = 40;
-			// The process has been down for twenty minutes of a 30-second routine: one catch-up fire, not forty.
-			const dueMs = clock.at() - missed * 30_000;
-			await writeFile(paths.file, JSON.stringify([routine("digest")]));
+			const dueMs = clock.at() - 40 * 24 * 60 * 60 * 1_000;
+			await writeFile(
+				paths.file,
+				JSON.stringify([
+					{
+						source: "routine",
+						name: "digest",
+						enabled: true,
+						prompt: "Read the digest.",
+						schedule: { every: 1, unit: "day", at: "09:00", timezone: "UTC" },
+					},
+				]),
+			);
 			await writeFile(
 				paths.state,
-				JSON.stringify({ digest: { enabled: true, fireCount: 1, nextFireAt: new Date(dueMs).toISOString() } }),
+				JSON.stringify({
+					digest: {
+						fireCount: 1,
+						nextFireAt: new Date(dueMs).toISOString(),
+						anchor: new Date(dueMs).toISOString(),
+					},
+				}),
 			);
 			const hooks = manager(testRuntime, paths, clock);
 			try {
@@ -615,17 +649,23 @@ describe("agent/routines.json", () => {
 					await new Promise((resolve) => setTimeout(resolve, 20));
 				}
 				assert.equal(hooks.get("digest")?.fireCount, 2, "one catch-up fire");
-				// And the skip is written down: the next due slot is the first one beyond the present, not the first
-				// missed one.
 				const next = Date.parse(String((await stateOf(paths.state)).digest?.nextFireAt));
 				assert.ok(next > clock.at(), "the schedule resumed in the future");
-				assert.ok(
-					next - clock.at() <= 30_000,
-					"the catch-up did not stampede: the missed slots were skipped, not queued",
-				);
 			} finally {
 				await hooks.close();
 			}
+		});
+	});
+
+	it("fires a routine with the routine marker and the entry's prompt", async () => {
+		await withFiringManager(async (hooks, runtime) => {
+			const names = hooks.list().map((entry) => entry.id);
+			assert.deepEqual(names, ["digest"]);
+			const fire = await hooks.fire("digest", { payload: "check the calendar" });
+			await fire.wait(BACKGROUND_CONTEXT);
+			const entries = await hookEntries(runtime);
+			const fired = entries.find((entry) => entry.data.payload === "check the calendar");
+			assert.match(fired?.text ?? "", /^\[ROUTINE: Digest\]\n/);
 		});
 	});
 });
@@ -749,31 +789,74 @@ describe("a fire's placement", () => {
 	});
 });
 
-describe("the routines file's validation", () => {
-	it("rejects a file that is not an array, or that no routine explains", () => {
-		assert.throws(() => parseRoutines("{}"));
+describe("the events file's validation", () => {
+	it("rejects a file that is not an array", () => {
+		assert.throws(() => parseEvents("{}"));
 	});
 
-	it("rejects a name that is not a hook id, or one named twice", () => {
-		assert.throws(() => parseRoutines('[{"name":"Morning Brief","intervalSeconds":60,"prompt":"x"}]'));
+	it("rejects a source that is not an integration name or routine", () => {
+		assert.throws(() => parseEvents('[{"source":"Bad Name","kind":"x","prompt":"x"}]'));
 		assert.throws(() =>
-			parseRoutines(
-				'[{"name":"digest","intervalSeconds":30,"prompt":"x"},{"name":"digest","intervalSeconds":60,"prompt":"y"}]',
+			parseEvents(
+				'[{"source":"routine","name":"Morning Brief","prompt":"x","schedule":{"every":1,"unit":"day","at":"09:00","timezone":"UTC"}}]',
 			),
 		);
 	});
 
-	it("rejects an interval under thirty seconds and an empty prompt", () => {
-		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":29,"prompt":"x"}]'));
-		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":30},{"prompt":"x"}]'));
-		assert.throws(() => parseRoutines('[{"name":"digest","intervalSeconds":30,"prompt":""}]'));
+	it("rejects a routine with no schedule, and an event that carries one", () => {
+		assert.throws(() => parseEvents('[{"source":"routine","name":"digest","prompt":"x"}]'), /no schedule/);
+		assert.throws(
+			() =>
+				parseEvents(
+					'[{"source":"github","kind":"issue.opened","prompt":"x","schedule":{"every":1,"unit":"day","at":"09:00","timezone":"UTC"}}]',
+				),
+			/schedule belongs on a routine/,
+		);
+	});
+
+	it("rejects a weekly schedule with no days, and a monthly one with no day", () => {
+		assert.throws(
+			() =>
+				parseEvents(
+					'[{"source":"routine","name":"digest","prompt":"x","schedule":{"every":1,"unit":"week","at":"09:00","timezone":"UTC"}}]',
+				),
+			/needs at least one day/,
+		);
+		assert.throws(
+			() =>
+				parseEvents(
+					'[{"source":"routine","name":"digest","prompt":"x","schedule":{"every":1,"unit":"month","at":"09:00","timezone":"UTC"}}]',
+				),
+			/schedule.day/,
+		);
+	});
+
+	it("rejects an empty prompt, a duplicate id, and a time that is not HH:MM", () => {
+		assert.throws(() => parseEvents('[{"source":"github","kind":"issue.opened","prompt":""}]'), /empty prompt/);
+		assert.throws(
+			() =>
+				parseEvents(
+					'[{"source":"github","kind":"issue.opened","prompt":"x"},{"source":"github","kind":"issue.opened","prompt":"y"}]',
+				),
+			/twice/,
+		);
+		assert.throws(
+			() =>
+				parseEvents(
+					'[{"source":"routine","name":"digest","prompt":"x","schedule":{"every":1,"unit":"day","at":"9:00","timezone":"UTC"}}]',
+				),
+			/24-hour HH:MM/,
+		);
 	});
 
 	// The run supervisor's retry lifecycle hook occupies the id in code; the file cannot take it, and a file that
 	// does is one malformed notice, not a fatal boot.
 	it("rejects the id the run supervisor's retry lifecycle hook occupies", () => {
 		assert.throws(
-			() => parseRoutines('[{"name":"retry-failed-run","intervalSeconds":60,"prompt":"x"}]'),
+			() =>
+				parseEvents(
+					'[{"source":"routine","name":"retry-failed-run","prompt":"x","schedule":{"every":1,"unit":"day","at":"09:00","timezone":"UTC"}}]',
+				),
 			/retry-failed-run/,
 		);
 	});

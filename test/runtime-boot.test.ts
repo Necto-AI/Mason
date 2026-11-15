@@ -45,9 +45,7 @@ async function homeWith(declared: unknown): Promise<string> {
 
 /** One entry's grant: a person's words (the default), or only the kinds it may raise. */
 function grant(options: { readonly user?: boolean } = {}): Record<string, unknown> {
-	return options.user === false
-		? { events: { hooks: { "alarm.ringing": "workspace-check" } } }
-		: { user: { owner: "8811" } };
+	return options.user === false ? { events: { kinds: ["alarm.ringing"] } } : { user: { owner: "8811" } };
 }
 
 /** Open a home's runtime, answering with the failure instead of throwing: a boot that did not refuse must be closed. */
