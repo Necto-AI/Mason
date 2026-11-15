@@ -397,9 +397,11 @@ Two rules keep it honest:
   id it commits with (the message's place in the transcript), and the committed row keeps that id. `runId` names the
   run that produced it — the turn-input entry the run started from — so a client can group a failed run's rows, and a
   failed run marks them `failed` rather than leaving them looking delivered. The mark is `pi.live.runFailure`'s: it
-  lives while that run is the newest, a retry keeps it in the process that watched the failure, and a restart after the
-  retry reads the history as delivered. A run with no `first` shows the notice and marks no row. A failed run's reason never crosses: one coarse notice stands for the run. A hook trigger crosses as nothing at all: a proactive turn is the message it wrote,
-  and the schedule, its payload and the prompt it built are the schedule's business, not the conversation's.
+  lives while that run is the newest, a retry keeps the mark and its notice in that process, and a restart after the
+  retry reads the history as delivered. A run with no `first` shows the notice and marks no row. A failed run's reason
+  never crosses: one coarse notice stands for the run. A hook trigger crosses as nothing at all: a proactive turn is
+  the message it wrote, and the schedule, its payload and the prompt it built are the schedule's business, not the
+  conversation's.
 
 Consequences: no tool row, reasoning, usage or error cause crosses. An origin stays on the
 submission entry and on no row: provenance, never a destination.

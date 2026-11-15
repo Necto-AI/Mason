@@ -323,6 +323,25 @@ describe("the transcript the client is sent", () => {
 		]);
 	});
 
+	it("shows the notice and marks no row when the failed run recorded no first entry", () => {
+		// A run started before `first` was recorded names no row of its own: the notice is the honest part, and inventing a
+		// row to mark would be worse than leaving the messages as they were.
+		const transcript = projectTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+					assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+				],
+				{ "pi.live": { runFailure: { taskId: 9, inputs: [], reason: "model_error" } } },
+			),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Write the report." },
+			{ kind: "delivered", id: "message:1", text: "partial", runId: "1" },
+			{ kind: "notice", id: "failed:9", text: "Something went wrong, and the turn did not finish." },
+		]);
+	});
+
 	it("appends the failed notice once, however many revisions still read the run record", () => {
 		// A commit that changes nothing a reader sees still folds the view. The record stays until the next run starts, so
 		// the notice must be one row, not one per revision.
