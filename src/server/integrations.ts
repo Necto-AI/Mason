@@ -27,6 +27,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { IntegrationManifest } from "mason-protocol";
 import { withStoreLock, writeTextAtomic } from "./atomic.ts";
 import { commitStaged, hashFile, jsonText } from "./common.ts";
 import { type ConnectorGrant, readConnectorGrant } from "./connectors.ts";
@@ -71,7 +72,7 @@ export interface Integration {
 	readonly description?: string;
 	readonly mcp?: IntegrationMcp;
 	/**
-	 * What this service is granted as a connector: the one `owner` actor, which kinds fire which routine, and which
+	 * What this service is granted as a connector: the one `owner` actor, the event kinds it may send, and which
 	 * controls it may spend. Absent for an integration that is only an MCP server.
 	 */
 	readonly connector?: ConnectorGrant;
@@ -451,15 +452,40 @@ function ordered<T>(integrations: Record<string, T>): Record<string, T> {
  */
 let configured: Record<string, Integration> = {};
 
+/** What one enabled integration declared at boot: its tool count and its docs, as the prompt reads them. */
+export interface IntegrationSurface {
+	readonly name: string;
+	readonly toolCount: number;
+	readonly docs: readonly { readonly name: string; readonly uri: string; readonly title?: string }[];
+	/** `undefined` when the service declared no `dev.mason/integration` manifest. */
+	readonly manifest?: IntegrationManifest;
+}
+
+/**
+ * The surface this boot read from the MCP servers. It is a snapshot on purpose: a reconnect changes health, never the
+ * prompt prefix, so the tool count and docs pointer a turn reads are the ones boot saw.
+ */
+let surface: Record<string, IntegrationSurface> = {};
+
 /** Called once, by `openAgentRuntime`, after the file has been read and validated. */
 export function setIntegrations(integrations: Record<string, Integration>): void {
 	configured = integrations;
+	surface = {};
 	// A new boot's findings replace the last one's: a connection status from a previous process is not news.
 	clearIntegrationStatus();
 }
 
 export function currentIntegrations(): Record<string, Integration> {
 	return configured;
+}
+
+/** Called once, by the boot that opened the MCP catalog: the prompt's one stable line per integration. */
+export function setIntegrationSurface(next: Record<string, IntegrationSurface>): void {
+	surface = next;
+}
+
+export function currentIntegrationSurface(): Record<string, IntegrationSurface> {
+	return surface;
 }
 
 /**

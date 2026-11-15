@@ -30,7 +30,7 @@ import {
 	resolveModelChoice,
 } from "./common.ts";
 import { listConnectorCredentials } from "./connectors.ts";
-import { parseRoutines, type RoutineConfig } from "./hooks.ts";
+import { type EventConfig, hookIdOf, parseEvents } from "./hooks.ts";
 import { HOUSE_ENTRIES, type HousePaths } from "./house.ts";
 import { readIntegrationBoot, readIntegrations } from "./integrations.ts";
 import { FAUX_MODEL } from "./runtime.ts";
@@ -361,7 +361,7 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 	return {
 		name: "integrations",
 		ok: true,
-		// Info, never a failure: a granted kind whose routine is absent or switched off is a connector writing into the
+		// Info, never a failure: a granted kind with no enabled event is a connector writing into the
 		// event log, which is a deliberate sink (#156) and not a broken home. Doctor says so because the alternative is an
 		// operator waiting for a wake that will never come.
 		detail: sinking.length === 0 ? detail : `${detail}; ${sinking.join("; ")}`,
@@ -369,30 +369,30 @@ async function checkIntegrations(house: HousePaths): Promise<DoctorCheck> {
 }
 
 /**
- * The granted kinds that wake nothing: a mapping to a routine `agent/routines.json` does not define, or defines with
- * `enabled: false`.
+ * The granted kinds that wake nothing: no entry in `agent/events.json`, or an entry switched off.
  *
  * Read-only and best effort. A file that will not parse is the boot's refusal, not this check's — doctor is about what a
  * person has to fix by hand.
  */
 async function sinkingKinds(house: HousePaths): Promise<string[]> {
 	const { integrations } = await readIntegrations(house).catch(() => ({ integrations: {} as Record<string, never> }));
-	let routines: RoutineConfig[] = [];
+	let events: EventConfig[] = [];
 	try {
-		routines = parseRoutines(await readFile(join(house.agentDir, "routines.json"), "utf8"));
+		events = parseEvents(await readFile(house.events, "utf8"));
 	} catch {
 		return [];
 	}
-	const live = new Set(routines.filter((routine) => routine.enabled !== false).map((routine) => routine.name));
+	const live = new Set(
+		events.filter((event) => event.source !== "routine" && event.enabled).map((event) => hookIdOf(event)),
+	);
 	const sinking: string[] = [];
 	for (const [name, integration] of Object.entries(integrations).sort(([left], [right]) =>
 		left.localeCompare(right),
 	)) {
 		if (integration?.enabled !== true) continue;
-		for (const [kind, routine] of Object.entries(integration.connector?.events?.hooks ?? {}).sort(([left], [right]) =>
-			left.localeCompare(right),
-		)) {
-			if (!live.has(routine)) sinking.push(`${name}: kind ${kind} wakes nothing (no live routine "${routine}")`);
+		for (const kind of [...(integration.connector?.events?.kinds ?? [])].sort()) {
+			if (!live.has(`${name}:${kind}`))
+				sinking.push(`${name}: kind ${kind} wakes nothing (no enabled entry in agent/events.json)`);
 		}
 	}
 	return sinking;

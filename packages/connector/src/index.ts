@@ -13,6 +13,8 @@ export type {
 	ControlOp,
 	ControlResult,
 	ErrorCode,
+	IntegrationEvent,
+	IntegrationManifest,
 	Origin,
 	Session,
 } from "mason-protocol";

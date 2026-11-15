@@ -90,7 +90,7 @@ test("a connector deployed before the conversation member existed still binds", 
 	const deployed = peerBeforeConversation();
 	// The fingerprint of the frozen consumer: pinned so a restatement that drifts fails here rather than quietly proving
 	// that *a* three-member contract binds.
-	assert.equal(deployed.fingerprint, "14219afca4437665");
+	assert.equal(deployed.fingerprint, "f28f64c8e76c0e39");
 	assert.notEqual(
 		deployed.fingerprint,
 		MasonPeer.fingerprint,

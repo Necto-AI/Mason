@@ -31,13 +31,15 @@ a `unit` carrying the state snapshot.
 ```json
 { "t": "hold", "id": 1, "at": "mason", "token": { "name": "mason.peer", "scope": "remote", "version": 1, "input": {…}, … }, "principal": … }
 { "t": "shape", "id": 1, "variant": "default", "members": ["append", "control"], "contract": "…", "state": ["session"] }
-{ "t": "unit", "id": 1, "values": { "session": { "protocol": 1, "commands": [], "kinds": [], "limits": {…} } } }
+{ "t": "unit", "id": 1, "values": { "session": { "protocol": 1, "commands": [], "kinds": [], "limits": {…}, "metadata": {…} } } }
 ```
 
 The `token` is the contract's description, which is what the provider validates against. A connector obtains it from
 `mason-protocol`'s exported contract (`MasonPeer.description`), or by importing the same contract in the same language.
 
-`session` is the handshake. Nothing is sent before it arrives, and a reconnect re-holds the object and reads it again.
+`session` is the handshake. Nothing is sent before it arrives, and a reconnect re-holds the object and reads it again. A
+connector that has no MCP server may send its integration manifest as `input.metadata`; it is validated and echoed in
+`session.metadata`.
 
 ## A call
 

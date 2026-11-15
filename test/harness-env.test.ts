@@ -51,16 +51,18 @@ function openFor(
 	access: ResolvedModel,
 	options: { storage?: "sqlite" | "memory"; extensions?: OpenAgentRuntimeOptions["extensions"] } = {},
 ): Promise<AgentRuntime> {
-	// One routine the tests fire; a deployment ships none, so the file is what the test seeds. The interval is far
+	// One routine the tests fire; a deployment ships none, so the file is what the test seeds. The schedule is far
 	// past every test's lifetime, so only a test's own fire becomes a turn.
 	mkdirSync(join(directory, "house", "agent"), { recursive: true, mode: 0o700 });
 	writeFileSync(
-		join(directory, "house", "agent", "routines.json"),
+		join(directory, "house", "agent", "events.json"),
 		JSON.stringify([
 			{
+				source: "routine",
 				name: "workspace-check",
-				intervalSeconds: 3_600,
+				enabled: true,
 				prompt: "Inspect the workspace and report only what needs attention.",
+				schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 			},
 		]),
 	);

@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, test } from "node:test";

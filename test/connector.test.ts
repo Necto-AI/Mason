@@ -7,6 +7,8 @@
  * origin, an `app.hook` entry that is not conversation — because that is where the claim lives.
  */
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import WebSocket from "ws";
 import { CONNECTOR_ENTRY_KIND, HOOK_ENTRY_KIND, REPLY_ENTRY_KIND } from "../src/shared/contract.ts";
@@ -185,7 +187,7 @@ describe("an event", () => {
 
 				const hooks = await entries(served, HOOK_ENTRY_KIND);
 				assert.equal(hooks.length, 1);
-				assert.equal((hooks[0]?.data as { hookId?: string }).hookId, "team-chat");
+				assert.equal((hooks[0]?.data as { hookId?: string }).hookId, "telegram:chat.message");
 				assert.equal((await entries(served, CONNECTOR_ENTRY_KIND)).length, 0, "an event is not conversation");
 				assert.match(JSON.stringify(hooks[0]?.model), /hello/);
 				assert.match(JSON.stringify(hooks[0]?.model), /begin untrusted payload/, "the payload is fenced as data");
@@ -213,13 +215,16 @@ describe("an event", () => {
 		}
 	});
 
-	it("of a granted kind whose routine is switched off is written down and wakes nothing", async () => {
-		const served = await serveConnector();
+	it("of a granted kind whose entry is switched off is written down and wakes nothing", async () => {
+		const home = await connectorHome();
+		await writeFile(
+			join(home.paths.agentDir, "events.json"),
+			JSON.stringify([{ source: "telegram", kind: "chat.message", enabled: false, prompt: "Do not wake." }]),
+		);
+		const served = await serveConnector({ home });
 		try {
 			const connected = await connectConnector(served);
 			try {
-				// The grant names `chat.message` -> `team-chat`; the routine file the home ships does not define `alarm-ringing`
-				// at all, which is the same shape as a routine the agent switched off.
 				const outcome = await connected.connector.event({
 					kind: "chat.message",
 					appendId: "quiet-1",
@@ -230,7 +235,8 @@ describe("an event", () => {
 				assert.equal(log.length, 1, "every event is written down");
 				assert.equal(log[0]?.kind, "chat.message");
 				assert.equal(log[0]?.connector, "telegram");
-				assert.equal(log[0]?.hook, "team-chat");
+				assert.equal(log[0]?.hook, "telegram:chat.message");
+				assert.equal(await entries(served, HOOK_ENTRY_KIND).then((rows) => rows.length), 0, "and no turn started");
 			} finally {
 				await connected.close();
 			}
@@ -299,6 +305,48 @@ describe("the session", () => {
 				assert.deepEqual(session.kinds, ["chat.message"]);
 				assert.equal(session.limits.submissionsPerMinute > 0, true);
 				assert.equal(session.limits.attachmentsPerMinute > 0, true);
+			} finally {
+				await connected.close();
+			}
+		} finally {
+			await served.close();
+		}
+	});
+
+	it("hands its manifest over the session, and its events are seeded disabled", async () => {
+		const home = await connectorHome();
+		const served = await serveConnector({ home });
+		try {
+			const manifest = {
+				about: "Mail and alarms for the team",
+				events: [{ kind: "mail.arrived", description: "mail arrived", prompt: "Read the mail." }],
+			};
+			const connected = await connectConnector(served, { integration: manifest });
+			try {
+				assert.deepEqual(
+					connected.connector.status().session?.metadata,
+					manifest,
+					"the session echoes what was sent",
+				);
+				assert.deepEqual(
+					connected.connector.status().session?.kinds,
+					["chat.message"],
+					"and the grant is the kinds",
+				);
+				const stored = JSON.parse(await readFile(join(home.paths.agentDir, "events.json"), "utf8")) as Array<
+					Record<string, unknown>
+				>;
+				assert.deepEqual(
+					stored.find((entry) => entry.source === "telegram" && entry.kind === "mail.arrived"),
+					{
+						source: "telegram",
+						kind: "mail.arrived",
+						enabled: false,
+						whenBusy: "followUp",
+						prompt: "Read the mail.",
+					},
+					"the manifest's event is in the agent's file, off",
+				);
 			} finally {
 				await connected.close();
 			}

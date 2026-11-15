@@ -229,14 +229,14 @@ describe("the boot's record", () => {
 		assert.match(stale.detail, /changed since the boot/);
 	});
 
-	test("a granted kind with no live routine is info, not a failure, and the report says which one", async () => {
+	test("a granted kind with no enabled event is info, not a failure, and the report says which one", async () => {
 		const { house } = await goodBot();
 		await recordIntegrationBoot(house);
 		await writeFile(
-			join(house.agentDir, "routines.json"),
+			house.events,
 			JSON.stringify([
-				{ name: "team-chat", prompt: "Answer the chat.", intervalSeconds: 600 },
-				{ name: "quiet-one", prompt: "Never fires.", enabled: false },
+				{ source: "telegram", kind: "chat.message", enabled: true, prompt: "Answer the chat." },
+				{ source: "telegram", kind: "alarm.ringing", enabled: false, prompt: "Never fires." },
 			]),
 		);
 		await writeIntegration(house, "telegram", {
@@ -244,9 +244,7 @@ describe("the boot's record", () => {
 			description: "the team chat",
 			connector: {
 				user: { owner: "8811" },
-				events: {
-					hooks: { "chat.message": "team-chat", "mail.arrived": "check-mail", "alarm.ringing": "quiet-one" },
-				},
+				events: { kinds: ["chat.message", "mail.arrived", "alarm.ringing"] },
 			},
 		});
 		await recordIntegrationBoot(house);
@@ -254,18 +252,18 @@ describe("the boot's record", () => {
 		// Info, not failure: the log is the default sink, so a kind nobody answers is a design, not a broken home.
 		assert.equal(reported.ok, true, reported.detail);
 		assert.match(reported.detail, /unchanged since the last boot/);
-		assert.match(reported.detail, /kind mail\.arrived wakes nothing/, "a routine the file does not define");
-		assert.match(reported.detail, /kind alarm\.ringing wakes nothing/, "a routine the file switched off");
-		assert.doesNotMatch(reported.detail, /chat\.message/, "a live routine is not reported");
+		assert.match(reported.detail, /kind mail\.arrived wakes nothing/, "an event the file does not define");
+		assert.match(reported.detail, /kind alarm\.ringing wakes nothing/, "an event the file switched off");
+		assert.doesNotMatch(reported.detail, /chat\.message/, "a live event is not reported");
 
-		// The same home with the routine the grant names: nothing to report, which is what makes the two lines above about
-		// the routines rather than about the check always finding something.
+		// Add the missing entry: nothing to report, which is what makes the two lines above about the file rather than
+		// about the check always finding something.
 		await writeFile(
-			join(house.agentDir, "routines.json"),
+			house.events,
 			JSON.stringify([
-				{ name: "team-chat", prompt: "Answer the chat.", intervalSeconds: 600 },
-				{ name: "check-mail", prompt: "Check the mail.", intervalSeconds: 600 },
-				{ name: "quiet-one", prompt: "Never fires." },
+				{ source: "telegram", kind: "chat.message", enabled: true, prompt: "Answer the chat." },
+				{ source: "telegram", kind: "mail.arrived", enabled: true, prompt: "Check the mail." },
+				{ source: "telegram", kind: "alarm.ringing", enabled: true, prompt: "Ring it." },
 			]),
 		);
 		const live = check(await doctor(house), "integrations");

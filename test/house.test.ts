@@ -68,6 +68,7 @@ test("housePaths() follows MASON_HOME and puts every path in one of the two halv
 			skillsDir: join(home, "agent", "skills"),
 			agentsDir: join(home, "agent", "agents"),
 			workspaceDir: join(home, "agent", "workspace"),
+			events: join(home, "agent", "events.json"),
 			// The server's half: the soul it renders, the door, the keys and the state.
 			soul: join(home, "service", "soul.md"),
 			config: join(home, "service", "config.json"),

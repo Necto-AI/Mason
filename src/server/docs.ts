@@ -1,25 +1,20 @@
 /**
  * The reference the agent reads about its own deployment, and the one place a document can grow without costing a token.
  *
- * The prompt has a ceiling, and every sentence in it is paid again on every turn; a connector that needs three paragraphs
- * of explanation cannot have them. So the explanation is a page on the tool machine instead — `/mason/docs/`, mounted
- * read-only by whoever serves it — and the prompt carries an index of it, one line per page.
+ * The prompt has a ceiling, and every sentence in it is paid again on every turn; a service that needs three paragraphs
+ * of explanation cannot have them. A service's pages are MCP resources now, read through `mcp_read_resource`; the pages
+ * mason ships stay in the package for mason's own reference and are indexed by title only.
  *
- * Read-only is the point, not a preference: the agent the reference is meant to correct is the same process that could
- * otherwise rewrite it, and a page the agent wrote would be read back as the machine's own truth. So nothing here copies
- * anything into the home, and the agent's half of it stays the agent's.
+ * Nothing here copies anything into the home, and the agent's half of it stays the agent's.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The pages mason ships, in the repository — the directory `DOCS_MOUNT` is served from. */
+/** The pages mason ships, in the repository; a deployment does not have to mount them for a service's docs. */
 export const SHIPPED_DOCS_DIR = fileURLToPath(new URL("../../docs/agent/", import.meta.url));
 
-/** The path the prompt names: where a tool machine sees the pages. */
-export const DOCS_MOUNT = "/mason/docs";
-
-/** One page of the reference: its path inside the mount, and the first heading that says what it is. */
+/** One page of the reference: its path inside the docs directory, and the first heading that says what it is. */
 export interface DocPage {
 	readonly path: string;
 	readonly title: string;
@@ -28,8 +23,8 @@ export interface DocPage {
 /**
  * The pages mason ships, README first and then alphabetical.
  *
- * Read from the server's side of the same directory the tool machine mounts, because the index is rendered by the server
- * and the mount is a deployment detail — a page the package does not carry is a page the index does not offer.
+ * Read from the package's own directory: the index is rendered by the server, and a page the package does not carry is a
+ * page the index does not offer. A deployment does not have to mount it; a service's docs are MCP resources.
  */
 export async function readDocsIndex(docsDir = SHIPPED_DOCS_DIR): Promise<DocPage[]> {
 	const pages: DocPage[] = [];

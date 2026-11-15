@@ -14,7 +14,7 @@ services in the stack. A connector uploads the audio as an attachment (`POST /ap
 agent reads itself when a message carrying one arrives), and a skill tells the agent to run a local transcriber over
 the file it now holds. No port, no container, no second copy of the bytes, nothing to authenticate.
 
-**Why not an MCP server.** mason's MCP surface is `mcp_search`, `mcp_describe` and `mcp_call`, and every one of them is
+**Why not an MCP server.** mason's MCP surface is `mcp_search`, `mcp_describe`, `mcp_call` and `mcp_read_resource`, and every one of them is
 `callers: ["tools"]`: the model is never offered an MCP tool. An ASR server on `mason-mcp` would therefore be invisible
 to the model, and reading a voice note would mean writing a script to call a tool the model was never told about. The
 skill is the shorter path and the one the model can follow.

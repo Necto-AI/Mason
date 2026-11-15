@@ -31,8 +31,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const PACKAGE = "mason-agent";
 
 /**
- * The reference's front page, as the tarball carries it. The mount is `/mason/docs`; `dist/docs/agent` is its source.
- * The prompt's grounding line names it too, so the index beside it is the half a missing copy empties.
+ * The reference's front page, as the tarball carries it. `dist/docs/agent` is its source, and the prompt indexes the
+ * shipped pages by title; README is the one page the index leaves out, so the tarball's copy is checked directly.
  */
 const DOCS_FRONT_PAGE = join("dist", "docs", "agent", "README.md");
 
@@ -99,14 +99,14 @@ async function main(): Promise<void> {
 				readonly prompt: string;
 				readonly sections: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 			};
-			// A listed page, not the grounding line: the line is a constant in the section, while a `- /mason/docs/` line
-			// can only exist if the installed `dist/docs/agent` was read. README is the one page the index leaves out, so
-			// the tarball's copy is checked directly.
+			// A listed page, not the grounding line: the line is a constant in the section, while a `- ` line can only
+			// exist if the installed `dist/docs/agent` was read. README is the one page the index leaves out, so the
+			// tarball's copy is checked directly.
 			const listed =
 				rendered.sections
 					.find((section) => section.key === "docs")
 					?.text.split("\n")
-					.filter((line) => line.startsWith("- /mason/docs/")) ?? [];
+					.filter((line) => line.startsWith("- ")) ?? [];
 			const [first] = listed;
 			if (first === undefined) {
 				throw new Error("the prompt's docs section lists no page: the tarball carries no deployment reference");

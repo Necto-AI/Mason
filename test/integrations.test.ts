@@ -358,6 +358,56 @@ describe("the integration list on disk", () => {
 		assert.match(await refusal(paths), /"connector\.user\.owner" that is not an actor id/);
 	});
 
+	it("reads a connector's event kinds, and refuses the retired hooks map", async () => {
+		const paths = await temporaryHome();
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					telegram: {
+						enabled: true,
+						connector: { events: { kinds: ["chat.message", " alarm.ringing ", "chat.message"] } },
+					},
+				},
+			}),
+		);
+		const read = (await readIntegrations(paths)).integrations.telegram?.connector?.events;
+		assert.deepEqual(
+			read?.kinds,
+			["chat.message", "alarm.ringing"],
+			"trimmed and deduplicated, in the operator's order",
+		);
+
+		await writeRaw(
+			paths,
+			JSON.stringify({
+				integrations: {
+					telegram: { enabled: true, connector: { events: { hooks: { "chat.message": "team-chat" } } } },
+				},
+			}),
+		);
+		const refused = await refusal(paths);
+		assert.match(refused, /retired "connector\.events\.hooks"/);
+		assert.match(refused, /connector\.events\.kinds/);
+		assert.match(refused, /agent\/events\.json/);
+		assert.match(refused, /by hand/);
+	});
+
+	it("refuses a kinds list that is not a list of non-empty names", async () => {
+		for (const kinds of ["chat.message", [""], [1]]) {
+			const paths = await temporaryHome();
+			await writeRaw(
+				paths,
+				JSON.stringify({
+					integrations: {
+						telegram: { enabled: true, connector: { events: { kinds } } },
+					},
+				}),
+			);
+			assert.match(await refusal(paths), /"connector\.events\.kinds"/);
+		}
+	});
+
 	it("writes the file private, through a rename, and leaves no temporary behind", async () => {
 		const paths = await temporaryHome();
 		await writeIntegration(paths, "github", github);

@@ -6,8 +6,9 @@
  * `McpClient` over Streamable HTTP per enabled integration. What it offers is **not** the prompt prefix. A tool that
  * appeared when a container restarted, or vanished because a server redeployed, used to arrive as a deferred tool — which meant the
  * `codemode` section that lists the tools a script can call was different between two turns of one build, and the
- * prefix stopped being reusable. So nothing a server says is registered here. The registry gets three stable tools,
- * `mcp_search`, `mcp_describe` and `mcp_call`, and the answer they give is whatever the servers say *now*.
+ * prefix stopped being reusable. So nothing a server says is registered here. The registry gets four stable tools,
+ * `mcp_search`, `mcp_describe`, `mcp_call` and `mcp_read_resource`, and the answer they give is whatever the servers say
+ * *now*.
  *
  * That is the whole of mason's MCP surface, and it is `callers: ["tools"]`: a script reaches it, the model is never
  * offered it, and `tool_search` cannot promote a server's forty schemas into the declared list. Progressive disclosure
@@ -40,16 +41,27 @@ import {
 } from "@earendil-works/pi-durable";
 import {
 	type CallToolResult,
+	type InitializeResult,
 	McpClient,
+	type Resource as McpResource,
 	type Tool as McpTool,
 	type McpTransport,
 	StreamableHttpTransport,
 	toLlmContent,
 } from "@earendil-works/pi-mcp";
-import { APPROVAL, APPROVAL_META_KEY, type ApprovalMarker, isApprovalMarker } from "mason-protocol";
+import { compile } from "@earendil-works/pi-schema";
+import {
+	APPROVAL,
+	APPROVAL_META_KEY,
+	type ApprovalMarker,
+	INTEGRATION_META_KEY,
+	type IntegrationManifest,
+	IntegrationManifestSchema,
+	isApprovalMarker,
+} from "mason-protocol";
 import { Type } from "typebox";
 import { integrationStatus } from "./integration-status.ts";
-import type { Integration, IntegrationMcp } from "./integrations.ts";
+import type { Integration, IntegrationMcp, IntegrationSurface } from "./integrations.ts";
 
 /**
  * One request to an integration. A container that accepts a socket and then says nothing must not hold a turn, and the
@@ -133,8 +145,13 @@ const CLIENT_VERSION = "0.1.0";
  */
 export type McpTransportFactory = (url: string, credential?: string) => McpTransport;
 
-/** The three tools the catalog installs, by the names a script calls: the whole of what MCP puts in a registry. */
-export const MCP_TOOL = { search: "mcp_search", describe: "mcp_describe", call: "mcp_call" } as const;
+/** The four tools the catalog installs, by the names a script calls: the whole of what MCP puts in a registry. */
+export const MCP_TOOL = {
+	search: "mcp_search",
+	describe: "mcp_describe",
+	call: "mcp_call",
+	read: "mcp_read_resource",
+} as const;
 
 /** One tool a server offers right now, with the two facts a caller needs to act on it. */
 export interface DiscoveredTool {
@@ -176,6 +193,20 @@ export type McpCallOutcome =
 /** Why a call did not reach the server: gone, redefined, or unreachable right now. */
 export type McpRefusal = "unknown_tool" | "changed" | "unreachable";
 
+/** One docs page a server lists: a markdown resource the prompt can point at. */
+export interface DiscoveredResource {
+	readonly integration: string;
+	readonly uri: string;
+	readonly name: string;
+	readonly title?: string;
+	readonly description?: string;
+}
+
+/** What a docs read came to. A refusal is a value, not a throw: a script decides what to do about it. */
+export type McpResourceOutcome =
+	| { readonly ok: true; readonly uri: string; readonly text: string }
+	| { readonly ok: false; readonly message: string };
+
 /** The catalog as the rest of mason sees it: a question about now, and a call against it. */
 export interface McpCatalog {
 	/**
@@ -183,8 +214,13 @@ export interface McpCatalog {
 	 * build with no integration has exactly the surface it had before MCP existed, not an empty extension in the list.
 	 */
 	readonly extension: Extension | undefined;
-	/** The three tools the extension carries, in declaration order. */
+	/** The four tools the extension carries, in declaration order. */
 	readonly tools: readonly ToolRegistration[];
+	/**
+	 * What each enabled MCP integration declared at boot: its tool count, its docs and its manifest. The prompt reads this
+	 * snapshot, so a reconnect cannot re-price the prefix mid-conversation.
+	 */
+	readonly surface: Record<string, IntegrationSurface>;
 	/** Tools whose name or description matches every word of `query`, best first. A server that dropped is retried once. */
 	search(query: string, options?: SearchOptions): Promise<DiscoveredTool[]>;
 	/**
@@ -195,6 +231,10 @@ export interface McpCatalog {
 	 */
 	describe(integration: string, tool: string): Promise<DiscoveredTool | undefined>;
 	call(integration: string, tool: string, args: JsonObject, expectedVersion?: string): Promise<McpCallOutcome>;
+	/** The markdown docs a server listed at boot, or the live list after a reconnect. */
+	resources(integration?: string): DiscoveredResource[];
+	/** Read one markdown resource, by its uri or its listed name. */
+	readResource(integration: string, uriOrName: string): Promise<McpResourceOutcome>;
 	/** Connects every server that dropped, for the routes and the boot's health line. */
 	refresh(): Promise<void>;
 	/** Closes every client this boot opened. The catalog holds sockets, so a runtime that closed without this leaks one per integration. */
@@ -222,7 +262,7 @@ export interface OpenMcpCatalogOptions {
  * Reach every enabled integration that has an MCP server, in parallel, and keep what they offer.
  *
  * The clients stay open for the calls that follow: a catalog is only useful if the next script's call is cheap. The
- * tools are the same three whatever connected, which is the point — the registry does not move when a server comes or
+ * tools are the same four whatever connected, which is the point — the registry does not move when a server comes or
  * goes.
  */
 export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<McpCatalog> {
@@ -327,16 +367,46 @@ export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<Mc
 		return server.call(current, args);
 	}
 
-	// The three tools carry the catalog, so they are built from the functions above rather than from the object below:
+	function resources(integration?: string): DiscoveredResource[] {
+		return [...servers.values()]
+			.filter((server) => integration === undefined || server.name === integration)
+			.flatMap((server) => server.resources());
+	}
+
+	async function readResource(integration: string, uriOrName: string): Promise<McpResourceOutcome> {
+		const server = servers.get(integration);
+		if (server === undefined) {
+			return { ok: false, message: `no integration named "${integration}" lists docs` };
+		}
+		await server.ensure();
+		if (!server.connected) {
+			return { ok: false, message: `mcp: ${integration} is not reachable right now; nothing was read` };
+		}
+		const resource = server.resource(uriOrName);
+		if (resource === undefined) {
+			return {
+				ok: false,
+				message: `mcp: ${integration} lists no doc named "${uriOrName}"; mcp_read_resource takes the uri or page name from the prompt's docs index`,
+			};
+		}
+		return server.read(resource);
+	}
+
+	// The four tools carry the catalog, so they are built from the functions above rather than from the object below:
 	// an object that held itself would have to be read before it exists.
-	const extension = defineExtension({ name: "mcp", tools: catalogTools({ search, describe, call }) });
+	const extension = defineExtension({ name: "mcp", tools: catalogTools({ search, describe, call, readResource }) });
+	const surface: Record<string, IntegrationSurface> = {};
+	for (const server of servers.values()) surface[server.name] = server.surface();
 	return {
 		extension,
-		// The three tools, not the servers': what the registry carries is the same on every boot of one build.
+		// The four tools, not the servers': what the registry carries is the same on every boot of one build.
 		tools: (extension.tools ?? []) as readonly ToolRegistration[],
+		surface,
 		search,
 		describe,
 		call,
+		resources,
+		readResource,
 		async refresh() {
 			await Promise.all([...servers.values()].map((server) => server.ensure()));
 		},
@@ -353,12 +423,18 @@ function emptyCatalog(): McpCatalog {
 	return {
 		extension: undefined,
 		tools: [],
+		surface: {},
 		search: async () => [],
 		describe: async () => undefined,
 		call: async (integration, _tool) => ({
 			ok: false,
 			code: "unknown_tool",
 			message: `no integration named "${integration}" lends tools: mcp_search lists what is configured`,
+		}),
+		resources: () => [],
+		readResource: async (integration) => ({
+			ok: false,
+			message: `no integration named "${integration}" lists docs`,
 		}),
 		refresh: async () => {},
 		close: async () => {},
@@ -384,6 +460,10 @@ class McpServer {
 	readonly #log: (line: string) => void;
 	#client: McpClient | undefined;
 	#listed = new Map<string, DiscoveredTool>();
+	#docs = new Map<string, DiscoveredResource>();
+	#manifest: IntegrationManifest | undefined;
+	/** A contract refusal is permanent for this boot: the service answered, and retrying the same shape cannot fix it. */
+	#refusal: string | undefined;
 	#refreshing: Promise<void> | undefined;
 	#refreshAgain = false;
 
@@ -414,6 +494,51 @@ class McpServer {
 		return this.#listed.get(tool);
 	}
 
+	/** The markdown docs this server listed. */
+	resources(): DiscoveredResource[] {
+		return [...this.#docs.values()];
+	}
+
+	/** One doc, by its uri or the page name the manifest and the index use. */
+	resource(uriOrName: string): DiscoveredResource | undefined {
+		return this.#docs.get(uriOrName) ?? [...this.#docs.values()].find((doc) => doc.name === uriOrName);
+	}
+
+	/** What the prompt's one line for this integration reads, as the boot found it. */
+	surface(): IntegrationSurface {
+		return {
+			name: this.name,
+			toolCount: this.#listed.size,
+			docs: [...this.#docs.values()]
+				.filter((doc) => this.#manifest?.docs === undefined || this.#manifest.docs.includes(doc.name))
+				.map((doc) => ({
+					name: doc.name,
+					uri: doc.uri,
+					...(doc.title === undefined ? {} : { title: doc.title }),
+				})),
+			...(this.#manifest === undefined ? {} : { manifest: this.#manifest }),
+		};
+	}
+
+	/** One `resources/read`, against the docs the server listed. */
+	async read(resource: DiscoveredResource): Promise<McpResourceOutcome> {
+		const client = this.#client;
+		if (client === undefined) {
+			return { ok: false, message: `mcp: ${this.name} is not reachable right now; nothing was read` };
+		}
+		try {
+			const result = await client.readResource(resource.uri, { timeoutMs: REQUEST_TIMEOUT_MS });
+			const text = result.contents
+				.filter((entry): entry is Extract<(typeof result.contents)[number], { text: string }> => "text" in entry)
+				.map((entry) => entry.text)
+				.join("\n");
+			return { ok: true, uri: resource.uri, text };
+		} catch (error) {
+			this.#markDown(error);
+			return { ok: false, message: `mcp: ${this.name} could not read ${resource.uri} (${errorMessage(error)})` };
+		}
+	}
+
 	/**
 	 * The boot's attempt: `undefined` when it connected, or the reason this boot has no tools from this server. A
 	 * `required` failure is the caller's to turn into a refusal — a container that is allowed to be down is one line.
@@ -425,7 +550,12 @@ class McpServer {
 		} catch (error) {
 			const message = errorMessage(error);
 			this.#record(false, message);
-			this.#log(`[mcp] ${this.name}: unreachable (${message}); its tools are absent until it answers`);
+			if (error instanceof IntegrationRefusal) {
+				this.#refusal = message;
+				this.#log(`[mcp] ${this.name}: refused (${message})`);
+			} else {
+				this.#log(`[mcp] ${this.name}: unreachable (${message}); its tools are absent until it answers`);
+			}
 			if (this.#mcp.required !== true) return undefined;
 			return { name: this.name, error: message };
 		}
@@ -437,9 +567,14 @@ class McpServer {
 	 */
 	async ensure(): Promise<void> {
 		if (this.#client !== undefined) return;
+		if (this.#refusal !== undefined) {
+			this.#record(false, this.#refusal);
+			return;
+		}
 		try {
 			await this.#connect();
 		} catch (error) {
+			if (error instanceof IntegrationRefusal) this.#refusal = errorMessage(error);
 			this.#record(false, errorMessage(error));
 		}
 	}
@@ -479,13 +614,23 @@ class McpServer {
 	async #connect(): Promise<void> {
 		const listed = await this.#attempt();
 		this.#client = listed.client;
+		this.#manifest = listed.manifest;
 		this.#apply(listed.tools);
+		this.#applyResources(listed.resources);
 		this.#record(true, null);
 		this.#watch(listed.client);
-		this.#log(`[mcp] ${this.name}: connected, ${listed.tools.length} tool${listed.tools.length === 1 ? "" : "s"}`);
+		this.#log(
+			`[mcp] ${this.name}: connected, ${listed.tools.length} tool${listed.tools.length === 1 ? "" : "s"}, ` +
+				`${listed.resources.length} doc${listed.resources.length === 1 ? "" : "s"}`,
+		);
 	}
 
-	async #attempt(): Promise<{ client: McpClient; tools: McpTool[] }> {
+	async #attempt(): Promise<{
+		client: McpClient;
+		tools: McpTool[];
+		resources: McpResource[];
+		manifest: IntegrationManifest | undefined;
+	}> {
 		let failure: unknown;
 		for (let attempt = 1; attempt <= CONNECT_ATTEMPTS; attempt += 1) {
 			const client = new McpClient({
@@ -494,11 +639,19 @@ class McpServer {
 				requestTimeoutMs: REQUEST_TIMEOUT_MS,
 			});
 			try {
-				await client.connect(this.#openTransport(this.#mcp.url, this.#mcp.credential));
-				return { client, tools: await client.listTools() };
+				const initialized = (await client.connect(
+					this.#openTransport(this.#mcp.url, this.#mcp.credential),
+				)) as InitializeResult & { readonly _meta?: Record<string, unknown> };
+				const manifest = validateIntegrationManifest(this.name, initialized._meta?.[INTEGRATION_META_KEY]);
+				const tools = await client.listTools();
+				assertTools(this.name, tools);
+				const resources = initialized.capabilities.resources === undefined ? [] : await client.listResources();
+				assertDocs(this.name, resources, manifest);
+				return { client, tools, resources, manifest };
 			} catch (error) {
-				failure = error;
 				await client.close().catch(() => {});
+				if (error instanceof IntegrationRefusal) throw error;
+				failure = error;
 				if (attempt < CONNECT_ATTEMPTS) await delay(RETRY_DELAY_MS);
 			}
 		}
@@ -529,7 +682,9 @@ class McpServer {
 				const client = this.#client;
 				if (client === undefined) return;
 				try {
-					this.#apply(await client.listTools());
+					const tools = await client.listTools();
+					assertTools(this.name, tools);
+					this.#apply(tools);
 					this.#record(true, null);
 				} catch (error) {
 					// The server may be redeploying: the catalog keeps what it had, and the next call says the server is quiet.
@@ -560,6 +715,22 @@ class McpServer {
 		this.#record(true, null);
 	}
 
+	/** The markdown pages a server lists: every other resource is not a docs page. */
+	#applyResources(listed: readonly McpResource[]): void {
+		const next = new Map<string, DiscoveredResource>();
+		for (const resource of listed) {
+			if (resource.mimeType !== "text/markdown") continue;
+			next.set(resource.uri, {
+				integration: this.name,
+				uri: resource.uri,
+				name: resource.name,
+				...(resource.title === undefined ? {} : { title: resource.title }),
+				...(resource.description === undefined ? {} : { description: resource.description }),
+			});
+		}
+		this.#docs = next;
+	}
+
 	#markDown(error: unknown): void {
 		const client = this.#client;
 		this.#client = undefined;
@@ -576,6 +747,93 @@ class McpServer {
 		const client = this.#client;
 		this.#client = undefined;
 		await client?.close().catch(() => {});
+	}
+}
+
+/** A service that answered but broke the contract: retrying cannot fix it, so the boot stops with the sentence. */
+export class IntegrationRefusal extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "IntegrationRefusal";
+	}
+}
+
+/** One compiled schema for the manifest an MCP server or a connector hands over: one parser, one set of refusals. */
+const manifestValidator = compile(IntegrationManifestSchema);
+
+/**
+ * The manifest a service declared, checked once. An absent manifest is a service that said nothing about itself; a
+ * present one is held to the schema, and the first failing field is the sentence the operator reads.
+ */
+export function validateIntegrationManifest(integration: string, value: unknown): IntegrationManifest | undefined {
+	if (value === undefined) return undefined;
+	const errors = manifestValidator.errors(value);
+	if (errors.length > 0) {
+		const first = errors[0];
+		throw new IntegrationRefusal(
+			`integration "${integration}" declared an invalid dev.mason/integration manifest at ` +
+				`${first?.path === undefined || first.path === "" ? "the manifest" : first.path}: ${first?.message ?? "invalid"}`,
+		);
+	}
+	const manifest = value as IntegrationManifest;
+	if (manifest.about.trim() === "") {
+		throw new IntegrationRefusal(
+			`integration "${integration}" declared an empty dev.mason/integration manifest.about`,
+		);
+	}
+	for (const [index, event] of manifest.events.entries()) {
+		for (const field of ["kind", "description", "prompt"] as const) {
+			if (event[field].trim() === "") {
+				throw new IntegrationRefusal(
+					`integration "${integration}" declared an empty dev.mason/integration manifest.events[${index}].${field}`,
+				);
+			}
+		}
+	}
+	for (const [index, name] of (manifest.docs ?? []).entries()) {
+		if (name.trim() === "") {
+			throw new IntegrationRefusal(
+				`integration "${integration}" declared an empty dev.mason/integration manifest.docs[${index}]`,
+			);
+		}
+	}
+	return manifest;
+}
+
+/**
+ * Every tool a service lends says what it is and what it does. A missing description is a tool a script cannot choose,
+ * and a missing marker is an effect nobody declared, so both refuse the whole integration instead of quietly defaulting.
+ */
+function assertTools(integration: string, tools: readonly McpTool[]): void {
+	for (const tool of tools) {
+		if (tool.description === undefined || tool.description.trim() === "") {
+			throw new IntegrationRefusal(
+				`integration "${integration}" refused: tools/list names "${tool.name}" with no description, and a script cannot choose a tool it cannot read`,
+			);
+		}
+		const marker = tool._meta?.[APPROVAL_META_KEY];
+		if (!isApprovalMarker(marker)) {
+			throw new IntegrationRefusal(
+				`integration "${integration}" refused: tools/list names "${tool.name}" with ` +
+					`${marker === undefined ? "no" : `the unknown ${JSON.stringify(marker)}`} dev.mason/approval marker; every tool declares required or not_required`,
+			);
+		}
+	}
+}
+
+/** The docs a server listed are markdown pages, and the manifest's names, when it gave any, name ones that exist. */
+function assertDocs(
+	integration: string,
+	resources: readonly McpResource[],
+	manifest: IntegrationManifest | undefined,
+): void {
+	const markdown = resources.filter((resource) => resource.mimeType === "text/markdown");
+	for (const name of manifest?.docs ?? []) {
+		if (!markdown.some((resource) => resource.name === name)) {
+			throw new IntegrationRefusal(
+				`integration "${integration}" refused: the manifest names docs "${name}", and resources/list offers no text/markdown page by that name`,
+			);
+		}
 	}
 }
 
@@ -606,13 +864,13 @@ function versionOf(tool: McpTool): string {
 }
 
 /**
- * The three tools a script uses to reach a server, and the whole of what the model's prompt carries about MCP.
+ * The four tools a script uses to reach a server, and the whole of what the model's prompt carries about MCP.
  *
  * `callers: ["tools"]` on each: the model is never offered them, so no server's schema can enter the declared list, and
  * `tool_search` has nothing of MCP's to promote. A script reads them from the `codemode` section, which is why their
- * descriptions say how the three fit together rather than what one does.
+ * descriptions say how the four fit together rather than what one does.
  */
-function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call">): ToolRegistration[] {
+function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call" | "readResource">): ToolRegistration[] {
 	const search = defineTool({
 		name: MCP_TOOL.search,
 		description:
@@ -715,7 +973,33 @@ function catalogTools(catalog: Pick<McpCatalog, "search" | "describe" | "call">)
 			};
 		},
 	});
-	return [search, describe, call];
+	const read = defineTool({
+		name: MCP_TOOL.read,
+		description:
+			"Read one markdown docs page a connected service lists. Name the integration and the page's uri or name from the prompt's docs index. Answers the page's text, or an error naming the page the service does not offer.",
+		parameters: Type.Object({
+			integration: Type.String({ description: "The service, as the operator names it." }),
+			uri: Type.String({ description: "The page's uri, or the name resources/list gave it." }),
+		}),
+		callers: ["tools"],
+		// A read: asking again after a restart reads the same page from the service.
+		replay: "safe",
+		structuredOutputSchema: Type.Unsafe<JsonValue>({
+			type: "object",
+			properties: { integration: { type: "string" }, uri: { type: "string" }, text: { type: "string" } },
+			required: ["integration", "uri", "text"],
+			additionalProperties: true,
+		}),
+		execute: async ({ integration, uri }) => {
+			const outcome = await catalog.readResource(integration, uri);
+			if (!outcome.ok) return { output: [{ type: "text", text: outcome.message }], isError: true };
+			return {
+				output: [{ type: "text", text: outcome.text }],
+				structuredOutput: { integration, uri: outcome.uri, text: outcome.text } as unknown as JsonValue,
+			};
+		},
+	});
+	return [search, describe, call, read];
 }
 
 /**

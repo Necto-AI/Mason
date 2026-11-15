@@ -1,9 +1,9 @@
 /**
  * The event log: every event a connector raises, in one append-only line per event.
  *
- * It exists because an event is not always news. A granted kind whose routine is absent, or switched off, wakes nothing —
- * and a kind that woke nothing and left no trace is an event nobody can find out about afterwards. So the log is the
- * default sink: `agent/routines.json` decides what wakes the bot, and this decides what is remembered either way.
+ * It exists because an event is not always news. A granted kind with no enabled entry in `agent/events.json` wakes
+ * nothing, and a kind that woke nothing and left no trace is an event nobody can find out about afterwards. So the log is
+ * the default sink: the agent's file decides what wakes the bot, and this decides what is remembered either way.
  *
  * It is **mason's state, not the agent's memory**: `service/data/events/YYYY-MM-DD.jsonl`, one file a day, written for
  * every event. Keeping it inside `agent/` would churn the memory repository with lines the agent did not choose to
@@ -22,7 +22,7 @@ export interface EventLine {
 	readonly at: string;
 	readonly connector: string;
 	readonly kind: string;
-	/** The routine the entry's grant maps the kind to: what the operator said this kind means. */
+	/** The entry in `agent/events.json` the kind names, when the home has one. */
 	readonly hook: string;
 	readonly appendId: string;
 	readonly summary?: string;

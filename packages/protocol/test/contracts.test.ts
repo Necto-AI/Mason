@@ -13,6 +13,8 @@ import {
 	connectorHost,
 	ERROR_CODE,
 	errorCodeOf,
+	INTEGRATION_META_KEY,
+	IntegrationManifestSchema,
 	MasonPeer,
 	masonError,
 	type PeerRef,
@@ -63,6 +65,30 @@ test("the shape the type says and the shape the schema validates are one shape",
 	} satisfies PeerRef["session"]["value"];
 	assert.equal(compile(SessionSchema).check(session), true);
 	assert.equal(compile(SessionSchema).check({ ...session, protocol: "one" }), false);
+
+	// The same manifest an MCP initialize result carries and a connector hands over in its session: one schema, one
+	// parser, one set of refusals.
+	const manifest = {
+		about: "Issues and pull requests",
+		events: [{ kind: "issue.opened", description: "an issue opened", prompt: "Read the issue." }],
+		docs: ["guide"],
+	};
+	assert.equal(INTEGRATION_META_KEY, "dev.mason/integration");
+	assert.equal(compile(IntegrationManifestSchema).check(manifest), true);
+	assert.equal(compile(IntegrationManifestSchema).check({ events: [] }), false, "about is required");
+	assert.equal(
+		compile(IntegrationManifestSchema).check({
+			...manifest,
+			events: [{ kind: "x", description: "y", prompt: "z", whenBusy: "later" }],
+		}),
+		false,
+		"whenBusy is one of the two words",
+	);
+	assert.equal(
+		compile(SessionSchema).check({ ...session, metadata: manifest }),
+		true,
+		"a session echoes the manifest the connector handed over",
+	);
 
 	const submission = {
 		type: "submission" as const,

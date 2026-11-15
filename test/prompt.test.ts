@@ -15,7 +15,12 @@ import { daemonCommand } from "../src/server/env.ts";
 import { CODEMODE_SECTION } from "../src/server/extensions/codemode.ts";
 import { discoverSkills, renderSkills } from "../src/server/extensions/skills.ts";
 import { ensureHouse, housePaths } from "../src/server/house.ts";
-import { type Integration, setIntegrations } from "../src/server/integrations.ts";
+import {
+	type Integration,
+	type IntegrationSurface,
+	setIntegrationSurface,
+	setIntegrations,
+} from "../src/server/integrations.ts";
 import {
 	DEFAULT_SOUL,
 	INTEGRATIONS_POINTER,
@@ -638,12 +643,18 @@ test("an empty home renders no skills section at all", async () => {
  * The integration list is one snapshot filled at boot (`setIntegrations`): a test sets it and puts back the empty one a
  * process that never configured a home has.
  */
-async function withIntegrations(integrations: Record<string, Integration>, run: () => Promise<void>): Promise<void> {
+async function withIntegrations(
+	integrations: Record<string, Integration>,
+	run: () => Promise<void>,
+	surface: Record<string, IntegrationSurface> = {},
+): Promise<void> {
 	setIntegrations(integrations);
+	setIntegrationSurface(surface);
 	try {
 		await run();
 	} finally {
 		setIntegrations({});
+		setIntegrationSurface({});
 	}
 }
 
@@ -659,16 +670,16 @@ const DOCS: Integration = {
 };
 
 /**
- * The section that connects a name the model can read to a tool it was never offered: every MCP tool is deferred, so the
- * description here is all the model has until `tool_search` finds one. Name and purpose only — no health (it changes
+ * The section that connects a name the model can read to a tool it was never offered: every enabled integration, the
+ * tool count a script will find, and the docs page it can read. Name, count and pointer only — no health (it changes
  * between turns), no tool names, no schemas.
  */
-test("the integrations section is one sorted name and purpose per enabled MCP server, and the way to reach them", async () => {
+test("the integrations section is one sorted line per enabled integration, with its tool count and docs pointer", async () => {
 	await withIntegrations(
 		{
 			github: GITHUB,
 			docs: DOCS,
-			// An entry with no MCP server is not a tool: nothing about it belongs in the tool list's section.
+			// An entry with no MCP server is still an integration the prompt names; it lends no tools.
 			activity: { enabled: true, description: "Never a tool" },
 			old: { enabled: false, description: "Turned off", mcp: { url: "http://mason-old:8080/mcp" } },
 		},
@@ -676,31 +687,32 @@ test("the integrations section is one sorted name and purpose per enabled MCP se
 			const rendered = await renderSection(sectionOf("integrations"));
 			assert.equal(
 				rendered,
-				`<integrations>\n${INTEGRATIONS_POINTER}\ndocs: The team's handbook and runbooks\ngithub: Issues and pull requests for the team's repositories\n</integrations>`,
-				"sorted by name, and nothing on the line but the name and what the integration is for",
+				`<integrations>\n${INTEGRATIONS_POINTER}\nactivity: Never a tool (0 tools)\ndocs: The team's handbook and runbooks (2 tools)\ngithub: Issues and pull requests for the team's repositories (12 tools; docs: guide (mason://docs/github))\n</integrations>`,
+				"sorted by name, with the count and the docs pointer on the line",
 			);
-			assert.match(
-				rendered ?? "",
-				/searchTools/,
-				"a name here reaches a tool through the script surface, never a schema",
-			);
-			assert.doesNotMatch(
-				rendered ?? "",
-				/Never a tool|Turned off/,
-				"a disabled entry and one with no MCP server are absent",
-			);
-			assert.doesNotMatch(rendered ?? "", /mcp__|issues_create|8082/, "no tool names, no urls, no schemas");
+			assert.match(rendered ?? "", /searchTools/, "a name here reaches a tool through the script surface");
+			assert.match(rendered ?? "", /mcp_read_resource/, "and a docs page through the one read tool");
+			assert.doesNotMatch(rendered ?? "", /Turned off/, "a disabled entry is absent");
+			assert.doesNotMatch(rendered ?? "", /mcp__|issues_search|8082/, "no tool names, no urls, no schemas");
+		},
+		{
+			github: {
+				name: "github",
+				toolCount: 12,
+				docs: [{ name: "guide", uri: "mason://docs/github" }],
+			},
+			docs: { name: "docs", toolCount: 2, docs: [] },
+			activity: { name: "activity", toolCount: 0, docs: [] },
 		},
 	);
 });
 
-test("the integrations section is absent when no integration is enabled with an MCP server", async () => {
+test("the integrations section is absent when no integration is enabled", async () => {
 	for (const integrations of [
 		{},
 		{
 			old: { enabled: false, description: "Off", mcp: { url: "http://mason-old:8080/mcp" } } satisfies Integration,
 		},
-		{ activity: { enabled: true, description: "No MCP server" } satisfies Integration },
 	] as Record<string, Integration>[]) {
 		await withIntegrations(integrations, async () => {
 			assert.equal(
@@ -714,18 +726,30 @@ test("the integrations section is absent when no integration is enabled with an 
 
 test("the integrations section renders the same bytes twice, and equally for a reordered file", async () => {
 	let first: string | undefined;
-	await withIntegrations({ github: GITHUB, docs: DOCS }, async () => {
-		first = await renderSection(sectionOf("integrations"));
-		assert.ok(first !== undefined);
-		assert.equal(await renderSection(sectionOf("integrations")), first, "an unchanged file is the same bytes");
-	});
-	await withIntegrations({ docs: DOCS, github: GITHUB }, async () => {
-		assert.equal(
-			await renderSection(sectionOf("integrations")),
-			first,
-			"the file is read by a person as often as by the server, so its order is not the prompt's",
-		);
-	});
+	const surface: Record<string, IntegrationSurface> = {
+		github: { name: "github", toolCount: 12, docs: [] },
+		docs: { name: "docs", toolCount: 2, docs: [] },
+	};
+	await withIntegrations(
+		{ github: GITHUB, docs: DOCS },
+		async () => {
+			first = await renderSection(sectionOf("integrations"));
+			assert.ok(first !== undefined);
+			assert.equal(await renderSection(sectionOf("integrations")), first, "an unchanged file is the same bytes");
+		},
+		surface,
+	);
+	await withIntegrations(
+		{ docs: DOCS, github: GITHUB },
+		async () => {
+			assert.equal(
+				await renderSection(sectionOf("integrations")),
+				first,
+				"the file is read by a person as often as by the server, so its order is not the prompt's",
+			);
+		},
+		surface,
+	);
 });
 
 /**
@@ -785,19 +809,30 @@ test("the prompt is one registry: no other extension brings a section, and the o
  * change its own extensions. mason's agent is not that agent: it may read how this machine works, and not how the
  * machinery that runs it is built. The distinction is the path, so the path is what this test reads.
  */
-test("the docs section points at the reference on the machine, never at pi's docs or the agent's own source", async () => {
+test("the docs section indexes the shipped pages and a service's resources, and names no mount", async () => {
 	await withHouseHome(async () => {
-		const rendered = (await Promise.all(PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection))))
-			.filter((text) => text !== undefined)
-			.join("\n");
-		assert.ok(rendered.length > 0);
-		assert.match((await renderSection(sectionOf("docs"))) ?? "", /\/mason\/docs\//);
-		assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
-		assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
-		// Every docs path the prompt names is inside the agent's own half of the home. A relative `docs/` is the shape pi's
-		// section uses, and the shape that would resolve inside the package the model is running from.
-		for (const path of rendered.match(/`[^`]*\/docs[^`]*`/g) ?? []) {
-			assert.match(path, /`\/mason\/docs/, `a docs path the agent is given is the read-only mount: ${path}`);
-		}
+		await withIntegrations(
+			{ github: GITHUB },
+			async () => {
+				const rendered = (await Promise.all(PROMPT_SECTIONS.map((promptSection) => renderSection(promptSection))))
+					.filter((text) => text !== undefined)
+					.join("\n");
+				const docs = (await renderSection(sectionOf("docs"))) ?? "";
+				assert.ok(rendered.length > 0);
+				assert.match(docs, /README|events\.md/, "the pages mason ships are indexed");
+				assert.match(docs, /github\/guide: The guide \(mason:\/\/docs\/github\)/, "the service's page is indexed");
+				assert.match(docs, /mcp_read_resource/, "and the one way to read it is named");
+				assert.doesNotMatch(rendered, /\/mason\/docs/);
+				assert.doesNotMatch(rendered, /vendor\/pi|\.pi\/agent|docs\/extensions|docs\/skills|docs\/sdk/i);
+				assert.doesNotMatch(rendered, /pi documentation|readme of pi/i);
+			},
+			{
+				github: {
+					name: "github",
+					toolCount: 1,
+					docs: [{ name: "guide", uri: "mason://docs/github", title: "The guide" }],
+				},
+			},
+		);
 	});
 });

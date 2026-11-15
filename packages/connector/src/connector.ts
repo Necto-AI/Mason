@@ -23,6 +23,7 @@ import {
 	connectorHost,
 	ERROR_CODE,
 	errorCodeOf,
+	type IntegrationManifest,
 	MasonPeer,
 	type PeerRef,
 	type Session,
@@ -57,6 +58,8 @@ export interface ConnectorConfig {
 	readonly credential: string;
 	readonly store: ConnectorStore;
 	readonly handlers?: ConnectorHandlers;
+	/** What this connector is for, and the events it can raise: the same manifest an MCP server declares. */
+	readonly integration?: IntegrationManifest;
 	readonly logger?: Logger;
 	readonly now?: () => number;
 	/** How a link to mason is opened. `nodeWebSocketLink(WebSocket)` is the Node one; a test supplies a pair. */
@@ -274,7 +277,10 @@ export function createConnector(config: ConnectorConfig): Connector {
 		host.connect(link, { principal });
 		let held: PeerRef;
 		try {
-			held = (await host.get(MasonPeer, {})) as unknown as PeerRef;
+			held = (await host.get(
+				MasonPeer,
+				config.integration === undefined ? {} : { metadata: config.integration },
+			)) as unknown as PeerRef;
 		} catch (error) {
 			// The first connection says whether mason is there at all. A refusal here is the answer a command prints, not
 			// something to retry in the dark: a supervisor restarts a process, and a person reads a sentence.

@@ -10,7 +10,7 @@ Chord's, and a peer that speaks Chord speaks this.
 
 | member | what it does |
 |---|---|
-| state `session` | the handshake: this connector's commands, granted kinds and budgets |
+| state `session` | the handshake: this connector's commands, granted kinds, budgets, and its `dev.mason/integration` manifest when it sent one |
 | state `conversation` | the conversation a person reads — transcript rows, queue, run status — with its revision and diffs |
 | `append(append)` | hands mason one of two things: a person's words, or an event |
 | `control(op)` | spends one control out of the `session.commands` vocabulary |
@@ -66,6 +66,19 @@ task id or a queue id — so it reacts to what happened without re-deriving the 
    anywhere else: no grant, no prompt and no model names one.
 9. **Within major 1, additions only.** Unknown fields are ignored on both sides: every object in the contract is `open`.
 10. **Nothing crosses the wire that the projection does not name.**
+
+## The integration manifest
+
+A connector with no MCP server may still say what it is for and which events it can raise. It hands the same manifest an
+MCP server puts in its `initialize` result's `_meta["dev.mason/integration"]` as the `metadata` field of its handshake; the
+session echoes it back after validation:
+
+```json
+{ "about": "Issues and pull requests", "events": [{ "kind": "issue.opened", "description": "an issue opened", "prompt": "Read the issue." }], "docs": ["guide"] }
+```
+
+`about` and `events` are required, `docs` names markdown resources. Mason validates it with one schema, appends every
+declared event to `agent/events.json` disabled, and refuses the connection if the manifest or its docs are invalid.
 
 ## The origin
 

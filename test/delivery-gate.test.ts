@@ -54,12 +54,20 @@ after(async () => {
 async function seedRoutine(directory: string): Promise<void> {
 	await mkdir(join(directory, "house", "agent"), { recursive: true, mode: 0o700 });
 	await writeFile(
-		join(directory, "house", "agent", "routines.json"),
+		join(directory, "house", "agent", "events.json"),
 		JSON.stringify([
 			{
-				name: "team-chat",
-				intervalSeconds: 3_600,
+				source: "telegram",
+				kind: "chat.message",
+				enabled: true,
 				prompt: "A message arrived in the chat: the person you work for asked. Answer it with send.\n{{payload}}",
+			},
+			{
+				source: "routine",
+				name: "team-chat",
+				enabled: true,
+				prompt: "A message arrived in the chat: the person you work for asked. Answer it with send.\n{{payload}}",
+				schedule: { every: 1, unit: "week", at: "09:00", timezone: "UTC", days: ["mon"] },
 			},
 		]),
 	);

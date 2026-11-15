@@ -145,6 +145,36 @@ export function isApprovalMarker(value: unknown): value is ApprovalMarker {
 	return value === APPROVAL.required || value === APPROVAL.notRequired;
 }
 
+/**
+ * The key an integration declares itself under: in an MCP `initialize` result's `_meta`, or in its connector session.
+ *
+ * One manifest, one parser. A service that lends tools says it over MCP; a connector with no MCP server sends the same
+ * shape in its handshake. `about` is what the service is for, `events` are the kinds it can raise and what one means,
+ * and `docs` names the resources that are its reference pages.
+ */
+export const INTEGRATION_META_KEY = "dev.mason/integration";
+
+export const IntegrationEventSchema = obj(
+	{
+		kind: str(),
+		description: str(),
+		prompt: str(),
+		whenBusy: opt(oneOf(["steer", "followUp"] as const)),
+	},
+	{ open: true },
+);
+export type IntegrationEvent = Static<typeof IntegrationEventSchema>;
+
+export const IntegrationManifestSchema = obj(
+	{
+		about: str(),
+		events: arr(IntegrationEventSchema),
+		docs: opt(arr(str())),
+	},
+	{ open: true },
+);
+export type IntegrationManifest = Static<typeof IntegrationManifestSchema>;
+
 /* ---------------------------------------------------------------------------------------------------------------- */
 /* Schemas                                                                                                           */
 /* ---------------------------------------------------------------------------------------------------------------- */
@@ -248,7 +278,14 @@ export const LimitsSchema = obj(
  * value cannot change under a live socket.
  */
 export const SessionSchema = obj(
-	{ protocol: int(), commands: arr(str()), kinds: arr(str()), limits: LimitsSchema },
+	{
+		protocol: int(),
+		commands: arr(str()),
+		kinds: arr(str()),
+		limits: LimitsSchema,
+		/** The manifest a connector handed over at the handshake, validated and echoed back. */
+		metadata: opt(IntegrationManifestSchema),
+	},
 	{ open: true },
 );
 export type Session = Static<typeof SessionSchema>;
@@ -353,7 +390,7 @@ export type ConversationState = Static<typeof ConversationStateSchema>;
  */
 export const MasonPeer: RemoteContract = remote(CONTRACT.peer, {
 	version: 1,
-	input: obj({}),
+	input: obj({ metadata: opt(IntegrationManifestSchema) }),
 	host: hostNamed(MASON_HOST),
 	variants: {
 		default: {
