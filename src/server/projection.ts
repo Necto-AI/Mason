@@ -105,24 +105,47 @@ export interface TranscriptFold {
 	/** The newest entry folded, and how many there were: a view that rewrote them is not a view that appended. */
 	readonly last: string;
 	readonly count: number;
-	/** The entry that started the turn being read: the run its messages belong to, and what `runId` names. */
+	/** The entry that started the turn being read: its last input, and what a row falls back to for `runId`. */
 	readonly input?: string;
 	/** Whether that turn is a submission, which owes the reader a message. A hook or event turn may be silent. */
 	readonly expected: boolean;
-	/** Where in `items` the turn's rows begin, so a failed run can mark its own messages and no earlier one. */
-	readonly turnStart: number;
 	/** How many agent messages the transcript holds: the next message row's ordinal. */
 	readonly messages: number;
+	/** Where in `items` the current run's rows begin, once its first entry is known. */
+	readonly runStart?: number;
 }
 
-/** What one pass over the entries carries between them: the fold being built, and the turn boundary it is inside. */
+/** What one pass over the entries carries between them: the fold being built, and the run the view names. */
 interface FoldState {
 	items: TranscriptItem[];
 	spoke: boolean;
 	input?: string;
 	expected: boolean;
-	turnStart: number;
 	messages: number;
+	/** The run whose rows are being folded: its first entry, and where its first row landed in `items`. */
+	runId?: string;
+	runStart?: number;
+}
+
+/**
+ * The run a view names, if it names one.
+ *
+ * `pi.live.run.first` is the run in flight and `pi.live.runFailure.first` the run that died, and both are entry ids: the
+ * boundary that started it, never the newest input (#199). A view that names neither — an old home, or a revision after
+ * a restart — has no pointer, and a row falls back to the last input its fold saw.
+ */
+function runOf(view: ConversationView | undefined): {
+	readonly id?: string;
+	readonly failed?: LiveState["runFailure"];
+} {
+	const live = view?.docs["pi.live"] as LiveState | undefined;
+	if (live?.runFailure !== undefined) {
+		return {
+			...(live.runFailure.first === undefined ? {} : { id: String(live.runFailure.first) }),
+			failed: live.runFailure,
+		};
+	}
+	return live?.run?.first === undefined ? {} : { id: String(live.run.first) };
 }
 
 /**
@@ -132,6 +155,10 @@ interface FoldState {
  * when the view only appended, the rows up to the last entry are reused object for object and only what follows is
  * derived. A view that rewrote an entry starts the fold again — the rows are then equal but not shared, and the diff that
  * follows is still a tail diff, because equality is what a diff reads.
+ *
+ * A failed run is the run record's, not a text scan: the messages from its `first` entry are marked, and one notice
+ * stands for the run. A provider attempt that failed and was retried inside the run is not this — it left an assistant
+ * entry with an error stop reason, the run went on, and no run record was written, so nothing is marked.
  */
 export function foldTranscript(
 	view: ConversationView | undefined,
@@ -139,6 +166,8 @@ export function foldTranscript(
 ): { readonly fold: TranscriptFold; readonly tail: TranscriptItem[] } {
 	const entries = (view?.entries ?? []) as readonly EntryRecord[];
 	const id = (index: number): string => (entries[index] === undefined ? "" : String(entries[index]?.id));
+	const run = runOf(view);
+	const firstIndex = run.id === undefined ? -1 : entries.findIndex((entry) => String(entry.id) === run.id);
 	// A turn nobody has read the start of has spoken until an entry says otherwise: the default the whole view gets.
 	const resumed =
 		before !== undefined && before.count <= entries.length && before.last === id(before.count - 1)
@@ -146,17 +175,34 @@ export function foldTranscript(
 			: undefined;
 	const state: FoldState =
 		resumed === undefined
-			? { items: [], spoke: true, expected: false, turnStart: 0, messages: 0 }
+			? { items: [], spoke: true, expected: false, messages: 0 }
 			: {
 					items: [...resumed.items],
 					spoke: resumed.spoke,
 					...(resumed.input === undefined ? {} : { input: resumed.input }),
 					expected: resumed.expected,
-					turnStart: resumed.turnStart,
 					messages: resumed.messages,
+					...(resumed.runStart === undefined ? {} : { runStart: resumed.runStart }),
 				};
+	// The run's first entry may have been folded in an earlier revision: the pointer names the run either way. A resumed
+	// fold that never saw its first entry has no row index to mark from, so it names the run and records the notice, and
+	// the rows it did not see are the one slice that fold cannot mark.
+	if (run.id !== undefined && firstIndex >= 0) state.runId = run.id;
 	for (let index = resumed === undefined ? 0 : resumed.count; index < entries.length; index += 1) {
-		foldEntry(entries[index] as EntryRecord, state);
+		if (index === firstIndex && state.runStart === undefined) state.runStart = state.items.length;
+		foldEntry(entries[index] as EntryRecord, index, firstIndex, state);
+	}
+	// The run that died, once: its messages are marked, and one coarse notice says so. Both are derived from the run
+	// record, so a retried provider attempt (which writes no record) is not mistaken for a failed run, while an aborted or
+	// turn-limited one is not missed for having no error entry.
+	if (run.failed !== undefined) {
+		const notice: TranscriptItem = {
+			kind: "notice",
+			id: `${FAILED_NOTICE_PREFIX}${String(run.failed.taskId)}`,
+			text: RUN_FAILED_NOTICE,
+		};
+		state.items.push(notice);
+		markRunFailed(state);
 	}
 	const fold: TranscriptFold = {
 		items: state.items,
@@ -165,10 +211,10 @@ export function foldTranscript(
 		count: entries.length,
 		...(state.input === undefined ? {} : { input: state.input }),
 		expected: state.expected,
-		turnStart: state.turnStart,
 		messages: state.messages,
+		...(state.runStart === undefined ? {} : { runStart: state.runStart }),
 	};
-	return { fold, tail: streamingItems(view, fold) };
+	return { fold, tail: streamingItems(view, fold, run) };
 }
 
 /**
@@ -178,7 +224,7 @@ export function foldTranscript(
  * become*. An entry kind this does not name contributes nothing, which is the property the tests in
  * `test/projection.test.ts` exist to keep.
  */
-function foldEntry(entry: EntryRecord, state: FoldState): void {
+function foldEntry(entry: EntryRecord, index: number, firstIndex: number, state: FoldState): void {
 	if (entry.kind === HOOK_ENTRY_KIND) {
 		// A fire starts a turn of its own. An event is the reader's business and says so as a row of its own; a routine's
 		// timer does not cross, and either way the turn may end without a message. A retry's fire is a turn like any other:
@@ -198,6 +244,9 @@ function foldEntry(entry: EntryRecord, state: FoldState): void {
 		if (written === "") return;
 		const { text, author } = splitAuthor(written);
 		state.items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
+		// A steer placed mid-run is a submission that joined the run, not one that started it: the run pointer, when the
+		// view names one, keeps every row of that run under the entry the run began at. Without a pointer the newest input
+		// is the best the fold can say.
 		beginTurn(state, String(entry.id), true);
 		return;
 	}
@@ -212,7 +261,7 @@ function foldEntry(entry: EntryRecord, state: FoldState): void {
 			kind: "delivered",
 			id: record.deliveryId,
 			text,
-			...(state.input === undefined ? {} : { runId: state.input }),
+			...(rowRunId(state, index, firstIndex) === undefined ? {} : { runId: rowRunId(state, index, firstIndex) }),
 		});
 		state.spoke = true;
 		return;
@@ -222,24 +271,17 @@ function foldEntry(entry: EntryRecord, state: FoldState): void {
 		const text = textOfMessage(message);
 		if (!isBlank(text)) {
 			state.messages += 1;
+			const runId = rowRunId(state, index, firstIndex);
 			state.items.push({
 				kind: "delivered",
 				id: messageRowId(state.messages),
 				text,
-				...(state.input === undefined ? {} : { runId: state.input }),
+				...(runId === undefined ? {} : { runId }),
 			});
 			state.spoke = true;
 		}
-		// A run that died is the reader's business; the reason it died is not. The messages it produced are marked, so a
-		// retry's new rows do not leave the failed ones looking delivered, and one coarse notice stands for the run.
-		if (message?.stopReason === "error") {
-			markTurnFailed(state);
-			if (state.items[state.items.length - 1]?.kind !== "notice") {
-				state.items.push({ kind: "notice", id: `${FAILED_NOTICE_PREFIX}${entry.id}`, text: RUN_FAILED_NOTICE });
-			}
-			state.spoke = true;
-			return;
-		}
+		// A run that died is the run record's business, not an entry's: a provider attempt the run retried also commits an
+		// assistant entry with an error stop reason, and marking on that would call a run failed that then answered.
 		// Decided after the message, because an answer that wrote something is not silence. A tool round is not speech
 		// either: only the entries this file forwards above count as having said something.
 		if (message?.stopReason === "stop" && !state.spoke && state.expected) {
@@ -251,17 +293,23 @@ function foldEntry(entry: EntryRecord, state: FoldState): void {
 	}
 }
 
+/** What a row names as its run: the run pointer when this entry is inside that run, else the newest input at this point. */
+function rowRunId(state: FoldState, index: number, firstIndex: number): string | undefined {
+	if (state.runId !== undefined && firstIndex >= 0 && index >= firstIndex) return state.runId;
+	return state.input;
+}
+
 /** Start a turn at `id`: its rows begin after what is already in the transcript, and it owes a message only if a person does. */
 function beginTurn(state: FoldState, id: string, expected: boolean): void {
 	state.input = id;
 	state.expected = expected;
 	state.spoke = false;
-	state.turnStart = state.items.length;
 }
 
-/** Mark every message this turn produced failed, keeping each row's id and text so a client's key still finds it. */
-function markTurnFailed(state: FoldState): void {
-	for (let index = state.turnStart; index < state.items.length; index += 1) {
+/** Mark every message the failed run produced failed, keeping each row's id and text so a client's key still finds it. */
+function markRunFailed(state: FoldState): void {
+	if (state.runStart === undefined) return;
+	for (let index = state.runStart; index < state.items.length; index += 1) {
 		const row = state.items[index];
 		if (row?.kind !== "delivered" || row.failed === true) continue;
 		state.items[index] = { ...row, failed: true };
@@ -275,7 +323,11 @@ function markTurnFailed(state: FoldState): void {
  * becomes the message without a second row appearing. The partial is skipped when the turn already committed the same
  * words, which is the revision where an entry landed and `pi.live` has not cleared yet.
  */
-function streamingItems(view: ConversationView | undefined, fold: TranscriptFold): TranscriptItem[] {
+function streamingItems(
+	view: ConversationView | undefined,
+	fold: TranscriptFold,
+	run: { readonly id?: string },
+): TranscriptItem[] {
 	const live = view?.docs["pi.live"] as LiveState | undefined;
 	const inFlight = live?.generation?.message;
 	if (inFlight === undefined) return [];
@@ -283,13 +335,14 @@ function streamingItems(view: ConversationView | undefined, fold: TranscriptFold
 	if (isBlank(text)) return [];
 	const newest = fold.items[fold.items.length - 1];
 	if (newest?.kind === "delivered" && newest.streaming !== true && newest.text === text) return [];
+	const runId = run.id ?? fold.input;
 	return [
 		{
 			kind: "delivered",
 			id: messageRowId(fold.messages + 1),
 			text,
 			streaming: true,
-			...(fold.input === undefined ? {} : { runId: fold.input }),
+			...(runId === undefined ? {} : { runId }),
 		},
 	];
 }

@@ -20,7 +20,7 @@ export type WebSocketConstructor = new (url: string, options?: unknown) => WebSo
  *
  * ```ts
  * import WebSocket from "ws";
- * const connector = createConnector({ ..., link: nodeWebSocketLink(WebSocket) });
+ * const client = createUserClient({ ..., link: nodeWebSocketLink(WebSocket) });
  * ```
  */
 export function nodeWebSocketLink(WebSocketImpl: WebSocketConstructor): LinkFactory {

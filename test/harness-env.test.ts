@@ -164,10 +164,8 @@ describe("durable harness + pi-env", () => {
 				{ path: join(directory, "house", "agent", "profile.md"), content: "Denis prefers short answers.\n" },
 				"w",
 			),
-			toolCall("send", { text: "Noted." }, "d"),
 			fauxAssistantMessage(fauxText("Noted.")),
 			// A second turn, so the prompt is rendered again: the profile written above is now the agent's memory.
-			toolCall("send", { text: "Second." }, "d2"),
 			fauxAssistantMessage(fauxText("Second.")),
 		]);
 		const runtime = await openFor(directory, access);
@@ -224,8 +222,7 @@ describe("durable harness + pi-env", () => {
 				{ command: 'echo "secret=${MASON_ENV_LEAK_TEST:-absent}"; echo "path=${PATH:+set}"' },
 				"probe",
 			),
-			toolCall("send", { text: "Probed the environment." }, "probed"),
-			fauxAssistantMessage(fauxText("Nothing else to report.")),
+			fauxAssistantMessage(fauxText("Probed the environment.")),
 		]);
 		// A secret in the server's own environment: an exported key, a database URL, a switch of ours. The model can run
 		// arbitrary commands, so anything reachable as `$NAME` is in the transcript and on its way to the provider.

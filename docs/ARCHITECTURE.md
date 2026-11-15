@@ -23,7 +23,7 @@ One process is one bot: started by `npm run dev` in a checkout, or by `mason up`
 - **The home is `~/.mason/<bot>/`** (`src/server/house.ts`): `agent/`, which the tool machine mounts — `profile.md`, the
   dated `log/`, `skills/`, `workspace/`, and its git history — and `service/`, which the tool machine never sees. `~/.mason` itself is the root (`src/server/root.ts`): `common/` and one directory per bot.
 - **The prompt** is `src/server/prompt.ts` and only that file: every section, in reading order.
-- **Tools** are extensions (`src/server/extensions/`) plus the two per-boot ones, `mcp` and `codemode`.
+- **Tools** are extensions (`src/server/extensions/`) plus the three per-boot ones, `subagent`, `mcp` and `codemode`.
 - **Hooks** (`src/server/hooks.ts`) are the ways a turn starts without a person: a timer, a fire, and the run
   supervisor's retry.
 

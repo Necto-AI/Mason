@@ -42,9 +42,9 @@ import {
 } from "./common.ts";
 import { createRuntimeEnvManager, type RuntimeEnvManager, sshTargetFromEnv, targetDocChannel } from "./env.ts";
 import { EventLog } from "./events-log.ts";
-import { createCodemode } from "./extensions/codemode.ts";
+import { CODEMODE_EXTENSION, createCodemode } from "./extensions/codemode.ts";
 import { Delivery } from "./extensions/delivery.ts";
-import { createSubagent } from "./extensions/subagent.ts";
+import { createSubagent, SUBAGENT_EXTENSION } from "./extensions/subagent.ts";
 import { HooksManager } from "./hooks.ts";
 import { configureHouse, ensureHouse, ensureRepository, type HousePaths, housePaths } from "./house.ts";
 import {
@@ -56,7 +56,7 @@ import {
 	setIntegrations,
 } from "./integrations.ts";
 import { leaseDirOf } from "./lease.ts";
-import { type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
+import { MCP_EXTENSION, type McpCatalog, type McpTransportFactory, openMcpCatalog } from "./mcp.ts";
 import { DEFAULT_SOUL, Prompt } from "./prompt.ts";
 import { fauxSessionScript } from "./provider.ts";
 import { RETRY_HOOK } from "./run-retry.ts";
@@ -89,9 +89,32 @@ export const BASE_EXTENSIONS: readonly Extension[] = [
  * directory, a QuickJS sandbox, one client socket per integration. `scripts/surface.ts` renders exactly this list, and
  * `npm run gen:surface` is what keeps the document and the boot from drifting.
  */
-export const PER_BOOT_EXTENSIONS = ["subagent", "codemode"] as const;
+export const PER_BOOT_EXTENSIONS = [SUBAGENT_EXTENSION, CODEMODE_EXTENSION] as const;
 /** The per-boot extension a boot installs only when an enabled integration has an MCP server. */
-export const MCP_EXTENSION_NAME = "mcp";
+export const MCP_EXTENSION_NAME = MCP_EXTENSION;
+
+/**
+ * What a boot must have built: the per-boot list, plus `mcp` when this boot reached a server.
+ *
+ * It is called with the names of the extensions the boot actually built, so a per-boot extension added inline and not to
+ * `PER_BOOT_EXTENSIONS` fails the boot instead of silently escaping the document `scripts/surface.ts` renders. The
+ * surface check is the other half: it fails when a name this list holds is missing from the render.
+ */
+export function assertPerBootExtensions(names: readonly string[]): void {
+	const known = new Set<string>([...PER_BOOT_EXTENSIONS, MCP_EXTENSION_NAME]);
+	const built = new Set(names);
+	// `mcp` is the conditional one: present when a boot reached a server, absent when no entry has one. The other two are
+	// unconditional, and a name outside the known set is a per-boot extension the document does not name.
+	const extra = [...built].filter((name) => !known.has(name));
+	const missing = PER_BOOT_EXTENSIONS.filter((name) => !built.has(name));
+	if (extra.length > 0 || missing.length > 0) {
+		throw new Error(
+			`the boot's per-boot extensions are ${[...built].join(", ")}; the names the surface knows are ${[...known].join(", ")}` +
+				`${extra.length > 0 ? `; not in the list: ${extra.join(", ")}` : ""}` +
+				`${missing.length > 0 ? `; built by no boot here: ${missing.join(", ")}` : ""}`,
+		);
+	}
+}
 
 /**
  * The names of every extension a boot installs whatever the conversation's stored selection says: `BASE_EXTENSIONS`,
@@ -484,6 +507,13 @@ export async function openAgentRuntime(context: Context, options: OpenAgentRunti
 			...(mcp.extension === undefined ? [] : [mcp.extension]),
 			codemode.extension,
 		];
+		// The per-boot names a document may render are the ones this boot actually built: a fourth built inline and left
+		// out of `PER_BOOT_EXTENSIONS` refuses the boot rather than escaping the surface check.
+		assertPerBootExtensions([
+			subagent.name,
+			...(mcp.extension === undefined ? [] : [mcp.extension.name]),
+			codemode.extension.name,
+		]);
 		const unconditional = unconditionalExtensionNames([
 			subagent.name,
 			...(mcp.extension === undefined ? [] : [mcp.extension.name]),

@@ -54,7 +54,10 @@ export function isReflectionAsk(text: string): boolean {
 	return REFLECTION_ASK_OPENING.test(text.trim());
 }
 
-const DELIVERY_REMINDER_OPENING = /^\[delivery\] That turn ended without a message, so nothing reached the reader:/;
+// The second branch is the reminder a build before #219 wrote. A home that upgraded still holds it as a `pi.user` entry,
+// and it is a gate's words there too: dropping the branch would show the old nudge to the reader as their own message.
+const DELIVERY_REMINDER_OPENING =
+	/^\[delivery\] That turn ended without (?:a message|a `[^`\n]+` call), so nothing reached the reader:/;
 
 const REFLECTION_ASK_OPENING = /^\[reflection\] That turn took ten tool rounds or more, so keep what it produced:/;
 

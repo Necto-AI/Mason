@@ -24,7 +24,7 @@ import { defineExtension, type Extension, type PromptSection, section } from "@e
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 
 /** The extension's name, the tool's name, and the key of its prompt section: pi-durable spells all three this way. */
-const CODEMODE = "codemode";
+export const CODEMODE_EXTENSION = "codemode";
 
 /** One boot's code mode: the extension to install, and the way to stop its sandbox when the runtime closes. */
 export interface Codemode {
@@ -37,7 +37,7 @@ export function createCodemode(): Codemode {
 	const sandbox = new CodemodeSandbox();
 	const vendor = createCodemodeExtension({ sandbox, models: false });
 	return {
-		extension: defineExtension({ name: CODEMODE, tools: vendor.tools ?? [] }),
+		extension: defineExtension({ name: CODEMODE_EXTENSION, tools: vendor.tools ?? [] }),
 		// Closing aborts a script still running and refuses later ones. The runtime closes it after the harness, so
 		// nothing can start a script in a sandbox that is already closing.
 		close: () => sandbox.close(),

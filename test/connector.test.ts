@@ -56,7 +56,7 @@ describe("a connector's words", () => {
 
 				const submitted = await entries(served, CONNECTOR_ENTRY_KIND);
 				assert.equal(submitted.length, 1);
-				// The origin is the durable record the send is routed from: a restart cannot lose where the words came from.
+				// The origin is the durable record of where the words came from: a restart cannot lose it, and no row carries it.
 				assert.deepEqual(submitted[0]?.data, {
 					origin: { connector: "telegram", ref: "team", messageId: "m1", actor: { id: "8811", name: "Denis" } },
 				});

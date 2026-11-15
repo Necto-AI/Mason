@@ -61,7 +61,10 @@ test("an event client wakes a headless bot, and no user client is connected", as
 		const client = await connectEventClient(served, { name: "alarm-only", credential: alarm.credential });
 		try {
 			// The client's whole surface is an append and a session: it reads no conversation, so there is none to report.
-			assert.equal(client.conversation, undefined);
+			for (const absent of ["submit", "control", "onConversation", "attachments"]) {
+				assert.equal(Object.hasOwn(client.client, absent), false, `an event client has no ${absent}`);
+			}
+			assert.equal(Object.hasOwn(client.client, "event"), true, "it appends events");
 			assert.equal(
 				Object.hasOwn(client.client.status(), "conversation"),
 				false,
@@ -104,8 +107,13 @@ test("an event client wakes a headless bot, and no user client is connected", as
 				"and the catalog is callable",
 			);
 			assert.ok(
-				!agent.extensions.some((extension) => extension.name === "delivery" && (extension.tools?.length ?? 0) > 0),
-				"the headless conversation has no delivery tool either",
+				agent.extensions.some((extension) => extension.name === "delivery"),
+				"the gates are installed",
+			);
+			assert.equal(
+				agent.tools.some((tool) => tool.name === "send"),
+				false,
+				"and no conversation is offered a delivery tool",
 			);
 
 			// It is not a submission anywhere: the event is a hook entry and no person's words were placed.

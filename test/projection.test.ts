@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import type { TranscriptItem as WireRow } from "mason-protocol";
-import { projectQueued, projectTranscript } from "../src/server/projection.ts";
+import { foldTranscript, projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
 	CONNECTOR_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
@@ -65,8 +65,13 @@ function replyEntry(id: number, deliveryId: string, text: string, extra: Record<
 }
 
 describe("the transcript the client is sent", () => {
-	it("carries the reader's words and one message per generation, and nothing else", () => {
+	it("the transcript row is the wire row", () => {
+		// The compile-time assertion above is the whole test: `src/shared/contract.ts` and `packages/protocol` spell the
+		// row once, and a field added on one side and not the other fails `npm run typecheck` here.
 		assert.equal(sameSpelling, true, "the projection's row and the wire's schema are the same shape");
+	});
+
+	it("carries the reader's words and one message per generation, and nothing else", () => {
 		const transcript = projectTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Check the deploy." }]),
@@ -170,43 +175,103 @@ describe("the transcript the client is sent", () => {
 
 	it("marks a failed run's messages, and keeps the machine's reason", () => {
 		const transcript = projectTranscript(
-			viewOf([
-				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
-				assistant(2, [{ type: "text", text: "First section." }], { stopReason: "stop" }),
-				assistant(3, [{ type: "text", text: "partial" }], {
-					stopReason: "error",
-					errorMessage: "usage limit reached",
-				}),
-			]),
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+					assistant(2, [{ type: "text", text: "First section." }], { stopReason: "stop" }),
+					assistant(3, [{ type: "text", text: "partial" }], {
+						stopReason: "error",
+						errorMessage: "usage limit reached",
+					}),
+				],
+				{ "pi.live": { runFailure: { taskId: 16, inputs: [], reason: "model_error", first: 1 } } },
+			),
 		);
 		assert.deepEqual(transcript, [
 			{ kind: "user", id: "1", text: "Write the report." },
 			{ kind: "delivered", id: "message:1", text: "First section.", runId: "1", failed: true },
 			{ kind: "delivered", id: "message:2", text: "partial", runId: "1", failed: true },
-			{ kind: "notice", id: "failed:3", text: "Something went wrong, and the turn did not finish." },
+			{ kind: "notice", id: "failed:16", text: "Something went wrong, and the turn did not finish." },
 		]);
 		assert.ok(!JSON.stringify(transcript).includes("usage limit"), "the reason stays on the server");
 	});
 
+	it("a provider attempt the run retried is not a failed run: it went on and answered", () => {
+		// `pi-durable` commits an assistant entry with an error stop reason for every attempt it retries inside a run.
+		// Marking on that entry would call a run failed that then answered, and invent a notice nobody should see.
+		const transcript = projectTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Check the deploy." }]),
+					assistant(2, [{ type: "text", text: "Checking the deploy." }], { stopReason: "error" }),
+					assistant(3, [{ type: "text", text: "The deploy is healthy." }], { stopReason: "stop" }),
+				],
+				{ "pi.live": { run: { taskId: 9, inputs: [], turns: 1, first: 1 } } },
+			),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Check the deploy." },
+			{ kind: "delivered", id: "message:1", text: "Checking the deploy.", runId: "1" },
+			{ kind: "delivered", id: "message:2", text: "The deploy is healthy.", runId: "1" },
+		]);
+	});
+
 	it("keeps a failed run with no message to one notice, inside the turn it belongs to", () => {
 		const transcript = projectTranscript(
-			viewOf([
-				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
-				assistant(2, [{ type: "thinking", thinking: "planning" }], {
-					stopReason: "error",
-					errorMessage: "usage limit reached",
-				}),
-			]),
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+					assistant(2, [{ type: "thinking", thinking: "planning" }], {
+						stopReason: "error",
+						errorMessage: "usage limit reached",
+					}),
+				],
+				{ "pi.live": { runFailure: { taskId: 16, inputs: [], reason: "model_error", first: 1 } } },
+			),
 		);
 		assert.deepEqual(transcript, [
 			{ kind: "user", id: "1", text: "Write the report." },
-			{ kind: "notice", id: "failed:2", text: "Something went wrong, and the turn did not finish." },
+			{ kind: "notice", id: "failed:16", text: "Something went wrong, and the turn did not finish." },
+		]);
+	});
+
+	it("marks an aborted partial failed too, because the run record says the run died", () => {
+		// A partial cut off by an abort or a turn limit is committed with `aborted`, and a turn limit writes no error entry
+		// at all. The run record is what says the run failed, so the message is marked and the notice is one.
+		const transcript = projectTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+					assistant(2, [{ type: "text", text: "Half a sen" }], { stopReason: "aborted" }),
+				],
+				{ "pi.live": { runFailure: { taskId: 7, inputs: [], reason: "aborted", first: 1 } } },
+			),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "user", id: "1", text: "Write the report." },
+			{ kind: "delivered", id: "message:1", text: "Half a sen", runId: "1", failed: true },
+			{ kind: "notice", id: "failed:7", text: "Something went wrong, and the turn did not finish." },
 		]);
 	});
 
 	it("does not mark a retry's message failed, and does not duplicate the failed row", () => {
-		// The failed run's turn ends with an error; the retry fires a hook (a turn of its own) and answers in it.
-		const transcript = projectTranscript(
+		// One revision says the run failed; the next says a retry started. The failed rows and the notice are reused, and
+		// the retry's own message names the fire that resumed it.
+		const failed = viewOf(
+			[
+				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+				assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
+			],
+			{ "pi.live": { runFailure: { taskId: 16, inputs: [], reason: "model_error", first: 1 } } },
+		);
+		const first = foldTranscript(failed).fold;
+		assert.deepEqual(first.items, [
+			{ kind: "user", id: "1", text: "Write the report." },
+			{ kind: "delivered", id: "message:1", text: "partial", runId: "1", failed: true },
+			{ kind: "notice", id: "failed:16", text: "Something went wrong, and the turn did not finish." },
+		]);
+
+		const retried = foldTranscript(
 			viewOf([
 				entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
 				assistant(2, [{ type: "text", text: "partial" }], { stopReason: "error" }),
@@ -215,13 +280,40 @@ describe("the transcript the client is sent", () => {
 				}),
 				assistant(4, [{ type: "text", text: "The report, finished." }], { stopReason: "stop" }),
 			]),
-		);
-		assert.deepEqual(transcript, [
+			first,
+		).fold;
+		assert.deepEqual(retried.items, [
 			{ kind: "user", id: "1", text: "Write the report." },
 			{ kind: "delivered", id: "message:1", text: "partial", runId: "1", failed: true },
-			{ kind: "notice", id: "failed:2", text: "Something went wrong, and the turn did not finish." },
+			{ kind: "notice", id: "failed:16", text: "Something went wrong, and the turn did not finish." },
 			{ kind: "delivered", id: "message:2", text: "The report, finished.", runId: "3" },
 		]);
+	});
+
+	it("keeps one run's messages under the entry the run started at, through a steer", () => {
+		// A steer placed mid-run joins the run; it does not start a second one. Every row of the run names the input the
+		// run began at, so a failure after the steer marks the messages written before it too.
+		const transcript = projectTranscript(
+			viewOf(
+				[
+					entry(1, "pi.user", [{ role: "user", content: "Write the report." }]),
+					assistant(2, [{ type: "text", text: "The first section." }], { stopReason: "stop" }),
+					entry(3, "pi.user", [{ role: "user", content: "Also add the numbers." }]),
+					assistant(4, [{ type: "text", text: "The second section." }], { stopReason: "error" }),
+				],
+				{ "pi.live": { runFailure: { taskId: 5, inputs: [], reason: "model_error", first: 1 } } },
+			),
+		);
+		assert.deepEqual(
+			transcript.filter((row) => row.kind === "delivered").map((row) => (row as { runId?: string }).runId),
+			["1", "1"],
+			"one run, one id, whichever input was placed last",
+		);
+		assert.deepEqual(
+			transcript.filter((row) => row.kind === "delivered").map((row) => (row as { failed?: boolean }).failed),
+			[true, true],
+			"the failure marks the whole run, not only what came after the steer",
+		);
 	});
 
 	it("reads an older home's committed reply as the message it was, under the id it was written with", () => {
@@ -322,6 +414,17 @@ describe("the transcript the client is sent", () => {
 		]);
 		// The answer the model wrote is still working notes, not a message: the wire is unchanged.
 		assert.ok(!JSON.stringify(transcript).includes("I read it earlier"));
+	});
+
+	it("drops the reminder a build before #219 wrote, so an upgraded home does not show it as the person's words", () => {
+		const old = `[delivery] That turn ended without a \`send\` call, so nothing reached the reader: not your answer, not your notes, nothing at all. Send the answer now with \`send\`, in the words the reader should see.`;
+		const transcript = projectTranscript(
+			viewOf([
+				entry(1, "pi.user", [{ role: "user", content: old }]),
+				assistant(2, [{ type: "text", text: "Answered." }], { stopReason: "stop" }),
+			]),
+		);
+		assert.deepEqual(transcript, [{ kind: "delivered", id: "message:1", text: "Answered." }]);
 	});
 
 	it("drops the reflection ask, and keeps a person's line that opens with the marker", () => {

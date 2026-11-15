@@ -37,7 +37,7 @@ export const CONSOLE = "console";
 /** The one line the model is told about this entry. It carries no MCP server, so nothing reads it yet — a person does. */
 export const CONSOLE_DESCRIPTION = "The terminal, built in: talk to the bot with no Telegram at all";
 
-/** The actor the console serves, and the address it mints on every append: where a send goes back to. */
+/** The actor the console serves, and the address it mints on every append: the append's provenance. */
 const OWNER = "local";
 const TERMINAL = "terminal";
 

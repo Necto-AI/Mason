@@ -87,7 +87,7 @@ mason/
 │           ├── codemode.ts            # The script tool: ALL_TOOLS, searchTools, describeTool
 │           ├── delivery.ts            # The two gates over a turn's ending: a message, and what it kept
 │           ├── subagent.ts            # delegate: one foreground child, its role, its bounds, its lease
-│           ├── nested.ts              # A nested call's shape, shared by the tools that refuse one
+│           ├── nested.ts              # The one shape a tool's refusal takes
 │           └── skills.ts              # The skills index: one root, agent/skills/, seeded at boot
 └── test/                              # One file per mechanism; the pin that fails when it is removed
 ```

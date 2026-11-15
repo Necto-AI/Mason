@@ -41,9 +41,9 @@ const SUMMARY = process.env.GITHUB_STEP_SUMMARY;
 /** What this run measured. Each case records a row before it asserts on it, so a failing run still prints the numbers. */
 const measured: { rowBytes?: number; baseline?: number; resumeMs?: number } = {};
 
-/** The bytes one committed agent message costs on the wire. */
-function rowBytes(row: { id: string; text: string }): number {
-	return Buffer.byteLength(JSON.stringify({ kind: "delivered", id: row.id, text: row.text }));
+/** The bytes one committed agent message costs on the wire, `runId` and all. */
+function rowBytes(row: Record<string, unknown>): number {
+	return Buffer.byteLength(JSON.stringify(row));
 }
 
 type Verdict = "ok" | "stale" | "regression";
@@ -91,11 +91,11 @@ function heldState(frames: readonly StateEvent<ConversationState>[]): Conversati
 	return state;
 }
 
-/** The committed reply rows of a state, oldest first. */
-function committedRows(state: ConversationState | undefined): Array<{ id: string; text: string }> {
-	return (state?.transcript ?? []).flatMap((row) =>
-		row.kind === "delivered" && row.streaming !== true ? [{ id: row.id, text: row.text }] : [],
-	);
+/** The committed agent-message rows of a state, oldest first, exactly as the wire carried them. */
+function committedRows(
+	state: ConversationState | undefined,
+): Array<{ id: string; text: string } & Record<string, unknown>> {
+	return (state?.transcript ?? []).flatMap((row) => (row.kind === "delivered" && row.streaming !== true ? [row] : []));
 }
 
 /** The fixture, submitted over the socket under test with the message id a person's client would mint. */
@@ -120,7 +120,7 @@ describe("the connector wire", () => {
 				await until(() => committedRows(heldState(heldPeer.frames)).length === 1, "the row in the state");
 				const rows = committedRows(heldState(heldPeer.frames));
 				assert.equal(rows.length, 1, "one message row for the turn");
-				measured.rowBytes = rowBytes(rows[0] as { id: string; text: string });
+				measured.rowBytes = rowBytes(rows[0] as Record<string, unknown>);
 				measured.baseline = await baselineOf();
 				const gate = verdict(measured.rowBytes, measured.baseline);
 				if (gate.verdict === "stale") console.log(`[wire] ${gate.message}`);

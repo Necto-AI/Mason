@@ -20,6 +20,7 @@ import {
 	fauxText,
 } from "@earendil-works/pi-ai/providers/faux";
 import {
+	type ClientConfig,
 	createEventClient,
 	createUserClient,
 	type EventClient,
@@ -258,8 +259,6 @@ export interface ConnectedConnector {
 
 export interface ConnectedEventClient {
 	readonly client: EventClient;
-	/** The conversation never arrives: this client has no transcript to hold. */
-	readonly conversation: undefined;
 	readonly sessions: number;
 	close(): Promise<void>;
 }
@@ -271,7 +270,7 @@ export async function connectConnector(
 		readonly name?: string;
 		readonly credential?: string;
 		readonly states?: ConversationState[];
-		readonly integration?: NonNullable<Parameters<typeof createConnector>[0]["integration"]>;
+		readonly integration?: ClientConfig["integration"];
 	} = {},
 ): Promise<ConnectedConnector> {
 	const states: ConversationState[] = options.states ?? [];
@@ -312,7 +311,6 @@ export async function connectEventClient(
 	await client.start();
 	return {
 		client,
-		conversation: undefined,
 		sessions: client.status().connections,
 		close: () => client.stop(),
 	};

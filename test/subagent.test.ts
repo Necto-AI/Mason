@@ -4,7 +4,7 @@
  * A child is a conversation owned by the tool call's task, configured in the creating commit: the `subagent` role's model
  * and thinking level, a turn limit, a worker brief instead of the persona, and an explicit extension selection that
  * leaves out `delivery` — so the child cannot reach the person and its words arrive only as the tool result. These tests
- * script the faux provider through the whole shape: parent asks, child answers, parent sends.
+ * script the faux provider through the whole shape: parent asks, child answers, parent writes its message.
  *
  * The catalogue is the faux provider's, so the level has to be one it supports (`high` with `reasoning: true`); `max` is
  * unverifiable there and is proved against the real cached catalogue in `roles.test.ts`.
@@ -304,7 +304,7 @@ test("the child's transcript is its task and its answer, and the parent's contex
 		assert.equal(
 			serialized.split("the second line is: drain the trap").length - 1,
 			2,
-			"once in the send, once in the tool result the parent read",
+			"once in the parent's message, once in the tool result it read",
 		);
 		assert.doesNotMatch(
 			serialized,
@@ -467,7 +467,7 @@ test("closing the runtime mid-child and resuming keeps one child and one submiss
 	}
 
 	// The second boot over the same storage: the child's request is retried, the tool call is re-executed, and the turn
-	// finishes. The script is the child's answer, then the parent's send and its ending.
+	// finishes. The script is the child's answer, then the parent's message and its ending.
 	const second = await boot(directory, ["the manual is three pages long"]);
 	const runtime = second.runtime;
 	try {
