@@ -262,7 +262,7 @@ export interface OpenMcpCatalogOptions {
  * Reach every enabled integration that has an MCP server, in parallel, and keep what they offer.
  *
  * The clients stay open for the calls that follow: a catalog is only useful if the next script's call is cheap. The
- * tools are the same three whatever connected, which is the point — the registry does not move when a server comes or
+ * tools are the same four whatever connected, which is the point — the registry does not move when a server comes or
  * goes.
  */
 export async function openMcpCatalog(options: OpenMcpCatalogOptions): Promise<McpCatalog> {

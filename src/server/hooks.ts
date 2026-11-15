@@ -515,7 +515,7 @@ export class HooksManager {
 			const dueMs = Date.parse(state.nextFireAt);
 			const waitMs = dueMs - this.#now().getTime();
 			if (waitMs <= 0) {
-				void this.#catchUp(hook, dueMs);
+				void this.#due(hook, dueMs);
 				return;
 			}
 			const clamped = waitMs > MAX_TIMER_MS;
@@ -544,7 +544,7 @@ export class HooksManager {
 		const dueMs = Date.parse(state.nextFireAt);
 		const waitMs = dueMs - this.#now().getTime();
 		if (waitMs <= 0) {
-			void this.#catchUp(hook, dueMs);
+			void this.#due(hook, dueMs);
 			return;
 		}
 		const clamped = waitMs > MAX_TIMER_MS;
@@ -564,21 +564,6 @@ export class HooksManager {
 
 	/** The slot is due now: one fire, then the next slot is written at once, so a timeout never stacks. */
 	async #due(hook: EventHookConfig, dueMs: number): Promise<void> {
-		const live = this.#hooks.get(hook.id);
-		if (live === undefined || !live.enabled) {
-			this.#disarm(hook.id);
-			return;
-		}
-		this.#advance(live, dueMs);
-		try {
-			await this.fire(live.id, { requestId: scheduledRequestId(live.id, dueMs) });
-		} catch (error: unknown) {
-			this.#report(error);
-		}
-	}
-
-	/** A slot the process did not keep: one catch-up fire from the missed slot's own key, then skip the rest. */
-	async #catchUp(hook: EventHookConfig, dueMs: number): Promise<void> {
 		const live = this.#hooks.get(hook.id);
 		if (live === undefined || !live.enabled) {
 			this.#disarm(hook.id);

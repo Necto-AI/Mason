@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 /** The pages mason ships, in the repository; a deployment does not have to mount them for a service's docs. */
 export const SHIPPED_DOCS_DIR = fileURLToPath(new URL("../../docs/agent/", import.meta.url));
 
-/** One page of the reference: its path inside the mount, and the first heading that says what it is. */
+/** One page of the reference: its path inside the docs directory, and the first heading that says what it is. */
 export interface DocPage {
 	readonly path: string;
 	readonly title: string;

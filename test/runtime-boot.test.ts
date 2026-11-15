@@ -95,3 +95,38 @@ test("a connector that only raises events is not a second surface, and boots bes
 	const runtime = await boot(home);
 	assert.ok(!(runtime instanceof Error), runtime instanceof Error ? runtime.message : undefined);
 });
+
+test("a retired agent/routines.json is named once at boot, and none of its entries are read", async () => {
+	const home = await homeWith({});
+	const paths = housePaths(home);
+	await mkdir(paths.agentDir, { recursive: true, mode: 0o700 });
+	await writeFile(
+		join(paths.agentDir, "routines.json"),
+		JSON.stringify([{ name: "legacy", prompt: "This must not arm.", intervalSeconds: 3_600 }]),
+	);
+	const logged: string[] = [];
+	const original = console.log;
+	console.log = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+	let runtime: AgentRuntime | undefined;
+	try {
+		runtime = await openAgentRuntime(BACKGROUND_CONTEXT, {
+			dataDir: join(dirname(home), "data"),
+			workspaceDir: join(dirname(home), "workspace"),
+			houseHome: home,
+			storage: "memory",
+			modelAccess: fauxAccess(),
+			onReport: () => {},
+		});
+	} finally {
+		console.log = original;
+	}
+	try {
+		assert.equal(runtime.hooks.has("legacy"), false, "the retired file arms nothing");
+		assert.ok(
+			logged.some((line) => /agent\/routines\.json is retired/.test(line)),
+			"the boot names the file, so a routine cannot silently stop waking",
+		);
+	} finally {
+		await runtime.close();
+	}
+});
