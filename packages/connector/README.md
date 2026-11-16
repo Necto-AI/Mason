@@ -69,6 +69,8 @@ await client.event({ kind: "alarm.ringing", payload: { host: "db-1" } });
   what is held, a diff is kept only when its revision is later — which is what makes a reconnect safe. Nothing is
   delivered to a connector and nothing is acknowledged: the rows are the message, and a client that renders them reads
   the same frames.
+- **Bytes are content ids, both ways.** `attachments.upload` stores a file and answers its id; `attachments.download`
+  reads what a row's `assets` names, with the same credential that read the row. No path and no base64 crosses the link.
 - **A handler that throws costs the frame, not the link.** The throw is logged and the state it was handed is already
   held, so the next frame is applied to what the SDK has.
 - **A refusal is a Chord error.** Its `reason` is one of mason's codes (`mason.kind_not_permitted`,
@@ -124,7 +126,7 @@ if (result.failed.length > 0) throw new Error(`${result.failed[0].name}: ${resul
 drives every case the protocol defines: the session as state, one submission and its duplicate id, words that name an
 actor the grant does not, words to an entry that grants no `user`, an event of a granted kind and of an ungranted one, an
 append carrying no address, the control vocabulary, a spent budget that keeps the call journaled, the journal replaying a
-call made while the link was down, and attachments with a cap. A case for a face the fixture does not implement is
+call made while the link was down, attachments with a cap, and a download by content id. A case for a face the fixture does not implement is
 skipped, and the report says which.
 
 There is no tools-face case: a meaningful one needs live MCP discovery, which is the server half.

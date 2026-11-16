@@ -28,7 +28,7 @@ protocol has no envelope, no sequence number and no cursor of its own.
 | field | what it is |
 |---|---|
 | `revision` | a counter mason owns: it rises by one for every published value within one mason process, and starts again at 0 when mason restarts |
-| `transcript` | the reader's rows, in order: `user`, `delivered` (an agent message: one row per generation, `streaming` while the model writes it, `failed` when its run died, `runId` naming that run), `event`, `notice` |
+| `transcript` | the reader's rows, in order: `user` and `delivered` (an agent message: one row per generation, `streaming` while the model writes it, `failed` when its run died, `runId` naming that run) either of which may carry `assets`, then `event` and `notice` |
 | `queue` | the submissions waiting behind the running turn, each with `withdrawable` |
 | `run` | one token: `idle`, `generating`, `running_tools`, `retrying`, `compacting` |
 | `busy` | whether a turn is running; `activeRunTaskId` names it when it is |
@@ -99,7 +99,7 @@ link and drops everything else, which is why the code rides in `reason` and why 
 
 One credential opens everything and a failed check is not a code on this socket: an upgrade it does not open is a
 connection closed with a reason, refused before any contract is served. The table below is what a call that was heard is
-refused with; `mason.not_authenticated` is the answer of the one HTTP path, the attachment upload, which has a status
+refused with; `mason.not_authenticated` is the answer of the two HTTP paths, the upload and the asset download, which have a status
 line to put it in.
 
 | code | meaning |
@@ -110,13 +110,24 @@ line to put it in.
 | `mason.rate_limited` | the minute's budget for this class is spent; try later |
 | `mason.queue_overflow` | the turn is busy and the append asked to be refused rather than queued |
 | `mason.invalid_request` | the call is not a call this side makes |
-| `mason.not_authenticated` | the credential did not open the attachment upload |
+| `mason.not_authenticated` | the credential did not open the attachment upload or an asset download |
+| `mason.asset_expired` | the asset's retention passed; the bytes are gone and the message is not |
 | `mason.internal` | mason itself failed, and not on the caller's account: the same call may work on a retry |
 
-## Attachments
+## Assets
 
 Bytes never cross the contract. A connector `POST`s them to `/api/connector/attachments` with its own credential, gets a
 `contentId` back, and references that id in a `file` block. The cap and the expiry are in `session.limits`.
+
+A row may carry `assets?: AssetRef[]`, where `AssetRef` is `{ id, name, mimeType, size }`: the user row carries what the
+person sent, and the agent row carries what the turn produced. The array is authoritative, and each id is a content id,
+never a path or base64. The agent names its own file with a `file:out/<path>` link; mason stores it and rewrites the link
+to `asset:<id>`.
+
+`GET /api/connector/assets/<id>` returns the bytes with the stored `Content-Type`, its `Content-Length` and
+`Content-Disposition: attachment`. A connector with the `user` grant reads its conversation's assets in both directions;
+the uploader reads its own input asset; an event grant is `403 mason.face_not_granted`. An id that is not there is `404`;
+an expired one is `410 mason.asset_expired`, and the message that named it is still in the transcript.
 
 ## Versioning
 

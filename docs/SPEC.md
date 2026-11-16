@@ -58,7 +58,7 @@ mason/
 ├── src/
 │   ├── shared/contract.ts             # The shapes the projection writes: rows, status, entry kinds
 │   └── server/
-│       ├── main.ts                    # HTTP: the health probe, the connector socket, attachment bytes
+│       ├── main.ts                    # HTTP: the health probe, the connector socket, asset bytes
 │       ├── auth.ts                    # The one credential class, and the Origin rule
 │       ├── connector.ts               # The socket: handshake, admission, the conversation a reader sees
 │       ├── connectors.ts              # A connector's grant, and the credential it opens its socket with
@@ -76,7 +76,7 @@ mason/
 │       ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
 │       ├── mcp.ts                     # The live tool catalog: mcp_search, mcp_describe, mcp_call, mcp_read_resource
 │       ├── integrations.ts            # service/integrations.json: the services the agent reaches
-│       ├── attachments.ts             # Content ids and bytes: the connector's upload store
+│       ├── attachments.ts             # Content ids and bytes: the upload store and a turn's outbox
 │       ├── limits.ts                  # The budgets and caps every refusal names
 │       ├── untrusted.ts               # Fencing for data the model did not write
 │       ├── resident.ts                # The turn loop, the queue and the run supervisor's wiring
@@ -408,8 +408,8 @@ submission entry and on no row: provenance, never a destination.
 
 ### 4.1b Who may talk to the server — the door
 
-There is one credential class, and it is the connector's. `/api/connector` (the socket, §4.1d) and
-`/api/connector/attachments` (the upload) are opened as **the connector**, by a credential mason
+There is one credential class, and it is the connector's. `/api/connector` (the socket, §4.1d), `/api/connector/attachments`
+(the upload) and `/api/connector/assets/<id>` (the download) are opened as **the connector**, by a credential mason
 issued for one entry (`src/server/connectors.ts`, `npm run connector`): `Authorization: Bearer masonc_…` on the upgrade
 request, read from `service/config.json` on every connection, so a revoke lands on the next one. `Origin` must be the
 request's own host or absent (`src/server/auth.ts`); a connector is a program, so the header's absence is the honest
@@ -496,7 +496,7 @@ feed is opened, `session.commands` is empty, `control` is refused with `mason.fa
 
 **Admission is one append.** `append` takes an `appendId`, an optional opaque `origin` (`{ref, messageId?, actor?}`) and
 one of two types. `submission` places ordinary human conversation: an `app.connector` entry whose `data.origin` is the
-origin, and nothing else — one bot has one person, so there is no name to attribute. It is refused with
+origin and whose `data.assets` is what the person sent — one bot has one person, so there is no name to attribute. It is refused with
 `mason.face_not_granted` when the entry grants no `user`, with `mason.actor_unknown` when the actor is not the entry's
 `owner` (and for any actor at all when the entry names none), and it spends the submission budget. `event` is written to
 `service/data/events/YYYY-MM-DD.jsonl` always, and wakes the bot only when `agent/events.json` has an enabled entry for
@@ -517,11 +517,18 @@ one row per generation: no fan-out, no second copy. `origin` stays on the submis
 entry as provenance, and no row carries it. The SDK offers the split as `createUserClient` and `createEventClient` over
 the same socket and credential class; the combined factory is internal.
 
-**Attachments.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores bytes under a
-content id and answers `{contentId, size, expiresAt}`. The store is `service/data/attachments/<connector>/`, durable
-because a restart between an upload and the submission that references it is the moment a resend happens, and write-only
-for a connector: the agent reads the bytes itself when a message carrying an id arrives. Over the cap is `413`, and the
-id never reaches the filesystem unless it matches `cnt_<32 hex>`.
+**Assets.** `POST /api/connector/attachments` (raw body, `content-type`, `x-mason-filename`) stores a person's upload
+under a content id and answers `{contentId, size, expiresAt}`. A turn's deliverable is written under `out/`, linked as
+`file:out/<path>` or simply left there; after the run `src/server/assets.ts` resolves the real path under `out/`, refuses
+a symlink, an escape, a `service/` path or a file over 25 MiB, stores the bytes and rewrites the link to `asset:<id>`.
+The store is `service/data/attachments/<connector>/` and `.../.out/`, durable because a restart between an upload and the
+submission that references it is the moment a resend happens. A user or agent row carries `assets?: AssetRef[]`
+(`{id, name, mimeType, size}`); `GET /api/connector/assets/<id>` serves the bytes to the uploader or to a connector with
+the `user` grant, with the stored type and a `Content-Disposition`. An event grant is `403`, an id that is gone is `404`,
+and retention is 90 days by default (`MASON_ASSET_TTL_MS`, in milliseconds): an expired asset is `410` for one further
+window, then `404`, and its message stays. Per turn: 10
+assets, 25 MiB each, 100 MiB total. Over the upload cap is `413`, and the id never reaches the filesystem unless it
+matches `cnt_<32 hex>`.
 
 **Budgets.** Appends (60, of which events are 6), controls (6, with `stop` in a class of its own) and attachments (30) are
 counted separately per connector, in the process's sliding-window limiter (`src/server/limits.ts`), keyed per connector
@@ -609,9 +616,9 @@ outage that outlasts every retry budget leaves a failed turn.
    log line, the caps, the git repository; the resident prompt — `soul.md` or `DEFAULT_SOUL`, the first-run profile
    interview, the skills index (one seeded root, nesting) and the tone rules; and the
    `[cache]` line's arithmetic. Every test uses a temporary `houseHome` and never the real `~/.mason`.
-3. **`test/connector.test.ts`, `test/projection.test.ts`:** the socket — the handshake ceiling, submissions against
-   fires, controls, the budgets and the attachments — and the wire boundary: the rows a reader is sent, and what stays
-   behind. A second turn offers the same tools, in the same order, and the same prompt sections as the first, and a
+3. **`test/connector.test.ts`, `test/projection.test.ts`, `test/assets.test.ts`:** the socket — the handshake ceiling,
+   submissions against fires, controls, the budgets and the assets — and the wire boundary: the rows a reader is sent,
+   and what stays behind. A second turn offers the same tools, in the same order, and the same prompt sections as the first, and a
    threshold compaction writes a `pi.compaction` entry (reason `threshold`) and still answers.
 
 ### 5.1 Behaviour evals (`npm run eval`)

@@ -16,6 +16,7 @@ connector presents a credential mason issued for it.
 | `/api/health` | public | the liveness probe: one word, so a dead process is distinguishable |
 | `/api/connector` | connector | the connector's Chord socket, authenticated at the upgrade |
 | `/api/connector/attachments` | connector | an upload, authenticated as the connector that posts it |
+| `/api/connector/assets/` | connector | one asset's bytes, authenticated and scoped to the connector's grant |
 
 ## Extensions a boot installs
 
@@ -30,4 +31,4 @@ in it: a service's tools are reached from a script.
 
 ## What a caller may spend
 
-Budgets: 60 submissions, 6 fires, 6 controls and 30 attachments a minute per connector; 32 KiB of JSON in one call; 25 MiB an attachment, kept for 24 h; a window of 60 s.
+Budgets: 60 submissions, 6 fires, 6 controls and 30 attachments a minute per connector; 32 KiB of JSON in one call; 25 MiB a file, kept for 90 days; 10 files a turn, 100 MiB in total; a window of 60 s.

@@ -16,12 +16,22 @@ export interface Refusal {
 	readonly message: string;
 }
 
+/** The bytes behind one content id, as the download route serves them. */
+export interface AssetDownload {
+	readonly bytes: Uint8Array;
+	readonly mimeType: string;
+	readonly name?: string;
+	readonly size: number;
+}
+
 export interface AttachmentClient {
 	/** Put bytes in mason's store and get the id to reference. */
 	upload(
 		bytes: Uint8Array,
 		meta?: { readonly mimeType?: string; readonly name?: string },
 	): Promise<AttachmentUploadResult>;
+	/** Read the bytes a row's asset names, with the credential that read the row. */
+	download(contentId: string): Promise<AssetDownload>;
 }
 
 /** A refusal from the transfer endpoint, with the status and mason's code when it sent one. */
@@ -76,7 +86,36 @@ export function createAttachmentClient(options: AttachmentClientOptions): Attach
 			if (!response.ok) throw await refusal(response);
 			return (await response.json()) as AttachmentUploadResult;
 		},
+		async download(contentId) {
+			const response = await doFetch(`${base}/api/connector/assets/${encodeURIComponent(contentId)}`, {
+				method: "GET",
+				headers: { authorization: `Bearer ${options.credential}` },
+			});
+			if (!response.ok) throw await refusal(response);
+			const bytes = new Uint8Array(await response.arrayBuffer());
+			const name = filenameOf(response.headers.get("content-disposition"));
+			return {
+				bytes,
+				mimeType: response.headers.get("content-type") ?? "application/octet-stream",
+				...(name === undefined ? {} : { name }),
+				size: bytes.byteLength,
+			};
+		},
 	};
+}
+
+/** The name in a `Content-Disposition`, preferring the RFC 5987 form: it is shown, never used as a path. */
+function filenameOf(header: string | null): string | undefined {
+	if (header === null) return undefined;
+	const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+	if (encoded !== undefined) {
+		try {
+			return decodeURIComponent(encoded);
+		} catch {
+			return undefined;
+		}
+	}
+	return /filename="([^"]*)"/i.exec(header)?.[1];
 }
 
 async function refusal(response: Response): Promise<AttachmentError> {

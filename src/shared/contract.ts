@@ -13,6 +13,8 @@ export const HOOK_ENTRY_KIND = "app.hook";
 export const CONNECTOR_ENTRY_KIND = "app.connector";
 /** One message an older build committed through the `send` tool. Read as an agent message; never written again. */
 export const REPLY_ENTRY_KIND = "app.reply";
+/** The durable record of a turn's files: the assets a row carries, and the links they replace. Never a model entry. */
+export const ASSET_ENTRY_KIND = "app.asset";
 
 /**
  * What the delivery gate says to the model when a submission turn ends without a message.
@@ -122,9 +124,25 @@ export function splitAuthor(text: string): { readonly text: string; readonly aut
  * failed run's messages without knowing an entry id. `failed` marks them when that run died, and `streaming` marks the
  * generation still being written. Nothing carries an origin: provenance stays on the submission entry, never on a row.
  */
+/**
+ * One file a row carries, by content id and never by path.
+ *
+ * The array on a row is authoritative: a client renders these and resolves each `asset:<id>` link with the same
+ * credential it reads the conversation with. Name and type are for display; the bytes are the download route's.
+ */
+export type AssetRef = { id: string; name: string; mimeType: string; size: number };
+
 export type TranscriptItem =
-	| { kind: "user"; id: string; text: string; author?: string; at?: number }
-	| { kind: "delivered"; id: string; text: string; failed?: boolean; streaming?: boolean; runId?: string }
+	| { kind: "user"; id: string; text: string; author?: string; at?: number; assets?: AssetRef[] }
+	| {
+			kind: "delivered";
+			id: string;
+			text: string;
+			failed?: boolean;
+			streaming?: boolean;
+			runId?: string;
+			assets?: AssetRef[];
+	  }
 	| { kind: "event"; id: string; name: string }
 	| { kind: "notice"; id: string; text: string };
 

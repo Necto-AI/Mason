@@ -378,6 +378,20 @@ export function conformanceCases(): readonly ConformanceCase[] {
 			},
 		},
 		{
+			name: "attachments/the id a row carries comes back as the bytes it was uploaded with",
+			async run({ connector }) {
+				const bytes = new Uint8Array([9, 8, 7, 6]);
+				const uploaded = await connector.attachments.upload(bytes, { mimeType: "application/octet-stream" });
+				const downloaded = await connector.attachments.download(uploaded.contentId);
+				equal(downloaded.size, 4, "downloaded size");
+				equal(
+					Buffer.from(downloaded.bytes).toString("hex"),
+					Buffer.from(bytes).toString("hex"),
+					"the bytes the row's id names",
+				);
+			},
+		},
+		{
 			name: "attachments/a file over the cap is refused before it is sent",
 			async run({ connector, mason }) {
 				const big = new Uint8Array(2_000_000);

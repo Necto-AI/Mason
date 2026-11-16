@@ -35,6 +35,7 @@ export {
 	SUBMISSION_MODES,
 } from "mason-protocol";
 export {
+	type AssetDownload,
 	type AttachmentClient,
 	type AttachmentClientOptions,
 	AttachmentError,

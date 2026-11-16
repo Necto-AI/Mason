@@ -4,6 +4,7 @@ import { isChordError } from "@earendil-works/chord";
 import { compile } from "@earendil-works/pi-schema";
 import {
 	AppendSchema,
+	AssetRefSchema,
 	CONTRACT,
 	CONTRACTS,
 	CONVERSATION_TRANSITIONS,
@@ -165,6 +166,41 @@ test("a message row may carry runId, and a consumer that never names it still va
 	);
 });
 
+test("a row's files are content ids, and a row without them is the same row", () => {
+	const asset = { id: "cnt_a", name: "report.md", mimeType: "text/markdown", size: 40 };
+	assert.equal(compile(AssetRefSchema).check(asset), true);
+	assert.equal(
+		compile(AssetRefSchema).check({ ...asset, path: "/tmp/report.md" }),
+		true,
+		"open, so a newer peer's field binds",
+	);
+	const state = (row: Record<string, unknown>) => ({
+		revision: 1,
+		transcript: [row],
+		queue: [],
+		run: "idle",
+		busy: false,
+		transitions: [],
+	});
+	assert.equal(
+		compile(ConversationStateSchema).check(state({ kind: "user", id: "1", text: "read it", assets: [asset] })),
+		true,
+		"a user row carries what they sent",
+	);
+	assert.equal(
+		compile(ConversationStateSchema).check(
+			state({ kind: "delivered", id: "message:1", text: "[report](asset:cnt_a)", assets: [asset] }),
+		),
+		true,
+		"an agent row carries what the turn produced",
+	);
+	assert.equal(
+		compile(ConversationStateSchema).check(state({ kind: "delivered", id: "message:1", text: "no files" })),
+		true,
+		"and the row without them is the row it always was",
+	);
+});
+
 test("the conversation member carries the read model and nothing else", () => {
 	type JsonSchema = {
 		readonly properties?: Record<string, any>;
@@ -196,6 +232,14 @@ test("the conversation member carries the read model and nothing else", () => {
 	// A streamed message has to be the row it settles into: same id, plus the two marks a client renders.
 	const delivered = rows[1];
 	assert.deepEqual(delivered?.required, ["kind", "id", "text"]);
-	assert.deepEqual(Object.keys(delivered?.properties ?? {}), ["kind", "id", "text", "failed", "streaming", "runId"]);
+	assert.deepEqual(Object.keys(delivered?.properties ?? {}), [
+		"kind",
+		"id",
+		"text",
+		"failed",
+		"streaming",
+		"runId",
+		"assets",
+	]);
 	assert.deepEqual(member.schema.properties?.transitions.items?.properties?.kind.enum, [...CONVERSATION_TRANSITIONS]);
 });

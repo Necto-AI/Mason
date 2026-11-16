@@ -12,7 +12,8 @@ target. Of your home it writes only `agent/`, plus the mounted checkout.
 | `agent/skills/<name>/SKILL.md` | your own procedures |
 | `agent/events.json` | the events and routines that may wake you |
 | `agent/workspace/` | where the work happens |
-| `agent/workspace/inbox/` | files a person sent you, one file per upload |
+| `agent/workspace/inbox/<contentId>/<name>` | files a person sent you, one directory per upload |
+| `agent/workspace/out/` | files you make for them: a deliverable goes here, and `[name](file:out/name.ext)` names one |
 
 `agent/.git` is the history of that half: a fact appended to `log/` is committed, so what you remembered last month is
 recoverable.

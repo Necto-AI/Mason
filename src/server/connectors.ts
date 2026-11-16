@@ -17,7 +17,7 @@
  *
  * Mason issues one credential per connector. It is stored as a SHA-256 hash in `service/config.json` — that file ends up
  * in bug reports — and read on every upgrade request, so a revoke lands on the next connection rather than on the next
- * restart. It opens `/api/connector` and the attachment upload, and nothing else. The credential for mason's own MCP
+ * restart. It opens `/api/connector` and the asset endpoints, and nothing else. The credential for mason's own MCP
  * calls is the other direction: it is configured on the entry's MCP server (`mcp.credential`) and never leaves the server
  * except on that call.
  */

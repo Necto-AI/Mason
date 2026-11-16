@@ -185,9 +185,14 @@ The secret mason issues one integration so its client can open `/api/connector` 
 `service/config.json`, read on every connection.
 _Avoid_: token, API key, session
 
+**asset**:
+One file a row carries, `{ id, name, mimeType, size }`: a person's upload on a user row, or a turn's deliverable on an
+agent row. The row names the content id; the bytes come from the download route.
+_Avoid_: attachment (that is the inbound direction), file id
+
 **content id**:
-The name of one uploaded file, `cnt_<hex>`. Bytes cross the transfer endpoint by this id, never base64 in a frame and
-never a shared path, and an id is served only to the client that uploaded it.
+The name of one asset, `cnt_<hex>`. Bytes cross the transfer endpoint by this id, never base64 in a frame and never a
+shared path; a row names it, and a client with the `user` grant downloads it.
 _Avoid_: attachment id, file token
 
 **tool catalog**:

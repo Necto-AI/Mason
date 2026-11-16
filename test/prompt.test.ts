@@ -153,7 +153,8 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 	// it is the wrong tool, that a worker cannot reach the person, and that a change is written and *then* reviewed.
 	// 5,600 became 5,700 when the integration contract (#222) put the tool count and docs pointer on each integration
 	// line, and the docs index learned a service's markdown resources: the resident prefix grew, which is the trade the
-	// contract chose, and the merged prompt is 5,641.
+	// contract chose, and the merged prompt is 5,641. 5,700 became 6,000 for the outbox rule (#225): a deliverable goes
+	// in `out/`, a link is `file:out/...`, and nothing else is attached, which the model cannot infer from the tool list.
 	await withHouseHome(async () => {
 		// The module's integrations are global: a test that set some would otherwise be counted here.
 		setIntegrations({});
@@ -161,7 +162,7 @@ test("the whole prompt fits in its budget, and the tool list is the six", async 
 		for (const promptSection of PROMPT_SECTIONS) {
 			total += (await renderSection(promptSection))?.length ?? 0;
 		}
-		assert.ok(total <= 5_700, `the prompt is ${total} characters, over its 5,700`);
+		assert.ok(total <= 6_000, `the prompt is ${total} characters, over its 6,000`);
 	});
 
 	const declared = BASE_EXTENSIONS.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name));

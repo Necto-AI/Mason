@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createUserClient, nodeWebSocketLink } from "mason-connector";
 import { MemoryStore } from "mason-connector/store/memory";
 import type { ConversationState } from "mason-protocol";
@@ -203,17 +203,55 @@ async function main(): Promise<void> {
 	});
 	try {
 		await client.start();
+		// One file in, one file out: the same content id on both rows, and the same credential downloads both.
+		const note = new TextEncoder().encode("sent by the person");
+		const upload = await client.attachments.upload(note, { mimeType: "text/plain", name: "note.txt" });
 		const outcome = await client.submit({
 			appendId: "first-run-1",
-			content: [{ type: "text", text: "Say the word ok." }],
+			content: [
+				{ type: "text", text: "Write the report." },
+				{ type: "file", contentId: upload.contentId, name: "note.txt", mimeType: "text/plain" },
+			],
 			origin: { ref: "first-run", actor: { id: "local", name: "you" } },
 		});
 		check(outcome.status === "accepted", "the client's submission was accepted", JSON.stringify(outcome));
-		const answered = await waitFor(async () => replyRows(state).length >= 1);
-		check(answered, "the turn produced a message row in the conversation", JSON.stringify(state?.transcript));
+		const answered = await waitFor(
+			async () =>
+				userRows(state).some((row) => (row.assets?.length ?? 0) > 0) &&
+				replyRows(state).some((row) => (row.assets?.length ?? 0) > 0),
+		);
+		check(
+			answered,
+			"the turn produced a user row and a message row, both carrying their file",
+			JSON.stringify(state?.transcript),
+		);
+		const users = userRows(state);
+		check(
+			users[0]?.assets?.[0]?.id === upload.contentId,
+			"the user row names the upload by content id",
+			JSON.stringify(users),
+		);
 		const rows = replyRows(state);
-		check(rows.length === 1, "exactly one message row for the turn", JSON.stringify(rows));
-		check(rows[0]?.text === "ok", "and it carries the words the turn wrote", JSON.stringify(rows));
+		check(rows.length >= 1, "the turn produced a message row in the conversation", JSON.stringify(rows));
+		const withAsset = rows.find((row) => (row.assets?.length ?? 0) > 0);
+		check(withAsset !== undefined, "and the message row carries the deliverable", JSON.stringify(rows));
+		check(
+			/\[report\]\(asset:cnt_[0-9a-f]{32}\)/.test(withAsset?.text ?? ""),
+			"the file link is a content id, not a path",
+			String(withAsset?.text),
+		);
+		const delivered = await client.attachments.download(withAsset?.assets?.[0]?.id ?? "");
+		check(
+			new TextDecoder().decode(delivered.bytes) === "hello from the outbox",
+			"the agent asset downloads",
+			new TextDecoder().decode(delivered.bytes),
+		);
+		const returned = await client.attachments.download(upload.contentId);
+		check(
+			new TextDecoder().decode(returned.bytes) === "sent by the person",
+			"the user asset downloads",
+			new TextDecoder().decode(returned.bytes),
+		);
 	} finally {
 		await client.stop().catch(() => {});
 		await served.close();
@@ -229,19 +267,40 @@ async function main(): Promise<void> {
 	process.exit(failures === 0 ? 0 : 1);
 }
 
-/** The committed reply rows of a state: what a person's window reads, and the whole of a delivery. */
-function replyRows(state: ConversationState | undefined): Array<{ id: string; text: string }> {
+/** The committed message rows of a state: what a person's window reads, and the whole of a delivery. */
+function replyRows(
+	state: ConversationState | undefined,
+): Array<{ id: string; text: string; assets?: Array<{ id: string }> }> {
 	return (state?.transcript ?? []).flatMap((row) =>
-		row.kind === "delivered" && row.streaming !== true ? [{ id: row.id, text: row.text }] : [],
+		row.kind === "delivered" && row.streaming !== true
+			? [{ id: row.id, text: row.text, ...(row.assets === undefined ? {} : { assets: row.assets }) }]
+			: [],
 	);
 }
 
-/** The faux provider with one scripted turn: the text is the message. */
+/** The committed user rows of a state, with the files they sent. */
+function userRows(
+	state: ConversationState | undefined,
+): Array<{ id: string; text: string; assets?: Array<{ id: string }> }> {
+	return (state?.transcript ?? []).flatMap((row) =>
+		row.kind === "user"
+			? [{ id: row.id, text: row.text, ...(row.assets === undefined ? {} : { assets: row.assets }) }]
+			: [],
+	);
+}
+
+/** The faux provider with one scripted turn: a file in the outbox, then the message that links it. */
 function scripted(): ResolvedModel {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
-	faux.setResponses([fauxAssistantMessage(fauxText("ok"))]);
+	faux.setResponses([
+		fauxAssistantMessage(
+			[fauxToolCall("write", { path: "out/report.md", content: "hello from the outbox" }, { id: "w1" })],
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(fauxText("[report](file:out/report.md)")),
+	]);
 	return { models, ref: { provider: "faux", modelId: "faux-1" }, faux: true };
 }
 
