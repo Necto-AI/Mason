@@ -18,7 +18,7 @@
  *    deliver and nothing to acknowledge. The member is served only to a grant with a `user`: an event client reads no
  *    transcript, and its cell stays empty because nothing is published to it.
  *
- * What is *not* here: the owner's token. A connector credential opens this socket and the attachment endpoints and
+ * What is *not* here: the owner's token. A connector credential opens this socket and the asset endpoints and
  * nothing else; the config is read per request, so a revoke lands on the next connection rather than the next restart.
  */
 import { randomUUID } from "node:crypto";
@@ -51,8 +51,8 @@ import {
 	SessionSchema,
 } from "mason-protocol";
 import type { WebSocket } from "ws";
-import { CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
-import { ATTACHMENT_LIMIT, type AttachmentStore } from "./attachments.ts";
+import { type AssetRef, CONNECTOR_ENTRY_KIND } from "../shared/contract.ts";
+import { ATTACHMENT_LIMIT, type AttachmentStore, displayName } from "./attachments.ts";
 import { commandTarget, runCommand } from "./commands.ts";
 import { authenticateConnector, type ConnectorGrant, connectorGrantFor, ownerRefusal } from "./connectors.ts";
 import { currentHouse } from "./house.ts";
@@ -318,14 +318,18 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 		if (claimed !== undefined) return { outcome: "duplicate", ...entryOf(claimed.entry) };
 		spend(name, "submission", CONNECTOR_SUBMISSION_LIMIT);
 		const origin = originOf(name, args.origin);
-		const content = await userInput(name, args.content);
+		const input = await userInput(name, args.content);
+		// The entry's data is where the row finds its files: a content id and its display fields, never the path the model
+		// was given. Origin and assets are independent, so a message may carry either, or both.
+		const data = {
+			...(origin === undefined ? {} : { origin: originData(origin) }),
+			...(input.assets.length === 0 ? {} : { assets: input.assets }),
+		};
 		const placed = await submitInput({
 			type: "input",
 			requestId,
-			content,
-			...(origin === undefined
-				? {}
-				: { entry: { kind: CONNECTOR_ENTRY_KIND, data: { origin: originData(origin) } } }),
+			content: input.content,
+			...(Object.keys(data).length === 0 ? {} : { entry: { kind: CONNECTOR_ENTRY_KIND, data } }),
 			...(args.mode === "steer" || args.mode === "followUp" || args.mode === "reject"
 				? { whenBusy: args.mode }
 				: {}),
@@ -360,13 +364,18 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	 * The words as the model reads them, plus the files they sent.
 	 *
 	 * Text and markdown blocks become the message, unprefixed: the connector's credential already says who is speaking,
-	 * and one person's bot has nobody to tell apart. A file block is fetched from the attachment store and written into
-	 * the agent's workspace, because a content id is not something a `read` can open; an image also travels as an image
-	 * block, so the model sees it without a tool call.
+	 * and one person's bot has nobody to tell apart. A file block is fetched from the asset store and written into the
+	 * agent's inbox, because a content id is not something a `read` can open; an image also travels as an image block, so
+	 * the model sees it without a tool call. Every stored file also becomes an `AssetRef`, which is what the user row
+	 * carries and the download route serves: the reader gets the same bytes back from history.
 	 */
-	async function userInput(name: string, blocks: readonly ContentBlock[]): Promise<UserInput> {
+	async function userInput(
+		name: string,
+		blocks: readonly ContentBlock[],
+	): Promise<{ content: UserInput; assets: AssetRef[] }> {
 		const text: string[] = [];
 		const images: UserInputImage[] = [];
+		const assets: AssetRef[] = [];
 		for (const block of blocks) {
 			if (block.type === "text" || block.type === "markdown" || block.type === "notice") {
 				text.push(block.text);
@@ -383,21 +392,29 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 			if (type.startsWith("image/")) {
 				images.push({ type: "image", data: read.attachment.bytes.toString("base64"), mimeType: type });
 			}
+			assets.push({
+				id: read.attachment.meta.contentId,
+				name: displayName(block.name ?? read.attachment.meta.name, read.attachment.meta.contentId),
+				mimeType: type,
+				size: read.attachment.meta.size,
+			});
 			text.push(`[file: ${path} — ${type}, ${read.attachment.meta.size} bytes]`);
 		}
 		const body = text.join("\n");
-		if (images.length === 0) return body;
-		return [{ type: "text", text: body }, ...images];
+		const content = images.length === 0 ? body : [{ type: "text" as const, text: body }, ...images];
+		return { content, assets };
 	}
 
-	/** Where one attachment is written for `read`: inside the workspace, its name kept but never its path. */
+	/** Where one attachment is written for `read`: one directory per upload, its name kept but never its path. */
 	async function attachmentPath(contentId: string, name: string | undefined): Promise<string> {
-		const directory = join(options.workspaceDir, "inbox");
+		const directory = join(options.workspaceDir, "inbox", contentId);
 		await mkdir(directory, { recursive: true, mode: 0o700 });
-		const safe = basename(name ?? "file")
+		const kept = basename(name ?? "file")
 			.replace(/[^\w.-]+/g, "_")
 			.slice(0, 80);
-		return join(directory, `${contentId}-${safe}`);
+		// `.` and `..` are directory names, not file names: a submission whose name is one still lands as a file.
+		const safe = kept === "" || kept === "." || kept === ".." ? "file" : kept;
+		return join(directory, safe);
 	}
 
 	/**

@@ -16,8 +16,9 @@
  * available server-side (the run supervisor reads it), and a trace endpoint can expose it later, deliberately.
  */
 import type { ConversationView, EntryRecord, LiveState } from "@earendil-works/pi-durable";
-import type { QueuedItem, TranscriptItem } from "../shared/contract.ts";
+import type { AssetRef, QueuedItem, TranscriptItem } from "../shared/contract.ts";
 import {
+	ASSET_ENTRY_KIND,
 	CONNECTOR_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
 	isDeliveryReminder,
@@ -237,11 +238,40 @@ function foldEntry(entry: EntryRecord, index: number, firstIndex: number, state:
 		if (gate) return;
 		if (written === "") return;
 		const { text, author } = splitAuthor(written);
-		state.items.push({ kind: "user", id: String(entry.id), text, ...(author === undefined ? {} : { author }) });
+		const assets = assetsOf((entry.data as { assets?: unknown } | undefined)?.assets);
+		state.items.push({
+			kind: "user",
+			id: String(entry.id),
+			text,
+			...(author === undefined ? {} : { author }),
+			...(assets === undefined ? {} : { assets }),
+		});
 		// A steer placed mid-run is a submission that joined the run, not one that started it: the run pointer, when the
 		// view names one, keeps every row of that run under the entry the run began at. Without a pointer the newest input
 		// is the best the fold can say.
 		beginTurn(state, String(entry.id), true);
+		return;
+	}
+	if (entry.kind === ASSET_ENTRY_KIND) {
+		const record = assetRecordOf(entry);
+		if (record === undefined) return;
+		const index = state.items.findIndex((row) => row.id === record.rowId);
+		const row = index < 0 ? undefined : state.items[index];
+		if (row !== undefined && row.kind === "delivered") {
+			state.items[index] = {
+				...row,
+				text: rewriteLinks(row.text, record.links),
+				...(record.assets.length === 0 ? {} : { assets: record.assets }),
+			};
+		}
+		// One notice for the turn's files, immediately after the message it belongs to: a refused link stays text in the
+		// row and the reader is told once, rather than the row silently naming a path that leads nowhere. The index is
+		// the row's when it is still here, and the tail is the fallback for a row a compaction left behind.
+		if (record.notice !== undefined) {
+			const notice: TranscriptItem = { kind: "notice", id: `asset:${entry.id}`, text: record.notice };
+			if (index < 0) state.items.push(notice);
+			else state.items.splice(index + 1, 0, notice);
+		}
 		return;
 	}
 	if (entry.kind === REPLY_ENTRY_KIND) {
@@ -286,6 +316,55 @@ function foldEntry(entry: EntryRecord, index: number, firstIndex: number, state:
 			state.spoke = true;
 		}
 	}
+}
+
+/** The asset refs an entry carries, or `undefined` when it names none or the shape is not one this build wrote. */
+function assetsOf(value: unknown): AssetRef[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const refs = value.filter((item): item is AssetRef => {
+		if (typeof item !== "object" || item === null) return false;
+		const ref = item as Record<string, unknown>;
+		return (
+			typeof ref.id === "string" &&
+			typeof ref.name === "string" &&
+			typeof ref.mimeType === "string" &&
+			typeof ref.size === "number"
+		);
+	});
+	return refs.length === 0 ? undefined : refs;
+}
+
+/** One `app.asset` entry as this build wrote it, or `undefined` when it is not one. */
+function assetRecordOf(entry: EntryRecord):
+	| {
+			readonly rowId: string;
+			readonly assets: AssetRef[];
+			readonly links: Record<string, string>;
+			readonly notice?: string;
+	  }
+	| undefined {
+	const data = entry.data as { rowId?: unknown; assets?: unknown; links?: unknown; notice?: unknown } | undefined;
+	if (typeof data?.rowId !== "string" || data.rowId === "") return undefined;
+	const assets = assetsOf(data.assets) ?? [];
+	const links: Record<string, string> = {};
+	if (typeof data.links === "object" && data.links !== null && !Array.isArray(data.links)) {
+		for (const [from, to] of Object.entries(data.links)) {
+			if (typeof to === "string" && to.startsWith("asset:")) links[from] = to;
+		}
+	}
+	return {
+		rowId: data.rowId,
+		assets,
+		links,
+		...(typeof data.notice === "string" && data.notice !== "" ? { notice: data.notice } : {}),
+	};
+}
+
+/** Replace each `file:` link target the resolver stored with the `asset:` id it became. */
+function rewriteLinks(text: string, links: Readonly<Record<string, string>>): string {
+	let rewritten = text;
+	for (const [from, to] of Object.entries(links)) rewritten = rewritten.split(`](${from})`).join(`](${to})`);
+	return rewritten;
 }
 
 /** What a row names as its run: the run pointer when this entry is inside that run, else the newest input at this point. */

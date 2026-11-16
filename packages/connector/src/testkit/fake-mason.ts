@@ -239,6 +239,18 @@ export function createFakeMason(options: FakeMasonOptions = {}): FakeMason {
 		if (credential !== "Bearer test-credential") {
 			return json(401, { code: ERROR_CODE.notAuthenticated, message: "bad credential" });
 		}
+		if (url.pathname.startsWith("/api/connector/assets/") && init.method === "GET") {
+			const id = decodeURIComponent(url.pathname.slice("/api/connector/assets/".length));
+			const bytes = attachments.get(id);
+			if (bytes === undefined) return json(404, { code: ERROR_CODE.invalidRequest, message: "not found" });
+			return new Response(bytes as unknown as BodyInit, {
+				status: 200,
+				headers: {
+					"content-type": "application/octet-stream",
+					"content-disposition": `attachment; filename="${id}"`,
+				},
+			});
+		}
 		if (url.pathname === "/api/connector/attachments" && init.method === "POST") {
 			if (spent.delete("attachments")) {
 				return json(429, { code: ERROR_CODE.rateLimited, message: "this connector has spent its uploads" });

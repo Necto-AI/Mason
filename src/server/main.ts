@@ -1,5 +1,5 @@
 /**
- * HTTP + WebSocket server: the connector door, a liveness probe, and the attachment endpoints.
+ * HTTP + WebSocket server: the connector door, a liveness probe, and the asset endpoints.
  *
  * There is no browser application. A person speaks to Mason through a connector, and the only credential on this
  * surface is the connector's own.
@@ -10,8 +10,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId } from "@earendil-works/pi-durable";
+import { ERROR_CODE } from "mason-protocol";
 import { WebSocketServer } from "ws";
-import { ATTACHMENT_LIMIT, AttachmentStore } from "./attachments.ts";
+import { createRunAssets } from "./assets.ts";
+import { ATTACHMENT_LIMIT, AttachmentStore, displayName } from "./attachments.ts";
 import { CONNECTOR_PATH, type ConnectorDoor, createConnectorDoor } from "./connector.ts";
 import { authenticateConnector } from "./connectors.ts";
 import { currentHouse, type HousePaths } from "./house.ts";
@@ -28,8 +30,8 @@ export interface StartServerOptions extends OpenAgentRuntimeOptions {
 	readonly port?: number;
 	readonly hostname?: string;
 	/**
-	 * The attachment store's bounds. Defaults are the protocol's (25 MiB, a day); a test that has to cross the cap or wait
-	 * for an expiry sets them small rather than writing 25 MB or sleeping a day.
+	 * The asset store's bounds. Defaults are the protocol's (25 MiB, 90 days); a test that has to cross the cap or wait
+	 * for an expiry sets them small rather than writing 25 MB or sleeping 90 days.
 	 */
 	readonly attachmentBytes?: number;
 	readonly attachmentTtlMs?: number;
@@ -67,6 +69,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// the one with the UI open. Fed from a connection instead, it observed nothing at all whenever nobody had a browser
 	// on the conversation, and a run that a provider killed stayed dead until somebody wrote again (2026-10-30: a bot's
 	// two messages sat unanswered for 3 and 12 hours while the log held no `[run-retry]` line at all).
+	// Uploaded bytes, a turn's files, and the ids that point at them. Durable, in the home's data half: a restart between
+	// an upload and the submission that references it is the moment a resend happens, and a row's asset outlives the
+	// process that stored it. Created before the watch, because the watch is what resolves a run's outbox.
+	const house = currentHouse();
+	const ttlMs = options.attachmentTtlMs ?? envMilliseconds("MASON_ASSET_TTL_MS");
+	const attachments = new AttachmentStore({
+		dataDir: runtime.dataDir,
+		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
+		...(ttlMs === undefined ? {} : { ttlMs }),
+	});
+	const runAssets = createRunAssets({
+		runtime,
+		store: attachments,
+		workspaceDir: runtime.workspaceDir,
+		log: (line) => console.error(line),
+	});
+
 	const conversation = await runtime.conversation();
 	const runWatch = await conversation.watch(BACKGROUND_CONTEXT);
 	const reportRun = createCacheReporter((line) => console.log(line));
@@ -80,6 +99,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 	// that the previous process died on is still a task nobody answered.
 	reportRun(runWatch.value);
 	supervisor.observe(runWatch.value);
+	runAssets.observe(runWatch.value);
 	// The failure branch is the watch saying it cannot read the view any more; nothing reaches the supervisor from it,
 	// because a supervisor told about a run nobody can read is a supervisor that retries on a guess.
 	runWatch.start(async (call) => {
@@ -89,19 +109,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 		}
 		reportRun(call.value);
 		supervisor.observe(call.value);
+		runAssets.observe(call.value);
 	});
 
-	const house = currentHouse();
 	// One limiter for the process: its budget is what this process may spend, so it is shared across requests. The
 	// connector classes beside it are keyed per connector, so one sender's minute is never another's.
 	const fires = createFireLimiter();
-	// Uploaded bytes and the ids that point at them. Durable, in the home's data half: a restart between an upload and the
-	// submission that references it is the moment a resend happens.
-	const attachments = new AttachmentStore({
-		dataDir: runtime.dataDir,
-		...(options.attachmentBytes === undefined ? {} : { maxBytes: options.attachmentBytes }),
-		...(options.attachmentTtlMs === undefined ? {} : { ttlMs: options.attachmentTtlMs }),
-	});
 	// The connector door: one Chord socket per connector, each admitted by its own host. Opened before the listener, so a
 	// socket that arrives in the first instant finds the door it is admitted by.
 	const connectors = await createConnectorDoor({
@@ -174,8 +187,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 			// Nothing the supervisor still owes is worth a fire into a closed runtime: a shutdown is the last thing that
 			// drops a pending re-fire.
 			supervisor.close();
-			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process.
+			// Stop the telemetry watch first: nothing it reports is worth waiting for a shutting-down process. An outbox
+			// resolution already in flight is the one exception: it writes before the harness closes, or its bytes are
+			// stored with no row to name them.
 			await runWatch.stop();
+			await runAssets.idle();
 			// The door first: it stops the state watch and closes every connector socket, so a call that arrives during
 			// shutdown cannot place work against a runtime that is about to close.
 			await connectors.close();
@@ -203,7 +219,7 @@ async function handleRequest(
 	const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 	applySecurityHeaders(response);
 
-	// The connector's own door: its socket's upgrade is routed elsewhere, but the attachment endpoints are HTTP and are
+	// The connector's own door: its socket's upgrade is routed elsewhere, but the asset endpoints are HTTP and are
 	// authenticated by the connector's credential. Nothing on this surface is the owner's, because no owner speaks HTTP.
 	if (await handleConnectorRequest(request, response, url, attachments, fires, house)) return;
 
@@ -216,15 +232,16 @@ async function handleRequest(
 }
 
 /**
- * The connector's one HTTP endpoint: `POST /api/connector/attachments`.
+ * The connector's HTTP endpoints: an upload, and one asset's bytes in either direction.
  *
- * The store is write-only for a connector: an upload answers the content id, and the agent reads the bytes itself when a
- * message carrying one arrives. A connector therefore never needs a download, and the route that served one went with
- * the panel.
+ * `POST /api/connector/attachments` stores a person's upload and answers its content id. `GET /api/connector/assets/<id>`
+ * serves the bytes behind an id a row names: an input asset to its uploader, any of the conversation's assets to a
+ * connector with the `user` grant. An event grant has no transcript, so an out asset is refused there.
  *
  * Authenticated as the connector (`authenticateConnector`), never as the owner, and answered with the protocol's own
- * statuses: `413` over the cap, `405` for a verb that is not a POST, and `404` for any other path. The budget is the
- * connector's attachment class, separate from its submissions, fires and controls.
+ * statuses: `413` over the cap, `410` for an expired asset, `403` for a grant that does not read it, `405` for a wrong
+ * verb, and `404` for an id or a path that is not there. The upload budget is the connector's attachment class, separate
+ * from its submissions, fires and controls.
  */
 async function handleConnectorRequest(
 	request: IncomingMessage,
@@ -251,9 +268,44 @@ async function handleConnectorRequest(
 		return true;
 	}
 	const name = auth.identity.name;
-	// Whether this request is the one endpoint mason serves here — settled before the budget is charged, so a wrong
-	// verb or an unknown path costs the connector nothing.
+	// Whether this request is one mason serves here — settled before a budget is charged, so a wrong verb or an unknown
+	// path costs the connector nothing.
 	const base = `${CONNECTOR_PATH}/attachments`;
+	if (url.pathname.startsWith("/api/connector/assets/")) {
+		if (request.method !== "GET") {
+			json(response, 405, { error: "method not allowed" });
+			return true;
+		}
+		const contentId = url.pathname.slice("/api/connector/assets/".length);
+		const grant = auth.identity.integration.connector;
+		const read = await attachments.readGranted(name, grant?.user !== undefined, contentId);
+		if (read.status === "missing") {
+			notFound(response);
+			return true;
+		}
+		if (read.status === "refused") {
+			json(response, 403, {
+				code: ERROR_CODE.faceNotGranted,
+				message: "this connector's grant does not read the conversation's assets",
+			});
+			return true;
+		}
+		if (read.status === "expired") {
+			json(response, 410, {
+				code: ERROR_CODE.assetExpired,
+				message: "that asset has expired; the message it was attached to is still here",
+			});
+			return true;
+		}
+		const meta = read.attachment.meta;
+		response.writeHead(200, {
+			"content-type": meta.mimeType,
+			"content-length": String(meta.size),
+			"content-disposition": contentDisposition(displayName(meta.name, meta.contentId)),
+		});
+		response.end(read.attachment.bytes);
+		return true;
+	}
 	if (url.pathname !== base) {
 		notFound(response);
 		return true;
@@ -302,6 +354,25 @@ async function handleConnectorRequest(
 	json(response, 200, { contentId: meta.contentId, size: meta.size, expiresAt: meta.expiresAt });
 	return true;
 }
+/**
+ * `Content-Disposition` for one asset: an attachment whose name is the stored one, never the path it came from.
+ *
+ * The quoted name is ASCII so an old client reads it, and the RFC 5987 form carries the real one when it is not. Both
+ * fields are a display name; the bytes are already typed and the route never answers inline.
+ */
+function contentDisposition(name: string): string {
+	const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+	return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+/** The environment's number for a deployment that wants a different retention: unset, blank or junk is the default. */
+function envMilliseconds(name: string): number | undefined {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") return undefined;
+	const value = Number(raw);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 /** A filename from a header, decoded and reduced to a name: it is shown and written, never used as a path. */
 function safeFilename(value: string): string | undefined {
 	let decoded: string;

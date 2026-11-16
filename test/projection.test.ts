@@ -16,6 +16,7 @@ import type { ConversationView } from "@earendil-works/pi-durable";
 import type { TranscriptItem as WireRow } from "mason-protocol";
 import { foldTranscript, projectQueued, projectTranscript } from "../src/server/projection.ts";
 import {
+	ASSET_ENTRY_KIND,
 	CONNECTOR_ENTRY_KIND,
 	HOOK_ENTRY_KIND,
 	REFLECTION_ASK,
@@ -102,6 +103,75 @@ describe("the transcript the client is sent", () => {
 		assert.ok(!wire.includes("thinking"), "no reasoning crosses the wire");
 		assert.ok(!wire.includes("toolCall"), "no tool call crosses the wire");
 		assert.ok(!wire.includes("pi.system"), "no entry kind crosses the wire");
+	});
+
+	it("carries a user row's files by content id, never by path", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				{
+					id: 2,
+					kind: CONNECTOR_ENTRY_KIND,
+					model: [{ role: "user", content: "read the note" }],
+					data: {
+						assets: [{ id: "cnt_a", name: "note.txt", mimeType: "text/plain", size: 12 }],
+					},
+				},
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{
+				kind: "user",
+				id: "2",
+				text: "read the note",
+				assets: [{ id: "cnt_a", name: "note.txt", mimeType: "text/plain", size: 12 }],
+			},
+		]);
+		assert.ok(!JSON.stringify(transcript).includes("inbox/"), "the row names an id, not the path the agent read");
+	});
+
+	it("merges a turn's assets into its message and rewrites a stored file link", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				assistant(1, [{ type: "text", text: "Here it is: [report](file:out/report.md)" }], { stopReason: "stop" }),
+				entry(2, ASSET_ENTRY_KIND, [], {
+					data: {
+						rowId: "message:1",
+						entryId: "1",
+						assets: [{ id: "cnt_b", name: "report.md", mimeType: "text/markdown", size: 40 }],
+						links: { "file:out/report.md": "asset:cnt_b" },
+					},
+				}),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{
+				kind: "delivered",
+				id: "message:1",
+				text: "Here it is: [report](asset:cnt_b)",
+				assets: [{ id: "cnt_b", name: "report.md", mimeType: "text/markdown", size: 40 }],
+			},
+		]);
+	});
+
+	it("leaves a refused link as text and adds one notice", () => {
+		const transcript = projectTranscript(
+			viewOf([
+				assistant(1, [{ type: "text", text: "[secret](file:service/key.txt)" }], { stopReason: "stop" }),
+				entry(2, ASSET_ENTRY_KIND, [], {
+					data: {
+						rowId: "message:1",
+						entryId: "1",
+						assets: [],
+						links: {},
+						notice: "A file in this message could not be attached.",
+					},
+				}),
+			]),
+		);
+		assert.deepEqual(transcript, [
+			{ kind: "delivered", id: "message:1", text: "[secret](file:service/key.txt)" },
+			{ kind: "notice", id: "asset:2", text: "A file in this message could not be attached." },
+		]);
 	});
 
 	it("drops a message with nothing in it rather than rendering an empty bubble", () => {

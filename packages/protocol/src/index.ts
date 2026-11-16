@@ -86,6 +86,7 @@ export const ERROR_CODE = {
 	queueOverflow: "mason.queue_overflow",
 	invalidRequest: "mason.invalid_request",
 	notAuthenticated: "mason.not_authenticated",
+	assetExpired: "mason.asset_expired",
 	internal: "mason.internal",
 } as const;
 
@@ -249,6 +250,10 @@ export const AppendResultSchema = obj(
 );
 export type AppendResult = Static<typeof AppendResultSchema>;
 
+/** One file a row carries: a content id, a display name and the type the bytes are served as. Never a path. */
+export const AssetRefSchema = obj({ id: str(), name: str(), mimeType: str(), size: num() }, { open: true });
+export type AssetRef = Static<typeof AssetRefSchema>;
+
 export const ControlSchema = obj({ op: str(), requestId: opt(str()), instructions: opt(str()) }, { open: true });
 export type ControlArgs = Static<typeof ControlSchema>;
 
@@ -302,7 +307,17 @@ export type Session = Static<typeof SessionSchema>;
  * run started from — and `failed` marks the messages of a run that died; `streaming` marks the one still being written.
  */
 export const TranscriptItemSchema = union([
-	obj({ kind: lit("user"), id: str(), text: str(), author: opt(str()), at: opt(num()) }, { open: true }),
+	obj(
+		{
+			kind: lit("user"),
+			id: str(),
+			text: str(),
+			author: opt(str()),
+			at: opt(num()),
+			assets: opt(arr(AssetRefSchema)),
+		},
+		{ open: true },
+	),
 	obj(
 		{
 			kind: lit("delivered"),
@@ -311,6 +326,7 @@ export const TranscriptItemSchema = union([
 			failed: opt(bool()),
 			streaming: opt(bool()),
 			runId: opt(str()),
+			assets: opt(arr(AssetRefSchema)),
 		},
 		{ open: true },
 	),
