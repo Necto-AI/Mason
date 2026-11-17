@@ -51,8 +51,8 @@ The live home confirms the map, read from `/home/user/.pi/agent/` on 2026-11-07:
 `pi-voice.json`, `web-search.json`. Every file other than the six JSON stores is owned by installed packages or
 extensions, not by pi core: searching all `@earendil-works` packages on this machine for `security.json` or
 `env.json` matches nothing, while the pi-setup checkout names both
-(`/home/user/.pi/agent/git/github.com/DenisSud/pi-setup/extensions/env/index.ts` and
-`/home/user/.pi/agent/git/github.com/DenisSud/pi-setup/lib/credentials.ts`, both read 2026-11-07). In this home,
+(`/home/user/.pi/agent/git/github.com/densudk/pi-setup/extensions/env/index.ts` and
+`/home/user/.pi/agent/git/github.com/densudk/pi-setup/lib/credentials.ts`, both read 2026-11-07). In this home,
 `env.json` is a flat map of env-var names to secret values (values redacted here) and `security.json` holds
 `profiles`/`rbw`/`guard` keys, secret-tooling state used by the pi-setup extensions — their role and shape are
 the evidence; no values are recorded here.
