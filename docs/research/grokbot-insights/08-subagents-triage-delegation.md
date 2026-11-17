@@ -66,7 +66,7 @@ Main agent = user-facing interface + orchestrator; it "keeps its conversation sp
 - `vendor/pi/packages/env/src/connection.ts`
 - `src/server/runtime.ts`, `src/server/hooks.ts`, `src/server/env.ts`, `src/server/extensions/agent-identity.ts`, `src/shared/contract.ts`
 - `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`
-- `~/.pi/agent/git/github.com/DenisSud/pi-setup/skills/engineering/triage/SKILL.md`, `AGENT-BRIEF.md`
+- `~/.pi/agent/git/github.com/densudk/pi-setup/skills/engineering/triage/SKILL.md`, `AGENT-BRIEF.md`
 - [1] https://code.claude.com/docs/en/sub-agents (read via https://web.archive.org/web/2025id_/https://docs.claude.com/en/docs/claude-code/sub-agents)
 - https://github.com/anthropics/claude-code — `plugins/plugin-dev/skills/agent-development/SKILL.md`
 - [2] https://www.anthropic.com/engineering/multi-agent-research-system (read via web.archive.org)
