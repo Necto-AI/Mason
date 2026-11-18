@@ -36,7 +36,7 @@ disagreeing.
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | The console connector, in this repository | `scripts/chat.ts` — `mason chat`, on the same socket as every other connector |
-| Telegram as an external process on the SDK | `github.com/Necto-AI/mason-telegram` — events and tools |
+| Telegram as an external process on the SDK | `github.com/Necto-AI/telegram-client` — events and tools |
 | What the agent is told about a connector | `docs/agent/`, indexed by the prompt; an integration's pages are MCP resources read with `mcp_read_resource` |
 
 A connector can connect, append words or an event, read the conversation and move files. One way in: this socket.
