@@ -538,7 +538,7 @@ message and a reason across the link and nothing else, so a structured `retryAft
 **What is not here.** No approval step and no question (§4.1e). No rooms or conversation allow-list: one person, one bot
 (#129 is multi-user). No vendor tool named on an entry.
 
-`mason-telegram` and `mason-slack` live in their own repositories and import nothing from this one: their diff here is
+`telegram-client` and `mason-slack` live in their own repositories and import nothing from this one: their diff here is
 an entry with `connector.events` and a credential, and no `user` face — a connector reports and is asked, and never
 carries a person's words. The console connector (`scripts/chat.ts`) is in this repository, holds the one `user` grant,
 and opens the same socket: it is the developer adapter v0 keeps.
