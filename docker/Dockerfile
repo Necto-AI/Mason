@@ -5,13 +5,22 @@
 # entry, key or home: a configuration baked into an image is one nobody reviews, and the home is a volume that
 # `mason init` and `mason new` write.
 #
+# **This image runs the tools beside the server, which is for tests and demos only, and a provider key here is a file.**
+# One container is one uid and one filesystem: `agent/` and `service/` are not two mounts, `/proc/1/environ` is one
+# `read` away, and a tool can open the SSH key and the provider credential the split exists to hide from it. A
+# deployment runs the tools on another machine and mounts only `agent/` (ADR-0016); this one boots the repository so
+# `scripts/boot-test.sh` has something to boot. The key therefore reaches the server as `common/auth.json` on the
+# volume, or in a mounted pi directory — never as an environment variable, which is every tool's to print.
+#
 # Fully qualified on purpose: a host whose podman defines no `unqualified-search-registries` (NixOS ships none) refuses
 # a bare `node:…` at build time — `short-name "node:…" did not resolve to an alias`. The tag is the floor in
 # `packages/mason-agent/package.json` and the version `.github/workflows/ci.yml` runs.
 FROM docker.io/library/node:26.4.0-bookworm-slim
 
 # git is not optional: the boot makes `agent/` a repository and commits the memory it starts with (`house.ts`,
-# `ensureRepository`). tzdata is for the date in `agent/log/YYYY-MM-DD.md`, which is otherwise UTC.
+# `ensureRepository`). `TZ` is pinned below to UTC because a container has no zone of its own, and tzdata is there for
+# the operator who sets one at run time: the tool daemon passes `TZ` through (`src/server/env.ts`), so a bare image
+# would answer `date` in UTC with or without the package.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git tzdata \
  && rm -rf /var/lib/apt/lists/*
@@ -25,13 +34,25 @@ RUN groupmod --new-name mason node \
 
 WORKDIR /app
 
-# Only the tree the server reads. `.dockerignore` keeps node_modules, dist, a developer's homes and the git directory out
-# of the context; the workspace packages are built below, and `docs/agent` is the reference the prompt's docs section
-# indexes.
+# Only the tree the server reads, named directory by directory so the image cannot quietly grow a test suite or a dev
+# tool again: the two workspace packages `npm ci` links and `build:packages` compiles (each needs its `package.json`, its
+# two tsconfigs and its `src`), the runtime's `src` and the skills `ensureHouse` seeds from, and the pages its docs
+# section indexes. `tsconfig.packages.json` is the base the two package tsconfigs extend, so the build reads it.
 COPY package.json package-lock.json tsconfig.packages.json ./
-COPY packages ./packages
+COPY packages/protocol/package.json packages/protocol/tsconfig.json packages/protocol/tsconfig.build.json ./packages/protocol/
+COPY packages/protocol/src ./packages/protocol/src
+COPY packages/client/package.json packages/client/tsconfig.json packages/client/tsconfig.build.json ./packages/client/
+COPY packages/client/src ./packages/client/src
+COPY packages/mason-agent/package.json ./packages/mason-agent/
+COPY packages/mason-agent/src ./packages/mason-agent/src
+COPY packages/mason-agent/skills ./packages/mason-agent/skills
+# The boot's own credential check, then the three scripts a first run types by hand, because the image has no `mason` on
+# PATH and no `dist`: `boot-credential.ts` is what `docker/entrypoint.sh` runs (and what its refusal names), `init.ts`
+# writes the store, `new.ts` makes the bot, and `chat.ts` is the console grant `new.ts` imports. The server runs none of
+# them at turn time.
+COPY packages/mason-agent/scripts/boot-credential.ts packages/mason-agent/scripts/init.ts packages/mason-agent/scripts/new.ts packages/mason-agent/scripts/chat.ts ./packages/mason-agent/scripts/
 COPY docs/agent ./docs/agent
-COPY docker ./docker
+COPY docker/entrypoint.sh ./docker/
 # The terms travel with the source they cover: the image is AGPL-3.0-only and a deployment is a distribution of it.
 COPY LICENSE NOTICE ./
 
@@ -43,11 +64,13 @@ RUN npm ci \
 
 # The tool daemon is a binary, and the old deployment's `patchelf` loop repaired one built from a local submodule that
 # linked its loader out of the Nix store. There is no submodule here: `@earendil-works/pi-env` ships
-# `bin/pi-env-<platform>/` static-pie for eight platforms (the published 1.5.0 linux-x64 binary has no PT_INTERP), and
-# `localDaemon()` is what `src/server/env.ts` spawns. This check replaces the loop: the image fails here, not at the
-# first tool call, if a future package stops carrying the daemon.
+# `bin/pi-env-<platform>/` for eight platforms, static on every linux one (x64 is static-pie, arm64 plain static) and
+# that platform's own format on darwin and windows, and `localDaemon()` is what `src/server/env.ts` spawns. This check
+# replaces the loop, and it runs the binary: `test -x` is a mode bit, and a file whose loader or interpreter is missing
+# passes it and exits 127 — at the far end of a tool call, after `/api/health` said the server was fine.
 RUN daemon="$(node --input-type=module -e 'import { localDaemon } from "@earendil-works/pi-env"; process.stdout.write(localDaemon())')" \
  && test -x "$daemon" \
+ && "$daemon" --version \
  && echo "pi-env daemon: $daemon"
 
 # The root the home lives under. `MASON_HOME` is emptied because the older spelling names one home directly and outranks
@@ -57,12 +80,14 @@ ENV HOME=/home/mason \
     MASON_ROOT=/home/mason/.mason \
     MASON_HOME="" \
     HOST=0.0.0.0 \
-    PORT=8787
+    PORT=8787 \
+    TZ=UTC
 
 USER mason
 
 STOPSIGNAL SIGTERM
 
-# The entrypoint prepares the halves and the credential, then `exec`s the server, so node is PID 1 and receives this
-# signal. `scripts/boot-test.sh` pins the three boot properties: the build, the refusal, and the clean stop.
+# The entrypoint refuses a boot with no resolvable credential and then `exec`s the server, so node is PID 1 and receives
+# this signal. `scripts/boot-test.sh` pins the properties a boot has: the build, the refusal, the offline provider's
+# ready state, the files the boot wrote, and the clean stop.
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
