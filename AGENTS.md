@@ -4,7 +4,7 @@ Mason is an agent runtime for building, connecting, and running AI agents.
 
 ## Read what you need
 
-- [README](README.md) — what Mason is and how to use it.
+- [README](README.md) — the repository map; the install and the first run are in `packages/mason-agent/README.md`.
 - [CONTRIBUTING](CONTRIBUTING.md) — development setup and checks.
 - [Architecture](docs/ARCHITECTURE.md) — code ownership and where changes belong.
 - [Specification](docs/SPEC.md) — product contracts and planned behavior.

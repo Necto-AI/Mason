@@ -27,7 +27,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
+/** The agent package: what this build writes, and the skills and eval data it copies. */
 const root = fileURLToPath(new URL("..", import.meta.url));
+/** The repository: the installed dependencies, the workspace packages and the docs. */
+const repository = fileURLToPath(new URL("../../..", import.meta.url));
 
 /** A workspace package the compiled code may import bare: the exact name in the import, and the directory that builds it. */
 export interface Vendored {
@@ -99,9 +102,13 @@ async function main(): Promise<void> {
 	// Clean, not incremental: tsc leaves nothing behind it, so the build is exactly what the sources say it is.
 	await rm(join(root, "dist"), { recursive: true, force: true });
 	console.log("[build-runtime] tsc writes dist/");
-	await exec(process.execPath, [join(root, "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"], {
-		cwd: root,
-	});
+	await exec(
+		process.execPath,
+		[join(repository, "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"],
+		{
+			cwd: root,
+		},
+	);
 	const tools = join(root, "dist");
 	// Vendored copies are rebuilt, never merged: a workspace this build stops importing leaves with its old build
 	// instead of sitting in the tarball unused.
@@ -118,8 +125,8 @@ async function main(): Promise<void> {
 	for (const name of vendoredNames(emitted)) {
 		const vendored = VENDORED.find((entry) => entry.name === name) as Vendored;
 		const target = join(tools, "node_modules", name);
-		for (const file of await vendoredFiles(join(root, vendored.package), vendored)) {
-			await cp(join(root, vendored.package, file), join(target, file), { recursive: true });
+		for (const file of await vendoredFiles(join(repository, vendored.package), vendored)) {
+			await cp(join(repository, vendored.package, file), join(target, file), { recursive: true });
 		}
 		const stray = await typescriptIn(target).catch(() => [] as []);
 		if (stray.length > 0) {
@@ -139,7 +146,7 @@ async function main(): Promise<void> {
 	// the tarball's prompt loses the section silently — `readDocsIndex` reads a missing directory as no pages — and the
 	// image, which mounts the same directory, keeps it. Two shipped deployments would disagree about the prompt.
 	await rm(join(tools, "docs", "agent"), { recursive: true, force: true });
-	await cp(join(root, "docs", "agent"), join(tools, "docs", "agent"), { recursive: true });
+	await cp(join(repository, "docs", "agent"), join(tools, "docs", "agent"), { recursive: true });
 	// The copy is the point of the build, so the build checks it: a data directory that did not travel is a section
 	// that disappears from the published prompt, and the failure is invisible until a bot answers without it.
 	await readFile(join(tools, "docs", "agent", "README.md"), "utf8");

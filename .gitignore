@@ -38,3 +38,6 @@ deploy/vpn/config.json
 # Operator credentials: the deploy env and the VPN link/config they produce.
 deploy/.env
 deploy/vpn/happ.url
+
+# The nix build output: a symlink into the store, never source.
+/result

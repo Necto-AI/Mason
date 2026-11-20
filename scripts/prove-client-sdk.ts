@@ -74,7 +74,7 @@ async function main(): Promise<void> {
 		const packs = join(workspace, "packs");
 		await mkdir(packs, { recursive: true });
 		await step("pack them", async () => {
-			for (const name of ["protocol", "connector"] as const) {
+			for (const name of ["protocol", "client"] as const) {
 				await exec("npm", ["pack", "--pack-destination", packs], { cwd: join(root, "packages", name) });
 			}
 		});

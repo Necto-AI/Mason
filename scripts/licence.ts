@@ -19,10 +19,14 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 export const LICENCE = "AGPL-3.0-only";
 
 /** The packages this repository publishes, and the tarballs a consumer's terms arrive in. */
-const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/client/package.json"] as const;
+const MANIFESTS = [
+	"packages/mason-agent/package.json",
+	"packages/protocol/package.json",
+	"packages/client/package.json",
+] as const;
 
 /** The per-package copies npm puts in a tarball: a LICENSE beside the package.json, not one three directories up. */
-const COPIES = ["packages/protocol/LICENSE", "packages/client/LICENSE"] as const;
+const COPIES = ["packages/mason-agent/LICENSE", "packages/protocol/LICENSE", "packages/client/LICENSE"] as const;
 
 const read = (path: string): string => readFileSync(join(root, path), "utf8");
 
@@ -56,4 +60,4 @@ if (problems.length > 0) {
 	for (const problem of problems) console.error(`[licence] ${problem}`);
 	process.exit(1);
 }
-console.log(`[licence] ${MANIFESTS.length} manifests, README, LICENSE, both package copies and NOTICE say ${LICENCE}`);
+console.log(`[licence] ${MANIFESTS.length} manifests, README, LICENSE, every package copy and NOTICE say ${LICENCE}`);

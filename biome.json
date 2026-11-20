@@ -6,18 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": [
-			"src/**",
-			"test/**",
-			"scripts/**",
-			"evals/**",
-			"packages/**",
-			"!vendor",
-			"!node_modules",
-			"!dist",
-			"!.data",
-			"!**/*.css"
-		]
+		"includes": ["scripts/**", "packages/**", "!vendor", "!node_modules", "!dist", "!.data", "!**/*.css"]
 	},
 	"formatter": {
 		"enabled": true,

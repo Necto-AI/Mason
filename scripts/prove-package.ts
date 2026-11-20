@@ -48,7 +48,10 @@ async function main(): Promise<void> {
 		const packs = join(workspace, "packs");
 		await mkdir(packs, { recursive: true });
 		await step("pack it", async () => {
-			await exec("npm", ["pack", "--pack-destination", packs], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+			await exec("npm", ["pack", "--pack-destination", packs], {
+				cwd: join(root, "packages", "mason-agent"),
+				maxBuffer: 8 * 1024 * 1024,
+			});
 		});
 		const tarballs = (await readdir(packs)).filter((file) => file.endsWith(".tgz"));
 		if (tarballs.length !== 1) throw new Error(`expected one tarball, found ${tarballs.join(", ") || "none"}`);

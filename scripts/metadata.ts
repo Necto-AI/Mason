@@ -9,7 +9,7 @@
  *
  * The comparisons, each read from where it is written rather than from a policy file that would drift like NOTICE did:
  *
- * - the root's publishable fields, because that is the npm page;
+ * - the published runtime's publishable fields, because that is the npm page;
  * - every `files` entry, against the tree — npm includes an entry only when it exists, and the one a build writes is the
  *   one that goes missing; that entry is exempt here and proven where it belongs, by the checks that install the tarball;
  * - `prepack` on both published packages: without it a `npm publish` from a checkout packs the sources, and a consumer's
@@ -32,12 +32,16 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 
 /** The three manifests npm publishes from this repository. */
-const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/client/package.json"] as const;
+const MANIFESTS = [
+	"packages/mason-agent/package.json",
+	"packages/protocol/package.json",
+	"packages/client/package.json",
+] as const;
 
 /** The two workspace packages: published on their own, so each needs its own build before npm touches it. */
-const WORKSPACES = ["packages/protocol/package.json", "packages/client/package.json"] as const;
+const WORKSPACES = MANIFESTS;
 
-/** The fields a stranger's first look is made of, on the root: the package's npm page. */
+/** The fields a stranger's first look is made of, on the published runtime: the package's npm page. */
 const PUBLISHABLE = ["description", "keywords", "homepage", "repository", "license"] as const;
 
 /** A declared floor this check can compare: `>=26.4`, `>=22.19.0`. Nothing looser, because an open range states none. */

@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"lib": ["ES2024", "DOM"],
+		"strict": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"noEmit": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"paths": {
+			"mason-protocol": ["../protocol/src/index.ts"],
+			"mason-client": ["../client/src/index.ts"],
+			"mason-client/testkit": ["../client/src/testkit/index.ts"],
+			"mason-client/store/memory": ["../client/src/store-memory.ts"],
+			"mason-client/store/sqlite": ["../client/src/store-sqlite.ts"]
+		}
+	},
+	"include": ["src/**/*", "test/**/*", "scripts/**/*", "bin/**/*", "evals/**/*"],
+	"exclude": ["node_modules", "dist"]
+}

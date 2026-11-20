@@ -19,7 +19,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+/** The repository root: the manifest and the documents both live there. */
+const root = fileURLToPath(new URL("../../..", import.meta.url));
 
 /** Where the ceilings live, relative to the repository root. */
 export const MANIFEST_PATH = "docs/doc-budgets.json";
