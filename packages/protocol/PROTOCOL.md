@@ -151,4 +151,4 @@ would break every client that renders a row. Adding `runId` to it is an addition
 ## What an SDK has to implement
 
 A connector in another language needs Chord's link protocol — `hello`, `hold`, `shape`, `unit`, `call`, `result`, `ack`,
-`ping`, `bye` — and nothing else. `packages/connector/WIRE.md` records the subset.
+`ping`, `bye` — and nothing else. `packages/client/WIRE.md` records the subset.

@@ -1,5 +1,5 @@
 /**
- * `mason-connector` — the TypeScript SDK for one external connector.
+ * `mason-client` — the TypeScript SDK for one external connector.
  *
  * A connector is a Chord host that opens one socket to mason. This package owns the parts that are the same for every
  * connector and wrong in the same way when each one writes them itself: the host, the link, the durable journal, the

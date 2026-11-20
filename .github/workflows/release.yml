@@ -38,9 +38,9 @@ jobs:
       # numbers, so the mismatch becomes the run's failure instead of a discovery after the publish.
       - run: |
           v="${GITHUB_REF_NAME#v}"
-          node -p "require('./package.json').version" | grep -qx "$v"
+          node -p "require('./packages/mason-agent/package.json').version" | grep -qx "$v"
           node -p "require('./packages/protocol/package.json').version" | grep -qx "$v"
-          node -p "require('./packages/connector/package.json').version" | grep -qx "$v"
+          node -p "require('./packages/client/package.json').version" | grep -qx "$v"
 
       # The same recipe a fresh clone runs: the root install, then the two workspace packages the tests and the
       # runtime import from `dist`.
@@ -69,20 +69,20 @@ jobs:
       # The artifact the release publishes, built here as it is on a pull request: `dist` is what the tarball ships, and
       # the deployment reference is the one copy whose absence is silent.
       - run: npm run build
-      - run: test -f dist/docs/agent/README.md
+      - run: test -f packages/mason-agent/dist/docs/agent/README.md
       # …and the tarball as a stranger installs it: packed, unpacked outside the tree, and driven there through `init`
       # from its flags, `new` and a doctor, then asked for its prompt.
       - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: a release that only runs from
       # source is not a release.
-      - run: npm run prove:connector
+      - run: npm run prove:client
 
       # The copies to attach land in `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in
       # the next one packed. Each package's `prepack` runs its build, protocol first, in the order the publish below keeps.
       - run: |
           mkdir .release
-          npm pack --workspace mason-protocol --workspace mason-connector --pack-destination .release/
-          npm pack --workspaces=false --pack-destination .release/
+          npm pack --workspace mason-protocol --workspace mason-client --pack-destination .release/
+          npm pack --workspace mason-agent --pack-destination .release/
 
       # Provenance needs each package.json to name this repository (npm's documented prerequisite), which the three
       # files carry. `--access public` says the visibility outright, because an access default is not a thing to
@@ -106,8 +106,8 @@ jobs:
             npm publish "$@" --provenance --access public
           }
           publish mason-protocol packages/protocol --workspace mason-protocol
-          publish mason-connector packages/connector --workspace mason-connector
-          publish mason-agent . --workspaces=false
+          publish mason-client packages/client --workspace mason-client
+          publish mason-agent packages/mason-agent --workspace mason-agent
 
       - name: attach the tarballs to the release
         if: startsWith(github.ref, 'refs/tags/v')

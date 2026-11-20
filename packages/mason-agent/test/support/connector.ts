@@ -26,8 +26,8 @@ import {
 	type EventClient,
 	nodeWebSocketLink,
 	type UserClient,
-} from "mason-connector";
-import { MemoryStore } from "mason-connector/store/memory";
+} from "mason-client";
+import { MemoryStore } from "mason-client/store/memory";
 import { type ConversationState, connectorHost, errorCodeOf, MasonPeer, type PeerRef } from "mason-protocol";
 import WebSocket from "ws";
 import { mintConnectorCredential } from "../../src/server/connectors.ts";
@@ -44,7 +44,7 @@ after(async () => {
 
 /** A directory that exists for this file's tests and is removed when the file is done. */
 export async function temporaryDirectory(): Promise<string> {
-	const directory = await mkdtemp(join(tmpdir(), "mason-connector-"));
+	const directory = await mkdtemp(join(tmpdir(), "mason-client-"));
 	directories.add(directory);
 	return directory;
 }

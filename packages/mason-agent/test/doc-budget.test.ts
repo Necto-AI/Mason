@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { audit, countWords, MANIFEST_PATH, readManifest } from "../scripts/doc-budget.ts";
 
-const root = new URL("../", import.meta.url).pathname;
+const root = new URL("../../../", import.meta.url).pathname;
 const directories = new Set<string>();
 after(async () => {
 	for (const directory of directories) await rm(directory, { recursive: true, force: true });

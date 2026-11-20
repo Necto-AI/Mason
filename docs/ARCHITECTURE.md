@@ -1,7 +1,8 @@
 # mason's architecture — the current state, and where a change goes
 
 This file is the map, not the argument. It says how mason is assembled today and which file owns which kind of
-behaviour, so that a stranger can find the place a change belongs before knowing why it belongs there. The product goal
+behaviour, so that a stranger can find the place a change belongs before knowing why it belongs there. A path that
+starts with `src/` or `test/` is inside `packages/mason-agent/`, the runtime's package. The product goal
 and the milestone specifications are [`docs/SPEC.md`](SPEC.md), the reasons behind the shape are in
 [`docs/adr/`](adr/), and the catalogs that can be generated — the routes and their grants, the extensions, the budgets —
 are [`docs/SURFACE.md`](SURFACE.md). Nothing here repeats those.

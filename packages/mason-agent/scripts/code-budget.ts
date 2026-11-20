@@ -18,7 +18,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+/** The repository root: the manifest lives there and the areas are its paths. */
+const root = fileURLToPath(new URL("../../..", import.meta.url));
 
 /** Where the ceilings live, relative to the repository root. */
 export const MANIFEST_PATH = "docs/code-budgets.json";
@@ -97,8 +98,8 @@ export function countArea(base: string, area: string): number {
 }
 
 /**
- * The areas the manifest must cover, found by walking rather than by listing: every directory directly under `src/`,
- * every package's `src/`, and the two tooling directories that are maintained code of their own.
+ * The areas the manifest must cover, found by walking rather than by listing: every package's `src`, the tooling
+ * directories that belong to a package, and the repository's own checks.
  */
 export function governedAreas(base: string): string[] {
 	const areas: string[] = [];
@@ -111,16 +112,16 @@ export function governedAreas(base: string): string[] {
 	};
 	for (const entry of children("")) {
 		if (!entry.isDirectory() || SKIP.has(entry.name)) continue;
-		if (entry.name === "scripts" || entry.name === "evals" || entry.name === "bin") areas.push(entry.name);
+		if (entry.name === "scripts") areas.push(entry.name);
 		if (entry.name !== "packages") continue;
 		for (const pkg of children("packages")) {
-			if (pkg.isDirectory() && children(`packages/${pkg.name}/src`).length > 0) {
-				areas.push(`packages/${pkg.name}/src`);
+			if (!pkg.isDirectory()) continue;
+			const dir = `packages/${pkg.name}`;
+			if (children(`${dir}/src`).length > 0) areas.push(`${dir}/src`);
+			for (const tooling of ["scripts", "evals", "bin"]) {
+				if (children(`${dir}/${tooling}`).length > 0) areas.push(`${dir}/${tooling}`);
 			}
 		}
-	}
-	for (const entry of children("src")) {
-		if (entry.isDirectory() && !SKIP.has(entry.name)) areas.push(`src/${entry.name}`);
 	}
 	return areas.sort();
 }

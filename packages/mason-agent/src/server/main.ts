@@ -262,7 +262,7 @@ async function handleConnectorRequest(
 		console.warn(`[connector] refused ${request.method ?? "GET"} ${url.pathname} (${auth.reason})`);
 		response.writeHead(401, {
 			"content-type": "application/json; charset=utf-8",
-			"www-authenticate": 'Bearer realm="mason-connector"',
+			"www-authenticate": 'Bearer realm="mason-client"',
 		});
 		response.end(JSON.stringify({ code: "mason.not_authenticated", message: "a connector credential is required" }));
 		return true;

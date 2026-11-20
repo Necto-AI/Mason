@@ -44,8 +44,9 @@ if (slash === -1) throw new Error("--judge-model expects provider/model");
 
 const rubric = await readFile(join(import.meta.dirname, "rubric.md"), "utf8");
 const runtime = await ModelRuntime.create({ allowModelNetwork: false });
-const model = runtime.getModel(judgeModel.slice(0, slash), judgeModel.slice(slash + 1));
-if (model === undefined) throw new Error(`unknown judge model: ${judgeModel}`);
+const resolved = runtime.getModel(judgeModel.slice(0, slash), judgeModel.slice(slash + 1));
+if (resolved === undefined) throw new Error(`unknown judge model: ${judgeModel}`);
+const model = resolved;
 
 // Verdicts are written next to the traces, so a second pass must not read its own output back as a trace.
 const files = (await readdir(directory)).filter(
@@ -89,7 +90,9 @@ async function judge(stored: Stored): Promise<Verdict> {
 	].join("\n");
 
 	try {
-		const result = await runtime.completeSimple(model, { messages: [{ role: "user", content: prompt }] });
+		const result = await runtime.completeSimple(model, {
+			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+		});
 		const text = result.content
 			.filter((part): part is { type: "text"; text: string } => part.type === "text")
 			.map((part) => part.text)

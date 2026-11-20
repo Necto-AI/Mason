@@ -23,7 +23,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { type ConnectorStore, createUserClient, nodeWebSocketLink, type StoreEntry } from "mason-connector";
+import { type ConnectorStore, createUserClient, nodeWebSocketLink, type StoreEntry } from "mason-client";
 import { CONTROL_OPS, type ControlOp } from "mason-protocol";
 import { writeFileAtomic } from "../src/server/atomic.ts";
 import type { ConnectorGrant } from "../src/server/connectors.ts";

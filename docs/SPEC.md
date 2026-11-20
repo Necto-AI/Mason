@@ -42,55 +42,58 @@ mason/
 ├── AGENTS.md                          # Standing orders: the rules, the commands, the paths
 ├── GLOSSARY.md                        # The vocabulary
 ├── docs/                              # ARCHITECTURE (where a change goes), SPEC, SURFACE (generated), adr/, agents/
-├── packages/
-│   ├── protocol/                      # mason-protocol: the connector wire contract, v1 (types + schema)
-│   └── connector/                     # mason-connector: the connector SDK + the fake-mason conformance suite
-├── bin/
-│   └── mason.ts                       # `mason <subcommand>` for the installed package: the scripts, mapped thin
-├── scripts/
-│   ├── build-runtime.ts               # `npm run build`: the consumer package's dist/ (compiled, vendored, skills)
-│   ├── prompt.ts                      # Prints the prompt a turn would send, rendered by the vendor
-│   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
-│   ├── surface.ts                     # Renders docs/SURFACE.md; fails on an unclassified door
-│   ├── connector.ts                   # `npm run connector -- add|list|revoke`: the credentials a connector uses
-│   └── integration.ts                 # `npm run integration -- add|remove|enable|disable|list`
-├── skills/ocr/SKILL.md                # A skill mason ships; copied into the home on first boot
-├── src/
-│   ├── shared/contract.ts             # The shapes the projection writes: rows, status, entry kinds
-│   └── server/
-│       ├── main.ts                    # HTTP: the health probe, the connector socket, asset bytes
-│       ├── auth.ts                    # The one credential class, and the Origin rule
-│       ├── connector.ts               # The socket: handshake, admission, the conversation a reader sees
-│       ├── connectors.ts              # A connector's grant, and the credential it opens its socket with
-│       ├── admission.ts               # Where a submission came from, and where it waits
-│       ├── atomic.ts                  # The one write that cannot be half-done: a JSON file through a rename
-│       ├── integration-status.ts      # What the boot's connections came to, for the report
-│       ├── commands.ts                # The four controls, and the claim that makes a control id an identity
-│       ├── hooks.ts                   # What wakes the bot: a routine's timer, a connector's event
-│       ├── replies.ts                 # A turn's origin, and the old `app.reply` entry read back
-│       ├── projection.ts              # The wire boundary: what a reader sees
-│       ├── status.ts                  # the status and role lines, from the committed view
-│       ├── runtime.ts                 # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
-│       ├── env.ts                     # pi-env Connection + RemoteExecutionEnv
-│       ├── house.ts                   # The home: agent/ and service/ paths, soul/profile reads, log, git
-│       ├── prompt.ts                  # The whole system prompt: every section, in order, with its source
-│       ├── mcp.ts                     # The live tool catalog: mcp_search, mcp_describe, mcp_call, mcp_read_resource
-│       ├── integrations.ts            # service/integrations.json: the services the agent reaches
-│       ├── attachments.ts             # Content ids and bytes: the upload store and a turn's outbox
-│       ├── limits.ts                  # The budgets and caps every refusal names
-│       ├── untrusted.ts               # Fencing for data the model did not write
-│       ├── resident.ts                # The turn loop, the queue and the run supervisor's wiring
-│       ├── run-retry.ts               # The supervisor's own hook: one retry after a failed run
-│       ├── lease.ts                   # The per-checkout write lease: one writer, refused rather than queued
-│       ├── http-proxy.ts              # The outbound proxy a connector's tools inherit
-│       └── extensions/
-│           ├── codemode.ts            # The script tool: ALL_TOOLS, searchTools, describeTool
-│           ├── delivery.ts            # The two gates over a turn's ending: a message, and what it kept
-│           ├── subagent.ts            # delegate: one foreground child, its role, its bounds, its lease
-│           ├── nested.ts              # The one shape a tool's refusal takes
-│           └── skills.ts              # The skills index: one root, agent/skills/, seeded at boot
-└── test/                              # One file per mechanism; the pin that fails when it is removed
+├── scripts/                           # The repository's checks: setup, licences, manifests, both tarball proofs
+└── packages/
+    ├── protocol/                      # mason-protocol: the peer contract, v1 (types + schema)
+    ├── client/                        # mason-client: the SDK + the fake-mason conformance suite
+    └── mason-agent/                   # mason-agent: the runtime, the `mason` command and the skills it ships
+        ├── bin/
+        │   └── mason.ts               # `mason <subcommand>` for the installed package: the scripts, mapped thin
+        ├── scripts/
+        │   ├── build-runtime.ts       # `npm run build`: the package's dist/ (compiled, vendored, skills, docs)
+        │   ├── prompt.ts              # Prints the prompt a turn would send, rendered by the vendor
+        │   ├── surface.ts             # Renders docs/SURFACE.md; fails on an unclassified door
+        │   ├── connector.ts           # `npm run connector -- add|list|revoke`: the credentials a connector uses
+        │   └── integration.ts         # `npm run integration -- add|remove|enable|disable|list`
+        ├── skills/ocr/SKILL.md        # A skill mason ships; copied into the home on first boot
+        ├── src/
+        │   ├── shared/contract.ts     # The shapes the projection writes: rows, status, entry kinds
+        │   └── server/
+        │       ├── main.ts            # HTTP: the health probe, the connector socket, asset bytes
+        │       ├── auth.ts            # The one credential class, and the Origin rule
+        │       ├── connector.ts       # The socket: handshake, admission, the conversation a reader sees
+        │       ├── connectors.ts      # A connector's grant, and the credential it opens its socket with
+        │       ├── admission.ts       # Where a submission came from, and where it waits
+        │       ├── atomic.ts          # The one write that cannot be half-done: a JSON file through a rename
+        │       ├── integration-status.ts  # What the boot's connections came to, for the report
+        │       ├── commands.ts        # The four controls, and the claim that makes a control id an identity
+        │       ├── hooks.ts           # What wakes the bot: a routine's timer, a connector's event
+        │       ├── replies.ts         # A turn's origin, and the old `app.reply` entry read back
+        │       ├── projection.ts      # The wire boundary: what a reader sees
+        │       ├── status.ts          # the status and role lines, from the committed view
+        │       ├── runtime.ts         # Durable Harness bootstrap (SQLite, ModelRuntime/faux, extensions)
+        │       ├── env.ts             # pi-env Connection + RemoteExecutionEnv
+        │       ├── house.ts           # The home: agent/ and service/ paths, soul/profile reads, log, git
+        │       ├── prompt.ts          # The whole system prompt: every section, in order, with its source
+        │       ├── mcp.ts             # The live tool catalog: mcp_search, mcp_describe, mcp_call, mcp_read_resource
+        │       ├── integrations.ts    # service/integrations.json: the services the agent reaches
+        │       ├── attachments.ts     # Content ids and bytes: the upload store and a turn's outbox
+        │       ├── limits.ts          # The budgets and caps every refusal names
+        │       ├── untrusted.ts       # Fencing for data the model did not write
+        │       ├── resident.ts        # The turn loop, the queue and the run supervisor's wiring
+        │       ├── run-retry.ts       # The supervisor's own hook: one retry after a failed run
+        │       ├── lease.ts           # The per-checkout write lease: one writer, refused rather than queued
+        │       ├── http-proxy.ts      # The outbound proxy a connector's tools inherit
+        │       └── extensions/
+        │           ├── codemode.ts    # The script tool: ALL_TOOLS, searchTools, describeTool
+        │           ├── delivery.ts    # The two gates over a turn's ending: a message, and what it kept
+        │           ├── subagent.ts    # delegate: one foreground child, its role, its bounds, its lease
+        │           ├── nested.ts      # The one shape a tool's refusal takes
+        │           └── skills.ts      # The skills index: one root, agent/skills/, seeded at boot
+        └── test/                      # One file per mechanism; the pin that fails when it is removed
 ```
+
+A path that starts with `src/` or `test/` in the sections below is inside `packages/mason-agent/`.
 
 ---
 

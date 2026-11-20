@@ -9,7 +9,7 @@
  * It also fails if an installed package ships a `.ts` file, because a consumer's Node refuses to strip types inside
  * `node_modules`, and an SDK that only runs from source is not a published SDK.
  *
- * Run with `npm run prove:connector`. It writes nothing into the repository.
+ * Run with `npm run prove:client`. It writes nothing into the repository.
  */
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -21,10 +21,10 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
 /** The two packages, by the names a consumer installs them under. */
-const PACKAGES = ["mason-protocol", "mason-connector"] as const;
+const PACKAGES = ["mason-protocol", "mason-client"] as const;
 
 const FIXTURE = `import { CONTRACTS } from "mason-protocol";
-import { runConformance } from "mason-connector/testkit";
+import { runConformance } from "mason-client/testkit";
 
 const chat = {
 	name: "external-chat",
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
 		const packs = join(workspace, "packs");
 		await mkdir(packs, { recursive: true });
 		await step("pack them", async () => {
-			for (const name of ["protocol", "connector"] as const) {
+			for (const name of ["protocol", "client"] as const) {
 				await exec("npm", ["pack", "--pack-destination", packs], { cwd: join(root, "packages", name) });
 			}
 		});

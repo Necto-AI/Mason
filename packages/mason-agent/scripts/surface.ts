@@ -114,8 +114,11 @@ Budgets: ${budgets}.
 }
 
 function main(): void {
+	// The source and the document are on two sides of the package boundary: the server is this package's, the rendered
+	// catalog is the repository's.
 	const root = fileURLToPath(new URL("..", import.meta.url));
-	const target = join(root, SURFACE_PATH);
+	const repository = fileURLToPath(new URL("../../..", import.meta.url));
+	const target = join(repository, SURFACE_PATH);
 	const source = readFileSync(join(root, SERVER_SOURCE), "utf8");
 	const unclaimedPaths = unclaimed(source);
 	if (unclaimedPaths.length > 0) {

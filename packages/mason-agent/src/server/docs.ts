@@ -7,12 +7,21 @@
  *
  * Nothing here copies anything into the home, and the agent's half of it stays the agent's.
  */
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The pages mason ships, in the repository; a deployment does not have to mount them for a service's docs. */
-export const SHIPPED_DOCS_DIR = fileURLToPath(new URL("../../docs/agent/", import.meta.url));
+/**
+ * The pages mason ships, in the repository; a deployment does not have to mount them for a service's docs. The checkout
+ * keeps them in the repository's `docs/agent`, four directories above this module; the tarball carries a copy at
+ * `dist/docs/agent`, two above it, because the build is the only thing that puts them beside the code.
+ */
+export const SHIPPED_DOCS_DIR =
+	[
+		fileURLToPath(new URL("../../../../docs/agent/", import.meta.url)),
+		fileURLToPath(new URL("../../docs/agent/", import.meta.url)),
+	].find((directory) => existsSync(directory)) ?? fileURLToPath(new URL("../../../../docs/agent/", import.meta.url));
 
 /** One page of the reference: its path inside the docs directory, and the first heading that says what it is. */
 export interface DocPage {

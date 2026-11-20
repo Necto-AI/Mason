@@ -2,7 +2,7 @@
 
 The normative contract is **[`packages/protocol/PROTOCOL.md`](../packages/protocol/PROTOCOL.md)**: one
 [Chord](https://github.com/earendil-works/pi) contract, `mason.peer`, beside the TypeScript that defines it. That document ships in the npm package on purpose — a connector author installs it, reads it, and needs
-nothing from this repository. [`packages/connector/WIRE.md`](../packages/connector/WIRE.md) is the frame subset for an
+nothing from this repository. [`packages/client/WIRE.md`](../packages/client/WIRE.md) is the frame subset for an
 SDK in another language.
 
 This file used to hold a proposed contract — events over an HMAC door, tools over MCP, replies through a vendor tool
@@ -25,14 +25,14 @@ disagreeing.
 | | |
 |---|---|
 | The contract, the ten rules, the error codes | `packages/protocol` (`PROTOCOL.md`, `src/index.ts`) |
-| SDK: socket, journal, the conversation, attachments | `packages/connector` |
-| Conformance suite and fake mason (a real Chord host) | `packages/connector/testkit` |
-| Three fixtures proving the suite (words, alarms, tools-only) | `packages/connector/test` |
-| Proof that the packed artifact works outside this repository | `npm run prove:connector` |
+| SDK: socket, journal, the conversation, attachments | `packages/client` |
+| Conformance suite and fake mason (a real Chord host) | `packages/client/testkit` |
+| Three fixtures proving the suite (words, alarms, tools-only) | `packages/client/test` |
+| Proof that the packed artifact works outside this repository | `npm run prove:client` |
 
 | | |
 |---|---|
-| Mason's server speaking this protocol | `src/server/connector.ts`: the Chord host, admission, the conversation it publishes, attachments and budgets |
+| Mason's server speaking this protocol | `packages/mason-agent/src/server/connector.ts`: the Chord host, admission, the conversation it publishes, attachments and budgets |
 | The grant and the credential | the entry's `connector` block in `service/integrations.json`; `npm run connector -- add` mints the credential |
 | What mason enforces, and what is pinned | `docs/SPEC.md` §4.1d; `test/connector*.test.ts` |
 | The console connector, in this repository | `scripts/chat.ts` — `mason chat`, on the same socket as every other connector |

@@ -60,32 +60,41 @@ test("countArea() skips tests, build output and dependencies", async () => {
 
 test("governedAreas() finds the areas a manifest has to cover", async () => {
 	const base = await tree({
-		"src/server/a.ts": "const a = 1;\n",
-		"src/web/a.ts": "const a = 1;\n",
+		"packages/bot/src/server/a.ts": "const a = 1;\n",
+		"packages/bot/scripts/build.ts": "const a = 1;\n",
+		"packages/bot/evals/run.ts": "const a = 1;\n",
 		"packages/protocol/src/index.ts": "const a = 1;\n",
-		"packages/connector/README.md": "no src directory, so no area\n",
-		"scripts/build.ts": "const a = 1;\n",
-		"evals/run.ts": "const a = 1;\n",
+		"packages/client/README.md": "no src directory, so no area\n",
+		"scripts/check.ts": "const a = 1;\n",
 	});
-	assert.deepEqual(governedAreas(base), ["evals", "packages/protocol/src", "scripts", "src/server", "src/web"]);
+	assert.deepEqual(governedAreas(base), [
+		"packages/bot/evals",
+		"packages/bot/scripts",
+		"packages/bot/src",
+		"packages/protocol/src",
+		"scripts",
+	]);
 });
 
 test("audit() names the area that is over, the one that is gone, and the one nobody measured", async () => {
 	const base = await tree({
-		"src/server/a.ts": "const a = 1;\nconst b = 2;\n",
-		"src/web/a.ts": "const a = 1;\n",
+		"packages/bot/src/server/a.ts": "const a = 1;\nconst b = 2;\n",
+		"packages/bot/src/web/a.ts": "const a = 1;\n",
 	});
-	const manifest = readManifest(JSON.stringify({ ceilings: { "src/server": 1, "src/gone": 10 } }), "a test manifest");
+	const manifest = readManifest(
+		JSON.stringify({ ceilings: { "packages/bot/src/server": 1, "packages/bot/src/gone": 10 } }),
+		"a test manifest",
+	);
 	const report = audit(manifest, base);
-	assert.deepEqual(report.over, ["src/server (2 lines > 1)"], "the area that grew past its number");
+	assert.deepEqual(report.over, ["packages/bot/src/server (2 lines > 1)"], "the area that grew past its number");
 	assert.deepEqual(
 		report.missing,
-		["src/gone (listed with a ceiling of 10)"],
+		["packages/bot/src/gone (listed with a ceiling of 10)"],
 		"an entry whose directory is gone is a ceiling that stopped measuring anything",
 	);
 	assert.deepEqual(
 		report.unlisted,
-		["src/web (no ceiling; add one at its current size)"],
+		["packages/bot/src (no ceiling; add one at its current size)"],
 		"code that no ceiling covers is code nobody is measuring",
 	);
 });

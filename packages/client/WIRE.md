@@ -44,7 +44,7 @@ commands, an empty conversation cell and no feed.
 
 ## The two clients
 
-`mason-connector` exports one factory per surface, over this one socket and one credential class:
+`mason-client` exports one factory per surface, over this one socket and one credential class:
 
 - `createUserClient` — `submit`, `event`, `control`, `onConversation`, attachments. The `user` grant's client.
 - `createEventClient` — `event` and `onSession` only. No conversation, no control, no submit, no attachments.

@@ -14,6 +14,6 @@ import { CONTRACT, MasonPeer, ERROR_CODE, connectorHost } from "mason-protocol";
 ```
 
 Mason serves `mason.peer`; a connector reaches it and has nothing of its own to serve. Installing this package is what a
-connector does to know what it is talking to. The SDK is separate: [`mason-connector`](../connector) adds the host, the
+connector does to know what it is talking to. The SDK is separate: [`mason-client`](../client) adds the host, the
 journal, the conversation it holds, attachments, and the conformance suite. Pinning `PROTOCOL_MAJOR` and pinning the SDK
 version are two different decisions, and the two move independently.

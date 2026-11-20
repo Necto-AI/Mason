@@ -96,7 +96,7 @@ catalog, module graph and CLI help. Freshness is gated: the English source is re
 - every hook and the limits that apply to it;
 - every projection row kind (`src/shared/contract.ts`) and who may see it.
 
-`npm run gen:surface -- --check` in CI, exactly like `verify-vendor.mjs` and `prove:connector` already work here.
+`npm run gen:surface -- --check` in CI, exactly like `verify-vendor.mjs` and `prove:client` already work here.
 
 **Cost**: two days. **Payoff**: mason's stated failure mode is "a new route without a `requireGrant` is unauthenticated by
 omission" (`AGENTS.md` §6) — a generated table with the grant column makes that omission visible in the diff instead of in
