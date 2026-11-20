@@ -1,4 +1,4 @@
-# `mason-connector`
+# `mason-client`
 
 The TypeScript SDK for one external mason connector. It owns the parts that are the same for every connector and wrong
 in the same way when each one writes them itself: the Chord host, the link, the durable journal, the conversation a
@@ -6,8 +6,8 @@ user client holds, attachments, and the approval marker. It does not own vendor 
 surface: `createUserClient` reads the conversation and may submit; `createEventClient` only appends events.
 
 ```ts
-import { createUserClient, nodeWebSocketLink, type WebSocketConstructor } from "mason-connector";
-import { openSqliteStore } from "mason-connector/store/sqlite";
+import { createUserClient, nodeWebSocketLink, type WebSocketConstructor } from "mason-client";
+import { openSqliteStore } from "mason-client/store/sqlite";
 import WebSocket from "ws";
 
 // `ws` declares an overload `WebSocketConstructor` does not describe (an address of `null`), so the class arrives
@@ -51,7 +51,7 @@ An **event client** — a service that reports and reads nothing — is the narr
 control, no submission and no attachments, and mason serves it an empty `conversation` cell:
 
 ```ts
-import { createEventClient, nodeWebSocketLink } from "mason-connector";
+import { createEventClient, nodeWebSocketLink } from "mason-client";
 
 const client = createEventClient({ name: "alarm", version: "1.0.0", url, credential, link, store });
 client.onSession((session) => console.log(session.kinds));
@@ -81,8 +81,8 @@ await client.event({ kind: "alarm.ringing", payload: { host: "db-1" } });
 
 | Import | Store | Use |
 |---|---|---|
-| `mason-connector/store/sqlite` | `openSqliteStore({ path })` | the reference production store: one SQLite file |
-| `mason-connector/store/memory` | `new MemoryStore()` | **test-only** — the journal is gone when the process ends |
+| `mason-client/store/sqlite` | `openSqliteStore({ path })` | the reference production store: one SQLite file |
+| `mason-client/store/memory` | `new MemoryStore()` | **test-only** — the journal is gone when the process ends |
 
 `node:sqlite` needs `--experimental-sqlite` on Node 22 and nothing on Node 24. A connector with its own persistence
 implements `ConnectorStore` — five methods — and passes it in.
@@ -92,7 +92,7 @@ implements `ConnectorStore` — five methods — and passes it in.
 The SDK does not ship an MCP server. It ships the one thing the contract fixes: the approval marker.
 
 ```ts
-import { declareTool } from "mason-connector/mcp";
+import { declareTool } from "mason-client/mcp";
 
 const sendMessage = declareTool({
 	name: "send_message",
@@ -108,7 +108,7 @@ authority: the marker is the connector author's statement, and trusting it is an
 ## The conformance suite
 
 ```ts
-import { runConformance } from "mason-connector/testkit";
+import { runConformance } from "mason-client/testkit";
 
 const result = await runConformance({
 	name: "alarm",

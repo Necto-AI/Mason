@@ -12,10 +12,10 @@
  * into `dist/docs/agent`, because `SHIPPED_DOCS_DIR` resolves that path from the compiled module and the prompt's
  * `docs` section is empty without it; and the workspace packages the server imports bare, vendored into
  * `dist/node_modules` under the name the import asks for, so one tarball installs and boots with nothing but npm
- * between it and the registry. #124 puts `mason-protocol` and `mason-connector` on npm; from that tag they can move to
+ * between it and the registry. #124 puts `mason-protocol` and `mason-client` on npm; from that tag they can move to
  * ordinary dependencies and the vendoring goes.
  *
- * A vendored copy is build output and nothing more, so it is guarded the way `npm run prove:connector` guards the
+ * A vendored copy is build output and nothing more, so it is guarded the way `npm run prove:client` guards the
  * packages themselves: its own `package.json` comes along (the stamped version is the real one), the workspace source
  * directory never enters `files`, and a `.ts` file under the copy fails the build, skill and
  * conformance-checked alike but here because it would quietly make the vendored package source-only.
@@ -50,8 +50,8 @@ export const VENDORED: readonly Vendored[] = [
 		files: ["package.json", "dist", "schemas"],
 	},
 	{
-		name: "mason-connector",
-		package: "packages/connector",
+		name: "mason-client",
+		package: "packages/client",
 		files: ["package.json", "dist"],
 	},
 ];
@@ -74,7 +74,7 @@ export function vendoredNames(javascript: readonly string[]): readonly string[] 
 
 /**
  * Every TypeScript source under one directory, as absolute paths. A vendored copy holds none; a `.d.ts` is a
- * declaration, not source, exactly as `npm run prove:connector` counts it.
+ * declaration, not source, exactly as `npm run prove:client` counts it.
  */
 export async function typescriptIn(dir: string): Promise<string[]> {
 	const found: string[] = [];

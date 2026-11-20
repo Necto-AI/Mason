@@ -32,10 +32,10 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 
 /** The three manifests npm publishes from this repository. */
-const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/connector/package.json"] as const;
+const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/client/package.json"] as const;
 
 /** The two workspace packages: published on their own, so each needs its own build before npm touches it. */
-const WORKSPACES = ["packages/protocol/package.json", "packages/connector/package.json"] as const;
+const WORKSPACES = ["packages/protocol/package.json", "packages/client/package.json"] as const;
 
 /** The fields a stranger's first look is made of, on the root: the package's npm page. */
 const PUBLISHABLE = ["description", "keywords", "homepage", "repository", "license"] as const;
@@ -54,7 +54,7 @@ const NOT_SHIPPED = new Set(["src", "test", "tests", "scripts", "evals", "node_m
 
 /**
  * A `files` entry the package's own `prepack` writes, so it is not in a fresh clone by design. The checks that install
- * the tarball are what prove it arrived — `prove:package` boots the installed `dist/`, `prove:connector` imports both
+ * the tarball are what prove it arrived — `prove:package` boots the installed `dist/`, `prove:client` imports both
  * packages' — and requiring it here would only make this check need a build to run.
  */
 const BUILT = new Set(["dist"]);

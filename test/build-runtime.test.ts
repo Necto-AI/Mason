@@ -22,19 +22,19 @@ test("vendoredNames() reads imports, not every string a module happens to quote"
 		'import { PROTOCOL_MAJOR } from "mason-protocol";',
 		'import { createConnectorDoor } from "./connector.ts";',
 		'import type { Origin } from "mason-protocol";',
-		'const door = await import("mason-connector");',
+		'const door = await import("mason-client");',
 		'import "mason-protocol";',
 	];
-	assert.deepEqual(vendoredNames(imports), ["mason-protocol", "mason-connector"]);
+	assert.deepEqual(vendoredNames(imports), ["mason-protocol", "mason-client"]);
 });
 
 test("vendoredNames() leaves a quoted name that is no import alone", () => {
 	// main.ts answers an unauthenticated socket with this realm; the name in it is prose, not an import.
-	const realm = 'response.setHeader("www-authenticate", \'Bearer realm="mason-connector"\');';
+	const realm = 'response.setHeader("www-authenticate", \'Bearer realm="mason-client"\');';
 	assert.deepEqual(vendoredNames([realm]), []);
 });
 
-test("typescriptIn() names source files and leaves declarations out, as prove:connector counts them", async () => {
+test("typescriptIn() names source files and leaves declarations out, as prove:client counts them", async () => {
 	const base = await mkdtemp(join(tmpdir(), "mason-build-runtime-"));
 	made.push(base);
 	await mkdir(join(base, "dist", "deep"), { recursive: true });

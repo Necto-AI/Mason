@@ -68,7 +68,7 @@ async function main(): Promise<void> {
 
 		const installed = join(project, "node_modules", PACKAGE);
 		await step("no TypeScript file ships in dist", async () => {
-			// A declaration is not source, and `dist` is where it belongs: the rule is the one `prove:connector` applies.
+			// A declaration is not source, and `dist` is where it belongs: the rule is the one `prove:client` applies.
 			const stray = await typescriptIn(join(installed, "dist"));
 			if (stray.length > 0) throw new Error(`the installed package ships source: ${stray.join(", ")}`);
 		});
@@ -162,7 +162,7 @@ async function typescriptIn(dir: string): Promise<string[]> {
 	return found;
 }
 
-/** A file a consumer's Node could not load. A declaration is not source, exactly as `prove:connector` counts it. */
+/** A file a consumer's Node could not load. A declaration is not source, exactly as `prove:client` counts it. */
 function isSource(name: string): boolean {
 	if (name.endsWith(".d.ts")) return false;
 	return name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".mts");

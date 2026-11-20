@@ -102,7 +102,7 @@ jobs:
       - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: an SDK that only runs from source is not
       # an SDK, and this is the only check that says so.
-      - run: npm run prove:connector
+      - run: npm run prove:client
 
   # The first run as a person walks it: a scratch root, `bin/mason.ts` as separate processes, flags-only `init` (then
   # again, for the asking-nothing half), `new`, one bot, `mason up` in its own process, and one turn a Chord client

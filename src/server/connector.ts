@@ -544,7 +544,7 @@ export async function createConnectorDoor(options: ConnectorDoorOptions): Promis
 	 * Charge one act against its minute, or refuse with the wait in the words.
 	 *
 	 * Chord carries a code, a message and a reason across a link and nothing else, so a structured `retryAfterMs` would be
-	 * dropped on the way (`packages/connector/WIRE.md`). The sentence is the field that arrives: it names the budget, and
+	 * dropped on the way (`packages/client/WIRE.md`). The sentence is the field that arrives: it names the budget, and
 	 * how long the connector should wait before it tries again.
 	 */
 	function spend(name: string, kind: "submission" | "fire" | "control" | "stop", perMinute: number): void {

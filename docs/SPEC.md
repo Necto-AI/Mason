@@ -44,13 +44,13 @@ mason/
 ├── docs/                              # ARCHITECTURE (where a change goes), SPEC, SURFACE (generated), adr/, agents/
 ├── packages/
 │   ├── protocol/                      # mason-protocol: the connector wire contract, v1 (types + schema)
-│   └── connector/                     # mason-connector: the connector SDK + the fake-mason conformance suite
+│   └── connector/                     # mason-client: the connector SDK + the fake-mason conformance suite
 ├── bin/
 │   └── mason.ts                       # `mason <subcommand>` for the installed package: the scripts, mapped thin
 ├── scripts/
 │   ├── build-runtime.ts               # `npm run build`: the consumer package's dist/ (compiled, vendored, skills)
 │   ├── prompt.ts                      # Prints the prompt a turn would send, rendered by the vendor
-│   ├── prove-connector-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
+│   ├── prove-client-sdk.ts         # Packs both packages, installs them outside the tree, runs the suite there
 │   ├── surface.ts                     # Renders docs/SURFACE.md; fails on an unclassified door
 │   ├── connector.ts                   # `npm run connector -- add|list|revoke`: the credentials a connector uses
 │   └── integration.ts                 # `npm run integration -- add|remove|enable|disable|list`

@@ -32,7 +32,7 @@ npm run gen:surface:check
 npm run check:docs
 npm run check:code
 npm run check:metadata
-npm run prove:connector
+npm run prove:client
 npm run prove:package
 ```
 

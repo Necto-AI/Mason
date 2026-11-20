@@ -19,10 +19,10 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 export const LICENCE = "AGPL-3.0-only";
 
 /** The packages this repository publishes, and the tarballs a consumer's terms arrive in. */
-const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/connector/package.json"] as const;
+const MANIFESTS = ["package.json", "packages/protocol/package.json", "packages/client/package.json"] as const;
 
 /** The per-package copies npm puts in a tarball: a LICENSE beside the package.json, not one three directories up. */
-const COPIES = ["packages/protocol/LICENSE", "packages/connector/LICENSE"] as const;
+const COPIES = ["packages/protocol/LICENSE", "packages/client/LICENSE"] as const;
 
 const read = (path: string): string => readFileSync(join(root, path), "utf8");
 

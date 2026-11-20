@@ -63,7 +63,7 @@ test("governedAreas() finds the areas a manifest has to cover", async () => {
 		"src/server/a.ts": "const a = 1;\n",
 		"src/web/a.ts": "const a = 1;\n",
 		"packages/protocol/src/index.ts": "const a = 1;\n",
-		"packages/connector/README.md": "no src directory, so no area\n",
+		"packages/client/README.md": "no src directory, so no area\n",
 		"scripts/build.ts": "const a = 1;\n",
 		"evals/run.ts": "const a = 1;\n",
 	});

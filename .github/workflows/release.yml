@@ -40,7 +40,7 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           node -p "require('./package.json').version" | grep -qx "$v"
           node -p "require('./packages/protocol/package.json').version" | grep -qx "$v"
-          node -p "require('./packages/connector/package.json').version" | grep -qx "$v"
+          node -p "require('./packages/client/package.json').version" | grep -qx "$v"
 
       # The same recipe a fresh clone runs: the root install, then the two workspace packages the tests and the
       # runtime import from `dist`.
@@ -75,13 +75,13 @@ jobs:
       - run: npm run prove:package
       # The packed artifact, installed into an empty project outside the tree: a release that only runs from
       # source is not a release.
-      - run: npm run prove:connector
+      - run: npm run prove:client
 
       # The copies to attach land in `.release/`, a directory outside `files`: a tarball dropped into `dist` would ride in
       # the next one packed. Each package's `prepack` runs its build, protocol first, in the order the publish below keeps.
       - run: |
           mkdir .release
-          npm pack --workspace mason-protocol --workspace mason-connector --pack-destination .release/
+          npm pack --workspace mason-protocol --workspace mason-client --pack-destination .release/
           npm pack --workspaces=false --pack-destination .release/
 
       # Provenance needs each package.json to name this repository (npm's documented prerequisite), which the three
@@ -106,7 +106,7 @@ jobs:
             npm publish "$@" --provenance --access public
           }
           publish mason-protocol packages/protocol --workspace mason-protocol
-          publish mason-connector packages/connector --workspace mason-connector
+          publish mason-client packages/client --workspace mason-client
           publish mason-agent . --workspaces=false
 
       - name: attach the tarballs to the release

@@ -54,7 +54,7 @@
             # broken package. The npm tarball has no such links.
             preFixup = ''
               rm -f $out/lib/node_modules/mason-agent/node_modules/mason-protocol \
-                    $out/lib/node_modules/mason-agent/node_modules/mason-connector
+                    $out/lib/node_modules/mason-agent/node_modules/mason-client
             '';
 
             meta = {

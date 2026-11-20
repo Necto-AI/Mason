@@ -4,7 +4,7 @@
 		"evals": 565,
 		"packages/protocol/src": 283,
 		"scripts": 2380,
-		"packages/connector/src": 1545,
+		"packages/client/src": 1545,
 		"src/server": 7720,
 		"src/shared": 61
 	}
