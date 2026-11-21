@@ -255,7 +255,7 @@ Everything the agent is made of is a file Denis can read, diff and revert, in on
 directories on one filesystem, and a tool that can read one can read the other. A deployment that mounts `agent/` and not
 `service/` makes the split meaningful — the tool machine has no `service/`, so `bash` cannot reach the connector
 credentials, the database, the SSH key or the provider credential, for every tool, not only policy-honouring ones.
-`docker/` runs that shape in one container, for tests and demos only
+`docker/` runs both halves in one container, for tests and demos only
 ([ADR-0016](adr/0016-one-container-is-not-a-tool-machine.md)). `service/` is unversioned. `agent/.git` is the memory
 repo, created when the home is first opened, and a home from before the split is refused at boot rather than migrated.
 

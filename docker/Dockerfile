@@ -58,16 +58,22 @@ COPY LICENSE NOTICE ./
 
 # The lockfile's install, then the two workspace packages the runtime imports as values: their `exports.import` is
 # `./dist/index.js`, so the workspace symlink is a package with no build until this runs. Nothing here needs a secret,
-# which is why the build takes no `--build-arg`.
+# which is why the build takes no `--build-arg`. The install's tarball cache is 61 MB and nothing at run time reads it,
+# so it goes in the layer that made it: a later `RUN rm` would keep the bytes and add a layer on top of them.
 RUN npm ci \
- && npm run build:packages
+ && npm run build:packages \
+ && rm -rf /root/.npm
 
 # The tool daemon is a binary, and the old deployment's `patchelf` loop repaired one built from a local submodule that
 # linked its loader out of the Nix store. There is no submodule here: `@earendil-works/pi-env` ships
-# `bin/pi-env-<platform>/` for eight platforms, static on every linux one (x64 is static-pie, arm64 plain static) and
-# that platform's own format on darwin and windows, and `localDaemon()` is what `src/server/env.ts` spawns. This check
-# replaces the loop, and it runs the binary: `test -x` is a mode bit, and a file whose loader or interpreter is missing
-# passes it and exits 127 — at the far end of a tool call, after `/api/health` said the server was fine.
+# `bin/pi-env-<platform>/` for eight platforms, and `localDaemon()` is what `src/server/env.ts` spawns. What `file` says
+# about each of the eight, read from the shipped bytes: linux-x64 is `ELF 64-bit LSB pie executable, x86-64, static-pie
+# linked`; linux-arm64 is `ELF 64-bit LSB executable, ARM aarch64, statically linked`; android-arm64 and android-x64 are
+# `ELF 64-bit LSB pie executable` — `ARM aarch64` and `x86-64`, both `dynamically linked` with `/system/bin/linker64` as
+# the interpreter; darwin-arm64 and darwin-x64 are `Mach-O 64-bit` executables (arm64 and x86_64); windows-arm64 and
+# windows-x64 are `PE32+ executable for MS Windows` (ARM64 and x86-64). This check replaces the loop, and it runs the
+# binary: `test -x` is a mode bit, and a file whose loader or interpreter is missing passes it and exits 127 — at the far
+# end of a tool call, after `/api/health` said the server was fine.
 RUN daemon="$(node --input-type=module -e 'import { localDaemon } from "@earendil-works/pi-env"; process.stdout.write(localDaemon())')" \
  && test -x "$daemon" \
  && "$daemon" --version \

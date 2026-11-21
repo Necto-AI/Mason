@@ -145,11 +145,35 @@ test("a MASON_HOME home with no root falls back to pi's settings.json, as the bo
 	}
 });
 
-test("a faux store without the switch is not refused, and says what actually differs", async () => {
+/**
+ * A `faux` store is not a boot that continues with a warning: without the switch the boot resolves a model no provider
+ * in this build answers for, so it listens while every turn fails, which is the shape this whole check exists to refuse.
+ * The refusal is the same sentence by name, and it names the switch rather than a key file — the offline provider has no
+ * key to store.
+ */
+test("a faux store without the switch is refused by name, and the switch is the repair", async () => {
 	const { root } = await rootWithBot({ version: "0.1", defaultProvider: "faux", defaultModel: "faux-1" });
 	const verdict = await check(root);
-	assert.equal(verdict.ready, true, "`mason init --provider faux` writes a store commonReady and doctor call ready");
-	assert.match(verdict.note ?? "", /PI_FAUX_MODEL=1 is what runs it/);
+	assert.equal(verdict.ready, false, "a store whose provider only runs under PI_FAUX_MODEL=1 is not a boot");
+	const refusal = verdict.refusal ?? "";
+	assert.match(refusal, /^no provider credential: .*common\/settings\.json names the offline provider/);
+	assert.match(refusal, /PI_FAUX_MODEL=1 is what runs it/);
+	assert.match(refusal, /every turn fails without it/);
+	assert.ok(refusal.includes("scripts/init.ts"), "the other repair is the command that stores a keyed provider");
+	// The switch is the answer, and it is the first one: the same store boots under it.
+	assert.deepEqual(await check(root, { PI_FAUX_MODEL: "1" }), { ready: true });
+});
+
+test("a faux store with no bot yet is refused too: the switch is missing before there is a home to open", async () => {
+	const root = await tempDir("mason-boot-credential-");
+	await write(join(root, "common", "settings.json"), {
+		version: "0.1",
+		defaultProvider: "faux",
+		defaultModel: "faux-1",
+	});
+	const verdict = await check(root);
+	assert.equal(verdict.ready, false);
+	assert.match(verdict.refusal ?? "", /names the offline provider/);
 });
 
 test("a store mason init has written and no bot yet is not refused for the bot the next command makes", async () => {

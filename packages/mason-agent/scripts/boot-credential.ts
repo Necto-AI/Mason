@@ -32,10 +32,10 @@
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { INIT, NEW } from "../src/server/command-line.ts";
 import {
 	commonPaths,
 	commonReady,
-	isOffline,
 	type ModelChoice,
 	readCommonSettings,
 	readPiSettingsModel,
@@ -44,18 +44,12 @@ import {
 import { type HousePaths, housePaths } from "../src/server/house.ts";
 import { readRoot, refuseRootAsHome, resolveBot } from "../src/server/root.ts";
 
-/** The command that writes a store, and the one that makes the bot, spelled so they run where the boot is running. */
-const INIT = `node --experimental-strip-types ${join(import.meta.dirname, "init.ts")}`;
-const NEW = `node --experimental-strip-types ${join(import.meta.dirname, "new.ts")}`;
-
-/** What the boot does with the verdict: continue, continue with a warning, or refuse with one sentence. */
+/** What the boot does with the verdict: continue, or refuse with one sentence. */
 export interface CredentialVerdict {
 	/** Whether the server may start. */
 	readonly ready: boolean;
 	/** The refusal, absent when `ready`. */
 	readonly refusal?: string;
-	/** A warning printed beside a boot that continues, for a shape that fails later. */
-	readonly note?: string;
 }
 
 /** The home the boot opens, or `undefined` when the root has no bot yet. */
@@ -86,8 +80,9 @@ function sourceOf(choice: ModelChoice | undefined, fromPi: boolean, root: string
 /**
  * No model anywhere: the command that writes one is the whole repair, and a root with no bot yet needs the one after it.
  *
- * Both are the scripts beside this file rather than `mason init` and `mason new`: the image has no `mason` on `PATH` and
- * no `dist`, so a refusal that named the packaged command would name a command that does not exist where it is read.
+ * Both are spelled by `src/server/command-line.ts`, not as `mason init` and `mason new`: the image has no `mason` on
+ * `PATH` and no `dist`, so a refusal that named the packaged command would name a command that does not exist where it
+ * is read. `test/command-line.test.ts` pins the path each one names to a file that is there.
  */
 function noModel(where: string, thenBot = false): string {
 	const then = thenBot ? `, then \`${NEW} <name>\` for the bot` : "";
@@ -120,6 +115,20 @@ function noKey(provider: string, source: string, authPath: string | undefined): 
 }
 
 /**
+ * The offline provider named in the store, and the switch that runs it not set.
+ *
+ * This is not a warning beside a boot that continues: without `PI_FAUX_MODEL=1` the boot resolves a model no provider in
+ * this build answers for, so it listens and every turn fails — the shape this whole check exists to refuse. The store's
+ * `faux` entry needs no key, so the sentence names the switch rather than a file, and it is the same refusal by name.
+ */
+function noFauxSwitch(source: string): string {
+	return (
+		`no provider credential: ${source} names the offline provider, and PI_FAUX_MODEL=1 is what runs it: every turn ` +
+		`fails without it. Set PI_FAUX_MODEL=1, or run \`${INIT}\` to store a provider with a key.`
+	);
+}
+
+/**
  * The verdict, for one root.
  *
  * Throws only when a store cannot be read — a malformed map, a legacy root — so the caller prints one sentence.
@@ -128,17 +137,9 @@ export async function checkCredential(root: string, env: NodeJS.ProcessEnv = pro
 	// The switch comes first and reads nothing: `resolveModelAccess` plays the offline provider under it, whatever the
 	// store says, so there is no credential this boot could find or want.
 	if (env.PI_FAUX_MODEL === "1") return { ready: true };
-	/** The offline provider verifies nothing; a `faux` store still needs the switch to be the provider that runs. */
-	const offline = (provider: string): CredentialVerdict => {
-		if (!isOffline(provider, env)) return { ready: false };
-		const missing = provider === "faux" && env.PI_FAUX_MODEL !== "1";
-		return {
-			ready: true,
-			...(missing
-				? { note: `the store names ${provider}, the offline provider: PI_FAUX_MODEL=1 is what runs it` }
-				: {}),
-		};
-	};
+	/** A store naming the offline provider, which this boot only runs under the switch above. `undefined` is any other. */
+	const offline = (provider: string, source: string): CredentialVerdict | undefined =>
+		provider === "faux" ? { ready: false, refusal: noFauxSwitch(source) } : undefined;
 
 	const house = homeFor(root, env);
 	if (house === undefined) {
@@ -147,8 +148,8 @@ export async function checkCredential(root: string, env: NodeJS.ProcessEnv = pro
 		const { value } = await readCommonSettings(root);
 		const provider = value.defaultModel === undefined ? undefined : value.defaultProvider;
 		if (provider !== undefined) {
-			const offlineVerdict = offline(provider);
-			if (offlineVerdict.ready) return offlineVerdict;
+			const offlineVerdict = offline(provider, commonPaths(root).settings);
+			if (offlineVerdict !== undefined) return offlineVerdict;
 		}
 		if (await commonReady(root, env)) return { ready: true };
 		return provider === undefined
@@ -164,8 +165,8 @@ export async function checkCredential(root: string, env: NodeJS.ProcessEnv = pro
 		const where = house.root === undefined ? join(house.serviceDir, "settings.json") : commonPaths(root).settings;
 		return { ready: false, refusal: noModel(where) };
 	}
-	const offlineVerdict = offline(provider);
-	if (offlineVerdict.ready) return offlineVerdict;
+	const offlineVerdict = offline(provider, sourceOf(choice, fromPi !== undefined, root, house));
+	if (offlineVerdict !== undefined) return offlineVerdict;
 	// A key the store carries is the boot's own runtime key (`resolveModelChoice` reads `common/auth.json` for it), and
 	// nothing else has to answer.
 	if (choice?.key !== undefined) return { ready: true };
@@ -194,7 +195,6 @@ export async function runBootCredential(argv: readonly string[]): Promise<number
 	} catch (error) {
 		verdict = { ready: false, refusal: error instanceof Error ? error.message : String(error) };
 	}
-	if (verdict.note !== undefined) console.error(`[boot] ${verdict.note}`);
 	if (verdict.refusal !== undefined) {
 		console.error(`[boot] ${verdict.refusal}`);
 		return 1;
